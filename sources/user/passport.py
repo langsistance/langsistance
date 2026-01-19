@@ -43,6 +43,10 @@ def verify_firebase_token(auth_header: str):
         decoded_token = auth.verify_id_token(id_token)
         firebase_uid = decoded_token['uid']
 
+        email_verified = decoded_token.get('email_verified', False)
+        if not email_verified:
+            raise HTTPException(status_code=401, detail="Email not verified")
+
         # 先检查 Redis 中是否存在
         user_data = redis_client.get(f"firebase_uid_{firebase_uid}")
         if user_data:
