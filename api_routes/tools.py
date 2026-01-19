@@ -47,8 +47,8 @@ async def create_tool_and_knowledge(request: ToolAndKnowledgeCreateRequest, http
     if not request.tool_description or len(request.tool_description) > 5000:
         tool_errors.append("tool_description is required and must be no more than 5000 characters")
 
-    if not request.tool_url or len(request.tool_url) > 1000:
-        tool_errors.append("tool_url is required and must be no more than 1000 characters")
+    if not request.tool_url or len(request.tool_url) > 2000:
+        tool_errors.append("tool_url is required and must be no more than 2000 characters")
 
     if len(request.tool_params) > 5000:
         tool_errors.append("tool_params must be no more than 5000 characters")
@@ -1086,8 +1086,8 @@ async def create_tool_from_openapi(request: OpenAPISpecRequest, http_request: Re
         if len(description) > 5000:
             errors.append("description must be no more than 5000 characters")
 
-        if len(full_url) > 1000:
-            errors.append("url must be no more than 1000 characters")
+        if len(full_url) > 2000:
+            errors.append("url must be no more than 2000 characters")
 
         if len(params) > 5000:
             errors.append("spec content is too large, must be no more than 5000 characters")
@@ -1187,8 +1187,8 @@ async def create_tool(request: ToolCreateRequest, http_request: Request):
     if not request.tool_description or len(request.tool_description) > 5000:
         errors.append("tool_description is required and must be no more than 5000 characters")
 
-    if not request.tool_url or len(request.tool_url) > 1000:
-        errors.append("tool_url is required and must be no more than 1000 characters")
+    if not request.tool_url or len(request.tool_url) > 2000:
+        errors.append("tool_url is required and must be no more than 2000 characters")
 
     if len(request.tool_params) > 5000:
         errors.append("tool_params must be no more than 5000 characters")
