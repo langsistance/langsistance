@@ -1041,7 +1041,7 @@ async def create_tool_from_openapi(request: OpenAPISpecRequest, http_request: Re
         # 验证base_url是否为标准的HTTP域名格式
         if base_url:
             # 验证URL格式的标准正则表达式
-            url_pattern = r'^https?://[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9](\.[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9])*(:\d+)?(/.*)?$'
+            url_pattern = r'^https?://[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*(:\d+)?(/.*)?$'
             if not re.match(url_pattern, base_url):
                 logger.error(f"Invalid base_url format: {base_url}")
                 return JSONResponse(
