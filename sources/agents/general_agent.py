@@ -222,9 +222,17 @@ class GeneralAgent(Agent):
                             self.logger.error(f"Failed to write to Redis: {str(e)}")
                             return None
 
+                    # 清理工具名称以符合API要求
+                    tool_name = tool_info.title if tool_info.title else "dynamic_knowledge_tool"
+                    # 只保留字母、数字、下划线和连字符
+                    cleaned_tool_name = re.sub(r'[^a-zA-Z0-9_-]', '_', tool_name)
+                    # 确保名称不为空
+                    if not cleaned_tool_name or cleaned_tool_name.strip() == "":
+                        cleaned_tool_name = "dynamic_knowledge_tool"
+
                     dynamic_tool = StructuredTool.from_function(
                         func=dynamic_tool_function,
-                        name=tool_info.title.replace(" ", "_") if tool_info.title else "dynamic_knowledge_tool",
+                        name=cleaned_tool_name,
                         description=tool_info.description if tool_info.description else "Dynamic knowledge tool",
                         args_schema=DynamicToolFunction
                     )
