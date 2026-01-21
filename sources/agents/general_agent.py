@@ -13,6 +13,7 @@ from langchain_core.tools import StructuredTool
 
 import os
 import time
+import re
 
 # 定义参数模型
 class DynamicToolFunction(BaseModel):
