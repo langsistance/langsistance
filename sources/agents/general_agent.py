@@ -145,6 +145,8 @@ class GeneralAgent(Agent):
         If the task can be completed without invoking the tool, respond directly to the user without calling any tool.
 
         Do not fabricate tool results. Do not assume tool behavior beyond the provided output.
+        
+        Do not return tool parameters, such as the user id and query id.
         """
         # return self.expand_prompt(system_prompt)
         return system_prompt
