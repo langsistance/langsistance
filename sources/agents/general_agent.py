@@ -290,7 +290,7 @@ class GeneralAgent(Agent):
 
                     # 动态创建工具函数
                     def dynamic_frontend_tool_function(user_id: str, query_id: str, params: str):
-                        self.logger.info(f"user id is {user_id} - query id is {query_id} - param is {params}")
+                        self.logger.info(f"dynamic_frontend_tool_function user id is {user_id} - query id is {query_id} - param is {params}")
                         try:
                             # 连接Redis
                             redis_conn = get_redis_connection()
@@ -332,7 +332,7 @@ class GeneralAgent(Agent):
                             return None
 
                     def dynamic_backend_tool_function(user_id: str, query_id: str, params: str):
-
+                        self.logger.info(f"dynamic_backend_tool_function user id is {user_id} - query id is {query_id} - param is {params}")
                         # 从tool_info中获取URL
                         url = tool_info.url
 
