@@ -210,7 +210,7 @@ class GeneralAgent(Agent):
         You MUST follow all rules below without exception:
 
         1. You may ONLY modify existing values in the JSON.
-           - DO NOT add new fields
+           - DO NOT add new fields, If a field is empty in the template, then leave it empty.
            - DO NOT change the JSON structure or nesting
         
         2. Field semantics:
