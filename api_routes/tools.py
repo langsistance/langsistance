@@ -1118,7 +1118,7 @@ async def create_tool_from_openapi(request: OpenAPISpecRequest, http_request: Re
                     title,
                     description,
                     full_url,  # 使用组合后的完整URL
-                    1,  # push默认为1
+                    2,  # push后端调用工具为2
                     1,  # public默认为1
                     1,  # status默认为1(有效)
                     30,  # timeout默认为30秒

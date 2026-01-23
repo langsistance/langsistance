@@ -60,6 +60,7 @@ class ToolItem(BaseModel):
     user_id: str
     title: str
     description: str
+    push: int
     url: Optional[str]
     status: Optional[bool]
     timeout: Optional[int]
@@ -343,6 +344,7 @@ def get_knowledge_tool(user_id: str, question: str, top_k: int = 3, similarity_t
                                                 title, \
                                                 description, \
                                                 url, \
+                                                push, \
                                                 status, \
                                                 timeout, \
                                                 params
@@ -360,6 +362,7 @@ def get_knowledge_tool(user_id: str, question: str, top_k: int = 3, similarity_t
                                 title=tool_result['title'],
                                 description=tool_result['description'],
                                 url=tool_result['url'],
+                                push=tool_result['push'],
                                 status=tool_result['status'],
                                 timeout=tool_result['timeout'],
                                 params=tool_result['params']
@@ -535,6 +538,7 @@ def get_tool_by_id(tool_id: int) -> Optional[ToolItem]:
                         title=tool_result['title'],
                         description=tool_result['description'],
                         url=tool_result['url'],
+                        push=tool_result['push'],
                         status=tool_result['status'],
                         create_time=tool_result['create_time'].isoformat() if tool_result['create_time'] else None,
                         update_time=tool_result['update_time'].isoformat() if tool_result['update_time'] else None,

@@ -225,7 +225,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
             )
 
     @router.post("/query_stream")
-    async def process_query(request: QueryRequest, http_request: Request):
+    async def process_query_stream(request: QueryRequest, http_request: Request):
         app_logger.info(f"Processing query_stream: {request.query}")
 
         auth_header = http_request.headers.get("Authorization")
