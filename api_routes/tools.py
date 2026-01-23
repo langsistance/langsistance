@@ -986,6 +986,7 @@ async def create_tool_from_openapi(request: OpenAPISpecRequest, http_request: Re
     Returns:
         OpenAPISpecResponse: 工具创建结果响应
     """
+    connection = None
     try:
         # 验证用户身份
         auth_header = http_request.headers.get("Authorization")
@@ -1104,7 +1105,6 @@ async def create_tool_from_openapi(request: OpenAPISpecRequest, http_request: Re
             )
 
         # 插入数据库
-        connection = None
         try:
             connection = get_db_connection()
             with connection.cursor() as cursor:
@@ -1254,6 +1254,166 @@ async def create_tool(request: ToolCreateRequest, http_request: Request):
                 "tool_id": None,
             }
         )
+    finally:
+        if connection:
+            connection.close()
+
+
+@router.post("/create_tool_from_custom", response_model=OpenAPISpecResponse)
+async def create_tool_from_custom(request: OpenAPISpecRequest, http_request: Request):
+    """
+    从自定义JSON创建工具接口
+
+    Args:
+        request: 包含自定义JSON格式的请求对象
+        http_request: HTTP请求对象，用于获取认证信息
+
+    Returns:
+        ToolCustomCreateResponse: 工具创建结果响应
+    """
+    connection = None
+    try:
+        # 验证用户身份
+        auth_header = http_request.headers.get("Authorization")
+        user = verify_firebase_token(auth_header)
+        user_id = user['uid']
+
+        logger.info(f"Creating custom tool for user: {user_id}")
+
+        # 解析传入的JSON内容
+        try:
+            custom_spec = json.loads(request.spec_content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON format: {str(e)}")
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "message": f"Invalid JSON format: {str(e)}"
+                }
+            )
+
+        # 验证必需的字段
+        required_fields = ['url', 'method']
+        for field in required_fields:
+            if field not in custom_spec:
+                logger.error(f"Missing required field: {field}")
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "success": False,
+                        "message": f"Missing required field: {field}"
+                    }
+                )
+
+        # 提取URL并获取最后一段path作为标题
+        url = custom_spec['url']
+
+        # 验证URL格式
+        url_pattern = r'^https?://[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*(:\d+)?(/.*)?$'
+        if not re.match(url_pattern, url):
+            logger.error(f"Invalid URL format: {url}")
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "message": f"Invalid URL format: {url}. Must be a standard HTTP/HTTPS URL."
+                }
+            )
+
+        # 从URL中提取最后一段path作为标题
+        from urllib.parse import urlparse
+        parsed_url = urlparse(url)
+        path_parts = [part for part in parsed_url.path.split('/') if part]
+        title = path_parts[-1] if path_parts else parsed_url.netloc  # 如果没有path，则使用域名
+
+        # 构造params字段，包含除了url以外的所有其他字段
+        params_data = {k: v for k, v in custom_spec.items() if k != 'url'}
+        params = json.dumps(params_data)
+
+        # 验证字段长度
+        errors = []
+        if len(title) > 100:
+            errors.append("title must be no more than 100 characters")
+
+        if len(url) > 4096:
+            errors.append("url must be no more than 4096 characters")
+
+        if len(params) > 5000:
+            errors.append("params content is too large, must be no more than 5000 characters")
+
+        if errors:
+            logger.error(f"Validation errors: {errors}")
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "message": "Validation failed",
+                    "errors": errors
+                }
+            )
+
+        # 插入数据库
+        try:
+            connection = get_db_connection()
+            with connection.cursor() as cursor:
+                insert_sql = """
+                    INSERT INTO tools 
+                    (user_id, title, description, url, push, public, status, timeout, params)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """
+
+                # 设置描述为URL的简化版本或者使用title作为描述
+                description = url
+
+                cursor.execute(insert_sql, (
+                    user_id,
+                    title,
+                    description,  # 使用URL作为描述
+                    url,  # 完整URL
+                    2,  # push设为2
+                    1,  # public默认为1
+                    1,  # status默认为1(有效)
+                    30,  # timeout默认为30秒
+                    params  # 包含method, query, header, body的JSON
+                ))
+                connection.commit()
+
+                # 获取插入的记录ID
+                tool_id = cursor.lastrowid
+
+                logger.info(f"Custom tool created successfully with ID: {tool_id}")
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "success": True,
+                        "message": "Custom tool created successfully",
+                        "tool_id": tool_id
+                    }
+                )
+
+        except Exception as e:
+            if connection:
+                connection.rollback()
+            logger.error(f"Database error: {str(e)}")
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "success": False,
+                    "message": f"Database error: {str(e)}"
+                }
+            )
+
+    except Exception as e:
+        logger.error(f"Error creating custom tool: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "message": f"Internal server error: {str(e)}"
+            }
+        )
+
     finally:
         if connection:
             connection.close()
