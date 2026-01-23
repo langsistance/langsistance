@@ -248,12 +248,12 @@ class GeneralAgent(Agent):
 
         # 根据tool_info.push的值选择不同系统提示词
         if tool_info.push == 1:
-            return generate_fixed_system_prompt()
+            return self.generate_fixed_system_prompt()
         elif tool_info.push == 2:
-            return generate_template_system_prompt()
+            return self.generate_template_system_prompt()
         else:
             # 默认情况下固定的系统提示词
-            return generate_fixed_system_prompt()
+            return self.generate_fixed_system_prompt()
 
 
 
