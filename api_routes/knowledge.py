@@ -864,6 +864,7 @@ async def copy_knowledge(request: KnowledgeCopyRequest, http_request: Request):
 
                 if tool_result:
                     tool_data = {
+                        'id': row["tool_id"],
                         'user_id': user_id,  # 新的所有者
                         'title': tool_result['title'],
                         'description': tool_result['description'],
@@ -1168,6 +1169,7 @@ async def handle_knowledge_share(request: Request, handle_request: dict):
 
                     if tool_result:
                         tool_data = {
+                            'id': knowledge_result['tool_id'],
                             'user_id': user_id,  # 新的所有者
                             'title': tool_result['title'],
                             'description': tool_result['description'],
