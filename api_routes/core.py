@@ -200,12 +200,18 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
             }
 
             if tool_info:
-                tool_response = {
-                    "id": tool_info.id,
-                    "title": tool_info.title,
-                    "description": tool_info.description,
-                    "url": tool_info.url
-                }
+                # 检查tool_info的push字段
+                if tool_info.push == 2:
+                    # 如果push为2，返回空对象
+                    tool_response = {}
+                else:
+                    # 如果push不为2，保持原有逻辑
+                    tool_response = {
+                        "id": tool_info.id,
+                        "title": tool_info.title,
+                        "description": tool_info.description,
+                        "url": tool_info.url
+                    }
                 response_data["tool"] = tool_response
 
             app_logger.info(f"Successfully found knowledge and tool for user: {user_id}")
