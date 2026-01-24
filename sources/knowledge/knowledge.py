@@ -417,28 +417,38 @@ def create_tool_and_knowledge_records(tool_data: dict, knowledge_data: dict) -> 
         # 开始事务
         connection.begin()
 
-        # 1. 创建 Tool
-        with connection.cursor() as cursor:
-            # 插入 Tool 数据
-            tool_sql = """
-                       INSERT INTO tools
-                       (user_id, title, description, url, push, status, timeout, params)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                       """
-            cursor.execute(tool_sql, (
-                tool_data['user_id'],
-                tool_data['title'],
-                tool_data['description'],
-                tool_data['url'],
-                tool_data['push'],
-                1,  # status
-                tool_data['timeout'],
-                tool_data['params']
-            ))
+        # 判断tool_data的push字段
+        push_value = tool_data.get('push', 1)  # 默认为1
 
-            # 获取插入的 tool ID
-            tool_id = cursor.lastrowid
-            logger.info(f"Tool record created successfully with ID: {tool_id}")
+        if push_value == 2:
+            # push为2时，直接使用传入的id作为tool_id
+            tool_id = tool_data.get('id')
+            if not tool_id:
+                raise ValueError("When push is 2, tool_data must contain 'id' field")
+            logger.info(f"Using existing tool ID: {tool_id} for push value 2")
+        else:
+            # push不为2
+            with connection.cursor() as cursor:
+                # 插入 Tool 数据
+                tool_sql = """
+                           INSERT INTO tools
+                           (user_id, title, description, url, push, status, timeout, params)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                           """
+                cursor.execute(tool_sql, (
+                    tool_data['user_id'],
+                    tool_data['title'],
+                    tool_data['description'],
+                    tool_data['url'],
+                    tool_data['push'],
+                    1,  # status
+                    tool_data['timeout'],
+                    tool_data['params']
+                ))
+
+                # 获取插入的 tool ID
+                tool_id = cursor.lastrowid
+                logger.info(f"Tool record created successfully with ID: {tool_id}")
 
         # 2. 创建 Knowledge，使用刚刚创建的 tool_id
         with connection.cursor() as cursor:
