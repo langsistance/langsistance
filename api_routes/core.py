@@ -212,6 +212,8 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         "description": tool_info.description,
                         "url": tool_info.url
                     }
+
+                tool_response["push"] = tool_info.push
                 response_data["tool"] = tool_response
 
             app_logger.info(f"Successfully found knowledge and tool for user: {user_id}")
