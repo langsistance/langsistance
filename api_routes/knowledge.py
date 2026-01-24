@@ -350,9 +350,9 @@ async def update_knowledge_record(request: KnowledgeUpdateRequest, http_request:
                 update_fields.append("model_name = %s")
                 update_params.append(request.modelName)
 
-            if request.toolId is not None:
-                update_fields.append("tool_id = %s")
-                update_params.append(request.toolId)
+            # if request.toolId is not None:
+            #     update_fields.append("tool_id = %s")
+            #     update_params.append(request.toolId)
 
             if request.params is not None:
                 update_fields.append("params = %s")
