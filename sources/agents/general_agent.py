@@ -373,6 +373,7 @@ class GeneralAgent(Agent):
                         else:
                             raise ValueError(f"Unsupported HTTP method: {method}")
 
+                        self.logger.info(f"Response body: {response.text}")
                         # 返回响应结果
                         return response.json() if response.content else None
 
