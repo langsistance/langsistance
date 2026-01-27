@@ -142,6 +142,8 @@ class GeneralAgent(Agent):
         Input parameters: {tool_params_info}
 
         Execute the tool with the appropriate parameters and generate the final response strictly based on the tool’s output.
+        
+        Whenever you provide information, facts, quotes, or data, please always include the specific source links (URLs) used to generate that part of the response.
 
         If the task can be completed without invoking the tool, respond directly to the user without calling any tool.
 
@@ -230,6 +232,8 @@ class GeneralAgent(Agent):
            - The output must be valid, strictly formatted JSON
     
         Execute the tool with the appropriate parameters and generate the final response strictly based on the tool's output.
+        
+        Whenever you provide information, facts, quotes, or data, please always include the specific source links (URLs) used to generate that part of the response.
     
         If the task can be completed without invoking the tool, respond directly to the user without calling any tool.
     
