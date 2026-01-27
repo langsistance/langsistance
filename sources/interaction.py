@@ -68,7 +68,7 @@ class Interaction:
             pretty_print(f"Text-to-speech trigger is {self.ai_name}", color="status")
         if self.tts_enabled:
             self.speech.speak("Hello, we are online and ready. What can I do for you ?")
-        pretty_print("AgenticSeek is ready.", color="status")
+        pretty_print("CopiioAI is ready.", color="status")
     
     def find_ai_name(self) -> str:
         """Find the name of the default AI. It is required for STT as a trigger word."""

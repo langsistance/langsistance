@@ -64,7 +64,8 @@ class SSECallbackHandler(AsyncCallbackHandler):
 
     async def on_chain_error(self, error, **kwargs) -> None:
         """链错误时触发"""
-        print(f"[QUEUE PUT] chain error error={error}")
+        print(f"[QUEUE PUT] chain error error={repr(error)}", flush=True)
+        traceback.print_exc(file=sys.stdout)
         # await self.queue.put({
         #     'type': 'error',
         #     'message': str(error),
