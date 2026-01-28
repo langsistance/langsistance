@@ -460,7 +460,7 @@ async def query_tool_records(http_request: Request, query: str = "", limit: int 
                                 LIMIT %s
                             OFFSET %s
                             """
-                params = [1, user_id, search_pattern, search_pattern, limit, offset]
+                params = [1, user_id, search_pattern, search_pattern, limit, offset * limit]
             else:
                 query_sql = """
                             SELECT id,
@@ -475,7 +475,7 @@ async def query_tool_records(http_request: Request, query: str = "", limit: int 
                                 LIMIT %s
                             OFFSET %s
                             """
-                params = [1, user_id, limit, offset]
+                params = [1, user_id, limit, offset * limit]
 
             cursor.execute(query_sql, params)
             results = cursor.fetchall()
@@ -609,7 +609,7 @@ async def query_public_tools(query: str = "", limit: int = 10, offset: int = 0):
                                 LIMIT %s
                             OFFSET %s
                             """
-                params = [1, 2, search_pattern, search_pattern, limit, offset]
+                params = [1, 2, search_pattern, search_pattern, limit, offset * limit]
             else:
                 query_sql = """
                             SELECT id,
@@ -624,7 +624,7 @@ async def query_public_tools(query: str = "", limit: int = 10, offset: int = 0):
                                 LIMIT %s
                             OFFSET %s
                             """
-                params = [1, 2, limit, offset]
+                params = [1, 2, limit, offset * limit]
 
             cursor.execute(query_sql, params)
             results = cursor.fetchall()

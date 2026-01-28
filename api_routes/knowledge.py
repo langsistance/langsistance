@@ -521,7 +521,7 @@ async def query_knowledge_records(http_request: Request, query: str, limit: int 
                                 LIMIT %s
                             OFFSET %s
                             """
-                params = [1, user_id, search_pattern, search_pattern, search_pattern, limit, offset]
+                params = [1, user_id, search_pattern, search_pattern, search_pattern, limit, offset * limit]
             else:
                 query_sql = """
                             SELECT id,
@@ -536,7 +536,7 @@ async def query_knowledge_records(http_request: Request, query: str, limit: int 
                                 LIMIT %s
                             OFFSET %s
                             """
-                params = [1, user_id, limit, offset]
+                params = [1, user_id, limit, offset * limit]
 
             cursor.execute(query_sql, params)
             results = cursor.fetchall()
@@ -697,7 +697,7 @@ async def query_public_knowledge(query: str, limit: int = 10, offset: int = 0):
                                 LIMIT %s
                             OFFSET %s
                             """
-                params = [1, 2, search_pattern, search_pattern, search_pattern, limit, offset]
+                params = [1, 2, search_pattern, search_pattern, search_pattern, limit, offset * limit]
             else:
                 query_sql = """
                             SELECT id,
@@ -712,7 +712,7 @@ async def query_public_knowledge(query: str, limit: int = 10, offset: int = 0):
                                 LIMIT %s
                             OFFSET %s
                             """
-                params = [1, 2, limit, offset]
+                params = [1, 2, limit, offset * limit]
 
             cursor.execute(query_sql, params)
             results = cursor.fetchall()
@@ -1288,7 +1288,7 @@ async def query_knowledge_shares(http_request: Request, limit: int = 10, offset:
                 ORDER BY create_time DESC
                 LIMIT %s OFFSET %s
             """
-            cursor.execute(share_query_sql, (email, limit, offset))
+            cursor.execute(share_query_sql, (email, limit, offset * limit))
             share_results = cursor.fetchall()
 
             # 收集所有knowledge_id用于查询知识详情
@@ -1442,7 +1442,7 @@ async def get_user_shared_knowledge(http_request: Request, limit: int = 10, offs
                 ORDER BY create_time DESC
                 LIMIT %s OFFSET %s
             """
-            cursor.execute(share_query_sql, (user_id, limit, offset))
+            cursor.execute(share_query_sql, (user_id, limit, offset * limit))
             share_results = cursor.fetchall()
 
             # 收集所有knowledge_id用于查询知识详情
