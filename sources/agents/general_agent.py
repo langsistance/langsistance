@@ -387,7 +387,7 @@ class GeneralAgent(Agent):
             self.logger.error(f"Failed to generate tool direct system prompt: {str(e)}")
             return self.generate_system_prompt()
 
-    async def get_tools(self) -> list:
+    async def get_dynamic_tools(self) -> list:
         try:
             tools = {}
             # 如果有知识库中的工具信息，则动态构建MCP工具
@@ -523,6 +523,25 @@ class GeneralAgent(Agent):
         except Exception as e:
             raise Exception(f"get_tool failed: {str(e)}") from e
 
+    async def get_tools(self) -> list:
+        """
+        选择方法
+        """
+        _, tool_info = self.knowledgeTool
+
+        tools = []
+        # 根据tool_info.push的值选择不同系统提示词
+        if tool_info.push == 1:
+            return self.get_dynamic_tools()
+        elif tool_info.push == 2:
+            if self.is_query_and_body_empty():
+                return tools
+            else:
+                return self.get_dynamic_tools()
+        else:
+            # 默认情况下固定的系统提示词
+            return self.get_dynamic_tools()
+
     async def process(self,user_id, prompt, query_id, speech_module) -> str | tuple[str, str]:
         if not self.enabled:
             return "general Agent is disabled."
@@ -559,8 +578,7 @@ class GeneralAgent(Agent):
         self.memory.push('system', system_prompt)
 
         self.logger.info(f"memory.get():{self.memory.get()}")
-        if not self.is_query_and_body_empty():
-            self.tools = await self.get_tools()
+        self.tools = await self.get_tools()
 
         return self.llm.openai_create(self.tools, self.memory.get(), callback_handler)
 
