@@ -532,15 +532,15 @@ class GeneralAgent(Agent):
         tools = []
         # 根据tool_info.push的值选择不同系统提示词
         if tool_info.push == 1:
-            return self.get_dynamic_tools()
+            return await self.get_dynamic_tools()
         elif tool_info.push == 2:
             if self.is_query_and_body_empty():
                 return tools
             else:
-                return self.get_dynamic_tools()
+                return await self.get_dynamic_tools()
         else:
             # 默认情况下固定的系统提示词
-            return self.get_dynamic_tools()
+            return await self.get_dynamic_tools()
 
     async def process(self,user_id, prompt, query_id, speech_module) -> str | tuple[str, str]:
         if not self.enabled:
