@@ -6,6 +6,8 @@ import os
 import uuid
 import json
 import asyncio
+from functools import lru_cache
+from datetime import datetime, timedelta
 
 from sources.schemas import QueryResponse
 from sources.logger import Logger
@@ -15,6 +17,74 @@ from sources.user.passport import verify_firebase_token, check_and_increase_usag
 from sources.callback.sse_callback import SSECallbackHandler
 
 router = APIRouter()
+
+# Agent pool for reusing agent instances
+_agent_pool = {}
+_agent_pool_lock = asyncio.Lock()
+AGENT_POOL_MAX_SIZE = 10
+AGENT_POOL_MAX_IDLE_TIME = 300  # 5 minutes
+
+# Token cache with TTL
+_token_cache = {}
+_token_cache_lock = asyncio.Lock()
+TOKEN_CACHE_TTL = 3600  # 1 hour
+
+async def get_cached_token_validation(auth_header: str):
+    """Cache token validation results to reduce Firebase API calls"""
+    async with _token_cache_lock:
+        if auth_header in _token_cache:
+            cached_data, expiry = _token_cache[auth_header]
+            if datetime.now() < expiry:
+                return cached_data
+            else:
+                del _token_cache[auth_header]
+
+    # Validate token if not cached
+    user = await asyncio.to_thread(verify_firebase_token, auth_header)
+
+    async with _token_cache_lock:
+        _token_cache[auth_header] = (user, datetime.now() + timedelta(seconds=TOKEN_CACHE_TTL))
+        # Cleanup old entries
+        current_time = datetime.now()
+        expired_keys = [k for k, (_, exp) in _token_cache.items() if current_time >= exp]
+        for k in expired_keys:
+            del _token_cache[k]
+
+    return user
+
+async def get_or_create_agent(create_agent_func, app_logger):
+    """Get an agent from pool or create new one"""
+    async with _agent_pool_lock:
+        current_time = datetime.now()
+
+        # Clean up expired agents
+        expired_keys = [k for k, (_, last_used) in _agent_pool.items()
+                       if (current_time - last_used).total_seconds() > AGENT_POOL_MAX_IDLE_TIME]
+        for k in expired_keys:
+            del _agent_pool[k]
+            app_logger.info(f"Removed expired agent from pool: {k}")
+
+        # Try to reuse an existing agent
+        for agent_id, (agent, _) in _agent_pool.items():
+            _agent_pool[agent_id] = (agent, current_time)
+            app_logger.info(f"Reusing agent from pool: {agent_id}")
+            return agent
+
+        # Create new agent if pool is not full
+        if len(_agent_pool) < AGENT_POOL_MAX_SIZE:
+            agent = await create_agent_func()
+            agent_id = str(uuid.uuid4())
+            _agent_pool[agent_id] = (agent, current_time)
+            app_logger.info(f"Created new agent and added to pool: {agent_id}")
+            return agent
+
+        # Pool is full, create temporary agent (not cached)
+        app_logger.warning("Agent pool is full, creating temporary agent")
+        return await create_agent_func()
+
+async def check_usage_async(user_id: str) -> bool:
+    """Async wrapper for check_and_increase_usage"""
+    return await asyncio.to_thread(check_and_increase_usage, user_id)
 
 def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, config_ref, is_generating_flag, think_wrapper_func, create_agent_func):
     """注册核心路由并传递所需的依赖"""
@@ -236,35 +306,42 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
     async def process_query_stream(request: QueryRequest, http_request: Request):
         app_logger.info(f"Processing query_stream: {request.query}")
 
+        # Optimize: Use cached token validation
         auth_header = http_request.headers.get("Authorization")
-        #user = verify_firebase_token(auth_header)
-        user = await asyncio.to_thread(verify_firebase_token, auth_header)
+        try:
+            user = await get_cached_token_validation(auth_header)
+        except Exception as e:
+            app_logger.error(f"Token validation failed: {str(e)}")
+            return JSONResponse(status_code=401, content={"error": "Invalid token"})
 
         user_id = user['uid']
 
-        allowed = check_and_increase_usage(user_id)
+        # Optimize: Make usage check async
+        allowed = await check_usage_async(user_id)
         if not allowed:
-            return JSONResponse(status_code=429, content="Daily API usage limit exceeded (100/day)")
-
-        query_resp = {
-            "done" : "false",
-            "success" : "false"
-        }
+            return JSONResponse(status_code=429, content={"error": "Daily API usage limit exceeded (100/day)"})
 
         # 如果没有提供 query_id，自动生成一个
         if not request.query_id:
             app_logger.warning("query id is none.")
-            return JSONResponse(status_code=429, content=json.dumps(query_resp))
+            return JSONResponse(status_code=400, content={"error": "query_id is required"})
 
         if is_generating_flag:
             app_logger.warning("Another query is being processed, please wait.")
-            return JSONResponse(status_code=429, content=json.dumps(query_resp))
+            return JSONResponse(status_code=429, content={"error": "Another query is being processed"})
 
         async def generate():
-            general_agent = await create_agent_func()
+            # Optimize: Reuse agent from pool instead of creating new one
+            general_agent = await get_or_create_agent(create_agent_func, app_logger)
             queue = asyncio.Queue()
             handler = SSECallbackHandler(queue)
-            openai_agent = await general_agent.create_agent(user_id, request.query, request.query_id, handler)
+
+            try:
+                openai_agent = await general_agent.create_agent(user_id, request.query, request.query_id, handler)
+            except Exception as e:
+                app_logger.error(f"Failed to create agent: {str(e)}")
+                yield f"data:{json.dumps({'error': 'Failed to create agent'})}\n\n"
+                return
 
             async def run_agent():
                 try:
@@ -279,23 +356,81 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
 
             task = asyncio.create_task(run_agent())
 
+            # Optimize: Batch tokens to reduce serialization overhead
+            token_buffer = []
+            buffer_size = 5  # Send 5 tokens at once
+            last_flush_time = asyncio.get_event_loop().time()
+            flush_interval = 0.05  # Flush every 50ms
+
             try:
                 while True:
-                    event = await queue.get()
-                    if event['type'] == 'token':
-                        # 将token内容进行JSON编码，确保换行符等特殊字符被正确处理
-                        token_json = json.dumps(event['content'])
-                        yield f"data:{token_json}\n\n"
+                    try:
+                        # Try to get event with timeout to enable periodic flushing
+                        event = await asyncio.wait_for(queue.get(), timeout=flush_interval)
 
-                    if event['type'] == 'end':
-                        break
+                        if event['type'] == 'token':
+                            token_buffer.append(event['content'])
+
+                            current_time = asyncio.get_event_loop().time()
+                            # Flush if buffer is full or enough time has passed
+                            if len(token_buffer) >= buffer_size or (current_time - last_flush_time) >= flush_interval:
+                                # Send buffered tokens
+                                combined = ''.join(token_buffer)
+                                token_json = json.dumps(combined)
+                                yield f"data:{token_json}\n\n"
+                                token_buffer.clear()
+                                last_flush_time = current_time
+
+                        elif event['type'] == 'end':
+                            # Flush remaining tokens before ending
+                            if token_buffer:
+                                combined = ''.join(token_buffer)
+                                token_json = json.dumps(combined)
+                                yield f"data:{token_json}\n\n"
+                                token_buffer.clear()
+                            break
+
+                        elif event['type'] == 'error':
+                            # Flush tokens and send error
+                            if token_buffer:
+                                combined = ''.join(token_buffer)
+                                token_json = json.dumps(combined)
+                                yield f"data:{token_json}\n\n"
+                                token_buffer.clear()
+                            error_json = json.dumps({'error': event.get('message', 'Unknown error')})
+                            yield f"data:{error_json}\n\n"
+                            break
+
+                    except asyncio.TimeoutError:
+                        # Periodic flush even without new tokens
+                        if token_buffer:
+                            current_time = asyncio.get_event_loop().time()
+                            if (current_time - last_flush_time) >= flush_interval:
+                                combined = ''.join(token_buffer)
+                                token_json = json.dumps(combined)
+                                yield f"data:{token_json}\n\n"
+                                token_buffer.clear()
+                                last_flush_time = current_time
+
+            except Exception as e:
+                app_logger.error(f"Error in generate loop: {str(e)}")
+                error_json = json.dumps({'error': str(e)})
+                yield f"data:{error_json}\n\n"
             finally:
                 if not task.done():
                     task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
 
         return StreamingResponse(
             generate(),
             media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no"  # Disable nginx buffering
+            }
         )
 
     @router.get("/copiioai_statistics")
