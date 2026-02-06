@@ -1,6 +1,7 @@
 from typing import Dict, Any
 import json
 from pydantic import BaseModel, Field
+from bs4 import BeautifulSoup
 
 from sources.knowledge.knowledge import get_redis_connection, get_knowledge_tool
 from sources.utility import pretty_print, animate_thinking
@@ -76,6 +77,29 @@ class GeneralAgent(Agent):
         {tools_str}
         """
         return prompt
+
+    def is_query_and_body_empty(self) -> bool:
+        """
+        判断 self.knowledgeTool 中的 tool_info 的 params 中的 query 和 body 是否都为空。
+        如果都为空，返回 True；否则返回 False。
+        """
+        # 获取工具信息
+        _, tool_info = self.knowledgeTool
+
+        try:
+            # 解析 params 字段
+            params_data = json.loads(tool_info.params)
+
+            # 获取 query 和 body 字段
+            query = params_data.get("query", {})
+            body = params_data.get("body", {})
+
+            # 判断 query 和 body 是否都为空
+            return not query and not body
+        except json.JSONDecodeError:
+            # 如果 params 不是合法的 JSON，视为非空
+            return False
+
     def generate_fixed_system_prompt(self) -> str:
         """
         生成系统提示
@@ -268,7 +292,10 @@ class GeneralAgent(Agent):
         if tool_info.push == 1:
             return self.generate_fixed_system_prompt()
         elif tool_info.push == 2:
-            return self.generate_template_system_prompt()
+            if self.is_query_and_body_empty():
+                return self.generate_tool_direct_system_prompt()
+            else:
+                return self.generate_template_system_prompt()
         else:
             # 默认情况下固定的系统提示词
             return self.generate_fixed_system_prompt()
@@ -285,16 +312,80 @@ class GeneralAgent(Agent):
 
         return user_prompt
 
-    # async def get_tools(self) -> dict:
-    #
-    #     try:
-    #         client = MCPClient.from_config_file("tool_config.json")
-    #         adapter = LangChainAdapter()
-    #         tools = await adapter.create_tools(client)
-    #         self.logger.info(f"tools{tools}")
-    #         return tools
-    #     except Exception as e:
-    #         raise Exception(f"get_tool failed: {str(e)}") from e
+    def generate_tool_direct_system_prompt(self) -> str:
+        """
+        直接利用 tool_info 发起 HTTP 请求，将结果写入系统提示词并返回。
+        告诉大模型无需调用工具，直接基于返回的数据生成结果。
+        """
+        # 获取工具信息
+        knowledge_item, tool_info = self.knowledgeTool
+        self.logger.info(f"generate_tool_direct_system_prompt - tool:{tool_info}")
+
+        try:
+            # 从 tool_info 中提取 URL 和参数模板
+            url = tool_info.url
+            params_data = json.loads(tool_info.params)
+
+            # 获取 HTTP 方法和 Content-Type
+            method = params_data.get("method", "GET").upper()
+            content_type = params_data.get("Content-Type", "application/json")
+
+            # 准备请求头
+            headers = {
+                "Content-Type": content_type
+            }
+
+            # params_data
+            params_data = params_data.get("header", {})
+            if isinstance(user_headers, dict):
+                headers.update(params_data)
+
+            # 发起 HTTP 请求
+            if method == "GET":
+                response = requests.get(url, headers=headers)
+            elif method == "POST":
+                response = requests.post(url, headers=headers, json={})
+            elif method == "PUT":
+                response = requests.put(url, headers=headers, json={})
+            elif method == "DELETE":
+                response = requests.delete(url, headers=headers)
+            elif method == "PATCH":
+                response = requests.patch(url, headers=headers, json={})
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
+
+            # 处理响应结果
+            if response.status_code == 200:
+
+                if "text/html" in response.headers.get("Content-Type", ""):
+                    # 使用BeautifulSoup移除HTML标签
+                    result_str = BeautifulSoup(response.content, "html.parser").get_text()
+                else:
+                    result_data = response.json() if response.content else {}
+                    result_str = json.dumps(result_data, ensure_ascii=False, indent=2)
+            else:
+                result_str = f"request failed，status code: {response.status_code}"
+
+
+
+            # 构造系统提示词
+            system_prompt = f"""
+            Act as a self-contained intelligent assistant. Follow these instructions strictly:
+
+            1.  **Core Principle:** You must perform tasks and generate answers using **only** the data, text, or context that I provide to you within this chat.
+            2.  **No External Access:** Do not attempt to invoke or use any internal or external tools (such as search functions, code interpreters, calculators, or knowledge retrieval from your base training data) to complete the task.
+            3.  **Direct Processing:** Analyze, reason, and respond directly based on the provided input. If the necessary information is not contained in my messages, state that clearly instead of making assumptions.
+
+            Input：
+            {result_str}
+
+            Please generate the final result based on the above data.
+            """
+            return system_prompt
+
+        except Exception as e:
+            self.logger.error(f"Failed to generate tool direct system prompt: {str(e)}")
+            return self.generate_system_prompt()
 
     async def get_tools(self) -> list:
         try:
@@ -468,7 +559,8 @@ class GeneralAgent(Agent):
         self.memory.push('system', system_prompt)
 
         self.logger.info(f"memory.get():{self.memory.get()}")
-        self.tools = await self.get_tools()
+        if not self.is_query_and_body_empty():
+            self.tools = await self.get_tools()
 
         return self.llm.openai_create(self.tools, self.memory.get(), callback_handler)
 
