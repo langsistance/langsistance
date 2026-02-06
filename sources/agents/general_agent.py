@@ -458,7 +458,8 @@ class GeneralAgent(Agent):
         return answer, reasoning
 
     async def create_agent(self, user_id, prompt, query_id, callback_handler):
-        self.knowledgeTool = get_knowledge_tool(user_id,  prompt)
+        #self.knowledgeTool = get_knowledge_tool(user_id,  prompt)
+        self.knowledgeTool = await asyncio.to_thread(get_knowledge_tool, user_id,  prompt)
         user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
         system_prompt = self.generate_system_prompt()
         self.memory.reset([])

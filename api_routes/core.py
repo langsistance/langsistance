@@ -237,7 +237,8 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
         app_logger.info(f"Processing query_stream: {request.query}")
 
         auth_header = http_request.headers.get("Authorization")
-        user = verify_firebase_token(auth_header)
+        #user = verify_firebase_token(auth_header)
+        user = await asyncio.to_thread(verify_firebase_token, auth_header)
 
         user_id = user['uid']
 
