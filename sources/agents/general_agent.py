@@ -15,6 +15,7 @@ import os
 import time
 import re
 import requests
+import asyncio
 
 # 定义参数模型
 class DynamicToolFunction(BaseModel):
