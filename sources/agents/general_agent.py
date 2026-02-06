@@ -336,9 +336,9 @@ class GeneralAgent(Agent):
             }
 
             # params_data
-            params_data = params_data.get("header", {})
+            user_headers = params_data.get("header", {})
             if isinstance(user_headers, dict):
-                headers.update(params_data)
+                headers.update(user_headers)
 
             # 发起 HTTP 请求
             if method == "GET":
