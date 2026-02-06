@@ -33,7 +33,7 @@ class GeneralAgent(Agent):
         super().__init__(name, prompt_path, provider, verbose, None)
         keys = self.get_api_keys()
         self.tools = {
-            "mcp_finder": MCP_finder(keys["mcp_finder"]),
+            #"mcp_finder": MCP_finder(keys["mcp_finder"]),
             # add mcp tools here
         }
         self.role = "mcp"
