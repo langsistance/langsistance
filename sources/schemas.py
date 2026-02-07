@@ -7,15 +7,17 @@ class QueryRequest(BaseModel):
     query: str
     query_id: str = ""
     tts_enabled: bool = True
+    tool_data: str = ""  # 新增字段，类型为str，默认为空字符串
 
     def __str__(self):
-        return f"Query: {self.query}, Query ID: {self.query_id}, TTS: {self.tts_enabled}"
+        return f"Query: {self.query}, Query ID: {self.query_id}, TTS: {self.tts_enabled}, Tool Data: {self.tool_data}"
 
     def jsonify(self):
         return {
             "query": self.query,
             "query_id": self.query_id,
             "tts_enabled": self.tts_enabled,
+            "tool_data": self.tool_data,  # 包含新增字段
         }
 
 class QueryResponse(BaseModel):
