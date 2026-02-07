@@ -282,7 +282,7 @@ class GeneralAgent(Agent):
 
         return system_prompt
 
-    def generate_system_prompt(self) -> str:
+    def generate_system_prompt(self, tool_data) -> str:
         """
         生成系统提示
         """
@@ -290,10 +290,13 @@ class GeneralAgent(Agent):
 
         # 根据tool_info.push的值选择不同系统提示词
         if tool_info.push == 1:
-            return self.generate_fixed_system_prompt()
+            if tool_data and tool_data.strip():  # 判断tool_data是否非空
+                return self.generate_frontend_tool_direct_system_prompt(tool_data)
+            else:
+                return self.generate_fixed_system_prompt()
         elif tool_info.push == 2:
             if self.is_query_and_body_empty():
-                return self.generate_tool_direct_system_prompt()
+                return self.generate_backend_tool_direct_system_prompt()
             else:
                 return self.generate_template_system_prompt()
         else:
@@ -312,7 +315,46 @@ class GeneralAgent(Agent):
 
         return user_prompt
 
-    def generate_tool_direct_system_prompt(self) -> str:
+    def generate_frontend_tool_direct_system_prompt(self, tool_data: str) -> str:
+        """
+        直接解析 tool_data 并生成系统提示词，无需发起 HTTP 请求。
+        """
+        self.logger.info(f"generate_frontend_tool_direct_system_prompt - tool_data: {tool_data}")
+
+        try:
+            # 解析 tool_data 内容
+            if "text/html" in tool_data:
+                # 如果是 HTML 内容，使用 BeautifulSoup 移除标签
+                result_str = BeautifulSoup(tool_data, "html.parser").get_text()
+            else:
+                # 尝试将 tool_data 解析为 JSON
+                try:
+                    result_data = json.loads(tool_data)
+                    result_str = json.dumps(result_data, ensure_ascii=False, indent=2)
+                except json.JSONDecodeError:
+                    # 如果不是有效的 JSON，则直接使用原始内容
+                    result_str = tool_data
+
+            # 构造系统提示词
+            system_prompt = f"""
+            Act as a self-contained intelligent assistant. Follow these instructions strictly:
+
+            1.  **Core Principle:** You must perform tasks and generate answers using **only** the data, text, or context that I provide to you within this chat.
+            2.  **No External Access:** Do not attempt to invoke or use any internal or external tools (such as search functions, code interpreters, calculators, or knowledge retrieval from your base training data) to complete the task.
+            3.  **Direct Processing:** Analyze, reason, and respond directly based on the provided input. If the necessary information is not contained in my messages, state that clearly instead of making assumptions.
+
+            Input：
+            {result_str}
+
+            Please generate the final result based on the above data.
+            """
+            return system_prompt
+
+        except Exception as e:
+            self.logger.error(f"Failed to generate frontend tool direct system prompt: {str(e)}")
+            return self.generate_system_prompt()
+
+    def generate_backend_tool_direct_system_prompt(self) -> str:
         """
         直接利用 tool_info 发起 HTTP 请求，将结果写入系统提示词并返回。
         告诉大模型无需调用工具，直接基于返回的数据生成结果。
@@ -568,11 +610,11 @@ class GeneralAgent(Agent):
                 working = False
         return answer, reasoning
 
-    async def create_agent(self, user_id, prompt, query_id, callback_handler):
+    async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler):
         #self.knowledgeTool = get_knowledge_tool(user_id,  prompt)
         self.knowledgeTool = await asyncio.to_thread(get_knowledge_tool, user_id,  prompt)
         user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
-        system_prompt = self.generate_system_prompt()
+        system_prompt = self.generate_system_prompt(tool_data)
         self.memory.reset([])
         self.memory.push('user', user_prompt)
         self.memory.push('system', system_prompt)

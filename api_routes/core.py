@@ -337,7 +337,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
             handler = SSECallbackHandler(queue)
 
             try:
-                openai_agent = await general_agent.create_agent(user_id, request.query, request.query_id, handler)
+                openai_agent = await general_agent.create_agent(user_id, request.query, request.query_id, request.tool_data, handler)
             except Exception as e:
                 app_logger.error(f"Failed to create agent: {str(e)}")
                 yield f"data:{json.dumps({'error': 'Failed to create agent'})}\n\n"
