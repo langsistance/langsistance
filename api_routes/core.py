@@ -280,7 +280,8 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         "id": tool_info.id,
                         "title": tool_info.title,
                         "description": tool_info.description,
-                        "url": tool_info.url
+                        "url": tool_info.url,
+                        "params": tool_info.params
                     }
 
                 tool_response["push"] = tool_info.push
