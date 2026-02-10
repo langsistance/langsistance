@@ -293,7 +293,7 @@ class GeneralAgent(Agent):
             if tool_data and tool_data.strip():  # 判断tool_data是否非空
                 return self.generate_frontend_tool_direct_system_prompt(tool_data)
             else:
-                return self.generate_fixed_system_prompt()
+                return self.generate_template_system_prompt()
         elif tool_info.push == 2:
             if self.is_query_and_body_empty():
                 return self.generate_backend_tool_direct_system_prompt()
@@ -301,7 +301,7 @@ class GeneralAgent(Agent):
                 return self.generate_template_system_prompt()
         else:
             # 默认情况下固定的系统提示词
-            return self.generate_fixed_system_prompt()
+            return self.generate_template_system_prompt()
 
 
 
@@ -449,13 +449,12 @@ class GeneralAgent(Agent):
                             # 构造Redis键
                             redis_key = f"tool_request_{query_id}_{user_id}"
 
+                            # param_dict = {"origin_params": json.loads(tool_info.params)}
+                            # if params:
+                            #     # 将参数转换为JSON并存储到Redis
+                            #     param_dict["llm_params"] = params
 
-                            param_dict = {"origin_params": json.loads(tool_info.params)}
-                            if params:
-                                # 将参数转换为JSON并存储到Redis
-                                param_dict["llm_params"] = params
-
-                            params_json = json.dumps(param_dict)
+                            params_json = json.dumps(params)
 
                             redis_conn.set(redis_key, params_json, ex=1200)
 

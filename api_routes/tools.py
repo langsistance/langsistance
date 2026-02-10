@@ -741,7 +741,7 @@ async def get_tool_request(request: ToolFetchRequest, http_request: Request):
                 content={
                     "success": True,
                     "message": "Tool retrieved successfully",
-                    "tool": tool_data
+                    "params": tool_data
                 }
             )
 
