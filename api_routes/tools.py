@@ -817,8 +817,8 @@ async def save_tool_response(request: ToolResponseRequest, http_request: Request
             html_content = processed_tool_response['html']
             if isinstance(html_content, str):
                 #使用BeautifulSoup移除HTML标签
-                cleaned_html = BeautifulSoup(html_content, "html.parser").get_text()
-                cleaned_html = cleaned_html.get_text(separator=" ", strip=True)
+                soup = BeautifulSoup(html_content, "html.parser")
+                cleaned_html = soup.get_text(separator=" ", strip=True)
                 cleaned_html = " ".join(cleaned_html.split())
                 # 创建一个新的字典副本
                 processed_tool_response = processed_tool_response.copy()
