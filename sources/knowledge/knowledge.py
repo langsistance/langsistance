@@ -6,6 +6,7 @@ import numpy as np
 from typing import Dict, List, Optional, Tuple, Any
 from pydantic import BaseModel
 from sklearn.metrics.pairwise import cosine_similarity
+from bs4 import BeautifulSoup
 
 from sources.logger import Logger
 import pymysql
@@ -80,6 +81,36 @@ def get_embedding(text: str) -> List[float]:
     except Exception as e:
         logger.error(f"Error in get_embedding: {str(e)}")
         raise e
+
+
+def clean_html_text(html_content: str) -> str:
+    """
+    清理HTML内容，提取纯文本并格式化
+
+    Args:
+        html_content: HTML格式的字符串内容
+
+    Returns:
+        str: 清理后的纯文本字符串
+    """
+    try:
+        # 使用 BeautifulSoup 解析 HTML 并提取文本
+        soup = BeautifulSoup(html_content, "html.parser")
+        result_str = soup.get_text(separator=" ", strip=True)
+
+        # 清理多余的空格
+        result_str = " ".join(result_str.split())
+
+        # 移除各种形式的换行符
+        result_str = result_str.replace(" \\n", "")
+        result_str = result_str.replace("\\n", "")
+        result_str = result_str.replace("\n", "")
+
+        return result_str
+    except Exception as e:
+        logger.error(f"Error in clean_html_text: {str(e)}")
+        return html_content  # 如果出错，返回原始内容
+
 
 def get_user_vector_indices(user_id: str, embeddings_list: List, knowledge_items: List[Dict]):
 

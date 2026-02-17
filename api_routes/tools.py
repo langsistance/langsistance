@@ -19,7 +19,7 @@ from .models import (
     ToolCreateRequest, ToolCreateResponse,
     UrlRequest
 )
-from sources.knowledge.knowledge import get_db_connection, get_redis_connection, create_tool_and_knowledge_records, get_tool_by_id
+from sources.knowledge.knowledge import get_db_connection, get_redis_connection, create_tool_and_knowledge_records, get_tool_by_id, clean_html_text
 from sources.logger import Logger
 from sources.user.passport import verify_firebase_token
 
@@ -816,10 +816,8 @@ async def save_tool_response(request: ToolResponseRequest, http_request: Request
         if isinstance(processed_tool_response, dict) and 'html' in processed_tool_response:
             html_content = processed_tool_response['html']
             if isinstance(html_content, str):
-                #使用BeautifulSoup移除HTML标签
-                soup = BeautifulSoup(html_content, "html.parser")
-                cleaned_html = soup.get_text(separator=" ", strip=True)
-                cleaned_html = " ".join(cleaned_html.split())
+                # 使用公用方法清理HTML文本
+                cleaned_html = clean_html_text(html_content)
                 # 创建一个新的字典副本
                 processed_tool_response = processed_tool_response.copy()
                 processed_tool_response['html'] = cleaned_html

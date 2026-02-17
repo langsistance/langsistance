@@ -3,7 +3,7 @@ import json
 from pydantic import BaseModel, Field
 from bs4 import BeautifulSoup
 
-from sources.knowledge.knowledge import get_redis_connection, get_knowledge_tool
+from sources.knowledge.knowledge import get_redis_connection, get_knowledge_tool, clean_html_text
 from sources.utility import pretty_print, animate_thinking
 from sources.agents.agent import Agent
 from sources.tools.mcpFinder import MCP_finder
@@ -326,10 +326,8 @@ class GeneralAgent(Agent):
         try:
             # 解析 tool_data 内容
             if "text/html" in tool_data:
-                # 如果是 HTML 内容，使用 BeautifulSoup 移除标签
-                soup = BeautifulSoup(tool_data, "html.parser")
-                result_str = soup.get_text(separator=" ", strip=True)
-                result_str = " ".join(result_str.split())
+                # 如果是 HTML 内容，使用公用方法清理文本
+                result_str = clean_html_text(tool_data)
 
             else:
                 # 尝试将 tool_data 解析为 JSON
