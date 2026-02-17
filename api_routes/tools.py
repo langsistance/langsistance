@@ -16,7 +16,8 @@ from .models import (
     ToolFetchRequest, ToolFetchResponse,
     ToolResponseRequest, ToolResponseResponse,
     OpenAPISpecRequest, OpenAPISpecResponse,
-    ToolCreateRequest, ToolCreateResponse
+    ToolCreateRequest, ToolCreateResponse,
+    UrlRequest
 )
 from sources.knowledge.knowledge import get_db_connection, get_redis_connection, create_tool_and_knowledge_records, get_tool_by_id
 from sources.logger import Logger
