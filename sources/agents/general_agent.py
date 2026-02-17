@@ -575,13 +575,15 @@ class GeneralAgent(Agent):
 
         tools = []
         # 根据tool_info.push的值选择不同系统提示词
-        if tool_info.push == 1 or tool_info.push == 3:
+        if tool_info.push == 1:
             return await self.get_dynamic_tools()
         elif tool_info.push == 2:
             if self.is_query_and_body_empty():
                 return tools
             else:
                 return await self.get_dynamic_tools()
+        elif tool_info.push == 3:
+            return tools
         else:
             # 默认情况下固定的系统提示词
             return await self.get_dynamic_tools()
