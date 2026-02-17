@@ -300,7 +300,7 @@ class GeneralAgent(Agent):
             else:
                 return self.generate_template_system_prompt()
         elif tool_info.push == 3:
-            return self.generate_frontend_tool_direct_system_prompt()
+            return self.generate_frontend_tool_direct_system_prompt(tool_data)
         else:
             # 默认情况下固定的系统提示词
             return self.generate_template_system_prompt()
