@@ -1419,7 +1419,7 @@ async def create_tool_from_custom(request: OpenAPISpecRequest, http_request: Req
             connection.close()
 
 @router.post("/create_tool_from_url", response_model=OpenAPISpecResponse)
-async def create_tool_from_url(url: str, http_request: Request):
+async def create_tool_from_url(urlRequest: UrlRequest, http_request: Request):
     """
     从自定义JSON创建工具接口
 
@@ -1430,6 +1430,18 @@ async def create_tool_from_url(url: str, http_request: Request):
     Returns:
         ToolCustomCreateResponse: 工具创建结果响应
     """
+    if not urlRequest.url:
+        logger.error(f"Validation errors: missing url")
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "message": "missing url",
+                "tool_id": None,
+            }
+        )
+    url = urlRequest.url
+
     connection = None
     try:
         # 验证用户身份

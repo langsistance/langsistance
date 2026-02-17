@@ -161,3 +161,9 @@ class ToolCreateResponse(BaseModel):
     success: bool
     message: str
     tool_id: Optional[int] = None
+
+class UrlRequest(BaseModel):
+    """
+    url请求模型
+    """
+    url: str  # "json" 或 "yaml"
