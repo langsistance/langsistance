@@ -321,13 +321,16 @@ class GeneralAgent(Agent):
         """
         直接解析 tool_data 并生成系统提示词，无需发起 HTTP 请求。
         """
-        self.logger.info(f"generate_frontend_tool_direct_system_prompt - tool_data: {tool_data}")
+        # self.logger.info(f"generate_frontend_tool_direct_system_prompt - tool_data: {tool_data}")
 
         try:
             # 解析 tool_data 内容
             if "text/html" in tool_data:
                 # 如果是 HTML 内容，使用 BeautifulSoup 移除标签
                 result_str = BeautifulSoup(tool_data, "html.parser").get_text()
+                result_str = result_str.get_text(separator=" ", strip=True)
+                result_str = " ".join(result_str.split())
+
             else:
                 # 尝试将 tool_data 解析为 JSON
                 try:
