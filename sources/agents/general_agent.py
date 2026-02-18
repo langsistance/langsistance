@@ -355,7 +355,7 @@ class GeneralAgent(Agent):
 
         except Exception as e:
             self.logger.error(f"Failed to generate frontend tool direct system prompt: {str(e)}")
-            return self.generate_system_prompt()
+            return self.generate_template_system_prompt()
 
     def generate_backend_tool_direct_system_prompt(self) -> str:
         """
@@ -576,7 +576,10 @@ class GeneralAgent(Agent):
         tools = []
         # 根据tool_info.push的值选择不同系统提示词
         if tool_info.push == 1:
-            return await self.get_dynamic_tools()
+            if self.is_query_and_body_empty():
+                return tools
+            else:
+                return await self.get_dynamic_tools()
         elif tool_info.push == 2:
             if self.is_query_and_body_empty():
                 return tools
