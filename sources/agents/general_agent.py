@@ -399,7 +399,6 @@ class GeneralAgent(Agent):
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
-            self.logger.info(f"response:{response}")
             # 处理响应结果
             if response.status_code == 200:
 
