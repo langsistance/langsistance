@@ -399,6 +399,8 @@ class GeneralAgent(Agent):
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
+            self.logger.info(f"tool_info.params:{tool_info.params}")
+            self.logger.info(f"response:{response}")
             # 处理响应结果
             if response.status_code == 200:
 
@@ -430,7 +432,7 @@ class GeneralAgent(Agent):
 
         except Exception as e:
             self.logger.error(f"Failed to generate tool direct system prompt: {str(e)}")
-            return self.generate_system_prompt()
+            return self.generate_system_prompt(result_str)
 
     async def get_dynamic_tools(self) -> list:
         try:
