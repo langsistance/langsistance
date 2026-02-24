@@ -399,17 +399,35 @@ class GeneralAgent(Agent):
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
-            self.logger.info(f"tool_info.params:{tool_info.params}")
             self.logger.info(f"response:{response}")
             # 处理响应结果
             if response.status_code == 200:
 
-                if "text/html" in response.headers.get("Content-Type", ""):
+                content_type = response.headers.get("Content-Type", "").lower()
+
+                if "text/html" in content_type:
                     # 使用BeautifulSoup移除HTML标签
                     result_str = BeautifulSoup(response.content, "html.parser").get_text()
+                elif "application/xml" in content_type or "text/xml" in content_type:
+                    # 处理XML格式响应
+                    try:
+                        # 使用BeautifulSoup解析XML并提取文本内容
+                        soup = BeautifulSoup(response.content, "xml")
+                        # 移除XML标签，只保留文本内容
+                        result_str = soup.get_text()
+                        # 如果XML解析失败或内容为空，使用原始内容
+                        if not result_str.strip():
+                            result_str = response.text
+                    except Exception as xml_e:
+                        self.logger.warning(f"XML parsing failed: {str(xml_e)}, using raw content")
+                        result_str = response.text
                 else:
-                    result_data = response.json() if response.content else {}
-                    result_str = json.dumps(result_data, ensure_ascii=False, indent=2)
+                    try:
+                        result_data = response.json() if response.content else {}
+                        result_str = json.dumps(result_data, ensure_ascii=False, indent=2)
+                    except json.JSONDecodeError:
+                        # 如果JSON解析失败，使用原始响应内容
+                        result_str = response.text if response.text else "Empty response"
             else:
                 result_str = f"request failed，status code: {response.status_code}"
 
