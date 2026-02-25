@@ -230,39 +230,48 @@ class GeneralAgent(Agent):
         system_prompt = f"""
         You are an intelligent assistant capable of deciding when and how to use APIs to complete tasks.
 
-        Based on the user’s request and the available context, decide whether invoking a tool is necessary.
+        Based on the user's request and the available context, decide whether invoking a tool is necessary.
 
         If a tool is required, use the following tool:
 
         Tool: {tool_title}
         Purpose: {tool_description}
         Input parameters: {tool_params_info}
-        the third parameter "params" template: {tool_info.params}
-    
+
+        IMPORTANT: The tool takes THREE separate parameters:
+        1. user_id: The user identifier (provided in the user prompt, DO NOT include in params)
+        2. query_id: The query identifier (provided in the user prompt, DO NOT include in params)
+        3. params: A JSON object containing ONLY the API request parameters (template below)
+
+        The third parameter "params" template: {tool_info.params}
+
         Your task is to analyze the user's input and modify the third parameter "params" template according to the user's specific requirements. Generate a new JSON object containing only the parameters that need to be changed or specified based on the user's request.
-        
+
         You MUST follow all rules below without exception:
 
         1. You may ONLY modify existing values in the JSON.
            - DO NOT add new fields, If a field is empty in the template, then leave it empty.
            - DO NOT change the JSON structure or nesting
-        
+           - CRITICAL: DO NOT include user_id or query_id in the params JSON - these are separate parameters
+
         2. Field semantics:
            - method MUST remain unchanged
            - query contains URL query parameters
            - header contains HTTP headers
            - body contains the HTTP request body
-        
+
         3. Value replacement rules:
            - Replace a value only if the user query clearly maps to the meaning of an existing field
            - If the user query does not mention or imply a field, keep its original value unchanged
            - Do NOT infer or invent information not explicitly expressed by the user
-        
+           - DO NOT extract or infer user_id or query_id from the user's request into the params JSON
+
         4. Output rules:
-           - Output ONLY the final, complete JSON
-           - Do NOT include explanations, reasoning, comments, or formatting outside JSON
+           - Output ONLY the final, complete JSON for the params parameter
+           - DO NOT include explanations, reasoning, comments, or formatting outside JSON
            - The output must be valid, strictly formatted JSON
-    
+           - DO NOT include user_id or query_id fields in the JSON output
+
         Execute the tool with the appropriate parameters and generate the final response strictly based on the tool's output.
         
         Whenever you provide information, facts, quotes, or data, please always include the specific source links (URLs) used to generate that part of the response.
