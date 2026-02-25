@@ -116,19 +116,31 @@ class GeneralAgent(Agent):
         # 格式化为字符串
         time_str = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
 
+        # 获取knowledge item的answer作为上下文
+        context = ""
+        if knowledge_item and hasattr(knowledge_item, 'answer') and knowledge_item.answer:
+            context = f"""
+
+        Context from knowledge base:
+        {knowledge_item.answer}
+
+        Use this context to better understand the task and provide more accurate responses.
+        """
+
         if not tool_info:
             system_prompt = f"""
-            
+
             You are an intelligent API-enabled assistant. Current time is {time_str}.
-            
-            If no relevant knowledge is available to complete the user’s task, clearly inform the user that no matching knowledge was found and suggest checking the community for shared knowledge or tools that may solve the problem.
-            
+            {context}
+
+            If no relevant knowledge is available to complete the user's task, clearly inform the user that no matching knowledge was found and suggest checking the community for shared knowledge or tools that may solve the problem.
+
             If a tool response indicates that the user is not authenticated, or returns a login page, inform the user that authentication is required before the task can be executed.
-            
+
             In this case, always append the following tag at the end of your response:
-            
+
             <Knowledge tool not logged in>
-            
+
             """
             return system_prompt
 
@@ -157,8 +169,9 @@ class GeneralAgent(Agent):
 
         system_prompt = f"""
         You are an intelligent assistant capable of deciding when and how to use APIs to complete tasks.
+        {context}
 
-        Based on the user’s request and the available context, decide whether invoking a tool is necessary.
+        Based on the user's request and the available context, decide whether invoking a tool is necessary.
 
         If a tool is required, use the following tool:
 
@@ -166,21 +179,21 @@ class GeneralAgent(Agent):
         Purpose: {tool_description}
         Input parameters: {tool_params_info}
 
-        Execute the tool with the appropriate parameters and generate the final response strictly based on the tool’s output.
-        
+        Execute the tool with the appropriate parameters and generate the final response strictly based on the tool's output.
+
         Whenever you provide information, facts, quotes, or data, please always include the specific source links (URLs) used to generate that part of the response.
-        
-                
+
+
         Use the standard Markdown inline link syntax: `[anchor text](full_url)`.
-        
+
         - **Correct:** The global AI market is projected to reach $1.5 trillion by 2030 [source](https://example.com/report2023).
-        
+
         - **Incorrect:** The global AI market is projected to reach $1.5 trillion by 2030. (Source: https://example.com/report2023)
 
         If the task can be completed without invoking the tool, respond directly to the user without calling any tool.
 
         Do not fabricate tool results. Do not assume tool behavior beyond the provided output.
-        
+
         Do not return tool parameters, such as the user id and query id.
         """
         # return self.expand_prompt(system_prompt)
@@ -202,12 +215,24 @@ class GeneralAgent(Agent):
         # 格式化为字符串
         time_str = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
 
+        # 获取knowledge item的answer作为上下文
+        context = ""
+        if knowledge_item and hasattr(knowledge_item, 'answer') and knowledge_item.answer:
+            context = f"""
+
+        Context from knowledge base:
+        {knowledge_item.answer}
+
+        Use this context to better understand the task and provide more accurate responses.
+        """
+
         if not tool_info:
             system_prompt = f"""
 
             You are an intelligent API-enabled assistant. Current time is {time_str}.
+            {context}
 
-            If no relevant knowledge is available to complete the user’s task, clearly inform the user that no matching knowledge was found and suggest checking the community for shared knowledge or tools that may solve the problem.
+            If no relevant knowledge is available to complete the user's task, clearly inform the user that no matching knowledge was found and suggest checking the community for shared knowledge or tools that may solve the problem.
 
             If a tool response indicates that the user is not authenticated, or returns a login page, inform the user that authentication is required before the task can be executed.
 
@@ -229,6 +254,7 @@ class GeneralAgent(Agent):
 
         system_prompt = f"""
         You are an intelligent assistant capable of deciding when and how to use APIs to complete tasks.
+        {context}
 
         Based on the user's request and the available context, decide whether invoking a tool is necessary.
 
@@ -273,19 +299,19 @@ class GeneralAgent(Agent):
            - DO NOT include user_id or query_id fields in the JSON output
 
         Execute the tool with the appropriate parameters and generate the final response strictly based on the tool's output.
-        
+
         Whenever you provide information, facts, quotes, or data, please always include the specific source links (URLs) used to generate that part of the response.
-        
+
         Use the standard Markdown inline link syntax: `[anchor text](full_url)`.
-        
+
         - **Correct:** The global AI market is projected to reach $1.5 trillion by 2030 [source](https://example.com/report2023).
-        
+
         - **Incorrect:** The global AI market is projected to reach $1.5 trillion by 2030. (Source: https://example.com/report2023)
-    
+
         If the task can be completed without invoking the tool, respond directly to the user without calling any tool.
-    
+
         Do not fabricate tool results. Do not assume tool behavior beyond the provided output.
-    
+
         Do not return tool parameters, such as the user id and query id.
         """
 
@@ -333,6 +359,18 @@ class GeneralAgent(Agent):
         # self.logger.info(f"generate_frontend_tool_direct_system_prompt - tool_data: {tool_data}")
 
         try:
+            # 获取knowledge item的answer作为上下文
+            knowledge_item, _ = self.knowledgeTool
+            context = ""
+            if knowledge_item and hasattr(knowledge_item, 'answer') and knowledge_item.answer:
+                context = f"""
+
+            Context from knowledge base:
+            {knowledge_item.answer}
+
+            Use this context to better understand the task and provide more accurate responses.
+            """
+
             # 解析 tool_data 内容
             if "text/html" in tool_data:
                 # 如果是 HTML 内容，使用公用方法清理文本
@@ -350,6 +388,7 @@ class GeneralAgent(Agent):
             # 构造系统提示词
             system_prompt = f"""
             Act as a self-contained intelligent assistant. Follow these instructions strictly:
+            {context}
 
             1.  **Core Principle:** You must perform tasks and generate answers using **only** the data, text, or context that I provide to you within this chat.
             2.  **No External Access:** Do not attempt to invoke or use any internal or external tools (such as search functions, code interpreters, calculators, or knowledge retrieval from your base training data) to complete the task.
@@ -376,6 +415,17 @@ class GeneralAgent(Agent):
         self.logger.info(f"generate_tool_direct_system_prompt - tool:{tool_info}")
 
         try:
+            # 获取knowledge item的answer作为上下文
+            context = ""
+            if knowledge_item and hasattr(knowledge_item, 'answer') and knowledge_item.answer:
+                context = f"""
+
+            Context from knowledge base:
+            {knowledge_item.answer}
+
+            Use this context to better understand the task and provide more accurate responses.
+            """
+
             # 从 tool_info 中提取 URL 和参数模板
             url = tool_info.url
             params_data = json.loads(tool_info.params)
@@ -444,6 +494,7 @@ class GeneralAgent(Agent):
             # 构造系统提示词
             system_prompt = f"""
             Act as a self-contained intelligent assistant. Follow these instructions strictly:
+            {context}
 
             1.  **Core Principle:** You must perform tasks and generate answers using **only** the data, text, or context that I provide to you within this chat.
             2.  **No External Access:** Do not attempt to invoke or use any internal or external tools (such as search functions, code interpreters, calculators, or knowledge retrieval from your base training data) to complete the task.
