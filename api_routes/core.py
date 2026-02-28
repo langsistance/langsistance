@@ -27,7 +27,7 @@ AGENT_POOL_MAX_IDLE_TIME = 300  # 5 minutes
 # Token cache with TTL
 _token_cache = {}
 _token_cache_lock = asyncio.Lock()
-TOKEN_CACHE_TTL = 3600  # 1 hour
+TOKEN_CACHE_TTL = 86400  # 24 hours
 
 async def get_cached_token_validation(auth_header: str):
     """Cache token validation results to reduce Firebase API calls"""
