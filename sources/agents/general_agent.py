@@ -66,6 +66,123 @@ class GeneralAgent(Agent):
             knowledge_tool (Dict[str, Any]): 知识工具字典
         """
         self.knowledgeTool = knowledge_tool
+
+    def _get_markdown_formatting_guide(self) -> str:
+        """
+        获取 Markdown 格式化指南，用于指导大模型输出美观的内容
+        """
+        return """
+## Markdown Formatting Guidelines
+
+You MUST follow these formatting rules to ensure beautiful, readable output:
+
+### 1. Structure & Organization
+- Use clear heading hierarchy: # for main title, ## for sections, ### for subsections
+- Add blank lines between different content blocks for better readability
+- Group related information together
+
+### 2. Links
+- **Inline links**: Use `[descriptive text](URL)` format
+- Make link text meaningful and descriptive (not just "click here")
+- Example: `[OpenAI Documentation](https://platform.openai.com/docs)`
+
+### 3. Images
+- Display images using: `![alt text](image_URL)`
+- Always provide meaningful alt text
+- If multiple images, consider organizing them in a list or grid pattern
+- Example: `![Product Screenshot](https://example.com/image.jpg)`
+
+### 4. Lists
+- Use `-` for unordered lists (more visually appealing than `*`)
+- Use numbered lists `1.` for sequential steps
+- Add space after list markers
+- Indent sub-items with 2-4 spaces
+
+Example:
+```
+- Main item
+  - Sub item
+  - Another sub item
+- Another main item
+```
+
+### 5. Emphasis
+- Use **bold** for important terms: `**text**`
+- Use *italic* for emphasis: `*text*`
+- Use ***bold italic*** for very important: `***text***`
+- Use `code` for technical terms: `` `code` ``
+
+### 6. Code Blocks
+- Use fenced code blocks with language specification:
+```
+```python
+def example():
+    return "formatted code"
+```
+```
+
+### 7. Tables (for structured data)
+- Use tables for comparing information:
+```
+| Column 1 | Column 2 | Column 3 |
+|----------|----------|----------|
+| Data 1   | Data 2   | Data 3   |
+```
+
+### 8. Quotes
+- Use `>` for important quotes or highlights
+- Example: `> This is an important note`
+
+### 9. Horizontal Rules
+- Use `---` to separate major sections (use sparingly)
+
+### 10. Special Formatting for Your Response
+
+**When presenting tool results:**
+
+a) **If result contains URLs**: Format as clickable links with context
+   - ❌ Bad: `https://example.com/article`
+   - ✅ Good: `[Read the full article](https://example.com/article)`
+
+b) **If result contains images**: Display them directly
+   - Format: `![Description](image_URL)`
+   - Add captions below if needed
+
+c) **If result is a list**: Use proper list formatting
+   - Keep items concise
+   - Use sub-lists for hierarchy
+
+d) **If result contains data**: Consider using tables for clarity
+
+e) **Summary structure** (recommended):
+   ```
+   ## [Main Topic]
+
+   [Brief introduction or summary]
+
+   ### Key Points
+   - Point 1
+   - Point 2
+
+   ### Details
+   [Detailed information]
+
+   ### Resources
+   - [Link 1](URL)
+   - [Link 2](URL)
+
+   ### Images
+   ![Image 1](URL)
+   ```
+
+### 11. Content Organization Tips
+- Start with a brief summary (2-3 sentences)
+- Group related links together
+- Place images after relevant text descriptions
+- End with additional resources or next steps if applicable
+
+**Remember**: Your goal is to make the content scannable, visually appealing, and easy to read. Use whitespace effectively!
+"""
     
     def expand_prompt(self, prompt):
         """
@@ -313,6 +430,44 @@ class GeneralAgent(Agent):
         Do not fabricate tool results. Do not assume tool behavior beyond the provided output.
 
         Do not return tool parameters, such as the user id and query id.
+
+        ## Markdown Formatting Requirements
+
+        When generating your response based on the tool's output, you MUST format it beautifully using Markdown:
+
+        ### Essential Formatting Rules:
+
+        1. **Structure**: Use clear heading hierarchy (## for main sections, ### for subsections)
+        2. **Links**: Convert ALL URLs to descriptive links: `[meaningful text](URL)`
+        3. **Images**: Display images using: `![description](image_URL)`
+        4. **Lists**: Use `-` for bullet points, `1.` for numbered lists
+        5. **Emphasis**: Use **bold** for key terms, *italic* for emphasis, `code` for technical terms
+        6. **Tables**: Use tables for structured data comparison
+        7. **Spacing**: Add blank lines between content blocks for readability
+        8. **Code blocks**: Use fenced code blocks with language specification when showing code
+
+        ### Response Structure Template:
+
+        ```markdown
+        ## [Main Topic]
+
+        [Brief summary of what the tool returned]
+
+        ### Key Information
+        - Important point 1
+        - Important point 2
+
+        ### Details
+        [Organized detailed content]
+
+        ### Resources
+        - [Descriptive Link Text](URL)
+
+        ### Visual Content
+        ![Image Description](image_URL)
+        ```
+
+        **IMPORTANT**: Make your response visually appealing, easy to scan, and professionally formatted. Transform raw data into a beautiful, user-friendly presentation.
         """
 
         return system_prompt
@@ -385,19 +540,35 @@ class GeneralAgent(Agent):
                     # 如果不是有效的 JSON，则直接使用原始内容
                     result_str = tool_data
 
+            # 获取格式化指南
+            formatting_guide = self._get_markdown_formatting_guide()
+
             # 构造系统提示词
             system_prompt = f"""
-            Act as a self-contained intelligent assistant. Follow these instructions strictly:
-            {context}
+Act as a self-contained intelligent assistant. Follow these instructions strictly:
+{context}
 
-            1.  **Core Principle:** You must perform tasks and generate answers using **only** the data, text, or context that I provide to you within this chat.
-            2.  **No External Access:** Do not attempt to invoke or use any internal or external tools (such as search functions, code interpreters, calculators, or knowledge retrieval from your base training data) to complete the task.
-            3.  **Direct Processing:** Analyze, reason, and respond directly based on the provided input. If the necessary information is not contained in my messages, state that clearly instead of making assumptions.
+## Core Instructions
 
-            Input：
-            {result_str}
+1.  **Core Principle:** You must perform tasks and generate answers using **only** the data, text, or context that I provide to you within this chat.
+2.  **No External Access:** Do not attempt to invoke or use any internal or external tools (such as search functions, code interpreters, calculators, or knowledge retrieval from your base training data) to complete the task.
+3.  **Direct Processing:** Analyze, reason, and respond directly based on the provided input. If the necessary information is not contained in my messages, state that clearly instead of making assumptions.
 
-            Please generate the final result based on the above data.
+{formatting_guide}
+
+## Input Data
+
+{result_str}
+
+## Your Task
+
+Generate a beautiful, well-formatted Markdown response based on the above data. Follow ALL the formatting guidelines provided above. Make your response:
+- Visually appealing with proper structure
+- Easy to scan with clear headings
+- Rich with properly formatted links and images
+- Professional and polished
+
+Begin your response now:
             """
             return system_prompt
 
@@ -489,21 +660,35 @@ class GeneralAgent(Agent):
             else:
                 result_str = f"request failed，status code: {response.status_code}"
 
-
+            # 获取格式化指南
+            formatting_guide = self._get_markdown_formatting_guide()
 
             # 构造系统提示词
             system_prompt = f"""
-            Act as a self-contained intelligent assistant. Follow these instructions strictly:
-            {context}
+Act as a self-contained intelligent assistant. Follow these instructions strictly:
+{context}
 
-            1.  **Core Principle:** You must perform tasks and generate answers using **only** the data, text, or context that I provide to you within this chat.
-            2.  **No External Access:** Do not attempt to invoke or use any internal or external tools (such as search functions, code interpreters, calculators, or knowledge retrieval from your base training data) to complete the task.
-            3.  **Direct Processing:** Analyze, reason, and respond directly based on the provided input. If the necessary information is not contained in my messages, state that clearly instead of making assumptions.
+## Core Instructions
 
-            Input：
-            {result_str}
+1.  **Core Principle:** You must perform tasks and generate answers using **only** the data, text, or context that I provide to you within this chat.
+2.  **No External Access:** Do not attempt to invoke or use any internal or external tools (such as search functions, code interpreters, calculators, or knowledge retrieval from your base training data) to complete the task.
+3.  **Direct Processing:** Analyze, reason, and respond directly based on the provided input. If the necessary information is not contained in my messages, state that clearly instead of making assumptions.
 
-            Please generate the final result based on the above data.
+{formatting_guide}
+
+## Input Data
+
+{result_str}
+
+## Your Task
+
+Generate a beautiful, well-formatted Markdown response based on the above data. Follow ALL the formatting guidelines provided above. Make your response:
+- Visually appealing with proper structure
+- Easy to scan with clear headings
+- Rich with properly formatted links and images
+- Professional and polished
+
+Begin your response now:
             """
             return system_prompt
 
