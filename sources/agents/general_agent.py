@@ -448,7 +448,8 @@ e) **Summary structure** (recommended):
 
         ### Response Structure Template:
 
-        ```markdown
+        Your response should follow this structure (but output DIRECTLY, not in a code block):
+
         ## [Main Topic]
 
         [Brief summary of what the tool returned]
@@ -465,7 +466,13 @@ e) **Summary structure** (recommended):
 
         ### Visual Content
         ![Image Description](image_URL)
-        ```
+
+        **CRITICAL OUTPUT FORMAT**:
+        - Output your response as DIRECT Markdown content
+        - Do NOT wrap your entire response in a code block
+        - Do NOT start with ```markdown or ```
+        - Start directly with Markdown formatting (e.g., ## Title or plain text)
+        - Only use code blocks for actual code snippets within your content, not for the entire response
 
         **IMPORTANT**: Make your response visually appealing, easy to scan, and professionally formatted. Transform raw data into a beautiful, user-friendly presentation.
         """
@@ -567,6 +574,13 @@ Generate a beautiful, well-formatted Markdown response based on the above data. 
 - Easy to scan with clear headings
 - Rich with properly formatted links and images
 - Professional and polished
+
+**CRITICAL OUTPUT FORMAT**:
+- Output your response as DIRECT Markdown content
+- Do NOT wrap your entire response in a code block
+- Do NOT start with ```markdown or ```
+- Start directly with Markdown formatting (e.g., ## Title or plain text)
+- Only use code blocks for actual code snippets within your content, not for the entire response
 
 Begin your response now:
             """
@@ -687,6 +701,13 @@ Generate a beautiful, well-formatted Markdown response based on the above data. 
 - Easy to scan with clear headings
 - Rich with properly formatted links and images
 - Professional and polished
+
+**CRITICAL OUTPUT FORMAT**:
+- Output your response as DIRECT Markdown content
+- Do NOT wrap your entire response in a code block
+- Do NOT start with ```markdown or ```
+- Start directly with Markdown formatting (e.g., ## Title or plain text)
+- Only use code blocks for actual code snippets within your content, not for the entire response
 
 Begin your response now:
             """
