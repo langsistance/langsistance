@@ -205,6 +205,55 @@
             -webkit-backdrop-filter: blur(12px) saturate(180%);
             background-color: rgba(255, 255, 255, 0.7);
         }
+
+        /* Language selector dropdown */
+        .language-dropdown {
+            position: relative;
+            padding-bottom: 0.25rem;
+        }
+
+        .language-menu {
+            display: none;
+            position: absolute;
+            right: 0;
+            top: 100%;
+            margin-top: 0;
+            padding-top: 0.25rem;
+            min-width: 160px;
+            z-index: 100;
+        }
+
+        .language-dropdown:hover .language-menu {
+            display: block;
+        }
+
+        .language-menu-inner {
+            border-radius: 0.5rem;
+            overflow: hidden;
+            background: white;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+
+        .language-menu-inner button {
+            display: block;
+            width: 100%;
+            text-align: left;
+            padding: 0.75rem 1rem;
+            transition: background-color 0.2s;
+            border: none;
+            background: transparent;
+            cursor: pointer;
+        }
+
+        .language-menu-inner button:hover {
+            background-color: #f3f4f6;
+        }
+
+        .language-menu-inner button.active {
+            background-color: #e0f2fe;
+            color: #0284c7;
+            font-weight: 600;
+        }
     </style>
 </head>
 
@@ -217,6 +266,30 @@
                 <span class="text-xl font-semibold text-gray-900">CopiioAI</span>
             </div>
             <div class="flex items-center space-x-4">
+                <!-- Language Selector -->
+                <div class="language-dropdown">
+                    <button class="flex items-center space-x-2 px-3 py-2 text-gray-700 hover:text-gray-900 border border-gray-300 rounded-lg transition">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129"></path>
+                        </svg>
+                        <span id="current-lang">English</span>
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                    </button>
+                    <div class="language-menu">
+                        <div class="language-menu-inner">
+                            <button onclick="changeLanguage('en')" data-lang="en" class="active">English</button>
+                            <button onclick="changeLanguage('zh')" data-lang="zh">简体中文</button>
+                            <button onclick="changeLanguage('ja')" data-lang="ja">日本語</button>
+                            <button onclick="changeLanguage('ko')" data-lang="ko">한국어</button>
+                            <button onclick="changeLanguage('es')" data-lang="es">Español</button>
+                            <button onclick="changeLanguage('fr')" data-lang="fr">Français</button>
+                            <button onclick="changeLanguage('de')" data-lang="de">Deutsch</button>
+                        </div>
+                    </div>
+                </div>
+
                 <a href="/copiioai.zip"
                     class="flex items-center space-x-2 px-4 py-2 text-gray-700 hover:text-gray-900 border border-gray-300 rounded-lg transition">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -224,7 +297,7 @@
                             d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4">
                         </path>
                     </svg>
-                    <span>Chrome Extension</span>
+                    <span data-i18n="header.extension">Chrome Extension</span>
                 </a>
                 <button
                     class="flex items-center space-x-2 px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition">
@@ -233,7 +306,7 @@
                             d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z">
                         </path>
                     </svg>
-                    <span>Desktop App Coming Soon</span>
+                    <span data-i18n="header.desktop">Desktop App Coming Soon</span>
                 </button>
             </div>
         </nav>
@@ -244,12 +317,12 @@
         <!-- Hero Section -->
         <section class="max-w-7xl mx-auto px-6 py-20 text-center">
             <h1 class="text-5xl md:text-6xl font-bold text-gray-900 mb-6">
-                Turn any API into a chat.<br>
-                No frontend required.
+                <span data-i18n="hero.title1">Turn any API into a chat.</span><br>
+                <span data-i18n="hero.title2">No frontend required.</span>
             </h1>
             <p class="text-xl text-gray-600 max-w-3xl mx-auto mb-12">
-                For developers: Build and share chat-based tools powered by your APIs.<br>
-                For non-developers: Access real-time data instantly — no coding required.
+                <span data-i18n="hero.subtitle1">For developers: Build and share chat-based tools powered by your APIs.</span><br>
+                <span data-i18n="hero.subtitle2">For non-developers: Access real-time data instantly — no coding required.</span>
             </p>
             <div class="max-w-4xl mx-auto bg-white rounded-2xl shadow-2xl overflow-hidden">
                 <div class="aspect-video">
@@ -265,17 +338,17 @@
         <!-- What is CopiioAI Section -->
         <section class="bg-white py-20">
             <div class="max-w-7xl mx-auto px-6">
-                <h2 class="text-4xl font-bold text-gray-900 text-center mb-16">What is CopiioAI?</h2>
+                <h2 class="text-4xl font-bold text-gray-900 text-center mb-16" data-i18n="what.title">What is CopiioAI?</h2>
                 <div class="grid md:grid-cols-2 gap-12 items-center">
                     <div class="space-y-6">
-                        <p class="text-lg text-gray-700">
+                        <p class="text-lg text-gray-700" data-i18n="what.p1">
                             CopiioAI is an AI-native tool that lets you turn APIs into conversational interfaces.
                         </p>
-                        <p class="text-lg text-gray-700">
+                        <p class="text-lg text-gray-700" data-i18n="what.p2">
                             Instead of building dashboards or frontend pages, you can publish your APIs as chat-based
                             tools and let others query them using plain language.
                         </p>
-                        <p class="text-lg font-semibold text-gray-900">
+                        <p class="text-lg font-semibold text-gray-900" data-i18n="what.p3">
                             No UI. No setup. No engineering overhead.
                         </p>
                     </div>
@@ -292,8 +365,8 @@
         <section class="py-20 bg-white">
             <div class="max-w-7xl mx-auto px-6">
                 <div class="text-center mb-16">
-                    <h2 class="text-4xl font-bold text-gray-900 mb-6">How to Use CopiioAI</h2>
-                    <p class="text-xl text-gray-600 max-w-3xl mx-auto">
+                    <h2 class="text-4xl font-bold text-gray-900 mb-6" data-i18n="howto.title">How to Use CopiioAI</h2>
+                    <p class="text-xl text-gray-600 max-w-3xl mx-auto" data-i18n="howto.subtitle">
                         Whether you're a developer building API tools or a non-developer accessing real-time data,
                         CopiioAI makes it simple.
                     </p>
@@ -305,9 +378,9 @@
                     <div>
                         <div class="text-center mb-4">
                             <span
-                                class="inline-block px-4 py-2 bg-blue-100 text-blue-800 rounded-full text-sm font-semibold">FOR
+                                class="inline-block px-4 py-2 bg-blue-100 text-blue-800 rounded-full text-sm font-semibold" data-i18n="dev.label">FOR
                                 DEVELOPERS</span>
-                            <h3 class="text-2xl font-bold text-gray-900 mt-4">Turn APIs into Chat</h3>
+                            <h3 class="text-2xl font-bold text-gray-900 mt-4" data-i18n="dev.title">Turn APIs into Chat</h3>
                         </div>
                         <div class="bg-white rounded-xl shadow-xl overflow-hidden">
                             <div class="aspect-video">
@@ -350,9 +423,9 @@
                     <div>
                         <div class="text-center mb-4">
                             <span
-                                class="inline-block px-4 py-2 bg-teal-100 text-teal-800 rounded-full text-sm font-semibold">FOR
+                                class="inline-block px-4 py-2 bg-teal-100 text-teal-800 rounded-full text-sm font-semibold" data-i18n="nondev.label">FOR
                                 NON-DEVELOPERS</span>
-                            <h3 class="text-2xl font-bold text-gray-900 mt-4">Access Real-Time Data Without Swtiching
+                            <h3 class="text-2xl font-bold text-gray-900 mt-4" data-i18n="nondev.title">Access Real-Time Data Without Switching
                                 Tabs</h3>
                         </div>
                         <div class="bg-white rounded-xl shadow-xl overflow-hidden">
@@ -395,12 +468,12 @@
 
                 <!-- Single CTA Box -->
                 <div class="bg-gradient-to-r from-teal-600 to-blue-600 rounded-2xl p-10 text-center">
-                    <h3 class="text-3xl font-bold text-white mb-4">
+                    <h3 class="text-3xl font-bold text-white mb-4" data-i18n="cta.main">
                         Turn Your Browser into a Real-Time Data Engine
                     </h3>
                     <p class="text-xl text-white opacity-90 mb-8 max-w-2xl mx-auto">
-                        No configuration. No coding. No frontend required.<br>
-                        Start building or using API tools in minutes.
+                        <span data-i18n="cta.subtitle1">No configuration. No coding. No frontend required.</span><br>
+                        <span data-i18n="cta.subtitle2">Start building or using API tools in minutes.</span>
                     </p>
                     <div class="flex flex-col sm:flex-row gap-4 justify-center items-center">
                         <a href="/copiioai.zip"
@@ -409,9 +482,9 @@
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                     d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
                             </svg>
-                            <span>Download Chrome Extension</span>
+                            <span data-i18n="cta.download">Download Chrome Extension</span>
                         </a>
-                        <span class="text-white opacity-75">or search "CopiioAI" on Chrome Web Store</span>
+                        <span class="text-white opacity-75" data-i18n="cta.search">or search "CopiioAI" on Chrome Web Store</span>
                     </div>
                 </div>
             </div>
@@ -420,7 +493,7 @@
         <!-- What can CopiioAI do Section -->
         <section class="py-20">
             <div class="max-w-7xl mx-auto px-6">
-                <h2 class="text-4xl font-bold text-gray-900 text-center mb-16">What can CopiioAI do?</h2>
+                <h2 class="text-4xl font-bold text-gray-900 text-center mb-16" data-i18n="features.title">What can CopiioAI do?</h2>
                 <div class="grid md:grid-cols-2 gap-12 items-center">
                     <div class="rounded-2xl overflow-hidden shadow-xl">
                         <img src="https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=800&h=600&fit=crop"
@@ -429,23 +502,23 @@
                     </div>
                     <div class="space-y-8">
                         <div>
-                            <h3 class="text-xl font-bold text-gray-900 mb-2">Turn APIs into chat tools</h3>
-                            <p class="text-gray-600">Expose any API as a conversational interface that understands user
+                            <h3 class="text-xl font-bold text-gray-900 mb-2" data-i18n="features.f1.title">Turn APIs into chat tools</h3>
+                            <p class="text-gray-600" data-i18n="features.f1.desc">Expose any API as a conversational interface that understands user
                                 intent.</p>
                         </div>
                         <div>
-                            <h3 class="text-xl font-bold text-gray-900 mb-2">Share APIs with non-technical users</h3>
-                            <p class="text-gray-600">Let teammates, operators, or stakeholders access data without
+                            <h3 class="text-xl font-bold text-gray-900 mb-2" data-i18n="features.f2.title">Share APIs with non-technical users</h3>
+                            <p class="text-gray-600" data-i18n="features.f2.desc">Let teammates, operators, or stakeholders access data without
                                 knowing how APIs work.</p>
                         </div>
                         <div>
-                            <h3 class="text-xl font-bold text-gray-900 mb-2">Skip frontend development</h3>
-                            <p class="text-gray-600">No dashboards, no components, no permissions to frontend codebases.
+                            <h3 class="text-xl font-bold text-gray-900 mb-2" data-i18n="features.f3.title">Skip frontend development</h3>
+                            <p class="text-gray-600" data-i18n="features.f3.desc">No dashboards, no components, no permissions to frontend codebases.
                             </p>
                         </div>
                         <div>
-                            <h3 class="text-xl font-bold text-gray-900 mb-2">Control and update centrally</h3>
-                            <p class="text-gray-600">Update logic and knowledge once — all users get the latest version.
+                            <h3 class="text-xl font-bold text-gray-900 mb-2" data-i18n="features.f4.title">Control and update centrally</h3>
+                            <p class="text-gray-600" data-i18n="features.f4.desc">Update logic and knowledge once — all users get the latest version.
                             </p>
                         </div>
                     </div>
@@ -456,7 +529,7 @@
         <!-- How does it work Section -->
         <section class="bg-white py-20">
             <div class="max-w-7xl mx-auto px-6">
-                <h2 class="text-4xl font-bold text-gray-900 text-center mb-16">How does it work?</h2>
+                <h2 class="text-4xl font-bold text-gray-900 text-center mb-16" data-i18n="workflow.title">How does it work?</h2>
                 <div class="grid md:grid-cols-2 gap-12 items-center">
                     <div class="space-y-8">
                         <div class="flex items-start space-x-4">
@@ -464,8 +537,8 @@
                                 class="w-12 h-12 bg-teal-600 text-white rounded-full flex items-center justify-center text-xl font-bold flex-shrink-0">
                                 1</div>
                             <div>
-                                <h3 class="text-xl font-bold text-gray-900 mb-2">Connect or capture an API</h3>
-                                <p class="text-gray-600">Import your API directly or capture requests from a browser
+                                <h3 class="text-xl font-bold text-gray-900 mb-2" data-i18n="workflow.step1.title">Connect or capture an API</h3>
+                                <p class="text-gray-600" data-i18n="workflow.step1.desc">Import your API directly or capture requests from a browser
                                     session.</p>
                             </div>
                         </div>
@@ -475,8 +548,8 @@
                                 class="w-12 h-12 bg-teal-600 text-white rounded-full flex items-center justify-center text-xl font-bold flex-shrink-0">
                                 2</div>
                             <div>
-                                <h3 class="text-xl font-bold text-gray-900 mb-2">Add knowledge and examples</h3>
-                                <p class="text-gray-600">Describe how the API should be used and what questions it can
+                                <h3 class="text-xl font-bold text-gray-900 mb-2" data-i18n="workflow.step2.title">Add knowledge and examples</h3>
+                                <p class="text-gray-600" data-i18n="workflow.step2.desc">Describe how the API should be used and what questions it can
                                     answer.</p>
                             </div>
                         </div>
@@ -486,8 +559,8 @@
                                 class="w-12 h-12 bg-teal-600 text-white rounded-full flex items-center justify-center text-xl font-bold flex-shrink-0">
                                 3</div>
                             <div>
-                                <h3 class="text-xl font-bold text-gray-900 mb-2">Share as a chat</h3>
-                                <p class="text-gray-600">Generate a link and let others interact with your API through
+                                <h3 class="text-xl font-bold text-gray-900 mb-2" data-i18n="workflow.step3.title">Share as a chat</h3>
+                                <p class="text-gray-600" data-i18n="workflow.step3.desc">Generate a link and let others interact with your API through
                                     conversation.</p>
                             </div>
                         </div>
@@ -504,7 +577,7 @@
         <!-- Built for Real Use Cases Section -->
         <section class="py-20">
             <div class="max-w-7xl mx-auto px-6">
-                <h2 class="text-4xl font-bold text-gray-900 text-center mb-16">Built for Real Use Cases</h2>
+                <h2 class="text-4xl font-bold text-gray-900 text-center mb-16" data-i18n="usecases.title">Built for Real Use Cases</h2>
                 <div class="grid md:grid-cols-2 gap-12 items-center">
                     <div class="rounded-2xl overflow-hidden shadow-xl">
                         <img src="https://images.unsplash.com/photo-1517694712202-14dd9538aa97?w=800&h=600&fit=crop"
@@ -514,25 +587,25 @@
                     <div class="space-y-6">
                         <div class="flex items-start space-x-3">
                             <div class="w-2 h-2 bg-teal-600 rounded-full mt-2 flex-shrink-0"></div>
-                            <p class="text-lg text-gray-700">Internal dashboards and metrics</p>
+                            <p class="text-lg text-gray-700" data-i18n="usecases.c1">Internal dashboards and metrics</p>
                         </div>
                         <div class="flex items-start space-x-3">
                             <div class="w-2 h-2 bg-teal-600 rounded-full mt-2 flex-shrink-0"></div>
-                            <p class="text-lg text-gray-700">Ops and analytics queries</p>
+                            <p class="text-lg text-gray-700" data-i18n="usecases.c2">Ops and analytics queries</p>
                         </div>
                         <div class="flex items-start space-x-3">
                             <div class="w-2 h-2 bg-teal-600 rounded-full mt-2 flex-shrink-0"></div>
-                            <p class="text-lg text-gray-700">Admin and support tools</p>
+                            <p class="text-lg text-gray-700" data-i18n="usecases.c3">Admin and support tools</p>
                         </div>
                         <div class="flex items-start space-x-3">
                             <div class="w-2 h-2 bg-teal-600 rounded-full mt-2 flex-shrink-0"></div>
-                            <p class="text-lg text-gray-700">Temporary or urgent data access needs</p>
+                            <p class="text-lg text-gray-700" data-i18n="usecases.c4">Temporary or urgent data access needs</p>
                         </div>
                         <div class="flex items-start space-x-3">
                             <div class="w-2 h-2 bg-teal-600 rounded-full mt-2 flex-shrink-0"></div>
-                            <p class="text-lg text-gray-700">Sharing APIs with non-engineers</p>
+                            <p class="text-lg text-gray-700" data-i18n="usecases.c5">Sharing APIs with non-engineers</p>
                         </div>
-                        <p class="text-gray-600 italic pt-4">
+                        <p class="text-gray-600 italic pt-4" data-i18n="usecases.note">
                             CopiioAI is ideal for any scenario where building a UI is overkill.
                         </p>
                     </div>
@@ -543,16 +616,16 @@
         <!-- Why CopiioAI Section -->
         <section class="bg-white py-20">
             <div class="max-w-7xl mx-auto px-6">
-                <h2 class="text-4xl font-bold text-gray-900 text-center mb-16">Why CopiioAI?</h2>
+                <h2 class="text-4xl font-bold text-gray-900 text-center mb-16" data-i18n="why.title">Why CopiioAI?</h2>
                 <div class="grid md:grid-cols-2 gap-12 items-center">
                     <div class="space-y-6">
-                        <p class="text-lg text-gray-700">
+                        <p class="text-lg text-gray-700" data-i18n="why.p1">
                             Traditional tools assume users are developers.
                         </p>
-                        <p class="text-lg font-bold text-gray-900">
+                        <p class="text-lg font-bold text-gray-900" data-i18n="why.p2">
                             CopiioAI assumes users have questions.
                         </p>
-                        <p class="text-lg text-gray-700">
+                        <p class="text-lg text-gray-700" data-i18n="why.p3">
                             We combine large language models with APIs so people can get answers directly — without
                             learning tools, interfaces, or query languages.
                         </p>
@@ -569,7 +642,7 @@
         <!-- CTA Section -->
         <section class="bg-gradient-to-r from-teal-600 to-teal-700 py-20">
             <div class="max-w-4xl mx-auto px-6 text-center">
-                <h2 class="text-4xl font-bold text-white mb-8">Get Started Now</h2>
+                <h2 class="text-4xl font-bold text-white mb-8" data-i18n="cta2.title">Get Started Now</h2>
                 <div class="flex flex-col sm:flex-row gap-4 justify-center">
                     <a href="/copiioai.zip"
                         class="flex items-center justify-center space-x-2 px-8 py-4 bg-white text-teal-600 rounded-lg hover:bg-gray-100 transition font-semibold text-lg shadow-lg">
@@ -578,7 +651,7 @@
                                 d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4">
                             </path>
                         </svg>
-                        <span>Download Chrome Extension</span>
+                        <span data-i18n="cta2.extension">Download Chrome Extension</span>
                     </a>
                     <button
                         class="flex items-center justify-center space-x-2 px-8 py-4 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition font-semibold text-lg shadow-lg">
@@ -587,7 +660,7 @@
                                 d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z">
                             </path>
                         </svg>
-                        <span>Desktop App Coming Soon</span>
+                        <span data-i18n="cta2.desktop">Desktop App Coming Soon</span>
                     </button>
                 </div>
             </div>
@@ -598,7 +671,7 @@
     <footer class="bg-gray-100 py-12">
         <div class="max-w-7xl mx-auto px-6">
             <div class="text-center mb-8">
-                <h3 class="text-2xl font-bold text-gray-900 mb-4">Community & Support</h3>
+                <h3 class="text-2xl font-bold text-gray-900 mb-4" data-i18n="footer.support">Community & Support</h3>
                 <a href="mailto:support@copiioai.com"
                     class="text-teal-600 hover:text-teal-700 text-lg flex items-center justify-center space-x-2">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -615,15 +688,489 @@
                         class="w-8 h-8 rounded-full">
                     <span class="text-xl font-semibold text-gray-900">CopiioAI</span>
                 </div>
-                <p class="text-gray-600 mb-4">Turn APIs into conversations.</p>
+                <p class="text-gray-600 mb-4" data-i18n="footer.tagline">Turn APIs into conversations.</p>
                 <div class="flex justify-center space-x-6 text-sm text-gray-600">
-                    <a href="/privacy-policy.html" class="hover:text-teal-600 transition">Privacy Policy</a>
-                    <a href="mailto:support@copiioai.com" class="hover:text-teal-600 transition">Contact</a>
+                    <a href="/privacy-policy.html" class="hover:text-teal-600 transition" data-i18n="footer.privacy">Privacy Policy</a>
+                    <a href="mailto:support@copiioai.com" class="hover:text-teal-600 transition" data-i18n="footer.contact">Contact</a>
                 </div>
-                <p class="text-gray-500 text-xs mt-4">&copy; 2026 CopiioAI. All rights reserved.</p>
+                <p class="text-gray-500 text-xs mt-4" data-i18n="footer.copyright">&copy; 2026 CopiioAI. All rights reserved.</p>
             </div>
         </div>
     </footer>
+
+    <!-- Internationalization Script -->
+    <script>
+        // Language translations
+        const translations = {
+            en: {
+                'header.extension': 'Chrome Extension',
+                'header.desktop': 'Desktop App Coming Soon',
+                'hero.title1': 'Turn any API into a chat.',
+                'hero.title2': 'No frontend required.',
+                'hero.subtitle1': 'For developers: Build and share chat-based tools powered by your APIs.',
+                'hero.subtitle2': 'For non-developers: Access real-time data instantly — no coding required.',
+                'what.title': 'What is CopiioAI?',
+                'what.p1': 'CopiioAI is an AI-native tool that lets you turn APIs into conversational interfaces.',
+                'what.p2': 'Instead of building dashboards or frontend pages, you can publish your APIs as chat-based tools and let others query them using plain language.',
+                'what.p3': 'No UI. No setup. No engineering overhead.',
+                'howto.title': 'How to Use CopiioAI',
+                'howto.subtitle': "Whether you're a developer building API tools or a non-developer accessing real-time data, CopiioAI makes it simple.",
+                'dev.label': 'FOR DEVELOPERS',
+                'dev.title': 'Turn APIs into Chat',
+                'nondev.label': 'FOR NON-DEVELOPERS',
+                'nondev.title': 'Access Real-Time Data Without Switching Tabs',
+                'cta.main': 'Turn Your Browser into a Real-Time Data Engine',
+                'cta.subtitle1': 'No configuration. No coding. No frontend required.',
+                'cta.subtitle2': 'Start building or using API tools in minutes.',
+                'cta.download': 'Download Chrome Extension',
+                'cta.search': 'or search "CopiioAI" on Chrome Web Store',
+                'features.title': 'What can CopiioAI do?',
+                'features.f1.title': 'Turn APIs into chat tools',
+                'features.f1.desc': 'Expose any API as a conversational interface that understands user intent.',
+                'features.f2.title': 'Share APIs with non-technical users',
+                'features.f2.desc': 'Let teammates, operators, or stakeholders access data without knowing how APIs work.',
+                'features.f3.title': 'Skip frontend development',
+                'features.f3.desc': 'No dashboards, no components, no permissions to frontend codebases.',
+                'features.f4.title': 'Control and update centrally',
+                'features.f4.desc': 'Update logic and knowledge once — all users get the latest version.',
+                'workflow.title': 'How does it work?',
+                'workflow.step1.title': 'Connect or capture an API',
+                'workflow.step1.desc': 'Import your API directly or capture requests from a browser session.',
+                'workflow.step2.title': 'Add knowledge and examples',
+                'workflow.step2.desc': 'Describe how the API should be used and what questions it can answer.',
+                'workflow.step3.title': 'Share as a chat',
+                'workflow.step3.desc': 'Generate a link and let others interact with your API through conversation.',
+                'usecases.title': 'Built for Real Use Cases',
+                'usecases.c1': 'Internal dashboards and metrics',
+                'usecases.c2': 'Ops and analytics queries',
+                'usecases.c3': 'Admin and support tools',
+                'usecases.c4': 'Temporary or urgent data access needs',
+                'usecases.c5': 'Sharing APIs with non-engineers',
+                'usecases.note': 'CopiioAI is ideal for any scenario where building a UI is overkill.',
+                'why.title': 'Why CopiioAI?',
+                'why.p1': 'Traditional tools assume users are developers.',
+                'why.p2': 'CopiioAI assumes users have questions.',
+                'why.p3': 'We combine large language models with APIs so people can get answers directly — without learning tools, interfaces, or query languages.',
+                'cta2.title': 'Get Started Now',
+                'cta2.extension': 'Download Chrome Extension',
+                'cta2.desktop': 'Desktop App Coming Soon',
+                'footer.support': 'Community & Support',
+                'footer.tagline': 'Turn APIs into conversations.',
+                'footer.privacy': 'Privacy Policy',
+                'footer.contact': 'Contact',
+                'footer.copyright': '© 2026 CopiioAI. All rights reserved.'
+            },
+            zh: {
+                'header.extension': 'Chrome 扩展',
+                'header.desktop': '桌面应用即将推出',
+                'hero.title1': '将任何 API 转换为对话。',
+                'hero.title2': '无需前端开发。',
+                'hero.subtitle1': '面向开发者：构建并分享由 API 驱动的聊天工具。',
+                'hero.subtitle2': '面向非开发者：即时访问实时数据——无需编码。',
+                'what.title': '什么是 CopiioAI？',
+                'what.p1': 'CopiioAI 是一个 AI 原生工具，让你可以将 API 转换为对话式界面。',
+                'what.p2': '无需构建仪表板或前端页面，你可以将 API 发布为基于聊天的工具，让其他人使用自然语言查询它们。',
+                'what.p3': '无 UI。无设置。无工程开销。',
+                'howto.title': '如何使用 CopiioAI',
+                'howto.subtitle': '无论你是构建 API 工具的开发者，还是访问实时数据的非开发者，CopiioAI 都让一切变得简单。',
+                'dev.label': '面向开发者',
+                'dev.title': '将 API 转换为聊天',
+                'nondev.label': '面向非开发者',
+                'nondev.title': '无需切换标签页即可访问实时数据',
+                'cta.main': '将你的浏览器变成实时数据引擎',
+                'cta.subtitle1': '无需配置。无需编码。无需前端开发。',
+                'cta.subtitle2': '几分钟内开始构建或使用 API 工具。',
+                'cta.download': '下载 Chrome 扩展',
+                'cta.search': '或在 Chrome 网上应用店搜索"CopiioAI"',
+                'features.title': 'CopiioAI 能做什么？',
+                'features.f1.title': '将 API 转换为聊天工具',
+                'features.f1.desc': '将任何 API 公开为理解用户意图的对话式界面。',
+                'features.f2.title': '与非技术用户共享 API',
+                'features.f2.desc': '让队友、运营人员或利益相关者在不了解 API 工作原理的情况下访问数据。',
+                'features.f3.title': '跳过前端开发',
+                'features.f3.desc': '无需仪表板、组件或前端代码库权限。',
+                'features.f4.title': '集中控制和更新',
+                'features.f4.desc': '只需更新一次逻辑和知识 — 所有用户都能获得最新版本。',
+                'workflow.title': '它是如何工作的？',
+                'workflow.step1.title': '连接或捕获 API',
+                'workflow.step1.desc': '直接导入你的 API 或从浏览器会话中捕获请求。',
+                'workflow.step2.title': '添加知识和示例',
+                'workflow.step2.desc': '描述 API 的使用方式以及它可以回答哪些问题。',
+                'workflow.step3.title': '作为聊天分享',
+                'workflow.step3.desc': '生成链接，让其他人通过对话与你的 API 交互。',
+                'usecases.title': '为真实用例而构建',
+                'usecases.c1': '内部仪表板和指标',
+                'usecases.c2': '运营和分析查询',
+                'usecases.c3': '管理和支持工具',
+                'usecases.c4': '临时或紧急数据访问需求',
+                'usecases.c5': '与非工程师共享 API',
+                'usecases.note': 'CopiioAI 非常适合任何构建 UI 过于复杂的场景。',
+                'why.title': '为什么选择 CopiioAI？',
+                'why.p1': '传统工具假设用户是开发者。',
+                'why.p2': 'CopiioAI 假设用户有问题。',
+                'why.p3': '我们将大型语言模型与 API 结合，让人们可以直接获得答案 — 无需学习工具、界面或查询语言。',
+                'cta2.title': '立即开始',
+                'cta2.extension': '下载 Chrome 扩展',
+                'cta2.desktop': '桌面应用即将推出',
+                'footer.support': '社区与支持',
+                'footer.tagline': '将 API 转换为对话。',
+                'footer.privacy': '隐私政策',
+                'footer.contact': '联系我们',
+                'footer.copyright': '© 2026 CopiioAI. 版权所有。'
+            },
+            ja: {
+                'header.extension': 'Chrome拡張機能',
+                'header.desktop': 'デスクトップアプリ近日公開',
+                'hero.title1': '任意のAPIをチャットに変換。',
+                'hero.title2': 'フロントエンド不要。',
+                'hero.subtitle1': '開発者向け：APIを活用したチャットベースのツールを構築・共有。',
+                'hero.subtitle2': '非開発者向け：リアルタイムデータに即座にアクセス - コーディング不要。',
+                'what.title': 'CopiioAIとは？',
+                'what.p1': 'CopiioAIは、APIを会話型インターフェースに変換できるAIネイティブツールです。',
+                'what.p2': 'ダッシュボードやフロントエンドページを構築する代わりに、APIをチャットベースのツールとして公開し、他の人が自然言語でクエリできるようにします。',
+                'what.p3': 'UIなし。セットアップなし。エンジニアリングのオーバーヘッドなし。',
+                'howto.title': 'CopiioAIの使い方',
+                'howto.subtitle': 'APIツールを構築する開発者でも、リアルタイムデータにアクセスする非開発者でも、CopiioAIならシンプルです。',
+                'dev.label': '開発者向け',
+                'dev.title': 'APIをチャットに変換',
+                'nondev.label': '非開発者向け',
+                'nondev.title': 'タブを切り替えずにリアルタイムデータにアクセス',
+                'cta.main': 'ブラウザをリアルタイムデータエンジンに変換',
+                'cta.subtitle1': '設定不要。コーディング不要。フロントエンド不要。',
+                'cta.subtitle2': '数分でAPIツールの構築または使用を開始。',
+                'cta.download': 'Chrome拡張機能をダウンロード',
+                'cta.search': 'またはChromeウェブストアで「CopiioAI」を検索',
+                'features.title': 'CopiioAIでできること',
+                'features.f1.title': 'APIをチャットツールに変換',
+                'features.f1.desc': '任意のAPIをユーザーの意図を理解する会話型インターフェースとして公開。',
+                'features.f2.title': '非技術ユーザーとAPIを共有',
+                'features.f2.desc': 'チームメイト、オペレーター、ステークホルダーがAPIの仕組みを知らなくてもデータにアクセス可能。',
+                'features.f3.title': 'フロントエンド開発をスキップ',
+                'features.f3.desc': 'ダッシュボード、コンポーネント、フロントエンドコードベースへの権限が不要。',
+                'features.f4.title': '集中管理と更新',
+                'features.f4.desc': 'ロジックとナレッジを一度更新するだけで、すべてのユーザーが最新バージョンを取得。',
+                'workflow.title': 'どのように機能しますか？',
+                'workflow.step1.title': 'APIを接続または取得',
+                'workflow.step1.desc': 'APIを直接インポートするか、ブラウザセッションからリクエストをキャプチャ。',
+                'workflow.step2.title': 'ナレッジと例を追加',
+                'workflow.step2.desc': 'APIの使用方法と回答できる質問を説明。',
+                'workflow.step3.title': 'チャットとして共有',
+                'workflow.step3.desc': 'リンクを生成し、他の人が会話を通じてAPIと対話できるようにする。',
+                'usecases.title': '実際のユースケース向けに構築',
+                'usecases.c1': '社内ダッシュボードとメトリクス',
+                'usecases.c2': '運用と分析のクエリ',
+                'usecases.c3': '管理とサポートツール',
+                'usecases.c4': '一時的または緊急のデータアクセスニーズ',
+                'usecases.c5': '非エンジニアとのAPI共有',
+                'usecases.note': 'CopiioAIは、UIの構築が過剰なあらゆるシナリオに最適です。',
+                'why.title': 'なぜCopiioAI？',
+                'why.p1': '従来のツールはユーザーが開発者であることを前提としています。',
+                'why.p2': 'CopiioAIはユーザーが質問を持っていることを前提としています。',
+                'why.p3': '大規模言語モデルとAPIを組み合わせることで、ツール、インターフェース、クエリ言語を学ぶことなく、人々が直接答えを得られるようにします。',
+                'cta2.title': '今すぐ始める',
+                'cta2.extension': 'Chrome拡張機能をダウンロード',
+                'cta2.desktop': 'デスクトップアプリ近日公開',
+                'footer.support': 'コミュニティとサポート',
+                'footer.tagline': 'APIを会話に変換。',
+                'footer.privacy': 'プライバシーポリシー',
+                'footer.contact': 'お問い合わせ',
+                'footer.copyright': '© 2026 CopiioAI. All rights reserved.'
+            },
+            ko: {
+                'header.extension': 'Chrome 확장 프로그램',
+                'header.desktop': '데스크톱 앱 출시 예정',
+                'hero.title1': '모든 API를 채팅으로 변환.',
+                'hero.title2': '프론트엔드 불필요.',
+                'hero.subtitle1': '개발자용: API 기반 채팅 도구를 구축하고 공유하세요.',
+                'hero.subtitle2': '비개발자용: 실시간 데이터에 즉시 액세스 - 코딩 불필요.',
+                'what.title': 'CopiioAI란?',
+                'what.p1': 'CopiioAI는 API를 대화형 인터페이스로 변환할 수 있는 AI 네이티브 도구입니다.',
+                'what.p2': '대시보드나 프론트엔드 페이지를 구축하는 대신 API를 채팅 기반 도구로 게시하고 다른 사람들이 자연어로 쿼리할 수 있도록 합니다.',
+                'what.p3': 'UI 없음. 설정 없음. 엔지니어링 오버헤드 없음.',
+                'howto.title': 'CopiioAI 사용 방법',
+                'howto.subtitle': 'API 도구를 구축하는 개발자든 실시간 데이터에 액세스하는 비개발자든 CopiioAI가 간단하게 만듭니다.',
+                'dev.label': '개발자용',
+                'dev.title': 'API를 채팅으로 변환',
+                'nondev.label': '비개발자용',
+                'nondev.title': '탭 전환 없이 실시간 데이터 액세스',
+                'cta.main': '브라우저를 실시간 데이터 엔진으로 변환',
+                'cta.subtitle1': '구성 불필요. 코딩 불필요. 프론트엔드 불필요.',
+                'cta.subtitle2': '몇 분 안에 API 도구 구축 또는 사용 시작.',
+                'cta.download': 'Chrome 확장 프로그램 다운로드',
+                'cta.search': '또는 Chrome 웹 스토어에서 "CopiioAI" 검색',
+                'features.title': 'CopiioAI로 할 수 있는 일',
+                'features.f1.title': 'API를 채팅 도구로 변환',
+                'features.f1.desc': '모든 API를 사용자 의도를 이해하는 대화형 인터페이스로 노출합니다.',
+                'features.f2.title': '비기술 사용자와 API 공유',
+                'features.f2.desc': '팀원, 운영자 또는 이해관계자가 API 작동 방식을 모르고도 데이터에 액세스할 수 있습니다.',
+                'features.f3.title': '프론트엔드 개발 생략',
+                'features.f3.desc': '대시보드, 컴포넌트, 프론트엔드 코드베이스 권한이 필요 없습니다.',
+                'features.f4.title': '중앙 제어 및 업데이트',
+                'features.f4.desc': '로직과 지식을 한 번 업데이트하면 모든 사용자가 최신 버전을 받습니다.',
+                'workflow.title': '어떻게 작동하나요?',
+                'workflow.step1.title': 'API 연결 또는 캡처',
+                'workflow.step1.desc': 'API를 직접 가져오거나 브라우저 세션에서 요청을 캡처합니다.',
+                'workflow.step2.title': '지식과 예제 추가',
+                'workflow.step2.desc': 'API 사용 방법과 답변할 수 있는 질문을 설명합니다.',
+                'workflow.step3.title': '채팅으로 공유',
+                'workflow.step3.desc': '링크를 생성하고 다른 사람들이 대화를 통해 API와 상호 작용할 수 있도록 합니다.',
+                'usecases.title': '실제 사용 사례를 위해 구축',
+                'usecases.c1': '내부 대시보드 및 메트릭',
+                'usecases.c2': '운영 및 분석 쿼리',
+                'usecases.c3': '관리 및 지원 도구',
+                'usecases.c4': '임시 또는 긴급 데이터 액세스 요구',
+                'usecases.c5': '비엔지니어와 API 공유',
+                'usecases.note': 'CopiioAI는 UI 구축이 과도한 모든 시나리오에 이상적입니다.',
+                'why.title': '왜 CopiioAI인가요?',
+                'why.p1': '기존 도구는 사용자가 개발자라고 가정합니다.',
+                'why.p2': 'CopiioAI는 사용자가 질문이 있다고 가정합니다.',
+                'why.p3': '대규모 언어 모델과 API를 결합하여 도구, 인터페이스 또는 쿼리 언어를 배우지 않고도 사람들이 직접 답변을 얻을 수 있도록 합니다.',
+                'cta2.title': '지금 시작하기',
+                'cta2.extension': 'Chrome 확장 프로그램 다운로드',
+                'cta2.desktop': '데스크톱 앱 출시 예정',
+                'footer.support': '커뮤니티 및 지원',
+                'footer.tagline': 'API를 대화로 변환.',
+                'footer.privacy': '개인정보 처리방침',
+                'footer.contact': '문의',
+                'footer.copyright': '© 2026 CopiioAI. All rights reserved.'
+            },
+            es: {
+                'header.extension': 'Extensión de Chrome',
+                'header.desktop': 'Aplicación de escritorio próximamente',
+                'hero.title1': 'Convierte cualquier API en un chat.',
+                'hero.title2': 'No se requiere frontend.',
+                'hero.subtitle1': 'Para desarrolladores: Crea y comparte herramientas de chat impulsadas por tus APIs.',
+                'hero.subtitle2': 'Para no desarrolladores: Accede a datos en tiempo real al instante - sin codificación.',
+                'what.title': '¿Qué es CopiioAI?',
+                'what.p1': 'CopiioAI es una herramienta nativa de IA que te permite convertir APIs en interfaces conversacionales.',
+                'what.p2': 'En lugar de crear paneles o páginas de frontend, puedes publicar tus APIs como herramientas basadas en chat y permitir que otros las consulten usando lenguaje natural.',
+                'what.p3': 'Sin UI. Sin configuración. Sin sobrecarga de ingeniería.',
+                'howto.title': 'Cómo usar CopiioAI',
+                'howto.subtitle': 'Ya seas un desarrollador creando herramientas API o un no desarrollador accediendo a datos en tiempo real, CopiioAI lo hace simple.',
+                'dev.label': 'PARA DESARROLLADORES',
+                'dev.title': 'Convierte APIs en Chat',
+                'nondev.label': 'PARA NO DESARROLLADORES',
+                'nondev.title': 'Accede a Datos en Tiempo Real sin Cambiar de Pestaña',
+                'cta.main': 'Convierte tu navegador en un motor de datos en tiempo real',
+                'cta.subtitle1': 'Sin configuración. Sin codificación. Sin frontend requerido.',
+                'cta.subtitle2': 'Comienza a crear o usar herramientas API en minutos.',
+                'cta.download': 'Descargar Extensión de Chrome',
+                'cta.search': 'o busca "CopiioAI" en Chrome Web Store',
+                'features.title': '¿Qué puede hacer CopiioAI?',
+                'features.f1.title': 'Convierte APIs en herramientas de chat',
+                'features.f1.desc': 'Expone cualquier API como una interfaz conversacional que entiende la intención del usuario.',
+                'features.f2.title': 'Comparte APIs con usuarios no técnicos',
+                'features.f2.desc': 'Permite que compañeros, operadores o partes interesadas accedan a datos sin saber cómo funcionan las APIs.',
+                'features.f3.title': 'Omite el desarrollo de frontend',
+                'features.f3.desc': 'Sin paneles, sin componentes, sin permisos a bases de código de frontend.',
+                'features.f4.title': 'Controla y actualiza centralmente',
+                'features.f4.desc': 'Actualiza la lógica y el conocimiento una vez: todos los usuarios obtienen la última versión.',
+                'workflow.title': '¿Cómo funciona?',
+                'workflow.step1.title': 'Conecta o captura una API',
+                'workflow.step1.desc': 'Importa tu API directamente o captura solicitudes desde una sesión del navegador.',
+                'workflow.step2.title': 'Agrega conocimiento y ejemplos',
+                'workflow.step2.desc': 'Describe cómo debe usarse la API y qué preguntas puede responder.',
+                'workflow.step3.title': 'Comparte como chat',
+                'workflow.step3.desc': 'Genera un enlace y permite que otros interactúen con tu API a través de la conversación.',
+                'usecases.title': 'Construido para casos de uso reales',
+                'usecases.c1': 'Paneles internos y métricas',
+                'usecases.c2': 'Consultas de operaciones y análisis',
+                'usecases.c3': 'Herramientas de administración y soporte',
+                'usecases.c4': 'Necesidades de acceso a datos temporales o urgentes',
+                'usecases.c5': 'Compartir APIs con no ingenieros',
+                'usecases.note': 'CopiioAI es ideal para cualquier escenario donde crear una UI es excesivo.',
+                'why.title': '¿Por qué CopiioAI?',
+                'why.p1': 'Las herramientas tradicionales asumen que los usuarios son desarrolladores.',
+                'why.p2': 'CopiioAI asume que los usuarios tienen preguntas.',
+                'why.p3': 'Combinamos modelos de lenguaje grandes con APIs para que las personas puedan obtener respuestas directamente, sin aprender herramientas, interfaces o lenguajes de consulta.',
+                'cta2.title': 'Comienza ahora',
+                'cta2.extension': 'Descargar Extensión de Chrome',
+                'cta2.desktop': 'Aplicación de escritorio próximamente',
+                'footer.support': 'Comunidad y Soporte',
+                'footer.tagline': 'Convierte APIs en conversaciones.',
+                'footer.privacy': 'Política de privacidad',
+                'footer.contact': 'Contacto',
+                'footer.copyright': '© 2026 CopiioAI. Todos los derechos reservados.'
+            },
+            fr: {
+                'header.extension': 'Extension Chrome',
+                'header.desktop': 'Application de bureau bientôt disponible',
+                'hero.title1': 'Transformez n\'importe quelle API en chat.',
+                'hero.title2': 'Aucun frontend requis.',
+                'hero.subtitle1': 'Pour les développeurs : Créez et partagez des outils de chat alimentés par vos APIs.',
+                'hero.subtitle2': 'Pour les non-développeurs : Accédez instantanément aux données en temps réel - sans codage.',
+                'what.title': 'Qu\'est-ce que CopiioAI ?',
+                'what.p1': 'CopiioAI est un outil natif IA qui vous permet de transformer des APIs en interfaces conversationnelles.',
+                'what.p2': 'Au lieu de créer des tableaux de bord ou des pages frontend, vous pouvez publier vos APIs comme outils basés sur le chat et laisser d\'autres les interroger en langage naturel.',
+                'what.p3': 'Pas d\'UI. Pas de configuration. Pas de surcharge d\'ingénierie.',
+                'howto.title': 'Comment utiliser CopiioAI',
+                'howto.subtitle': 'Que vous soyez un développeur créant des outils API ou un non-développeur accédant aux données en temps réel, CopiioAI rend cela simple.',
+                'dev.label': 'POUR LES DÉVELOPPEURS',
+                'dev.title': 'Transformez les APIs en Chat',
+                'nondev.label': 'POUR LES NON-DÉVELOPPEURS',
+                'nondev.title': 'Accédez aux Données en Temps Réel sans Changer d\'Onglet',
+                'cta.main': 'Transformez votre navigateur en moteur de données en temps réel',
+                'cta.subtitle1': 'Aucune configuration. Aucun codage. Aucun frontend requis.',
+                'cta.subtitle2': 'Commencez à créer ou utiliser des outils API en quelques minutes.',
+                'cta.download': 'Télécharger l\'Extension Chrome',
+                'cta.search': 'ou recherchez "CopiioAI" sur Chrome Web Store',
+                'features.title': 'Que peut faire CopiioAI ?',
+                'features.f1.title': 'Transformez les APIs en outils de chat',
+                'features.f1.desc': 'Exposez n\'importe quelle API comme interface conversationnelle qui comprend l\'intention de l\'utilisateur.',
+                'features.f2.title': 'Partagez les APIs avec des utilisateurs non techniques',
+                'features.f2.desc': 'Laissez les coéquipiers, opérateurs ou parties prenantes accéder aux données sans savoir comment les APIs fonctionnent.',
+                'features.f3.title': 'Sautez le développement frontend',
+                'features.f3.desc': 'Pas de tableaux de bord, pas de composants, pas de permissions aux bases de code frontend.',
+                'features.f4.title': 'Contrôlez et mettez à jour centralement',
+                'features.f4.desc': 'Mettez à jour la logique et les connaissances une fois - tous les utilisateurs obtiennent la dernière version.',
+                'workflow.title': 'Comment ça marche ?',
+                'workflow.step1.title': 'Connectez ou capturez une API',
+                'workflow.step1.desc': 'Importez votre API directement ou capturez les requêtes d\'une session de navigateur.',
+                'workflow.step2.title': 'Ajoutez des connaissances et des exemples',
+                'workflow.step2.desc': 'Décrivez comment l\'API doit être utilisée et quelles questions elle peut répondre.',
+                'workflow.step3.title': 'Partagez comme chat',
+                'workflow.step3.desc': 'Générez un lien et laissez d\'autres interagir avec votre API par conversation.',
+                'usecases.title': 'Construit pour des cas d\'usage réels',
+                'usecases.c1': 'Tableaux de bord internes et métriques',
+                'usecases.c2': 'Requêtes d\'opérations et d\'analyse',
+                'usecases.c3': 'Outils d\'administration et de support',
+                'usecases.c4': 'Besoins d\'accès aux données temporaires ou urgents',
+                'usecases.c5': 'Partage d\'APIs avec les non-ingénieurs',
+                'usecases.note': 'CopiioAI est idéal pour tout scénario où créer une UI est excessif.',
+                'why.title': 'Pourquoi CopiioAI ?',
+                'why.p1': 'Les outils traditionnels supposent que les utilisateurs sont des développeurs.',
+                'why.p2': 'CopiioAI suppose que les utilisateurs ont des questions.',
+                'why.p3': 'Nous combinons de grands modèles de langage avec des APIs pour que les gens puissent obtenir des réponses directement - sans apprendre d\'outils, d\'interfaces ou de langages de requête.',
+                'cta2.title': 'Commencez maintenant',
+                'cta2.extension': 'Télécharger l\'Extension Chrome',
+                'cta2.desktop': 'Application de bureau bientôt disponible',
+                'footer.support': 'Communauté et Support',
+                'footer.tagline': 'Transformez les APIs en conversations.',
+                'footer.privacy': 'Politique de confidentialité',
+                'footer.contact': 'Contact',
+                'footer.copyright': '© 2026 CopiioAI. Tous droits réservés.'
+            },
+            de: {
+                'header.extension': 'Chrome-Erweiterung',
+                'header.desktop': 'Desktop-App kommt bald',
+                'hero.title1': 'Verwandle jede API in einen Chat.',
+                'hero.title2': 'Kein Frontend erforderlich.',
+                'hero.subtitle1': 'Für Entwickler: Erstelle und teile Chat-basierte Tools, die von deinen APIs angetrieben werden.',
+                'hero.subtitle2': 'Für Nicht-Entwickler: Greife sofort auf Echtzeitdaten zu - ohne Programmierung.',
+                'what.title': 'Was ist CopiioAI?',
+                'what.p1': 'CopiioAI ist ein AI-natives Tool, mit dem Sie APIs in konversationelle Schnittstellen verwandeln können.',
+                'what.p2': 'Anstatt Dashboards oder Frontend-Seiten zu erstellen, können Sie Ihre APIs als Chat-basierte Tools veröffentlichen und andere in natürlicher Sprache abfragen lassen.',
+                'what.p3': 'Keine UI. Keine Einrichtung. Kein Engineering-Overhead.',
+                'howto.title': 'So verwenden Sie CopiioAI',
+                'howto.subtitle': 'Egal ob Sie ein Entwickler sind, der API-Tools erstellt, oder ein Nicht-Entwickler, der auf Echtzeitdaten zugreift, CopiioAI macht es einfach.',
+                'dev.label': 'FÜR ENTWICKLER',
+                'dev.title': 'Verwandle APIs in Chat',
+                'nondev.label': 'FÜR NICHT-ENTWICKLER',
+                'nondev.title': 'Greife auf Echtzeitdaten zu ohne Tab-Wechsel',
+                'cta.main': 'Verwandle deinen Browser in eine Echtzeit-Daten-Engine',
+                'cta.subtitle1': 'Keine Konfiguration. Keine Programmierung. Kein Frontend erforderlich.',
+                'cta.subtitle2': 'Beginne in Minuten mit dem Erstellen oder Verwenden von API-Tools.',
+                'cta.download': 'Chrome-Erweiterung herunterladen',
+                'cta.search': 'oder suche "CopiioAI" im Chrome Web Store',
+                'features.title': 'Was kann CopiioAI?',
+                'features.f1.title': 'Verwandle APIs in Chat-Tools',
+                'features.f1.desc': 'Stelle jede API als konversationelle Schnittstelle bereit, die die Benutzerabsicht versteht.',
+                'features.f2.title': 'Teile APIs mit nicht-technischen Benutzern',
+                'features.f2.desc': 'Lasse Teamkollegen, Betreiber oder Stakeholder auf Daten zugreifen, ohne zu wissen, wie APIs funktionieren.',
+                'features.f3.title': 'Überspringe Frontend-Entwicklung',
+                'features.f3.desc': 'Keine Dashboards, keine Komponenten, keine Berechtigungen für Frontend-Codebasen.',
+                'features.f4.title': 'Zentrale Kontrolle und Aktualisierung',
+                'features.f4.desc': 'Aktualisiere Logik und Wissen einmal - alle Benutzer erhalten die neueste Version.',
+                'workflow.title': 'Wie funktioniert es?',
+                'workflow.step1.title': 'Verbinde oder erfasse eine API',
+                'workflow.step1.desc': 'Importiere deine API direkt oder erfasse Anfragen aus einer Browser-Sitzung.',
+                'workflow.step2.title': 'Füge Wissen und Beispiele hinzu',
+                'workflow.step2.desc': 'Beschreibe, wie die API verwendet werden soll und welche Fragen sie beantworten kann.',
+                'workflow.step3.title': 'Als Chat teilen',
+                'workflow.step3.desc': 'Generiere einen Link und lasse andere über Konversation mit deiner API interagieren.',
+                'usecases.title': 'Für echte Anwendungsfälle entwickelt',
+                'usecases.c1': 'Interne Dashboards und Metriken',
+                'usecases.c2': 'Betriebs- und Analyseabfragen',
+                'usecases.c3': 'Verwaltungs- und Support-Tools',
+                'usecases.c4': 'Temporäre oder dringende Datenzugriffsbedürfnisse',
+                'usecases.c5': 'APIs mit Nicht-Ingenieuren teilen',
+                'usecases.note': 'CopiioAI ist ideal für jedes Szenario, in dem das Erstellen einer UI übertrieben ist.',
+                'why.title': 'Warum CopiioAI?',
+                'why.p1': 'Traditionelle Tools gehen davon aus, dass Benutzer Entwickler sind.',
+                'why.p2': 'CopiioAI geht davon aus, dass Benutzer Fragen haben.',
+                'why.p3': 'Wir kombinieren große Sprachmodelle mit APIs, damit Menschen direkt Antworten erhalten können - ohne Tools, Schnittstellen oder Abfragesprachen zu lernen.',
+                'cta2.title': 'Jetzt loslegen',
+                'cta2.extension': 'Chrome-Erweiterung herunterladen',
+                'cta2.desktop': 'Desktop-App kommt bald',
+                'footer.support': 'Community & Support',
+                'footer.tagline': 'Verwandle APIs in Konversationen.',
+                'footer.privacy': 'Datenschutzrichtlinie',
+                'footer.contact': 'Kontakt',
+                'footer.copyright': '© 2026 CopiioAI. Alle Rechte vorbehalten.'
+            }
+        };
+
+        // Language names for display
+        const languageNames = {
+            en: 'English',
+            zh: '简体中文',
+            ja: '日本語',
+            ko: '한국어',
+            es: 'Español',
+            fr: 'Français',
+            de: 'Deutsch'
+        };
+
+        // Get current language from localStorage or default to 'en'
+        let currentLang = localStorage.getItem('copiioai_lang') || 'en';
+
+        // Function to change language
+        function changeLanguage(lang) {
+            currentLang = lang;
+            localStorage.setItem('copiioai_lang', lang);
+
+            // Update UI
+            document.getElementById('current-lang').textContent = languageNames[lang];
+
+            // Update active state in menu
+            document.querySelectorAll('.language-menu-inner button').forEach(btn => {
+                btn.classList.remove('active');
+                if (btn.getAttribute('data-lang') === lang) {
+                    btn.classList.add('active');
+                }
+            });
+
+            // Translate all elements with data-i18n attribute
+            document.querySelectorAll('[data-i18n]').forEach(element => {
+                const key = element.getAttribute('data-i18n');
+                if (translations[lang] && translations[lang][key]) {
+                    element.textContent = translations[lang][key];
+                }
+            });
+
+            // Update page title and meta tags
+            if (lang === 'zh') {
+                document.title = 'CopiioAI - 将API转换为对话';
+            } else if (lang === 'ja') {
+                document.title = 'CopiioAI - APIを会話に変換';
+            } else if (lang === 'ko') {
+                document.title = 'CopiioAI - API를 대화로 변환';
+            } else if (lang === 'es') {
+                document.title = 'CopiioAI - Convierte APIs en Conversaciones';
+            } else if (lang === 'fr') {
+                document.title = 'CopiioAI - Transformez les APIs en Conversations';
+            } else if (lang === 'de') {
+                document.title = 'CopiioAI - Verwandle APIs in Konversationen';
+            } else {
+                document.title = 'CopiioAI - Turn APIs into Conversations';
+            }
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            changeLanguage(currentLang);
+        });
+    </script>
 </body>
 
 </html>
