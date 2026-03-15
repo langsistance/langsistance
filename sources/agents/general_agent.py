@@ -813,6 +813,10 @@ Begin your response now:
                         else:
                             raise ValueError(f"Unsupported HTTP method: {method}")
 
+                        # 打印 response 信息
+                        self.logger.info(f"Response status code: {response.status_code}")
+                        self.logger.info(f"Response headers: {response.headers}")
+                        self.logger.info(f"Response content: {response.text}")
                         # 返回响应结果
                         return response.json() if response.content else None
 
