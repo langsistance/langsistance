@@ -17,6 +17,8 @@ import time
 import re
 import requests
 import asyncio
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # 定义参数模型
 class DynamicToolFunction(BaseModel):
@@ -224,14 +226,12 @@ e) **Summary structure** (recommended):
         knowledge_item, tool_info = self.knowledgeTool
         self.logger.info(f"knowledge item:{knowledge_item} - tool:{tool_info}")
 
-        # 获取当前时间戳
-        current_timestamp = time.time()
+        # 获取美国东部时区的当前时间
+        eastern_tz = ZoneInfo("America/New_York")
+        eastern_time = datetime.now(eastern_tz)
 
-        # 转换为本地时间结构
-        local_time = time.localtime(current_timestamp)
-
-        # 格式化为字符串
-        time_str = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
+        # 格式化为字符串（包含时区信息）
+        time_str = eastern_time.strftime("%Y-%m-%d %H:%M:%S %Z")
 
         # 获取knowledge item的answer作为上下文
         context = ""
@@ -314,14 +314,12 @@ e) **Summary structure** (recommended):
         knowledge_item, tool_info = self.knowledgeTool
         self.logger.info(f"knowledge item:{knowledge_item} - tool:{tool_info}")
 
-        # 获取当前时间戳
-        current_timestamp = time.time()
+        # 获取美国东部时区的当前时间
+        eastern_tz = ZoneInfo("America/New_York")
+        eastern_time = datetime.now(eastern_tz)
 
-        # 转换为本地时间结构
-        local_time = time.localtime(current_timestamp)
-
-        # 格式化为字符串
-        time_str = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
+        # 格式化为字符串（包含时区信息）
+        time_str = eastern_time.strftime("%Y-%m-%d %H:%M:%S %Z")
 
         # 获取knowledge item的answer作为上下文
         context = ""
