@@ -798,8 +798,35 @@ Begin your response now:
                         self.logger.info(f"Response status code: {response.status_code}")
                         self.logger.info(f"Response headers: {response.headers}")
                         self.logger.info(f"Response content: {response.text}")
-                        # 返回响应结果
-                        return response.json() if response.content else None
+                        # 处理响应结果
+                        if response.status_code == 200:
+                            content_type = response.headers.get("Content-Type", "").lower()
+
+                            if "text/html" in content_type:
+                                # HTML 内容，使用 BeautifulSoup 清理
+                                result = BeautifulSoup(response.content, "html.parser").get_text()
+                            elif "application/xml" in content_type or "text/xml" in content_type:
+                                # XML 内容，尝试解析并提取文本
+                                try:
+                                    soup = BeautifulSoup(response.content, "xml")
+                                    result = soup.get_text()
+                                    if not result.strip():
+                                        result = response.text
+                                except Exception as xml_e:
+                                    self.logger.warning(f"XML parsing failed: {str(xml_e)}, using raw content")
+                                    result = response.text
+                            else:
+                                # JSON 或其他格式
+                                try:
+                                    result = response.json() if response.content else None
+                                except json.JSONDecodeError:
+                                    # JSON 解析失败，返回原始文本
+                                    result = response.text if response.text else None
+                        else:
+                            # 请求失败，返回错误信息
+                            result = f"Request failed, status code: {response.status_code}"
+
+                        return result
 
                     # 清理工具名称以符合API要求
                     tool_name = tool_info.title if tool_info.title else "dynamic_knowledge_tool"
