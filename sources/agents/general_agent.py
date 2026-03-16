@@ -905,7 +905,7 @@ Begin your response now:
 
 
     async def invoke_agent(self, agent, callback_handler):
-        self.logger.info(f"invoke agent memory:{self.memory.get()}")
+        # self.logger.info(f"invoke agent memory:{self.memory.get()}")
         try:
             await self.llm.openai_invoke(agent, self.memory.get(), callback_handler)
         except Exception as e:
