@@ -298,15 +298,6 @@ e) **Summary structure** (recommended):
 
         Execute the tool with the appropriate parameters and generate the final response strictly based on the tool's output.
 
-        Whenever you provide information, facts, quotes, or data, please always include the specific source links (URLs) used to generate that part of the response.
-
-
-        Use the standard Markdown inline link syntax: `[anchor text](full_url)`.
-
-        - **Correct:** The global AI market is projected to reach $1.5 trillion by 2030 [source](https://example.com/report2023).
-
-        - **Incorrect:** The global AI market is projected to reach $1.5 trillion by 2030. (Source: https://example.com/report2023)
-
         If the task can be completed without invoking the tool, respond directly to the user without calling any tool.
 
         Do not fabricate tool results. Do not assume tool behavior beyond the provided output.
@@ -416,14 +407,6 @@ e) **Summary structure** (recommended):
            - DO NOT include user_id or query_id fields in the JSON output
 
         Execute the tool with the appropriate parameters and generate the final response strictly based on the tool's output.
-
-        Whenever you provide information, facts, quotes, or data, please always include the specific source links (URLs) used to generate that part of the response.
-
-        Use the standard Markdown inline link syntax: `[anchor text](full_url)`.
-
-        - **Correct:** The global AI market is projected to reach $1.5 trillion by 2030 [source](https://example.com/report2023).
-
-        - **Incorrect:** The global AI market is projected to reach $1.5 trillion by 2030. (Source: https://example.com/report2023)
 
         If the task can be completed without invoking the tool, respond directly to the user without calling any tool.
 
