@@ -611,17 +611,20 @@ Begin your response now:
             if isinstance(user_headers, dict):
                 headers.update(user_headers)
 
+            # 添加时间戳参数绕过 CDN 缓存
+            cache_bust_params = {"_t": str(int(time.time() * 1000))}
+
             # 发起 HTTP 请求
             if method == "GET":
-                response = requests.get(url, headers=headers)
+                response = requests.get(url, params=cache_bust_params, headers=headers)
             elif method == "POST":
-                response = requests.post(url, headers=headers, json={})
+                response = requests.post(url, params=cache_bust_params, headers=headers, json={})
             elif method == "PUT":
-                response = requests.put(url, headers=headers, json={})
+                response = requests.put(url, params=cache_bust_params, headers=headers, json={})
             elif method == "DELETE":
-                response = requests.delete(url, headers=headers)
+                response = requests.delete(url, params=cache_bust_params, headers=headers)
             elif method == "PATCH":
-                response = requests.patch(url, headers=headers, json={})
+                response = requests.patch(url, params=cache_bust_params, headers=headers, json={})
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
@@ -780,6 +783,11 @@ Begin your response now:
 
                         request_params = user_params.get("query")
                         request_body = user_params.get("body")
+
+                        # 添加时间戳参数绕过 CDN 缓存
+                        if request_params is None:
+                            request_params = {}
+                        request_params["_t"] = str(int(time.time() * 1000))
 
                         if method == "GET":
                             response = requests.get(url, params=request_params, headers=headers)
