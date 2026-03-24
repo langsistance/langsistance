@@ -99,6 +99,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
 - Use numbered lists `1.` for sequential steps
 - Add space after list markers
 - Indent sub-items with 2-4 spaces
+- **CRITICAL**: When the tool returns a list, display ALL items from the list. Do NOT summarize, truncate, or selectively show items.
 
 Example:
 ```
@@ -151,6 +152,7 @@ b) **If result contains images**: Display them directly
    - Add captions below if needed
 
 c) **If result is a list**: Use proper list formatting
+   - **CRITICAL**: Display ALL items from the list, do NOT truncate or summarize
    - Keep items concise
    - Use sub-lists for hierarchy
 
@@ -162,26 +164,29 @@ e) **Summary structure** (recommended):
 
    [Brief introduction or summary]
 
-   ### Key Points
-   - Point 1
-   - Point 2
+   ### Key Information
+   - Point 1 (with details)
+   - Point 2 (with details)
+   - ... (include ALL items from the tool result)
 
    ### Details
-   [Detailed information]
+   [Detailed information organized by topic]
 
-   ### Resources
-   - [Link 1](URL)
-   - [Link 2](URL)
-
-   ### Images
-   ![Image 1](URL)
+   [Display images inline where relevant]
+   ![Image Description](image_URL)
    ```
 
 ### 11. Content Organization Tips
 - Start with a brief summary (2-3 sentences)
-- Group related links together
-- Place images after relevant text descriptions
-- End with additional resources or next steps if applicable
+- Present ALL content from the tool result - do NOT omit items to save space
+- Place images inline with relevant content
+- **DO NOT** add a separate "Resources" or "Sources" section at the end
+- **DO NOT** create a list of links at the bottom of your response
+
+### 12. CRITICAL Rules
+- **Display completeness**: Show ALL items when the tool returns a list or array
+- **No source sections**: Do NOT add "Sources:", "References:", or "Resources:" sections at the end
+- **Inline links only**: Integrate links naturally within the content, not as a separate list at the bottom
 
 **Remember**: Your goal is to make the content scannable, visually appealing, and easy to read. Use whitespace effectively!
 """
@@ -426,6 +431,7 @@ e) **Summary structure** (recommended):
         6. **Tables**: Use tables for structured data comparison
         7. **Spacing**: Add blank lines between content blocks for readability
         8. **Code blocks**: Use fenced code blocks with language specification when showing code
+        9. **Completeness**: When tool returns a list, display ALL items - do NOT truncate or summarize
 
         ### Response Structure Template:
 
@@ -436,16 +442,14 @@ e) **Summary structure** (recommended):
         [Brief summary of what the tool returned]
 
         ### Key Information
-        - Important point 1
-        - Important point 2
+        - Important point 1 (with details)
+        - Important point 2 (with details)
+        - ... (include ALL items from the tool result)
 
         ### Details
-        [Organized detailed content]
+        [Organized detailed content - display ALL data from tool result]
 
-        ### Resources
-        - [Descriptive Link Text](URL)
-
-        ### Visual Content
+        [Display images inline where relevant]
         ![Image Description](image_URL)
 
         **CRITICAL OUTPUT FORMAT**:
@@ -455,7 +459,13 @@ e) **Summary structure** (recommended):
         - Start directly with Markdown formatting (e.g., ## Title or plain text)
         - Only use code blocks for actual code snippets within your content, not for the entire response
 
-        **IMPORTANT**: Make your response visually appealing, easy to scan, and professionally formatted. Transform raw data into a beautiful, user-friendly presentation.
+        **CRITICAL CONTENT RULES**:
+        - Display ALL items when the tool returns a list or array - do NOT omit any items
+        - Do NOT add a "Resources", "Sources", or "References" section at the end of your response
+        - Do NOT create a separate list of links at the bottom
+        - Integrate all links naturally within the content itself
+
+        **IMPORTANT**: Make your response visually appealing, easy to scan, and professionally formatted. Transform raw data into a beautiful, user-friendly presentation while ensuring ALL content from the tool result is displayed.
         """
 
         return system_prompt
@@ -542,6 +552,8 @@ Act as a self-contained intelligent assistant. Follow these instructions strictl
 2.  **No External Access:** Do not attempt to invoke or use any internal or external tools (such as search functions, code interpreters, calculators, or knowledge retrieval from your base training data) to complete the task.
 3.  **Direct Processing:** Analyze, reason, and respond directly based on the provided input. If the necessary information is not contained in my messages, state that clearly instead of making assumptions.
 4.  **Privacy Protection:** Do NOT include or output any `user_id`, `query_id`, or similar internal identifiers in your response. These are system metadata and should never appear in user-facing output.
+5.  **Content Completeness:** When the input data contains a list or array, display ALL items in your response. Do NOT truncate, summarize, or selectively show items.
+6.  **No Source Sections:** Do NOT add a "Sources", "References", or "Resources" section at the end of your response. Do NOT create a separate list of links at the bottom.
 
 {formatting_guide}
 
@@ -554,8 +566,9 @@ Act as a self-contained intelligent assistant. Follow these instructions strictl
 Generate a beautiful, well-formatted Markdown response based on the above data. Follow ALL the formatting guidelines provided above. Make your response:
 - Visually appealing with proper structure
 - Easy to scan with clear headings
-- Rich with properly formatted links and images
+- Rich with properly formatted links and images (integrated naturally within content)
 - Professional and polished
+- Complete - display ALL items if the data contains lists or arrays
 
 **CRITICAL OUTPUT FORMAT**:
 - Output your response as DIRECT Markdown content
@@ -563,6 +576,11 @@ Generate a beautiful, well-formatted Markdown response based on the above data. 
 - Do NOT start with ```markdown or ```
 - Start directly with Markdown formatting (e.g., ## Title or plain text)
 - Only use code blocks for actual code snippets within your content, not for the entire response
+
+**CRITICAL CONTENT RULES**:
+- Display ALL items from lists/arrays in the input data
+- Do NOT add a separate "Sources" or "References" section at the end
+- Integrate all links naturally within the content
 
 Begin your response now:
             """
@@ -673,6 +691,8 @@ Act as a self-contained intelligent assistant. Follow these instructions strictl
 2.  **No External Access:** Do not attempt to invoke or use any internal or external tools (such as search functions, code interpreters, calculators, or knowledge retrieval from your base training data) to complete the task.
 3.  **Direct Processing:** Analyze, reason, and respond directly based on the provided input. If the necessary information is not contained in my messages, state that clearly instead of making assumptions.
 4.  **Privacy Protection:** Do NOT include or output any `user_id`, `query_id`, or similar internal identifiers in your response. These are system metadata and should never appear in user-facing output.
+5.  **Content Completeness:** When the input data contains a list or array, display ALL items in your response. Do NOT truncate, summarize, or selectively show items.
+6.  **No Source Sections:** Do NOT add a "Sources", "References", or "Resources" section at the end of your response. Do NOT create a separate list of links at the bottom.
 
 {formatting_guide}
 
@@ -685,8 +705,9 @@ Act as a self-contained intelligent assistant. Follow these instructions strictl
 Generate a beautiful, well-formatted Markdown response based on the above data. Follow ALL the formatting guidelines provided above. Make your response:
 - Visually appealing with proper structure
 - Easy to scan with clear headings
-- Rich with properly formatted links and images
+- Rich with properly formatted links and images (integrated naturally within content)
 - Professional and polished
+- Complete - display ALL items if the data contains lists or arrays
 
 **CRITICAL OUTPUT FORMAT**:
 - Output your response as DIRECT Markdown content
@@ -694,6 +715,11 @@ Generate a beautiful, well-formatted Markdown response based on the above data. 
 - Do NOT start with ```markdown or ```
 - Start directly with Markdown formatting (e.g., ## Title or plain text)
 - Only use code blocks for actual code snippets within your content, not for the entire response
+
+**CRITICAL CONTENT RULES**:
+- Display ALL items from lists/arrays in the input data
+- Do NOT add a separate "Sources" or "References" section at the end
+- Integrate all links naturally within the content
 
 Begin your response now:
             """
