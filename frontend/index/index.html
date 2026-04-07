@@ -4,6 +4,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0d9488" />
+    <link rel="preconnect" href="https://www.googletagmanager.com" />
+    <link rel="preconnect" href="https://www.youtube.com" />
+    <link rel="preconnect" href="https://images.unsplash.com" />
     <title>CopiioAI - Turn APIs into Conversations</title>
     <meta name="description"
         content="CopiioAI turns any API into a chat-based interface. Perfect for both developers and non-developers - build and share chat tools powered by your APIs so anyone can access real-time data with natural language, no coding or frontend required." />
@@ -11,7 +15,16 @@
         content="API, chat interface, conversational AI, API tools, no-code API, chat-based API, API to chat, developer tools, AI assistant, natural language API" />
     <meta name="author" content="CopiioAI" />
     <link rel="canonical" href="https://copiioai.com" />
+    <link rel="alternate" hreflang="en" href="https://copiioai.com" />
+    <link rel="alternate" hreflang="zh" href="https://copiioai.com" />
+    <link rel="alternate" hreflang="ja" href="https://copiioai.com" />
+    <link rel="alternate" hreflang="ko" href="https://copiioai.com" />
+    <link rel="alternate" hreflang="es" href="https://copiioai.com" />
+    <link rel="alternate" hreflang="fr" href="https://copiioai.com" />
+    <link rel="alternate" hreflang="de" href="https://copiioai.com" />
+    <link rel="alternate" hreflang="x-default" href="https://copiioai.com" />
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1" />
+    <link rel="apple-touch-icon" href="/logo.png" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon" />
@@ -21,11 +34,16 @@
         content="CopiioAI turns any API into a chat-based interface. Perfect for both developers and non-developers - build and share chat tools powered by your APIs so anyone can access real-time data with natural language, no coding or frontend required." />
     <meta property="og:image"
         content="https://images.unsplash.com/photo-1762340277380-04c2c30d0ef8?w=1200&h=630&fit=crop" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="CopiioAI - Turn APIs into Conversations" />
     <meta property="og:url" content="https://copiioai.com" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="CopiioAI" />
+    <meta property="og:locale" content="en_US" />
     <!-- Twitter Cards -->
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@CopiioAI" />
     <meta name="twitter:title" content="CopiioAI - Turn APIs into Conversations" />
     <meta name="twitter:description"
         content="CopiioAI turns any API into a chat-based interface. Perfect for both developers and non-developers - build and share chat tools powered by your APIs so anyone can access real-time data with natural language, no coding or frontend required." />
@@ -49,12 +67,7 @@
       "@type": "WebSite",
       "name": "CopiioAI",
       "url": "https://copiioai.com",
-      "description": "Turn APIs into conversations",
-      "potentialAction": {
-        "@type": "SearchAction",
-        "target": "https://copiioai.com/search?q={search_term_string}",
-        "query-input": "required name=search_term_string"
-      }
+      "description": "Turn APIs into conversations"
     }
     </script>
     <script type="application/ld+json">
@@ -83,12 +96,7 @@
         "priceCurrency": "USD"
       },
       "description": "Turn any API into a chat-based interface. No frontend required.",
-      "screenshot": "https://images.unsplash.com/photo-1762340277380-04c2c30d0ef8?w=1200&h=630&fit=crop",
-      "aggregateRating": {
-        "@type": "AggregateRating",
-        "ratingValue": "5",
-        "ratingCount": "1"
-      }
+      "screenshot": "https://images.unsplash.com/photo-1762340277380-04c2c30d0ef8?w=1200&h=630&fit=crop"
     }
     </script>
     <script type="application/ld+json">
@@ -1154,6 +1162,36 @@
             de: 'Deutsch'
         };
 
+        const metaDescriptions = {
+            en: 'CopiioAI turns any API into a chat-based interface. Perfect for both developers and non-developers - build and share chat tools powered by your APIs so anyone can access real-time data with natural language, no coding or frontend required.',
+            zh: 'CopiioAI 将任何 API 转换为聊天界面。面向开发者和非开发者——构建并分享由 API 驱动的聊天工具，让任何人都能用自然语言访问实时数据，无需编码或前端开发。',
+            ja: 'CopiioAIは任意のAPIをチャットインターフェースに変換します。開発者・非開発者どちらにも最適。APIを活用したチャットツールを構築・共有し、コーディング不要でリアルタイムデータにアクセス。',
+            ko: 'CopiioAI는 모든 API를 채팅 인터페이스로 변환합니다. 개발자와 비개발자 모두에게 적합 - API 기반 채팅 도구를 구축하고 공유하여 누구나 코딩 없이 실시간 데이터에 접근할 수 있습니다.',
+            es: 'CopiioAI convierte cualquier API en una interfaz de chat. Ideal para desarrolladores y no desarrolladores: crea y comparte herramientas de chat impulsadas por tus APIs para que cualquiera acceda a datos en tiempo real sin codificación.',
+            fr: 'CopiioAI transforme n\'importe quelle API en interface de chat. Idéal pour les développeurs et non-développeurs : créez et partagez des outils de chat alimentés par vos APIs pour accéder aux données en temps réel sans codage.',
+            de: 'CopiioAI verwandelt jede API in eine Chat-Oberfläche. Ideal für Entwickler und Nicht-Entwickler – erstelle und teile Chat-Tools auf API-Basis, damit jeder ohne Programmierung auf Echtzeitdaten zugreifen kann.'
+        };
+
+        const metaTitles = {
+            en: 'CopiioAI - Turn APIs into Conversations',
+            zh: 'CopiioAI - 将API转换为对话',
+            ja: 'CopiioAI - APIを会話に変換',
+            ko: 'CopiioAI - API를 대화로 변환',
+            es: 'CopiioAI - Convierte APIs en Conversaciones',
+            fr: 'CopiioAI - Transformez les APIs en Conversations',
+            de: 'CopiioAI - Verwandle APIs in Konversationen'
+        };
+
+        const ogLocales = {
+            en: 'en_US',
+            zh: 'zh_CN',
+            ja: 'ja_JP',
+            ko: 'ko_KR',
+            es: 'es_ES',
+            fr: 'fr_FR',
+            de: 'de_DE'
+        };
+
         // Get current language from localStorage or default to 'en'
         let currentLang = localStorage.getItem('copiioai_lang') || 'en';
 
@@ -1161,6 +1199,9 @@
         function changeLanguage(lang) {
             currentLang = lang;
             localStorage.setItem('copiioai_lang', lang);
+
+            // Sync html[lang] attribute for accessibility and SEO
+            document.documentElement.lang = lang;
 
             // Update UI
             document.getElementById('current-lang').textContent = languageNames[lang];
@@ -1181,22 +1222,21 @@
                 }
             });
 
-            // Update page title and meta tags
-            if (lang === 'zh') {
-                document.title = 'CopiioAI - 将API转换为对话';
-            } else if (lang === 'ja') {
-                document.title = 'CopiioAI - APIを会話に変換';
-            } else if (lang === 'ko') {
-                document.title = 'CopiioAI - API를 대화로 변환';
-            } else if (lang === 'es') {
-                document.title = 'CopiioAI - Convierte APIs en Conversaciones';
-            } else if (lang === 'fr') {
-                document.title = 'CopiioAI - Transformez les APIs en Conversations';
-            } else if (lang === 'de') {
-                document.title = 'CopiioAI - Verwandle APIs in Konversationen';
-            } else {
-                document.title = 'CopiioAI - Turn APIs into Conversations';
-            }
+            // Update page title
+            const title = metaTitles[lang];
+            document.title = title;
+
+            // Update meta description
+            document.querySelector('meta[name="description"]').setAttribute('content', metaDescriptions[lang]);
+
+            // Update Open Graph tags
+            document.querySelector('meta[property="og:title"]').setAttribute('content', title);
+            document.querySelector('meta[property="og:description"]').setAttribute('content', metaDescriptions[lang]);
+            document.querySelector('meta[property="og:locale"]').setAttribute('content', ogLocales[lang]);
+
+            // Update Twitter tags
+            document.querySelector('meta[name="twitter:title"]').setAttribute('content', title);
+            document.querySelector('meta[name="twitter:description"]').setAttribute('content', metaDescriptions[lang]);
         }
 
         // Initialize on page load
