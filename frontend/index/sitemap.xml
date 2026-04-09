@@ -7,14 +7,14 @@
   <!-- Homepage -->
   <url>
     <loc>https://copiioai.com/</loc>
-    <lastmod>2026-02-10</lastmod>
+    <lastmod>2026-04-09</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>
 
   <!-- Privacy Policy -->
   <url>
-    <loc>https://copiioai.com/privacy-policy.html</loc>
+    <loc>https://copiioai.com/privacy-policy</loc>
     <lastmod>2026-01-16</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>

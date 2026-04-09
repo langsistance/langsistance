@@ -1,0 +1,18 @@
+# CopiioAI
+
+> CopiioAI turns any API into a chat-based interface. Developers connect or capture APIs; non-developers query them in plain language. No frontend required.
+
+## Product
+- https://copiioai.com/ : Homepage — product overview, features, use cases, and how-it-works
+- https://copiioai.com/privacy-policy : Privacy Policy
+
+## Key Facts
+- Category: Developer tool / no-code API-to-chat interface
+- Pricing: Free tier available via Chrome Web Store
+- Platform: Chrome Extension, Web
+- Use cases: Internal dashboards, ops/analytics queries, admin and support tools, sharing APIs with non-technical users
+- Target users: Developers who want to expose APIs as chat tools; non-developers who want to query real-time data without coding
+
+## Contact
+- Support: support@copiioai.com
+- Twitter: @CopiioAI

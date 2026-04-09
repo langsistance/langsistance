@@ -8,21 +8,15 @@
     <link rel="preconnect" href="https://www.googletagmanager.com" />
     <link rel="preconnect" href="https://www.youtube.com" />
     <link rel="preconnect" href="https://images.unsplash.com" />
+    <link rel="preload" as="image" fetchpriority="high"
+        href="https://images.unsplash.com/photo-1762340277380-04c2c30d0ef8?w=800&h=600&fit=crop&fm=webp">
     <title>CopiioAI - Turn APIs into Conversations</title>
     <meta name="description"
         content="CopiioAI turns any API into a chat-based interface. Perfect for both developers and non-developers - build and share chat tools powered by your APIs so anyone can access real-time data with natural language, no coding or frontend required." />
     <meta name="keywords"
         content="API, chat interface, conversational AI, API tools, no-code API, chat-based API, API to chat, developer tools, AI assistant, natural language API" />
     <meta name="author" content="CopiioAI" />
-    <link rel="canonical" href="https://copiioai.com" />
-    <link rel="alternate" hreflang="en" href="https://copiioai.com" />
-    <link rel="alternate" hreflang="zh" href="https://copiioai.com" />
-    <link rel="alternate" hreflang="ja" href="https://copiioai.com" />
-    <link rel="alternate" hreflang="ko" href="https://copiioai.com" />
-    <link rel="alternate" hreflang="es" href="https://copiioai.com" />
-    <link rel="alternate" hreflang="fr" href="https://copiioai.com" />
-    <link rel="alternate" hreflang="de" href="https://copiioai.com" />
-    <link rel="alternate" hreflang="x-default" href="https://copiioai.com" />
+    <link rel="canonical" href="https://copiioai.com/" />
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1" />
     <link rel="apple-touch-icon" href="/logo.png" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -37,7 +31,7 @@
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="CopiioAI - Turn APIs into Conversations" />
-    <meta property="og:url" content="https://copiioai.com" />
+    <meta property="og:url" content="https://copiioai.com/" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="CopiioAI" />
     <meta property="og:locale" content="en_US" />
@@ -58,7 +52,14 @@
       "url": "https://copiioai.com",
       "logo": "https://copiioai.com/logo.png",
       "description": "CopiioAI turns any API into a chat-based interface. Perfect for both developers and non-developers - build and share chat tools powered by your APIs so anyone can access real-time data with natural language, no coding or frontend required.",
-      "sameAs": []
+      "sameAs": [
+        "https://twitter.com/CopiioAI"
+      ],
+      "contactPoint": {
+        "@type": "ContactPoint",
+        "contactType": "customer support",
+        "email": "support@copiioai.com"
+      }
     }
     </script>
     <script type="application/ld+json">
@@ -89,14 +90,19 @@
       "@type": "SoftwareApplication",
       "name": "CopiioAI",
       "applicationCategory": "DeveloperApplication",
-      "operatingSystem": "Chrome, Web Browser",
+      "operatingSystem": "Web Browser",
+      "browserRequirements": "Requires JavaScript. Requires Chrome browser.",
       "offers": {
         "@type": "Offer",
         "price": "0",
-        "priceCurrency": "USD"
+        "priceCurrency": "USD",
+        "availability": "https://schema.org/InStock"
       },
       "description": "Turn any API into a chat-based interface. No frontend required.",
-      "screenshot": "https://images.unsplash.com/photo-1762340277380-04c2c30d0ef8?w=1200&h=630&fit=crop"
+      "author": {
+        "@type": "Organization",
+        "name": "CopiioAI"
+      }
     }
     </script>
     <script type="application/ld+json">
@@ -162,8 +168,17 @@
       "name": "CopiioAI Introduction Video",
       "description": "Learn how CopiioAI turns APIs into conversations",
       "thumbnailUrl": "https://img.youtube.com/vi/WC3b299li7U/maxresdefault.jpg",
+      "contentUrl": "https://www.youtube.com/watch?v=WC3b299li7U",
+      "embedUrl": "https://www.youtube.com/embed/WC3b299li7U",
       "uploadDate": "2026-01-29T00:00:00+00:00",
-      "embedUrl": "https://www.youtube.com/embed/WC3b299li7U"
+      "publisher": {
+        "@type": "Organization",
+        "name": "CopiioAI",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://copiioai.com/logo.png"
+        }
+      }
     }
     </script>
     <script type="application/ld+json">
@@ -173,8 +188,17 @@
       "name": "A Real-Time Data AI Assistant for Non-Developers",
       "description": "Learn how non-developers can use CopiioAI to access real-time data without coding",
       "thumbnailUrl": "https://img.youtube.com/vi/XXoMGPtarsg/maxresdefault.jpg",
+      "contentUrl": "https://www.youtube.com/watch?v=XXoMGPtarsg",
+      "embedUrl": "https://www.youtube.com/embed/XXoMGPtarsg",
       "uploadDate": "2026-03-01T00:00:00+00:00",
-      "embedUrl": "https://www.youtube.com/embed/XXoMGPtarsg"
+      "publisher": {
+        "@type": "Organization",
+        "name": "CopiioAI",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://copiioai.com/logo.png"
+        }
+      }
     }
     </script>
     <script type="application/ld+json">
@@ -184,8 +208,17 @@
       "name": "How to Turn Any API into a Chat Interface with CopiioAI",
       "description": "Learn how developers can use CopiioAI to turn APIs into real-time conversational tools without building a frontend",
       "thumbnailUrl": "https://img.youtube.com/vi/mAIdNHtDIw8/maxresdefault.jpg",
+      "contentUrl": "https://www.youtube.com/watch?v=mAIdNHtDIw8",
+      "embedUrl": "https://www.youtube.com/embed/mAIdNHtDIw8",
       "uploadDate": "2026-03-04T00:00:00+00:00",
-      "embedUrl": "https://www.youtube.com/embed/mAIdNHtDIw8"
+      "publisher": {
+        "@type": "Organization",
+        "name": "CopiioAI",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://copiioai.com/logo.png"
+        }
+      }
     }
     </script>
     <!-- Google Analytics -->
@@ -198,68 +231,7 @@
     </script>
     <!-- Google Search Console Verification -->
     <meta name="google-site-verification" content="owVaf3LfHZSArXBhv1ECsB4DTbDu2vMGqBwSUsUQpiM" />
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body {
-            scroll-behavior: smooth;
-        }
-
-        /* Frosted glass effect for header */
-        header {
-            backdrop-filter: blur(12px) saturate(180%);
-            -webkit-backdrop-filter: blur(12px) saturate(180%);
-            background-color: rgba(255, 255, 255, 0.7);
-        }
-
-        /* Language selector dropdown */
-        .language-dropdown {
-            position: relative;
-            padding-bottom: 0.25rem;
-        }
-
-        .language-menu {
-            display: none;
-            position: absolute;
-            right: 0;
-            top: 100%;
-            margin-top: 0;
-            padding-top: 0.25rem;
-            min-width: 160px;
-            z-index: 100;
-        }
-
-        .language-dropdown:hover .language-menu {
-            display: block;
-        }
-
-        .language-menu-inner {
-            border-radius: 0.5rem;
-            overflow: hidden;
-            background: white;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-        }
-
-        .language-menu-inner button {
-            display: block;
-            width: 100%;
-            text-align: left;
-            padding: 0.75rem 1rem;
-            transition: background-color 0.2s;
-            border: none;
-            background: transparent;
-            cursor: pointer;
-        }
-
-        .language-menu-inner button:hover {
-            background-color: #f3f4f6;
-        }
-
-        .language-menu-inner button.active {
-            background-color: #e0f2fe;
-            color: #0284c7;
-            font-weight: 600;
-        }
-    </style>
+    <link rel="stylesheet" href="/styles.css">
 </head>
 
 <body class="bg-gray-50">
@@ -271,8 +243,9 @@
                 <span class="text-xl font-semibold text-gray-900">CopiioAI</span>
             </div>
             <div class="flex items-center space-x-4">
-                <a href="https://chromewebstore.google.com/detail/copiioai/lejbegpfaanpcilacmakkdediinkmnne" target="_blank" rel="noopener noreferrer"
-                    class="flex items-center space-x-2 px-4 py-2 text-gray-700 hover:text-gray-900 border border-gray-300 rounded-lg transition">
+                <a href="https://chromewebstore.google.com/detail/copiioai/lejbegpfaanpcilacmakkdediinkmnne"
+                    target="_blank" rel="noopener noreferrer"
+                    class="flex items-center space-x-2 px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                             d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4">
@@ -281,7 +254,7 @@
                     <span data-i18n="header.extension">Chrome Extension</span>
                 </a>
                 <button
-                    class="flex items-center space-x-2 px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition">
+                    class="flex items-center space-x-2 px-4 py-2 text-gray-700 hover:text-gray-900 border border-gray-300 rounded-lg transition">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                             d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z">
@@ -289,6 +262,16 @@
                     </svg>
                     <span data-i18n="header.desktop">Desktop App Coming Soon</span>
                 </button>
+                <a href="https://copiioaicom-spec.github.io/CopiioAI-Natural-language-interface-for-accessing-internet-data/"
+                    target="_blank" rel="noopener noreferrer"
+                    class="flex items-center space-x-2 px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253">
+                        </path>
+                    </svg>
+                    <span>Documentation</span>
+                </a>
 
                 <!-- Language Selector -->
                 <div class="language-dropdown">
@@ -337,11 +320,20 @@
             </p>
             <div class="max-w-4xl mx-auto bg-white rounded-2xl shadow-2xl overflow-hidden">
                 <div class="aspect-video">
-                    <iframe width="100%" height="100%" src="https://www.youtube.com/embed/WC3b299li7U"
-                        title="YouTube video player" frameborder="0"
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                        allowfullscreen class="w-full h-full">
-                    </iframe>
+                    <div class="youtube-facade w-full h-full relative bg-black cursor-pointer flex items-center justify-center"
+                        data-videoid="WC3b299li7U"
+                        style="background-image: url('https://img.youtube.com/vi/WC3b299li7U/maxresdefault.jpg'); background-size: cover; background-position: center;">
+                        <button class="youtube-play-btn absolute inset-0 flex items-center justify-center"
+                            aria-label="Play CopiioAI Introduction Video">
+                            <svg width="68" height="48" viewBox="0 0 68 48" fill="none"
+                                xmlns="http://www.w3.org/2000/svg">
+                                <path
+                                    d="M66.52 7.74C65.73 4.79 63.4 2.46 60.45 1.67 55.19 0 34 0 34 0S12.82 0 7.55 1.67C4.6 2.46 2.27 4.79 1.48 7.74 0 13.01 0 24 0 24s0 10.99 1.48 16.26c.79 2.95 3.12 5.28 6.07 6.07C12.82 48 34 48 34 48s21.18 0 26.45-1.67c2.95-.79 5.28-3.12 6.07-6.07C68 34.99 68 24 68 24s0-10.99-1.48-16.26z"
+                                    fill="#FF0000" />
+                                <path d="M27 34l18-10-18-10v20z" fill="white" />
+                            </svg>
+                        </button>
+                    </div>
                 </div>
             </div>
         </section>
@@ -365,9 +357,9 @@
                         </p>
                     </div>
                     <div class="rounded-2xl shadow-xl overflow-hidden">
-                        <img src="https://images.unsplash.com/photo-1762340277380-04c2c30d0ef8?w=800&h=600&fit=crop"
+                        <img src="https://images.unsplash.com/photo-1762340277380-04c2c30d0ef8?w=800&h=600&fit=crop&fm=webp"
                             alt="Conversational AI Interface showing chat-based API interaction"
-                            class="w-full h-full object-cover aspect-video">
+                            class="w-full h-full object-cover aspect-video" width="800" height="600">
                     </div>
                 </div>
             </div>
@@ -398,11 +390,20 @@
                         </div>
                         <div class="bg-white rounded-xl shadow-xl overflow-hidden">
                             <div class="aspect-video">
-                                <iframe width="100%" height="100%" src="https://www.youtube.com/embed/mAIdNHtDIw8"
-                                    title="How to Turn Any API into a Chat Interface with CopiioAI" frameborder="0"
-                                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                                    allowfullscreen class="w-full h-full">
-                                </iframe>
+                                <div class="youtube-facade w-full h-full relative bg-black cursor-pointer flex items-center justify-center"
+                                    data-videoid="mAIdNHtDIw8"
+                                    style="background-image: url('https://img.youtube.com/vi/mAIdNHtDIw8/maxresdefault.jpg'); background-size: cover; background-position: center;">
+                                    <button class="youtube-play-btn absolute inset-0 flex items-center justify-center"
+                                        aria-label="Play: How to Turn Any API into a Chat Interface with CopiioAI">
+                                        <svg width="68" height="48" viewBox="0 0 68 48" fill="none"
+                                            xmlns="http://www.w3.org/2000/svg">
+                                            <path
+                                                d="M66.52 7.74C65.73 4.79 63.4 2.46 60.45 1.67 55.19 0 34 0 34 0S12.82 0 7.55 1.67C4.6 2.46 2.27 4.79 1.48 7.74 0 13.01 0 24 0 24s0 10.99 1.48 16.26c.79 2.95 3.12 5.28 6.07 6.07C12.82 48 34 48 34 48s21.18 0 26.45-1.67c2.95-.79 5.28-3.12 6.07-6.07C68 34.99 68 24 68 24s0-10.99-1.48-16.26z"
+                                                fill="#FF0000" />
+                                            <path d="M27 34l18-10-18-10v20z" fill="white" />
+                                        </svg>
+                                    </button>
+                                </div>
                             </div>
                         </div>
                         <!-- <ul class="mt-6 space-y-2 text-gray-700">
@@ -446,11 +447,20 @@
                         </div>
                         <div class="bg-white rounded-xl shadow-xl overflow-hidden">
                             <div class="aspect-video">
-                                <iframe width="100%" height="100%" src="https://www.youtube.com/embed/XXoMGPtarsg"
-                                    title="A Real-Time Data AI Assistant for Non-Developers" frameborder="0"
-                                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                                    allowfullscreen class="w-full h-full">
-                                </iframe>
+                                <div class="youtube-facade w-full h-full relative bg-black cursor-pointer flex items-center justify-center"
+                                    data-videoid="XXoMGPtarsg"
+                                    style="background-image: url('https://img.youtube.com/vi/XXoMGPtarsg/maxresdefault.jpg'); background-size: cover; background-position: center;">
+                                    <button class="youtube-play-btn absolute inset-0 flex items-center justify-center"
+                                        aria-label="Play: A Real-Time Data AI Assistant for Non-Developers">
+                                        <svg width="68" height="48" viewBox="0 0 68 48" fill="none"
+                                            xmlns="http://www.w3.org/2000/svg">
+                                            <path
+                                                d="M66.52 7.74C65.73 4.79 63.4 2.46 60.45 1.67 55.19 0 34 0 34 0S12.82 0 7.55 1.67C4.6 2.46 2.27 4.79 1.48 7.74 0 13.01 0 24 0 24s0 10.99 1.48 16.26c.79 2.95 3.12 5.28 6.07 6.07C12.82 48 34 48 34 48s21.18 0 26.45-1.67c2.95-.79 5.28-3.12 6.07-6.07C68 34.99 68 24 68 24s0-10.99-1.48-16.26z"
+                                                fill="#FF0000" />
+                                            <path d="M27 34l18-10-18-10v20z" fill="white" />
+                                        </svg>
+                                    </button>
+                                </div>
                             </div>
                         </div>
                         <!-- <ul class="mt-6 space-y-2 text-gray-700">
@@ -492,7 +502,8 @@
                         <span data-i18n="cta.subtitle2">Start building or using API tools in minutes.</span>
                     </p>
                     <div class="flex flex-col sm:flex-row gap-4 justify-center items-center">
-                        <a href="https://chromewebstore.google.com/detail/copiioai/lejbegpfaanpcilacmakkdediinkmnne" target="_blank" rel="noopener noreferrer"
+                        <a href="https://chromewebstore.google.com/detail/copiioai/lejbegpfaanpcilacmakkdediinkmnne"
+                            target="_blank" rel="noopener noreferrer"
                             class="inline-flex items-center space-x-2 px-8 py-4 bg-white text-teal-600 rounded-lg hover:bg-gray-100 transition font-semibold text-lg shadow-xl">
                             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -514,9 +525,9 @@
                     CopiioAI do?</h2>
                 <div class="grid md:grid-cols-2 gap-12 items-center">
                     <div class="rounded-2xl overflow-hidden shadow-xl">
-                        <img src="https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=800&h=600&fit=crop"
+                        <img src="https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=800&h=600&fit=crop&fm=webp"
                             alt="Team Collaboration using CopiioAI chat-based API tools"
-                            class="w-full h-full object-cover">
+                            class="w-full h-full object-cover" loading="lazy" width="800" height="600">
                     </div>
                     <div class="space-y-8">
                         <div>
@@ -599,9 +610,9 @@
                         </div>
                     </div>
                     <div class="rounded-2xl overflow-hidden shadow-xl">
-                        <img src="https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?w=800&h=600&fit=crop"
+                        <img src="https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?w=800&h=600&fit=crop&fm=webp"
                             alt="CopiioAI Workflow Process - Connect API, Add Knowledge, Share as Chat"
-                            class="w-full h-full object-cover">
+                            class="w-full h-full object-cover" loading="lazy" width="800" height="600">
                     </div>
                 </div>
             </div>
@@ -614,9 +625,9 @@
                     Use Cases</h2>
                 <div class="grid md:grid-cols-2 gap-12 items-center">
                     <div class="rounded-2xl overflow-hidden shadow-xl">
-                        <img src="https://images.unsplash.com/photo-1517694712202-14dd9538aa97?w=800&h=600&fit=crop"
+                        <img src="https://images.unsplash.com/photo-1517694712202-14dd9538aa97?w=800&h=600&fit=crop&fm=webp"
                             alt="Developer Coding on Laptop with CopiioAI API Integration"
-                            class="w-full h-full object-cover">
+                            class="w-full h-full object-cover" loading="lazy" width="800" height="600">
                     </div>
                     <div class="space-y-6">
                         <div class="flex items-start space-x-3">
@@ -666,9 +677,9 @@
                         </p>
                     </div>
                     <div class="rounded-2xl overflow-hidden shadow-xl">
-                        <img src="https://images.unsplash.com/photo-1522202176988-66273c2fd55f?w=800&h=600&fit=crop"
+                        <img src="https://images.unsplash.com/photo-1522202176988-66273c2fd55f?w=800&h=600&fit=crop&fm=webp"
                             alt="People Collaborating with CopiioAI Chat-based API Tools"
-                            class="w-full h-full object-cover">
+                            class="w-full h-full object-cover" loading="lazy" width="800" height="600">
                     </div>
                 </div>
             </div>
@@ -679,7 +690,8 @@
             <div class="max-w-4xl mx-auto px-6 text-center">
                 <h2 class="text-4xl font-bold text-white mb-8" data-i18n="cta2.title">Get Started Now</h2>
                 <div class="flex flex-col sm:flex-row gap-4 justify-center">
-                    <a href="https://chromewebstore.google.com/detail/copiioai/lejbegpfaanpcilacmakkdediinkmnne" target="_blank" rel="noopener noreferrer"
+                    <a href="https://chromewebstore.google.com/detail/copiioai/lejbegpfaanpcilacmakkdediinkmnne"
+                        target="_blank" rel="noopener noreferrer"
                         class="flex items-center justify-center space-x-2 px-8 py-4 bg-white text-teal-600 rounded-lg hover:bg-gray-100 transition font-semibold text-lg shadow-lg">
                         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -725,7 +737,7 @@
                 </div>
                 <p class="text-gray-600 mb-4" data-i18n="footer.tagline">Turn APIs into conversations.</p>
                 <div class="flex justify-center space-x-6 text-sm text-gray-600">
-                    <a href="/privacy-policy.html" class="hover:text-teal-600 transition"
+                    <a href="/privacy-policy" class="hover:text-teal-600 transition"
                         data-i18n="footer.privacy">Privacy Policy</a>
                     <a href="mailto:support@copiioai.com" class="hover:text-teal-600 transition"
                         data-i18n="footer.contact">Contact</a>
@@ -1240,7 +1252,24 @@
         document.addEventListener('DOMContentLoaded', function () {
             changeLanguage(currentLang);
         });
+    </script> <!-- YouTube facade click handler -->
+    <script>
+        document.querySelectorAll('.youtube-facade').forEach(function (facade) {
+            facade.addEventListener('click', function () {
+                var videoId = this.getAttribute('data-videoid');
+                var iframe = document.createElement('iframe');
+                iframe.setAttribute('width', '100%');
+                iframe.setAttribute('height', '100%');
+                iframe.setAttribute('src', 'https://www.youtube.com/embed/' + videoId + '?autoplay=1');
+                iframe.setAttribute('frameborder', '0');
+                iframe.setAttribute('allow', 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share');
+                iframe.setAttribute('allowfullscreen', '');
+                iframe.className = 'w-full h-full';
+                this.replaceWith(iframe);
+            });
+        });
     </script>
+
 </body>
 
 </html>
