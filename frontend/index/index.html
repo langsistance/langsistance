@@ -1269,6 +1269,7 @@
                 iframe.setAttribute('frameborder', '0');
                 iframe.setAttribute('allow', 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share');
                 iframe.setAttribute('allowfullscreen', '');
+                iframe.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
                 iframe.className = 'w-full h-full';
                 this.replaceWith(iframe);
             });
