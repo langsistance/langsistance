@@ -924,10 +924,10 @@ Begin your response now:
             # 默认情况下固定的系统提示词
             return await self.get_dynamic_tools()
 
-    async def process(self,user_id, prompt, query_id, speech_module) -> str | tuple[str, str]:
+    async def process(self, user_id, prompt, query_id, speech_module, push_filter=None) -> str | tuple[str, str]:
         if not self.enabled:
             return "general Agent is disabled."
-        self.knowledgeTool = get_knowledge_tool(user_id,  prompt)
+        self.knowledgeTool = get_knowledge_tool(user_id, prompt, push_filter=push_filter)
         # user_prompt = self.expand_prompt(prompt)
         user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
         system_prompt = self.generate_system_prompt()
@@ -950,9 +950,9 @@ Begin your response now:
                 working = False
         return answer, reasoning
 
-    async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler):
+    async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler, push_filter=None):
         #self.knowledgeTool = get_knowledge_tool(user_id,  prompt)
-        self.knowledgeTool = await asyncio.to_thread(get_knowledge_tool, user_id,  prompt)
+        self.knowledgeTool = await asyncio.to_thread(get_knowledge_tool, user_id, prompt, push_filter=push_filter)
         user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
         system_prompt = self.generate_system_prompt(tool_data)
         self.memory.reset([])
