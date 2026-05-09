@@ -425,12 +425,15 @@ export const LANDING_TRANSLATIONS: Record<LangKey, Record<string, string>> = {
 }
 
 export function useLandingI18n() {
+  // Default 'en' for SSR safety; stored language applied after hydration via useEffect
   const [lang, setLangState] = useState<LangKey>('en')
 
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY) as LangKey | null
-      if (saved && LANDING_TRANSLATIONS[saved]) setLangState(saved)
+      const saved = localStorage.getItem(STORAGE_KEY)
+      if (saved && saved in LANDING_TRANSLATIONS) {
+        setLangState(saved as LangKey)
+      }
     } catch {}
   }, [])
 
@@ -439,9 +442,9 @@ export function useLandingI18n() {
     try { localStorage.setItem(STORAGE_KEY, newLang) } catch {}
   }, [])
 
-  function t(key: string): string {
+  const t = useCallback((key: string): string => {
     return LANDING_TRANSLATIONS[lang]?.[key] ?? LANDING_TRANSLATIONS.en[key] ?? key
-  }
+  }, [lang])
 
   return { lang, setLanguage, t }
 }
