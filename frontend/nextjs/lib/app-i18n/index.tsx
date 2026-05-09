@@ -1,5 +1,5 @@
 'use client'
-import { createContext, useContext, useState, useCallback } from 'react'
+import { createContext, useContext, useCallback, useMemo, useState } from 'react'
 import en from './locales/en'
 import zh from './locales/zh'
 
@@ -33,7 +33,7 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
     try { localStorage.setItem(STORAGE_KEY, newLang) } catch {}
   }, [])
 
-  function t(key: string, params: Record<string, string | number> = {}): string {
+  const t = useCallback((key: string, params: Record<string, string | number> = {}): string => {
     const locale = LOCALES[lang] as Record<string, unknown>
     const keys = key.split('.')
     let value: unknown = locale
@@ -49,10 +49,12 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
       (str, [k, v]) => str.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v)),
       value
     )
-  }
+  }, [lang])
+
+  const value = useMemo(() => ({ lang, setLang, t }), [lang, setLang, t])
 
   return (
-    <I18nContext.Provider value={{ lang, setLang, t }}>
+    <I18nContext.Provider value={value}>
       {children}
     </I18nContext.Provider>
   )
