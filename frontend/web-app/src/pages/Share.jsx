@@ -94,8 +94,12 @@ export default function Share() {
   useEffect(() => { loadSent(); loadReceived() }, [loadSent, loadReceived])
 
   async function handleCreate(form) {
-    await authorizeKnowledgeAccess(form)
-    loadSent()
+    try {
+      await authorizeKnowledgeAccess(form)
+      loadSent()
+    } catch (e) {
+      alert('分享失败：' + e.message)
+    }
   }
 
   async function handleCancel(shareId) {

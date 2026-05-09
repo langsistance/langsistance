@@ -8,13 +8,19 @@ export default function Community() {
   const [total, setTotal] = useState(0)
   const PAGE_SIZE = 10
 
+  const [debouncedSearch, setDebouncedSearch] = useState(search)
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(t)
+  }, [search])
+
   const load = useCallback(async () => {
     try {
-      const res = await queryPublicKnowledge({ search, page, limit: PAGE_SIZE })
+      const res = await queryPublicKnowledge({ search: debouncedSearch, page, limit: PAGE_SIZE })
       setItems(res.items || res.knowledge || [])
       setTotal(res.total || 0)
     } catch (e) { console.error(e) }
-  }, [search, page])
+  }, [debouncedSearch, page])
 
   useEffect(() => { load() }, [load])
 

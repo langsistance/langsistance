@@ -16,10 +16,16 @@ function KnowledgeModal({ item, tools, onClose, onSave }) {
     setForm((f) => ({ ...f, [key]: val }))
   }
 
+  const [saveError, setSaveError] = useState('')
   async function submit(e) {
     e.preventDefault()
-    await onSave(form)
-    onClose()
+    setSaveError('')
+    try {
+      await onSave(form)
+      onClose()
+    } catch (err) {
+      setSaveError(err.message || '保存失败')
+    }
   }
 
   return (
@@ -70,6 +76,7 @@ function KnowledgeModal({ item, tools, onClose, onSave }) {
             />
             公开（在社区可见）
           </label>
+          {saveError && <p className="text-red-400 text-xs">{saveError}</p>}
           <div className="flex justify-end gap-2 mt-2">
             <button
               type="button"
@@ -100,15 +107,21 @@ export default function Knowledge() {
   const [modal, setModal] = useState(null) // null | 'create' | item object
   const PAGE_SIZE = 10
 
+  const [debouncedSearch, setDebouncedSearch] = useState(search)
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(t)
+  }, [search])
+
   const load = useCallback(async () => {
     try {
-      const res = await queryKnowledge({ search, page, limit: PAGE_SIZE })
+      const res = await queryKnowledge({ search: debouncedSearch, page, limit: PAGE_SIZE })
       setItems(res.items || res.knowledge || [])
       setTotal(res.total || 0)
     } catch (e) {
       console.error(e)
     }
-  }, [search, page])
+  }, [debouncedSearch, page])
 
   useEffect(() => { load() }, [load])
   useEffect(() => {

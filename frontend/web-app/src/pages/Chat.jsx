@@ -50,7 +50,9 @@ export default function Chat() {
           if (raw === '[DONE]') continue
           try {
             const evt = JSON.parse(raw)
-            const token = evt.content ?? evt.token ?? evt.answer ?? ''
+            const token = typeof evt === 'string'
+              ? evt
+              : (evt.content ?? evt.token ?? evt.answer ?? '')
             if (token) {
               setMessages((m) =>
                 m.map((msg) =>
