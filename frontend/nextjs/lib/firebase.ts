@@ -10,5 +10,9 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID!,
 }
 
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0]
-export const auth = getAuth(app)
+function initFirebase() {
+  const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0]
+  return getAuth(app)
+}
+
+export const auth = typeof window !== 'undefined' ? initFirebase() : null!

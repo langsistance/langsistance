@@ -1,5 +1,5 @@
 'use client'
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useCallback, useEffect, useState } from 'react'
 import type { User } from 'firebase/auth'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { auth } from '@/lib/firebase'
@@ -18,7 +18,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return onAuthStateChanged(auth, setUser)
   }, [])
 
-  const logout = () => signOut(auth)
+  const logout = useCallback(() => signOut(auth), [])
 
   return (
     <AuthContext.Provider value={{ user, logout }}>
