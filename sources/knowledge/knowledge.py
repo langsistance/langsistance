@@ -274,7 +274,9 @@ def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
         return []
 
 
-def get_knowledge_tool(user_id: str, question: str, top_k: int = 3, similarity_threshold: float = 0) -> Tuple[
+def get_knowledge_tool(user_id: str, question: str, top_k: int = 3,
+                       similarity_threshold: float = 0,
+                       push_filter: Optional[int] = None) -> Tuple[
     Optional[KnowledgeItem], Optional[ToolItem]]:
     """
     根据用户问题查找最相关的知识及其对应的工具
@@ -369,21 +371,22 @@ def get_knowledge_tool(user_id: str, question: str, top_k: int = 3, similarity_t
                 try:
                     with connection.cursor() as cursor:
                         # 查询工具信息
-                        tool_query_sql = """
-                                         SELECT id, \
-                                                user_id, \
-                                                title, \
-                                                description, \
-                                                url, \
-                                                push, \
-                                                status, \
-                                                timeout, \
-                                                params
-                                         FROM tools
-                                         WHERE id = %s \
-                                           AND status = %s
-                                         """
-                        cursor.execute(tool_query_sql, (best_knowledge['tool_id'], 1))
+                        if push_filter is not None:
+                            tool_query_sql = """
+                                SELECT id, user_id, title, description, url, push,
+                                       status, timeout, params
+                                FROM tools
+                                WHERE id = %s AND status = %s AND push = %s
+                            """
+                            cursor.execute(tool_query_sql, (best_knowledge['tool_id'], 1, push_filter))
+                        else:
+                            tool_query_sql = """
+                                SELECT id, user_id, title, description, url, push,
+                                       status, timeout, params
+                                FROM tools
+                                WHERE id = %s AND status = %s
+                            """
+                            cursor.execute(tool_query_sql, (best_knowledge['tool_id'], 1))
                         tool_result = cursor.fetchone()
 
                         if tool_result:
