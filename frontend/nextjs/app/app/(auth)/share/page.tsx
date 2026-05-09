@@ -36,7 +36,7 @@ function CreateShareModal({ onClose, onSave }: {
 
   useEffect(() => {
     queryKnowledge({ page: 1, limit: 100 })
-      .then((res: { items?: KnowledgeItem[]; knowledge?: KnowledgeItem[] }) => setAllKnowledge(res.items || res.knowledge || []))
+      .then((res) => setAllKnowledge(res.items || res.knowledge || []))
       .catch(() => {})
   }, [])
 

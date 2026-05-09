@@ -38,25 +38,28 @@ async function get<T>(path: string, params: Record<string, string | number> = {}
   return res.json()
 }
 
-export const queryTools = (params: Record<string, string | number>) => get('/query_tools', params)
-export const createToolFromCustom = (body: unknown) => post('/create_tool_from_custom', body)
-export const createToolFromOpenapi = (body: unknown) => post('/create_tool_from_openapi', body)
-export const updateTool = (body: unknown) => post('/update_tool', body)
-export const deleteTool = (body: unknown) => post('/delete_tool', body)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ApiResult = Promise<any>
 
-export const queryKnowledge = (params: Record<string, string | number>) => get('/query_knowledge', params)
-export const createKnowledge = (body: unknown) => post('/create_knowledge', body)
-export const updateKnowledge = (body: unknown) => post('/update_knowledge', body)
-export const deleteKnowledge = (body: unknown) => post('/delete_knowledge', body)
+export const queryTools = (params: Record<string, string | number>): ApiResult => get('/query_tools', params)
+export const createToolFromCustom = (body: unknown): ApiResult => post('/create_tool_from_custom', body)
+export const createToolFromOpenapi = (body: unknown): ApiResult => post('/create_tool_from_openapi', body)
+export const updateTool = (body: unknown): ApiResult => post('/update_tool', body)
+export const deleteTool = (body: unknown): ApiResult => post('/delete_tool', body)
 
-export const queryPublicKnowledge = (params: Record<string, string | number>) => get('/query_public_knowledge', params)
-export const copyKnowledge = (body: unknown) => post('/copy_knowledge', body)
+export const queryKnowledge = (params: Record<string, string | number>): ApiResult => get('/query_knowledge', params)
+export const createKnowledge = (body: unknown): ApiResult => post('/create_knowledge', body)
+export const updateKnowledge = (body: unknown): ApiResult => post('/update_knowledge', body)
+export const deleteKnowledge = (body: unknown): ApiResult => post('/delete_knowledge', body)
 
-export const authorizeKnowledgeAccess = (body: unknown) => post('/authorize_knowledge_access', body)
-export const handleKnowledgeShare = (body: unknown) => post('/handle_knowledge_share', body)
-export const queryKnowledgeShares = (params: Record<string, string | number>) => get('/query_knowledge_shares', params)
-export const getUserSharedKnowledge = (params: Record<string, string | number>) => get('/get_user_shared_knowledge', params)
-export const cancelKnowledgeShare = (body: unknown) => post('/cancel_knowledge_share', body)
+export const queryPublicKnowledge = (params: Record<string, string | number>): ApiResult => get('/query_public_knowledge', params)
+export const copyKnowledge = (body: unknown): ApiResult => post('/copy_knowledge', body)
+
+export const authorizeKnowledgeAccess = (body: unknown): ApiResult => post('/authorize_knowledge_access', body)
+export const handleKnowledgeShare = (body: unknown): ApiResult => post('/handle_knowledge_share', body)
+export const queryKnowledgeShares = (params: Record<string, string | number>): ApiResult => get('/query_knowledge_shares', params)
+export const getUserSharedKnowledge = (params: Record<string, string | number>): ApiResult => get('/get_user_shared_knowledge', params)
+export const cancelKnowledgeShare = (body: unknown): ApiResult => post('/cancel_knowledge_share', body)
 
 export async function queryStream(query: string, queryId: string, abortSignal: AbortSignal): Promise<ReadableStream<Uint8Array>> {
   const headers = await authHeaders()
