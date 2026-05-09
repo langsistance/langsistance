@@ -1,5 +1,5 @@
 
-from typing import Tuple, Callable
+from typing import Tuple, Callable, Optional
 from pydantic import BaseModel
 from sources.utility import pretty_print
 
@@ -8,6 +8,7 @@ class QueryRequest(BaseModel):
     query_id: str = ""
     tts_enabled: bool = True
     tool_data: str = ""  # 新增字段，类型为str，默认为空字符串
+    push_filter: Optional[int] = None  # web app passes 2 to restrict to push=2 tools
 
     def __str__(self):
         return f"Query: {self.query}, Query ID: {self.query_id}, TTS: {self.tts_enabled}, Tool Data: {self.tool_data}"
@@ -17,7 +18,8 @@ class QueryRequest(BaseModel):
             "query": self.query,
             "query_id": self.query_id,
             "tts_enabled": self.tts_enabled,
-            "tool_data": self.tool_data,  # 包含新增字段
+            "tool_data": self.tool_data,
+            "push_filter": self.push_filter,
         }
 
 class QueryResponse(BaseModel):
