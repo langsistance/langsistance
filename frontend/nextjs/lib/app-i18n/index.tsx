@@ -8,6 +8,7 @@ const LOCALES: Record<string, Locale> = { en, zh }
 const STORAGE_KEY = 'apiforge-language'
 
 function getInitialLang(): string {
+  if (typeof window === 'undefined') return 'en'
   try {
     const saved = localStorage.getItem(STORAGE_KEY)
     if (saved && LOCALES[saved]) return saved
