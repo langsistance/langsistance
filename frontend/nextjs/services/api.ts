@@ -4,6 +4,7 @@ import { auth } from '@/lib/firebase'
 const BASE_URL = 'https://api.copiioai.com'
 
 async function authHeaders(): Promise<Record<string, string>> {
+  if (typeof window === 'undefined') throw new Error('API service is client-only')
   const user = auth.currentUser
   if (!user) throw new Error('Not authenticated')
   const token = await getIdToken(user)
@@ -17,16 +18,23 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     headers,
     body: JSON.stringify(body),
   })
-  if (!res.ok) throw new Error(`${path} failed: ${res.status}`)
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => '')
+    throw new Error(`${path} failed: ${res.status}${errorBody ? ` — ${errorBody}` : ''}`)
+  }
   return res.json()
 }
 
 async function get<T>(path: string, params: Record<string, string | number> = {}): Promise<T> {
   const headers = await authHeaders()
-  const qs = new URLSearchParams(params as Record<string, string>).toString()
+  const entries = Object.entries(params).map(([k, v]) => [k, String(v)] as [string, string])
+  const qs = new URLSearchParams(entries).toString()
   const url = `${BASE_URL}${path}${qs ? '?' + qs : ''}`
   const res = await fetch(url, { headers })
-  if (!res.ok) throw new Error(`${path} failed: ${res.status}`)
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => '')
+    throw new Error(`${path} failed: ${res.status}${errorBody ? ` — ${errorBody}` : ''}`)
+  }
   return res.json()
 }
 
@@ -59,5 +67,6 @@ export async function queryStream(query: string, queryId: string, abortSignal: A
     signal: abortSignal,
   })
   if (!res.ok) throw new Error(`/query_stream failed: ${res.status}`)
-  return res.body!
+  if (!res.body) throw new Error('/query_stream: response body is null')
+  return res.body
 }
