@@ -3,9 +3,38 @@
 import { useState, useRef, useEffect } from 'react'
 import { queryStream } from '@/services/api'
 import { useI18n } from '@/lib/app-i18n'
+import MarkdownMessage from '@/components/app/MarkdownMessage'
 
 function genId() {
   return Math.random().toString(36).slice(2)
+}
+
+function UserCopyButton({ content }: { content: string }) {
+  const [copied, setCopied] = useState(false)
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(content)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {}
+  }
+  return (
+    <button
+      className={`user-copy-button${copied ? ' copied' : ''}`}
+      onClick={handleCopy}
+    >
+      {copied ? (
+        <svg viewBox="0 0 24 24" fill="none" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+      )}
+    </button>
+  )
 }
 
 export default function Chat() {
@@ -13,6 +42,7 @@ export default function Chat() {
   const [messages, setMessages] = useState<Array<{ id: string; role: string; content: string }>>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
+  const [streamingId, setStreamingId] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -33,6 +63,7 @@ export default function Chat() {
     const assistantId = genId()
     setMessages((m) => [...m, { role: 'assistant', content: '', id: assistantId }])
     setStreaming(true)
+    setStreamingId(assistantId)
 
     const controller = new AbortController()
     abortRef.current = controller
@@ -85,6 +116,7 @@ export default function Chat() {
       }
     } finally {
       setStreaming(false)
+      setStreamingId(null)
       abortRef.current = null
     }
   }
@@ -120,9 +152,18 @@ export default function Chat() {
           )}
           {messages.map((msg) => (
             <div key={msg.id} className={`chat-message-wrapper ${msg.role}`}>
-              <div className={`chat-message ${msg.role}`}>
-                {msg.content || (msg.role === 'assistant' && streaming ? '▋' : '')}
-              </div>
+              {msg.role === 'assistant' ? (
+                <MarkdownMessage
+                  content={msg.content}
+                  streaming={streaming && streamingId === msg.id}
+                />
+              ) : (
+                <div className="chat-message user">
+                  {msg.content}
+                  <UserCopyButton content={msg.content} />
+                  <div className="user-copy-button-bridge" />
+                </div>
+              )}
             </div>
           ))}
           <div ref={bottomRef} />
