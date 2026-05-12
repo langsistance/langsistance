@@ -997,7 +997,7 @@ Begin your response now:
         except Exception as e:
             raise Exception(f"get_tool failed: {str(e)}") from e
 
-    async def get_tools(self) -> list:
+    async def get_tools(self, tool_data: str = "") -> list:
         """
         选择方法
         """
@@ -1006,6 +1006,12 @@ Begin your response now:
         tools = []
         # 根据tool_info.push的值选择不同系统提示词
         if tool_info.push == 1:
+            # If tool_data is already provided, the system prompt contains the
+            # pre-fetched result. Do NOT give the LLM a LangChain tool —
+            # it would call the tool, receive a ToolMessage, and ignore the
+            # pre-formatted list we placed in the system prompt.
+            if tool_data and tool_data.strip():
+                return tools
             if self.is_query_and_body_empty():
                 return tools
             else:
@@ -1057,7 +1063,7 @@ Begin your response now:
         self.memory.push('system', system_prompt)
 
         self.logger.info(f"memory.get():{self.memory.get()}")
-        self.tools = await self.get_tools()
+        self.tools = await self.get_tools(tool_data)
 
         return self.llm.openai_create(self.tools, self.memory.get(), callback_handler)
 
