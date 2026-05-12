@@ -949,7 +949,20 @@ Begin your response now:
                             else:
                                 # JSON 或其他格式
                                 try:
-                                    result = response.json() if response.content else None
+                                    result_data = response.json() if response.content else None
+                                    if isinstance(result_data, (dict, list)):
+                                        formatted, list_count = self._preformat_result(result_data)
+                                        if list_count > 0:
+                                            result = (
+                                                f"⚠️ This result contains exactly {list_count} items. "
+                                                f"ALL {list_count} items are listed below. "
+                                                f"Your response MUST include every single item "
+                                                f"without omission or truncation:\n\n{formatted}"
+                                            )
+                                        else:
+                                            result = formatted
+                                    else:
+                                        result = result_data
                                 except json.JSONDecodeError:
                                     # JSON 解析失败，返回原始文本
                                     result = response.text if response.text else None
