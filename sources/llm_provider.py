@@ -492,6 +492,22 @@ class Provider:
         except Exception as e:
             raise e
 
+    async def stream_simple(self, system_prompt: str, user_content: str, callback_handler=None):
+        """Stream a single chat completion directly, bypassing the agent framework."""
+        llm = ChatOpenAI(
+            model=self.model,
+            api_key=self.api_key,
+            temperature=0,
+            streaming=True,
+        )
+        messages = [
+            ("system", system_prompt),
+            ("human", user_content),
+        ]
+        async for chunk in llm.astream(messages):
+            if chunk.content and callback_handler:
+                await callback_handler.on_llm_new_token(chunk.content)
+
     def test_fn(self, tools, history, verbose=True):
         """
         This function is used to conduct tests.

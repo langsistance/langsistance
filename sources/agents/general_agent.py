@@ -147,7 +147,30 @@ class GeneralAgent(Agent):
                 blocks.append(f"- **[{i}]** {item}")
         return "\n".join(blocks)
 
-    def _preformat_result(self, data) -> tuple[str, int]:
+    def _format_batch_for_llm(self, batch: list, start_idx: int) -> str:
+        """Format a batch of raw items as structured text for LLM input."""
+        parts = []
+        for i, item in enumerate(batch, start_idx + 1):
+            if isinstance(item, dict):
+                lines = [f"Item {i}:"]
+                for k, v in item.items():
+                    if v is None or v == "" or v == {} or v == []:
+                        continue
+                    if isinstance(v, dict):
+                        flat = self._flatten_dict(v)
+                        if flat:
+                            lines.append(f"  {k}: {flat}")
+                    elif isinstance(v, list):
+                        if v and not isinstance(v[0], (dict, list)):
+                            lines.append(f"  {k}: {', '.join(str(x) for x in v)}")
+                    else:
+                        lines.append(f"  {k}: {v}")
+                parts.append("\n".join(lines))
+            else:
+                parts.append(f"Item {i}: {item}")
+        return "\n\n".join(parts)
+
+
         """Pre-format tool result data into Markdown.
 
         When the data is (or contains) a list, every item is rendered as a
@@ -889,23 +912,29 @@ Begin your response now:
                                 try:
                                     result_data = response.json() if response.content else None
                                     if isinstance(result_data, (dict, list)):
-                                        formatted, list_count = self._preformat_result(result_data)
-                                        if list_count > 0:
-                                            # Store the full list on the agent instance.
-                                            # invoke_agent will inject it into the SSE stream
-                                            # after openai_invoke returns, before core.py sends 'end'.
-                                            self._pending_full_list = (
-                                                f"\n\n---\n\n"
-                                                f"## Full Results ({list_count} items)\n\n"
-                                                f"{formatted}"
+                                        # Extract raw items list for batch LLM analysis
+                                        if isinstance(result_data, list) and result_data:
+                                            raw_items = result_data
+                                        elif isinstance(result_data, dict):
+                                            raw_items = next(
+                                                (v for v in result_data.values() if isinstance(v, list) and v),
+                                                None
                                             )
+                                        else:
+                                            raw_items = None
+
+                                        if raw_items:
+                                            list_count = len(raw_items)
+                                            # Store raw items; invoke_agent will batch-analyze them via LLM
+                                            self._pending_raw_items = raw_items
                                             result = (
                                                 f"The query returned {list_count} items. "
                                                 f"Please write a brief 2–3 sentence summary of what was found. "
-                                                f"The complete item list will be appended automatically — "
+                                                f"The complete list will be analyzed and displayed item by item automatically — "
                                                 f"do NOT enumerate the items yourself."
                                             )
                                         else:
+                                            formatted, _ = self._preformat_result(result_data)
                                             result = formatted
                                     else:
                                         result = result_data
@@ -1028,12 +1057,38 @@ Begin your response now:
     async def invoke_agent(self, agent, callback_handler):
         try:
             await self.llm.openai_invoke(agent, self.memory.get(), callback_handler)
-            # LangGraph agents don't call on_agent_finish, so inject pending list here —
+            # LangGraph agents don't call on_agent_finish — inject batch analysis here,
             # after all LLM tokens have been streamed but before core.py sends 'end'.
-            pending = getattr(self, '_pending_full_list', None)
+            pending = getattr(self, '_pending_raw_items', None)
             if pending:
-                self._pending_full_list = None
-                await callback_handler.on_llm_new_token(pending)
+                self._pending_raw_items = None
+                total = len(pending)
+                batch_size = 5
+                await callback_handler.on_llm_new_token(
+                    f"\n\n---\n\n## Full Results ({total} items)\n\n"
+                )
+                system_prompt = (
+                    "You are presenting search result items clearly and concisely. "
+                    "For each item, extract and present the most important information as clean Markdown. "
+                    "Use **bold** for field names. Number each item. "
+                    "Do NOT add any preamble, summary, or conclusion — output only the formatted items."
+                )
+                for batch_start in range(0, total, batch_size):
+                    batch = pending[batch_start:batch_start + batch_size]
+                    batch_end = min(batch_start + batch_size, total)
+                    await callback_handler.on_llm_new_token(
+                        f"### Items {batch_start + 1}–{batch_end}\n\n"
+                    )
+                    batch_text = self._format_batch_for_llm(batch, batch_start)
+                    await self.llm.stream_simple(
+                        system_prompt=system_prompt,
+                        user_content=(
+                            f"Format and analyze these {len(batch)} search result items as readable Markdown:\n\n"
+                            f"{batch_text}"
+                        ),
+                        callback_handler=callback_handler,
+                    )
+                    await callback_handler.on_llm_new_token("\n\n")
         except Exception as e:
             raise e
 
