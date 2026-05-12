@@ -98,26 +98,58 @@ class GeneralAgent(Agent):
         """
         self.knowledgeTool = knowledge_tool
 
-    def _render_list_as_md(self, label: str | None, items: list) -> str:
-        """Render every item in a list as a markdown bullet line."""
-        header = f"**{label}** ({len(items)} items total):\n\n" if label else f"({len(items)} items total):\n\n"
-        lines = [header]
-        for item in items:
-            if isinstance(item, dict):
-                props = " | ".join(
-                    f"**{k}**: {v}" for k, v in item.items()
-                    if not isinstance(v, (dict, list))
-                )
-                nested = {k: v for k, v in item.items() if isinstance(v, (dict, list))}
-                line = f"- {props}"
-                if nested:
-                    line += f" | {json.dumps(nested, ensure_ascii=False)}"
-                lines.append(line)
-            elif isinstance(item, list):
-                lines.append(f"- {json.dumps(item, ensure_ascii=False)}")
+    def _flatten_dict(self, d: dict) -> str:
+        """Flatten a dict into readable 'key: value' pairs, skipping empty values."""
+        parts = []
+        for k, v in d.items():
+            if v is None or v == "" or v == {} or v == []:
+                continue
+            if isinstance(v, dict):
+                sub = self._flatten_dict(v)
+                if sub:
+                    parts.append(f"{k}: {sub}")
+            elif isinstance(v, list):
+                if v and not isinstance(v[0], (dict, list)):
+                    parts.append(f"{k}: {', '.join(str(i) for i in v)}")
             else:
-                lines.append(f"- {item}")
-        return "\n".join(lines)
+                parts.append(f"{k}: {v}")
+        return " | ".join(parts)
+
+    def _render_list_as_md(self, label: str | None, items: list) -> str:
+        """Render every item in a list as readable markdown bullets without JSON dumps."""
+        header = f"**{label}** ({len(items)} items total):\n\n" if label else f"({len(items)} items total):\n\n"
+        blocks = [header]
+        for i, item in enumerate(items, 1):
+            if isinstance(item, dict):
+                scalar_parts = [
+                    f"**{k}**: {v}" for k, v in item.items()
+                    if not isinstance(v, (dict, list)) and v is not None and v != ""
+                ]
+                nested_parts = [
+                    (k, v) for k, v in item.items()
+                    if isinstance(v, (dict, list)) and v
+                ]
+                top = f"- **[{i}]** " + (" | ".join(scalar_parts) if scalar_parts else "")
+                sub_lines = []
+                for nk, nv in nested_parts:
+                    if isinstance(nv, dict):
+                        flat = self._flatten_dict(nv)
+                        if flat:
+                            sub_lines.append(f"  - **{nk}**: {flat}")
+                    elif isinstance(nv, list):
+                        if nv and not isinstance(nv[0], (dict, list)):
+                            sub_lines.append(f"  - **{nk}**: {', '.join(str(x) for x in nv)}")
+                        elif nv:
+                            sub_lines.append(f"  - **{nk}**: [{len(nv)} items]")
+                blocks.append("\n".join([top] + sub_lines) if sub_lines else top)
+            elif isinstance(item, list):
+                if item and not isinstance(item[0], (dict, list)):
+                    blocks.append(f"- **[{i}]** {', '.join(str(x) for x in item)}")
+                else:
+                    blocks.append(f"- **[{i}]** [{len(item)} items]")
+            else:
+                blocks.append(f"- **[{i}]** {item}")
+        return "\n".join(blocks)
 
     def _preformat_result(self, data) -> tuple[str, int]:
         """Pre-format tool result data into Markdown.
