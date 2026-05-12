@@ -98,7 +98,48 @@ class GeneralAgent(Agent):
         """
         self.knowledgeTool = knowledge_tool
 
-    def _get_markdown_formatting_guide(self) -> str:
+    def _render_list_as_md(self, label: str | None, items: list) -> str:
+        """Render every item in a list as a markdown bullet line."""
+        header = f"**{label}** ({len(items)} items total):\n\n" if label else f"({len(items)} items total):\n\n"
+        lines = [header]
+        for item in items:
+            if isinstance(item, dict):
+                props = " | ".join(
+                    f"**{k}**: {v}" for k, v in item.items()
+                    if not isinstance(v, (dict, list))
+                )
+                nested = {k: v for k, v in item.items() if isinstance(v, (dict, list))}
+                line = f"- {props}"
+                if nested:
+                    line += f" | {json.dumps(nested, ensure_ascii=False)}"
+                lines.append(line)
+            elif isinstance(item, list):
+                lines.append(f"- {json.dumps(item, ensure_ascii=False)}")
+            else:
+                lines.append(f"- {item}")
+        return "\n".join(lines)
+
+    def _preformat_result(self, data) -> tuple[str, int]:
+        """Pre-format tool result data into Markdown.
+
+        When the data is (or contains) a list, every item is rendered as a
+        bullet line so the LLM can copy it verbatim rather than regenerate it.
+        Returns (formatted_markdown, list_item_count).
+        list_item_count == 0 means no list was found.
+        """
+        if isinstance(data, list):
+            return self._render_list_as_md(None, data), len(data)
+
+        if isinstance(data, dict):
+            for key, val in data.items():
+                if isinstance(val, list) and len(val) > 0:
+                    meta = {k: v for k, v in data.items() if k != key}
+                    meta_str = (json.dumps(meta, ensure_ascii=False, indent=2) + "\n\n") if meta else ""
+                    return meta_str + self._render_list_as_md(key, val), len(val)
+
+        return json.dumps(data, ensure_ascii=False, indent=2), 0
+
+
         """
         获取 Markdown 格式化指南，用于指导大模型输出美观的内容
         """
@@ -559,15 +600,26 @@ e) **Summary structure** (recommended):
             if "text/html" in tool_data:
                 # 如果是 HTML 内容，使用公用方法清理文本
                 result_str = clean_html_text(tool_data)
-
+                list_count = 0
             else:
                 # 尝试将 tool_data 解析为 JSON
                 try:
                     result_data = json.loads(tool_data)
-                    result_str = json.dumps(result_data, ensure_ascii=False, indent=2)
+                    result_str, list_count = self._preformat_result(result_data)
                 except json.JSONDecodeError:
                     # 如果不是有效的 JSON，则直接使用原始内容
                     result_str = tool_data
+                    list_count = 0
+
+            list_completeness_block = ""
+            if list_count > 0:
+                list_completeness_block = f"""
+⚠️ LIST COMPLETENESS REQUIREMENT:
+The Input Data section below contains exactly {list_count} items.
+Your response MUST include ALL {list_count} items — do not stop before item {list_count}.
+The list is already pre-formatted as markdown bullets. Embed it verbatim in your response.
+Outputting fewer than {list_count} items is NOT acceptable under any circumstances.
+"""
 
             # 获取格式化指南
             formatting_guide = self._get_markdown_formatting_guide()
@@ -586,6 +638,7 @@ Act as a self-contained intelligent assistant. Follow these instructions strictl
 5.  **Content Completeness:** When the input data contains a list or array, display ALL items in your response. Do NOT truncate, summarize, or selectively show items.
 6.  **No Source Sections:** Do NOT add a "Sources", "References", or "Resources" section at the end of your response. Do NOT create a separate list of links at the bottom.
 
+{list_completeness_block}
 {formatting_guide}
 
 ## Input Data
@@ -599,7 +652,7 @@ Generate a beautiful, well-formatted Markdown response based on the above data. 
 - Easy to scan with clear headings
 - Rich with properly formatted links and images (integrated naturally within content)
 - Professional and polished
-- Complete - display ALL items if the data contains lists or arrays
+- Complete - include ALL {list_count} items if the data contains a list
 
 **CRITICAL OUTPUT FORMAT**:
 - Output your response as DIRECT Markdown content
@@ -609,7 +662,7 @@ Generate a beautiful, well-formatted Markdown response based on the above data. 
 - Only use code blocks for actual code snippets within your content, not for the entire response
 
 **CRITICAL CONTENT RULES**:
-- Display ALL items from lists/arrays in the input data
+- Display ALL {list_count} items from the Input Data — not a subset, not a summary
 - Do NOT add a separate "Sources" or "References" section at the end
 - Integrate all links naturally within the content
 
@@ -701,12 +754,24 @@ Begin your response now:
                 else:
                     try:
                         result_data = response.json() if response.content else {}
-                        result_str = json.dumps(result_data, ensure_ascii=False, indent=2)
+                        result_str, list_count = self._preformat_result(result_data)
                     except json.JSONDecodeError:
                         # 如果JSON解析失败，使用原始响应内容
                         result_str = response.text if response.text else "Empty response"
+                        list_count = 0
             else:
                 result_str = f"request failed，status code: {response.status_code}"
+                list_count = 0
+
+            list_completeness_block = ""
+            if list_count > 0:
+                list_completeness_block = f"""
+⚠️ LIST COMPLETENESS REQUIREMENT:
+The Input Data section below contains exactly {list_count} items.
+Your response MUST include ALL {list_count} items — do not stop before item {list_count}.
+The list is already pre-formatted as markdown bullets. Embed it verbatim in your response.
+Outputting fewer than {list_count} items is NOT acceptable under any circumstances.
+"""
 
             # 获取格式化指南
             formatting_guide = self._get_markdown_formatting_guide()
@@ -725,6 +790,7 @@ Act as a self-contained intelligent assistant. Follow these instructions strictl
 5.  **Content Completeness:** When the input data contains a list or array, display ALL items in your response. Do NOT truncate, summarize, or selectively show items.
 6.  **No Source Sections:** Do NOT add a "Sources", "References", or "Resources" section at the end of your response. Do NOT create a separate list of links at the bottom.
 
+{list_completeness_block}
 {formatting_guide}
 
 ## Input Data
@@ -738,7 +804,7 @@ Generate a beautiful, well-formatted Markdown response based on the above data. 
 - Easy to scan with clear headings
 - Rich with properly formatted links and images (integrated naturally within content)
 - Professional and polished
-- Complete - display ALL items if the data contains lists or arrays
+- Complete - include ALL {list_count} items if the data contains a list
 
 **CRITICAL OUTPUT FORMAT**:
 - Output your response as DIRECT Markdown content
@@ -748,7 +814,7 @@ Generate a beautiful, well-formatted Markdown response based on the above data. 
 - Only use code blocks for actual code snippets within your content, not for the entire response
 
 **CRITICAL CONTENT RULES**:
-- Display ALL items from lists/arrays in the input data
+- Display ALL {list_count} items from the Input Data — not a subset, not a summary
 - Do NOT add a separate "Sources" or "References" section at the end
 - Integrate all links naturally within the content
 
