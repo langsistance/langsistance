@@ -1079,8 +1079,8 @@ Begin your response now:
                     await callback_handler.on_llm_new_token(
                         f"### Items {batch_start + 1}–{batch_end}\n\n"
                     )
+                    self.logger.info(f"batch_text:{batch}")
                     batch_text = self._format_batch_for_llm(batch, batch_start)
-                    self.logger.info(f"batch_text:{batch_text}")
                     await self.llm.stream_simple(
                         system_prompt=system_prompt,
                         user_content=(
