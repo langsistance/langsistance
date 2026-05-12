@@ -31,20 +31,25 @@ async function get(path, params = {}) {
 }
 
 // Tools
-export const queryTools = (params) => get('/query_tools', params)
+export const queryTools = (params = {}) => {
+  const { page = 1, limit = 200, ...rest } = params
+  return get('/query_tools', { ...rest, offset: page - 1, limit })
+}
 export const createToolFromCustom = (body) => post('/create_tool_from_custom', body)
 export const createToolFromOpenapi = (body) => post('/create_tool_from_openapi', body)
 export const updateTool = (body) => post('/update_tool', body)
 export const deleteTool = (body) => post('/delete_tool', body)
 
 // Knowledge
-export const queryKnowledge = (params) => get('/query_knowledge', params)
+export const queryKnowledge = ({ search = '', page = 1, limit = 10 } = {}) =>
+  get('/query_knowledge', { query: search, offset: page - 1, limit })
 export const createKnowledge = (body) => post('/create_knowledge', body)
 export const updateKnowledge = (body) => post('/update_knowledge', body)
 export const deleteKnowledge = (body) => post('/delete_knowledge', body)
 
 // Public knowledge
-export const queryPublicKnowledge = (params) => get('/query_public_knowledge', params)
+export const queryPublicKnowledge = ({ search = '', page = 1, limit = 10 } = {}) =>
+  get('/query_public_knowledge', { query: search, offset: page - 1, limit })
 export const copyKnowledge = (body) => post('/copy_knowledge', body)
 
 // Sharing

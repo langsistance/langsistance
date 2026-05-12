@@ -2,11 +2,11 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 
 const NAV = [
-  { to: '/chat',      icon: '💬', label: '对话' },
-  { to: '/knowledge', icon: '📚', label: '知识库' },
-  { to: '/share',     icon: '🔗', label: '分享中心' },
-  { to: '/community', icon: '👥', label: '社区' },
-  { to: '/devtools',  icon: '⚡', label: '开发者工具' },
+  { to: '/chat',      label: '对话' },
+  { to: '/knowledge', label: '知识库' },
+  { to: '/share',     label: '分享中心' },
+  { to: '/community', label: '社区' },
+  { to: '/devtools',  label: '开发者工具' },
 ]
 
 export default function Layout() {
@@ -19,44 +19,38 @@ export default function Layout() {
   }
 
   return (
-    <div className="flex h-screen bg-slate-900 text-slate-200">
-      {/* Sidebar */}
-      <aside className="w-14 bg-slate-950 border-r border-slate-800 flex flex-col items-center py-3 gap-1 shrink-0">
-        {/* Logo */}
-        <div className="w-8 h-8 bg-teal-600 rounded-lg mb-3 flex items-center justify-center text-white text-xs font-bold">
-          C
+    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+      {/* Sidebar nav */}
+      <nav className="nav-menu" style={{ width: 180, flexShrink: 0, borderRight: '1px solid var(--color-border)', display: 'flex', flexDirection: 'column', background: 'var(--color-bg-white)' }}>
+        <div style={{ padding: '16px 12px 8px', borderBottom: '1px solid var(--color-border)' }}>
+          <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--color-text-primary)' }}>CopiioAI</span>
         </div>
-
-        {NAV.map(({ to, icon, label }) => (
-          <NavLink
-            key={to}
-            to={to}
-            title={label}
-            className={({ isActive }) =>
-              `w-10 h-10 rounded-lg flex items-center justify-center text-lg transition-colors ` +
-              (isActive ? 'bg-teal-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white')
-            }
+        <div style={{ flex: 1, padding: '8px 0' }}>
+          {NAV.map(({ to, label }) => (
+            <NavLink
+              key={to}
+              to={to}
+              className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+            >
+              {label}
+            </NavLink>
+          ))}
+        </div>
+        <div style={{ padding: '8px 12px', borderTop: '1px solid var(--color-border)' }}>
+          <button
+            onClick={handleLogout}
+            className="btn btn-secondary"
+            style={{ width: '100%', fontSize: 13 }}
           >
-            {icon}
-          </NavLink>
-        ))}
+            {user?.email?.split('@')[0] || '退出'} · 退出
+          </button>
+        </div>
+      </nav>
 
-        <div className="flex-1" />
-
-        {/* User avatar / logout */}
-        <button
-          onClick={handleLogout}
-          title={user?.email || '退出'}
-          className="w-8 h-8 rounded-full bg-slate-700 hover:bg-slate-600 flex items-center justify-center text-xs text-slate-300 transition-colors"
-        >
-          {user?.email?.[0]?.toUpperCase() || '?'}
-        </button>
-      </aside>
-
-      {/* Main content */}
-      <main className="flex-1 overflow-hidden">
+      {/* Page content */}
+      <div className="content-area" style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <Outlet />
-      </main>
+      </div>
     </div>
   )
 }

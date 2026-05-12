@@ -1,9 +1,38 @@
+@import './styles/popup.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* Web app layout overrides */
+html, body, #root {
+  height: 100%;
+}
+
 body {
-  background-color: #0f172a;
-  color: #e2e8f0;
+  background-color: var(--color-bg-main);
+  color: var(--color-text-primary);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* Page content area needs overflow so .page-content scrolls */
+.page {
+  height: 100%;
+}
+
+.page.active {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.page-content {
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* NavLink active state */
+a.active-nav {
+  background: var(--color-primary);
+  color: #fff;
 }
