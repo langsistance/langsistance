@@ -91,11 +91,7 @@ class GeneralAgent(Agent):
             return params_str
     
     def set_knowledge_tool(self, knowledge_tool: Dict[str, Any]) -> None:
-        """
-        设置知识工具字典
-        Args:
-            knowledge_tool (Dict[str, Any]): 知识工具字典
-        """
+        """Set the knowledge tool dictionary."""
         self.knowledgeTool = knowledge_tool
 
     def _flatten_dict(self, d: dict) -> str:
@@ -171,10 +167,8 @@ class GeneralAgent(Agent):
 
         return json.dumps(data, ensure_ascii=False, indent=2), 0
 
-
-        """
-        获取 Markdown 格式化指南，用于指导大模型输出美观的内容
-        """
+    def _get_markdown_formatting_guide(self) -> str:
+        """Return a Markdown formatting guide injected into direct-mode system prompts."""
         return """
 ## Markdown Formatting Guidelines
 
@@ -203,96 +197,22 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
 - Indent sub-items with 2-4 spaces
 - **CRITICAL**: When the tool returns a list, display ALL items from the list. Do NOT summarize, truncate, or selectively show items.
 
-Example:
-```
-- Main item
-  - Sub item
-  - Another sub item
-- Another main item
-```
-
 ### 5. Emphasis
 - Use **bold** for important terms: `**text**`
 - Use *italic* for emphasis: `*text*`
-- Use ***bold italic*** for very important: `***text***`
 - Use `code` for technical terms: `` `code` ``
 
-### 6. Code Blocks
-- Use fenced code blocks with language specification:
-```
-```python
-def example():
-    return "formatted code"
-```
-```
+### 6. Tables (for structured data)
+- Use tables for comparing information
 
-### 7. Tables (for structured data)
-- Use tables for comparing information:
-```
-| Column 1 | Column 2 | Column 3 |
-|----------|----------|----------|
-| Data 1   | Data 2   | Data 3   |
-```
-
-### 8. Quotes
-- Use `>` for important quotes or highlights
-- Example: `> This is an important note`
-
-### 9. Horizontal Rules
-- Use `---` to separate major sections (use sparingly)
-
-### 10. Special Formatting for Your Response
-
-**When presenting tool results:**
-
-a) **If result contains URLs**: Format as clickable links with context
-   - ❌ Bad: `https://example.com/article`
-   - ✅ Good: `[Read the full article](https://example.com/article)`
-
-b) **If result contains images**: Display them directly
-   - Format: `![Description](image_URL)`
-   - Add captions below if needed
-
-c) **If result is a list**: Use proper list formatting
-   - **CRITICAL**: Display ALL items from the list, do NOT truncate or summarize
-   - Keep items concise
-   - Use sub-lists for hierarchy
-
-d) **If result contains data**: Consider using tables for clarity
-
-e) **Summary structure** (recommended):
-   ```
-   ## [Main Topic]
-
-   [Brief introduction or summary]
-
-   ### Key Information
-   - Point 1 (with details)
-   - Point 2 (with details)
-   - ... (include ALL items from the tool result)
-
-   ### Details
-   [Detailed information organized by topic]
-
-   [Display images inline where relevant]
-   ![Image Description](image_URL)
-   ```
-
-### 11. Content Organization Tips
-- Start with a brief summary (2-3 sentences)
-- Present ALL content from the tool result - do NOT omit items to save space
-- Place images inline with relevant content
-- **DO NOT** add a separate "Resources" or "Sources" section at the end
-- **DO NOT** create a list of links at the bottom of your response
-
-### 12. CRITICAL Rules
+### 7. CRITICAL Rules
 - **Display completeness**: Show ALL items when the tool returns a list or array
 - **No source sections**: Do NOT add "Sources:", "References:", or "Resources:" sections at the end
 - **Inline links only**: Integrate links naturally within the content, not as a separate list at the bottom
+- **No code block wrapper**: Output DIRECT Markdown content, do NOT wrap your entire response in a code block
 
-**Remember**: Your goal is to make the content scannable, visually appealing, and easy to read. Use whitespace effectively!
+**Remember**: Your goal is to make the content scannable, visually appealing, and easy to read.
 """
-    
     def expand_prompt(self, prompt):
         """
         Expands the prompt with the tools available.
@@ -305,10 +225,7 @@ e) **Summary structure** (recommended):
         return prompt
 
     def is_query_and_body_empty(self) -> bool:
-        """
-        判断 self.knowledgeTool 中的 tool_info 的 params 中的 query 和 body 是否都为空。
-        如果都为空，返回 True；否则返回 False。
-        """
+        """Return True if both query and body in tool_info.params are empty."""
         # 获取工具信息
         _, tool_info = self.knowledgeTool
 
@@ -327,9 +244,7 @@ e) **Summary structure** (recommended):
             return False
 
     def generate_fixed_system_prompt(self) -> str:
-        """
-        生成系统提示
-        """
+        """Generate system prompt for fixed (no-parameter) tools."""
         knowledge_item, tool_info = self.knowledgeTool
         self.logger.info(f"knowledge item:{knowledge_item} - tool:{tool_info}")
 
@@ -381,15 +296,15 @@ e) **Summary structure** (recommended):
             try:
                 params_data = json.loads(tool_info.params)
                 if isinstance(params_data, dict):
-                    tool_params_info = "工具参数要求:user id - query id\n"
+                    tool_params_info = "Tool parameters: user_id, query_id\n"
                     for param_name, param_type in params_data.items():
                         if param_name in ("method", "content-type", "header"):
                             continue
                         tool_params_info += f"  - {param_name} ({param_type})\n"
                 else:
-                    tool_params_info = f"工具参数: {tool_info.params}"
+                    tool_params_info = f"Tool parameters: {tool_info.params}"
             except json.JSONDecodeError:
-                tool_params_info = f"工具参数: {tool_info.params}"
+                tool_params_info = f"Tool parameters: {tool_info.params}"
 
         system_prompt = f"""
         You are an intelligent assistant capable of deciding when and how to use APIs to complete tasks.
@@ -416,9 +331,7 @@ e) **Summary structure** (recommended):
         return system_prompt
 
     def generate_template_system_prompt(self) -> str:
-        """
-        生成系统提示
-        """
+        """Generate system prompt for template-parameter tools (LLM fills params)."""
         knowledge_item, tool_info = self.knowledgeTool
         self.logger.info(f"knowledge item:{knowledge_item} - tool:{tool_info}")
 
@@ -575,9 +488,7 @@ e) **Summary structure** (recommended):
         return system_prompt
 
     def generate_system_prompt(self, tool_data) -> str:
-        """
-        生成系统提示
-        """
+        """Select and return the appropriate system prompt based on push mode."""
         _, tool_info = self.knowledgeTool
 
         # 根据tool_info.push的值选择不同系统提示词
@@ -610,9 +521,7 @@ e) **Summary structure** (recommended):
         return user_prompt
 
     def generate_frontend_tool_direct_system_prompt(self, tool_data: str) -> str:
-        """
-        直接解析 tool_data 并生成系统提示词，无需发起 HTTP 请求。
-        """
+        """Generate system prompt from pre-fetched tool_data without making an HTTP request."""
         # self.logger.info(f"generate_frontend_tool_direct_system_prompt - tool_data: {tool_data}")
 
         try:
@@ -707,10 +616,7 @@ Begin your response now:
             return self.generate_template_system_prompt()
 
     def generate_backend_tool_direct_system_prompt(self) -> str:
-        """
-        直接利用 tool_info 发起 HTTP 请求，将结果写入系统提示词并返回。
-        告诉大模型无需调用工具，直接基于返回的数据生成结果。
-        """
+        """Make the HTTP request from tool_info, embed the result in the system prompt, and return it."""
         # 获取工具信息
         knowledge_item, tool_info = self.knowledgeTool
         self.logger.info(f"generate_tool_direct_system_prompt - tool:{tool_info}")
@@ -792,7 +698,7 @@ Begin your response now:
                         result_str = response.text if response.text else "Empty response"
                         list_count = 0
             else:
-                result_str = f"request failed，status code: {response.status_code}"
+                result_str = f"Request failed, status code: {response.status_code}"
                 list_count = 0
 
             list_completeness_block = ""
@@ -990,7 +896,7 @@ Begin your response now:
                                             # after openai_invoke returns, before core.py sends 'end'.
                                             self._pending_full_list = (
                                                 f"\n\n---\n\n"
-                                                f"## 完整数据 / Full Results ({list_count} items)\n\n"
+                                                f"## Full Results ({list_count} items)\n\n"
                                                 f"{formatted}"
                                             )
                                             result = (
@@ -1051,9 +957,7 @@ Begin your response now:
             raise Exception(f"get_tool failed: {str(e)}") from e
 
     async def get_tools(self, tool_data: str = "") -> list:
-        """
-        选择方法
-        """
+        """Select and return the appropriate LangChain tool list based on push mode."""
         _, tool_info = self.knowledgeTool
 
         tools = []
