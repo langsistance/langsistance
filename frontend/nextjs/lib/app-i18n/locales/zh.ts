@@ -34,7 +34,8 @@ export default {
     refuse: '拒绝',
     accept: '接受',
     prevPage: '上一页',
-    nextPage: '下一页'
+    nextPage: '下一页',
+    signOut: '退出登录'
   },
 
   // 应用标题和描述

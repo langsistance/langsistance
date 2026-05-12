@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { marked } from 'marked'
 import { markedHighlight } from 'marked-highlight'
 import hljs from 'highlight.js'
@@ -23,15 +23,70 @@ interface Props {
   streaming: boolean
 }
 
+const THROTTLE_MS = 1000
+
 export default function MarkdownMessage({ content, streaming }: Props) {
   const { t } = useI18n()
   const [copied, setCopied] = useState(false)
   const [downloaded, setDownloaded] = useState(false)
+  const [html, setHtml] = useState('')
 
-  const html = useMemo(() => {
-    if (!content || streaming) return ''
-    return marked.parse(content) as string
-  }, [content, streaming])
+  const lastRenderTimeRef = useRef(0)
+  const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const latestContentRef = useRef(content)
+  const latestStreamingRef = useRef(streaming)
+
+  const doRender = useCallback((text: string, isStreaming: boolean) => {
+    const src = isStreaming ? text + ' ▋' : text
+    setHtml(marked.parse(src) as string)
+    lastRenderTimeRef.current = Date.now()
+  }, [])
+
+  useEffect(() => {
+    latestContentRef.current = content
+    latestStreamingRef.current = streaming
+
+    if (!content) {
+      if (pendingTimerRef.current) {
+        clearTimeout(pendingTimerRef.current)
+        pendingTimerRef.current = null
+      }
+      setHtml('')
+      return
+    }
+
+    if (!streaming) {
+      // Streaming done: flush immediately, cancel any pending throttle
+      if (pendingTimerRef.current) {
+        clearTimeout(pendingTimerRef.current)
+        pendingTimerRef.current = null
+      }
+      doRender(content, false)
+      return
+    }
+
+    // Streaming: throttle re-parses to at most once per THROTTLE_MS
+    const elapsed = Date.now() - lastRenderTimeRef.current
+    if (pendingTimerRef.current) {
+      clearTimeout(pendingTimerRef.current)
+      pendingTimerRef.current = null
+    }
+
+    if (elapsed >= THROTTLE_MS) {
+      doRender(content, true)
+    } else {
+      pendingTimerRef.current = setTimeout(() => {
+        pendingTimerRef.current = null
+        doRender(latestContentRef.current, latestStreamingRef.current)
+      }, THROTTLE_MS - elapsed)
+    }
+  }, [content, streaming, doRender])
+
+  useEffect(() => {
+    return () => {
+      if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current)
+    }
+  }, [])
 
   async function handleCopy() {
     try {
@@ -56,18 +111,10 @@ export default function MarkdownMessage({ content, streaming }: Props) {
     setTimeout(() => setDownloaded(false), 2000)
   }
 
-  if (streaming) {
-    return (
-      <div className="chat-message assistant">
-        {content || '▋'}
-      </div>
-    )
-  }
-
   return (
     <div className="chat-message assistant">
-      <div dangerouslySetInnerHTML={{ __html: html }} />
-      {content.trim() && (
+      <div dangerouslySetInnerHTML={{ __html: html || '▋' }} />
+      {!streaming && content.trim() && (
         <div className="message-action-buttons">
           <button
             className={`copy-button${copied ? ' copied' : ''}`}

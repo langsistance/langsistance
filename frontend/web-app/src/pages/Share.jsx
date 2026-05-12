@@ -7,8 +7,10 @@ import {
   handleKnowledgeShare,
   queryKnowledge,
 } from '../services/api'
+import { useI18n } from '../i18n'
 
 function CreateShareModal({ onClose, onSave }) {
+  const { t, lang } = useI18n()
   const [recipient, setRecipient] = useState('')
   const [knowledgeIds, setKnowledgeIds] = useState([])
   const [allKnowledge, setAllKnowledge] = useState([])
@@ -32,38 +34,54 @@ function CreateShareModal({ onClose, onSave }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-slate-800 rounded-xl p-6 w-full max-w-lg border border-slate-700">
-        <h3 className="text-base font-semibold mb-4">创建分享</h3>
-        <form onSubmit={submit} className="flex flex-col gap-3">
-          <input
-            placeholder="接收人邮箱"
-            type="email"
-            value={recipient}
-            onChange={(e) => setRecipient(e.target.value)}
-            required
-            className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-teal-500"
-          />
-          <div className="max-h-48 overflow-y-auto flex flex-col gap-1">
-            {allKnowledge.map((k) => (
-              <label key={k.id} className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={knowledgeIds.includes(k.id)}
-                  onChange={() => toggleId(k.id)}
-                  className="accent-teal-600"
-                />
-                {k.question}
-              </label>
-            ))}
+    <div className="modal">
+      <div className="modal-overlay" onClick={onClose} />
+      <div className="modal-content">
+        <div className="modal-header">
+          <h2>{t('share.create')}</h2>
+          <button className="modal-close-btn" onClick={onClose}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+        <form onSubmit={submit}>
+          <div className="modal-body">
+            <div className="form-group">
+              <label>{t('share.shareWith')}</label>
+              <input
+                type="email"
+                className="form-input"
+                placeholder={t('share.emailDesc')}
+                value={recipient}
+                onChange={(e) => setRecipient(e.target.value)}
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label>{t('share.chooseKnowledgeShare')}</label>
+              <div className="api-select-list">
+                {allKnowledge.length === 0 && (
+                  <p style={{ fontSize: 14, color: 'var(--color-text-secondary)', padding: 8 }}>{t('share.noKnowledgeDesc')}</p>
+                )}
+                {allKnowledge.map((k) => (
+                  <div key={k.id} className="api-select-item">
+                    <input
+                      type="checkbox"
+                      id={`k-${k.id}`}
+                      checked={knowledgeIds.includes(k.id)}
+                      onChange={() => toggleId(k.id)}
+                    />
+                    <label htmlFor={`k-${k.id}`}>{k.question}</label>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
-          <div className="flex justify-end gap-2 mt-2">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-slate-300 hover:text-white">
-              取消
-            </button>
-            <button type="submit" className="px-4 py-2 bg-teal-600 hover:bg-teal-500 text-sm text-white rounded-lg">
-              发送分享
-            </button>
+          <div className="modal-footer">
+            <button type="button" className="btn btn-secondary" onClick={onClose}>{t('common.cancel')}</button>
+            <button type="submit" className="btn btn-primary">{t('share.sendShare')}</button>
           </div>
         </form>
       </div>
@@ -72,7 +90,8 @@ function CreateShareModal({ onClose, onSave }) {
 }
 
 export default function Share() {
-  const [tab, setTab] = useState('sent') // 'sent' | 'received'
+  const { t, lang } = useI18n()
+  const [tab, setTab] = useState('sent')
   const [sent, setSent] = useState([])
   const [received, setReceived] = useState([])
   const [showModal, setShowModal] = useState(false)
@@ -98,12 +117,12 @@ export default function Share() {
       await authorizeKnowledgeAccess(form)
       loadSent()
     } catch (e) {
-      alert('分享失败：' + e.message)
+      alert((lang === 'en' ? 'Share failed: ' : '分享失败：') + e.message)
     }
   }
 
   async function handleCancel(shareId) {
-    if (!confirm('确认撤销分享？')) return
+    if (!confirm(t('confirmations.cancelShare'))) return
     await cancelKnowledgeShare({ share_id: shareId })
     loadSent()
   }
@@ -116,71 +135,106 @@ export default function Share() {
   const list = tab === 'sent' ? sent : received
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-        <div>
-          <h2 className="text-sm font-semibold text-slate-200">分享中心</h2>
-          <p className="text-xs text-slate-500">分享知识库给其他用户</p>
-        </div>
-        <button
-          onClick={() => setShowModal(true)}
-          className="px-3 py-1.5 bg-teal-600 hover:bg-teal-500 text-xs text-white rounded-lg"
-        >
-          + 创建分享
-        </button>
-      </div>
-
-      <div className="flex gap-2 px-4 py-3">
-        {['sent', 'received'].map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${
-              tab === t
-                ? 'bg-teal-600 text-white'
-                : 'bg-slate-800 text-slate-400 hover:text-white'
-            }`}
-          >
-            {t === 'sent' ? '我的分享' : '收到的分享'}
-          </button>
-        ))}
-      </div>
-
-      <div className="flex-1 overflow-y-auto px-4 flex flex-col gap-2">
-        {list.length === 0 && (
-          <p className="text-slate-500 text-sm text-center mt-8">暂无记录</p>
-        )}
-        {list.map((share) => (
-          <div key={share.id} className="bg-slate-800 rounded-lg p-4">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-sm font-medium text-slate-200">
-                  {tab === 'sent' ? `→ ${share.recipient_email}` : `← ${share.sender_email}`}
-                </p>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  {share.knowledge_count || 0} 条知识 · {share.create_time?.slice(0, 10)}
-                </p>
-              </div>
-              {tab === 'sent' ? (
-                <button
-                  onClick={() => handleCancel(share.id)}
-                  className="text-xs text-slate-400 hover:text-red-400"
-                >
-                  撤销
-                </button>
-              ) : share.status !== 'accepted' ? (
-                <button
-                  onClick={() => handleAccept(share.id)}
-                  className="text-xs text-teal-400 hover:text-teal-300"
-                >
-                  接受
-                </button>
-              ) : (
-                <span className="text-xs text-slate-500">已接受</span>
-              )}
-            </div>
+    <div className="page active">
+      <div className="page-header">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h1>{t('share.title')}</h1>
+            <p>{t('share.description')}</p>
           </div>
-        ))}
+          <button className="btn btn-primary" onClick={() => setShowModal(true)}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="18" cy="5" r="3" />
+              <circle cx="6" cy="12" r="3" />
+              <circle cx="18" cy="19" r="3" />
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+              <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+            </svg>
+            {t('share.create')}
+          </button>
+        </div>
+      </div>
+
+      <div className="page-content">
+        <div className="tabs-container">
+          <button
+            className={`tab-btn${tab === 'sent' ? ' active' : ''}`}
+            onClick={() => setTab('sent')}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+              <polyline points="22 4 12 14.01 9 11.01" />
+            </svg>
+            {t('share.my')}
+          </button>
+          <button
+            className={`tab-btn${tab === 'received' ? ' active' : ''}`}
+            onClick={() => setTab('received')}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+              <path d="M3 15v4a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-4" />
+            </svg>
+            {t('share.received')}
+          </button>
+        </div>
+
+        <div style={{ marginTop: 24 }}>
+          {list.length === 0 ? (
+            <div className="empty-state">
+              <p>{tab === 'sent' ? t('share.noSharedDesc') : t('share.noReceived')}</p>
+            </div>
+          ) : (
+            <div className="share-list">
+              {list.map((share) => (
+                <div key={share.id} className="share-card">
+                  <div className="share-card-header">
+                    <div>
+                      <p className="share-card-title">
+                        {tab === 'sent'
+                          ? `${lang === 'en' ? 'To' : '发送给'}: ${share.recipient_email}`
+                          : `${lang === 'en' ? 'From' : '来自'}: ${share.sender_email}`}
+                      </p>
+                    </div>
+                    <span className={`share-card-status ${share.status || 'pending'}`}>
+                      {share.status === 'accepted'
+                        ? (lang === 'en' ? 'Accepted' : '已接受')
+                        : share.status === 'rejected'
+                        ? (lang === 'en' ? 'Rejected' : '已拒绝')
+                        : t('common.pending')}
+                    </span>
+                  </div>
+                  <div className="share-card-info">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                      <line x1="16" y1="2" x2="16" y2="6" />
+                      <line x1="8" y1="2" x2="8" y2="6" />
+                      <line x1="3" y1="10" x2="21" y2="10" />
+                    </svg>
+                    {share.create_time?.slice(0, 10)} · {share.knowledge_count || 0} {lang === 'en' ? 'items' : '条知识'}
+                  </div>
+                  <div className="share-card-actions">
+                    {tab === 'sent' ? (
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        style={{ color: '#D32F2F' }}
+                        onClick={() => handleCancel(share.id)}
+                      >{t('share.unshare')}</button>
+                    ) : share.status !== 'accepted' ? (
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => handleAccept(share.id)}
+                      >{t('common.accept')}</button>
+                    ) : (
+                      <span style={{ fontSize: 14, color: 'var(--color-text-secondary)' }}>{lang === 'en' ? 'Accepted' : '已接受'}</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {showModal && (

@@ -34,7 +34,8 @@ export default {
     refuse: 'Refuse',
     accept: 'Accept',
     prevPage: 'Prev Page',
-    nextPage: 'Next page'
+    nextPage: 'Next page',
+    signOut: 'Sign out'
   },
 
   // App title and description

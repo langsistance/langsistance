@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
@@ -77,6 +77,19 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
   const [devMode, setDevMode] = useState(getInitialDevMode)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!menuOpen) return
+    function handleClickOutside(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [menuOpen])
 
   async function handleLogout() {
     await logout()
@@ -111,9 +124,25 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <span>{lang === 'en' ? '🇺🇸' : '🇨🇳'}</span>
             <span>{lang === 'en' ? 'English' : '中文'}</span>
           </button>
-          <button className="user-avatar-btn" onClick={handleLogout} title={`${t('common.back')} (${user?.email})`}>
-            {user?.email?.[0]?.toUpperCase() ?? 'U'}
-          </button>
+          <div className="user-menu" ref={menuRef}>
+            <button className="user-avatar" onClick={() => setMenuOpen(v => !v)}>
+              {user?.email?.[0]?.toUpperCase() ?? 'U'}
+            </button>
+            {menuOpen && (
+              <div className="user-menu-dropdown">
+                <div className="user-menu-email">{user?.email}</div>
+                <hr className="user-menu-divider" />
+                <button className="user-menu-logout" onClick={handleLogout}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                    <polyline points="16 17 21 12 16 7" />
+                    <line x1="21" y1="12" x2="9" y2="12" />
+                  </svg>
+                  {t('common.signOut')}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 

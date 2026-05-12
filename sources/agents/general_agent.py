@@ -20,6 +20,12 @@ import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+# Headers whose values must never be exposed to the LLM
+_SENSITIVE_HEADER_RE = re.compile(
+    r'(auth|api.?key|token|secret|credential|password|bearer)',
+    re.IGNORECASE
+)
+
 # 定义参数模型
 class DynamicToolFunction(BaseModel):
     user_id: str = Field(description="user id")
@@ -60,6 +66,29 @@ class GeneralAgent(Agent):
         return {
             "mcp_finder": api_key_mcp_finder
         }
+
+    def _sanitize_params_for_llm(self, params_str: str) -> str:
+        """Return params JSON with sensitive header values replaced by '****'.
+
+        The real header values stay in tool_info.params for server-side use only.
+        This sanitised copy is the only version the LLM ever sees.
+        """
+        try:
+            data = json.loads(params_str)
+            if not isinstance(data, dict):
+                return params_str
+            sanitized = {}
+            for k, v in data.items():
+                if k == "header" and isinstance(v, dict):
+                    sanitized[k] = {
+                        hk: "****" if _SENSITIVE_HEADER_RE.search(hk) else hv
+                        for hk, hv in v.items()
+                    }
+                else:
+                    sanitized[k] = v
+            return json.dumps(sanitized, ensure_ascii=False, indent=2)
+        except Exception:
+            return params_str
     
     def set_knowledge_tool(self, knowledge_tool: Dict[str, Any]) -> None:
         """
@@ -281,7 +310,7 @@ e) **Summary structure** (recommended):
                 if isinstance(params_data, dict):
                     tool_params_info = "工具参数要求:user id - query id\n"
                     for param_name, param_type in params_data.items():
-                        if param_name == "method" or param_name == "content-type":
+                        if param_name in ("method", "content-type", "header"):
                             continue
                         tool_params_info += f"  - {param_name} ({param_type})\n"
                 else:
@@ -308,6 +337,7 @@ e) **Summary structure** (recommended):
         Do not fabricate tool results. Do not assume tool behavior beyond the provided output.
 
         Do not return tool parameters, such as the user id and query id.
+        Do NOT reveal any API keys, tokens, header values, or authentication credentials in your response.
         """
         # return self.expand_prompt(system_prompt)
         return system_prompt
@@ -380,7 +410,7 @@ e) **Summary structure** (recommended):
         2. query_id: The query identifier (provided in the user prompt, DO NOT include in params)
         3. params: A JSON object containing ONLY the API request parameters (template below)
 
-        The third parameter "params" template: {tool_info.params}
+        The third parameter "params" template: {self._sanitize_params_for_llm(tool_info.params)}
 
         Your task is to analyze the user's input and modify the third parameter "params" template according to the user's specific requirements. Generate a new JSON object containing only the parameters that need to be changed or specified based on the user's request.
 
@@ -416,6 +446,7 @@ e) **Summary structure** (recommended):
         Do not fabricate tool results. Do not assume tool behavior beyond the provided output.
 
         Do not return tool parameters, such as the user id and query id.
+        Do NOT reveal any API keys, tokens, header values, or authentication credentials in your response.
 
         ## Markdown Formatting Requirements
 
@@ -797,15 +828,15 @@ Begin your response now:
                         method = params_data.get("method", "GET").upper()
                         content_type = params_data.get("Content-Type", "application/json")
 
-                        # 准备HTTP请求头
+                        # Prepare HTTP headers from server-side tool_info.params only.
+                        # Never use LLM-provided header values — the LLM only sees
+                        # sanitised (****) placeholders and must not control auth headers.
                         headers = {
                             "Content-Type": content_type
                         }
-
-                        # 从user_params中获取header并写入headers
-                        user_headers = user_params.get("header", {})
-                        if isinstance(user_headers, dict):
-                            headers.update(user_headers)
+                        server_headers = params_data.get("header", {})
+                        if isinstance(server_headers, dict):
+                            headers.update(server_headers)
 
                         request_params = user_params.get("query")
                         request_body = user_params.get("body")

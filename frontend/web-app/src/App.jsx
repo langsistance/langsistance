@@ -10,7 +10,7 @@ import DevTools from './pages/DevTools'
 
 function RequireAuth({ children }) {
   const { user } = useAuth()
-  if (user === undefined) return <div className="flex items-center justify-center h-screen text-slate-400">加载中...</div>
+  if (user === undefined) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: 'var(--color-text-secondary)' }}>加载中...</div>
   if (!user) return <Navigate to="/login" replace />
   return children
 }

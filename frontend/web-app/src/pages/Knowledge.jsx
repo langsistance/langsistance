@@ -6,17 +6,21 @@ import {
   deleteKnowledge,
   queryTools,
 } from '../services/api'
+import { useI18n } from '../i18n'
 
 function KnowledgeModal({ item, tools, onClose, onSave }) {
+  const { t, lang } = useI18n()
   const [form, setForm] = useState(
-    item || { question: '', answer: '', description: '', tool_id: '', public: 0 }
+    item
+      ? { ...item }
+      : { question: '', answer: '', description: '', tool_id: '', public: 0 }
   )
+  const [saveError, setSaveError] = useState('')
 
   function set(key, val) {
     setForm((f) => ({ ...f, [key]: val }))
   }
 
-  const [saveError, setSaveError] = useState('')
   async function submit(e) {
     e.preventDefault()
     setSaveError('')
@@ -24,73 +28,89 @@ function KnowledgeModal({ item, tools, onClose, onSave }) {
       await onSave(form)
       onClose()
     } catch (err) {
-      setSaveError(err.message || '保存失败')
+      setSaveError(err.message || (lang === 'en' ? 'Save failed' : '保存失败'))
     }
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-slate-800 rounded-xl p-6 w-full max-w-lg border border-slate-700">
-        <h3 className="text-base font-semibold mb-4">{item ? '编辑知识库' : '创建知识库'}</h3>
-        <form onSubmit={submit} className="flex flex-col gap-3">
-          <input
-            placeholder="问题（AI 匹配时使用）"
-            value={form.question}
-            onChange={(e) => set('question', e.target.value)}
-            required
-            className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-teal-500"
-          />
-          <textarea
-            placeholder="答案 / 工具调用说明"
-            value={form.answer}
-            onChange={(e) => set('answer', e.target.value)}
-            required
-            rows={3}
-            className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 resize-none focus:outline-none focus:border-teal-500"
-          />
-          <textarea
-            placeholder="描述（可选）"
-            value={form.description}
-            onChange={(e) => set('description', e.target.value)}
-            rows={2}
-            className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 resize-none focus:outline-none focus:border-teal-500"
-          />
-          <select
-            value={form.tool_id}
-            onChange={(e) => set('tool_id', e.target.value)}
-            className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-teal-500"
-          >
-            <option value="">无关联工具</option>
-            {tools.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.title}
-              </option>
-            ))}
-          </select>
-          <label className="flex items-center gap-2 text-sm text-slate-300">
-            <input
-              type="checkbox"
-              checked={!!form.public}
-              onChange={(e) => set('public', e.target.checked ? 1 : 0)}
-              className="accent-teal-600"
-            />
-            公开（在社区可见）
-          </label>
-          {saveError && <p className="text-red-400 text-xs">{saveError}</p>}
-          <div className="flex justify-end gap-2 mt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-sm text-slate-300 hover:text-white"
-            >
-              取消
-            </button>
-            <button
-              type="submit"
-              className="px-4 py-2 bg-teal-600 hover:bg-teal-500 text-sm text-white rounded-lg"
-            >
-              保存
-            </button>
+    <div className="modal">
+      <div className="modal-overlay" onClick={onClose} />
+      <div className="modal-content knowledge-editor-modal">
+        <div className="modal-header">
+          <h2>{item ? t('knowledge.edit') : t('knowledge.create')}</h2>
+          <button className="modal-close-btn" onClick={onClose}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+        <form onSubmit={submit}>
+          <div className="modal-body">
+            <div className="form-group">
+              <label>{t('modals.knowledgeCreate.question')}</label>
+              <input
+                id="knowledgeQuestion"
+                className="form-input"
+                placeholder={t('modals.knowledgeCreate.questionPlaceholder')}
+                value={form.question}
+                onChange={(e) => set('question', e.target.value)}
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label>{t('modals.knowledgeCreate.answer')}</label>
+              <textarea
+                id="knowledgeAnswer"
+                className="form-textarea"
+                placeholder={t('modals.knowledgeCreate.answerPlaceholder')}
+                value={form.answer}
+                onChange={(e) => set('answer', e.target.value)}
+                required
+                rows={4}
+              />
+            </div>
+            <div className="form-group">
+              <label>{lang === 'en' ? 'Description (optional)' : '描述（可选）'}</label>
+              <textarea
+                className="form-textarea"
+                placeholder={lang === 'en' ? 'Additional notes' : '补充说明'}
+                value={form.description}
+                onChange={(e) => set('description', e.target.value)}
+                rows={2}
+              />
+            </div>
+            <div className="form-group">
+              <label>{lang === 'en' ? 'Associated Tool' : '关联工具'}</label>
+              <select
+                id="knowledgeToolSelect"
+                className="form-input"
+                value={form.tool_id}
+                onChange={(e) => set('tool_id', e.target.value)}
+              >
+                <option value="">{lang === 'en' ? 'No linked tool' : '无关联工具'}</option>
+                {tools.map((t) => (
+                  <option key={t.id} value={t.id}>{t.title}</option>
+                ))}
+              </select>
+            </div>
+            <div className="form-group">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={!!form.public}
+                  onChange={(e) => set('public', e.target.checked ? 1 : 0)}
+                />
+                {t('modals.knowledgeCreate.makePublic')}
+              </label>
+            </div>
+            {saveError && (
+              <p style={{ color: '#D32F2F', fontSize: 14, marginTop: -8 }}>{saveError}</p>
+            )}
+          </div>
+          <div className="modal-footer">
+            <button type="button" className="btn btn-secondary" onClick={onClose}>{t('common.cancel')}</button>
+            <button type="submit" className="btn btn-primary">{t('common.save')}</button>
           </div>
         </form>
       </div>
@@ -99,12 +119,13 @@ function KnowledgeModal({ item, tools, onClose, onSave }) {
 }
 
 export default function Knowledge() {
+  const { t } = useI18n()
   const [items, setItems] = useState([])
   const [tools, setTools] = useState([])
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
-  const [modal, setModal] = useState(null) // null | 'create' | item object
+  const [modal, setModal] = useState(null)
   const PAGE_SIZE = 10
 
   const [debouncedSearch, setDebouncedSearch] = useState(search)
@@ -124,6 +145,7 @@ export default function Knowledge() {
   }, [debouncedSearch, page])
 
   useEffect(() => { load() }, [load])
+
   useEffect(() => {
     queryTools({ push: 2 })
       .then((res) => setTools((res.tools || res.items || []).filter((t) => t.push === 2)))
@@ -140,7 +162,7 @@ export default function Knowledge() {
   }
 
   async function handleDelete(id) {
-    if (!confirm('确认删除？')) return
+    if (!confirm(t('alerts.confirmDeleteKnowledge'))) return
     await deleteKnowledge({ id })
     load()
   }
@@ -148,78 +170,90 @@ export default function Knowledge() {
   const totalPages = Math.ceil(total / PAGE_SIZE)
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-        <div>
-          <h2 className="text-sm font-semibold text-slate-200">知识库</h2>
-          <p className="text-xs text-slate-500">管理 API 文档和使用说明</p>
-        </div>
-        <button
-          onClick={() => setModal('create')}
-          className="px-3 py-1.5 bg-teal-600 hover:bg-teal-500 text-xs text-white rounded-lg"
-        >
-          + 创建知识库
-        </button>
-      </div>
-
-      <div className="px-4 py-3">
-        <input
-          placeholder="搜索知识库..."
-          value={search}
-          onChange={(e) => { setSearch(e.target.value); setPage(1) }}
-          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-teal-500"
-        />
-      </div>
-
-      <div className="flex-1 overflow-y-auto px-4 flex flex-col gap-2">
-        {items.map((item) => (
-          <div key={item.id} className="bg-slate-800 rounded-lg p-4">
-            <div className="flex items-start justify-between gap-2">
-              <p className="text-sm font-medium text-slate-200 flex-1">{item.question}</p>
-              <div className="flex gap-2 shrink-0">
-                <button
-                  onClick={() => setModal(item)}
-                  className="text-xs text-slate-400 hover:text-white"
-                >
-                  编辑
-                </button>
-                <button
-                  onClick={() => handleDelete(item.id)}
-                  className="text-xs text-slate-400 hover:text-red-400"
-                >
-                  删除
-                </button>
-              </div>
-            </div>
-            <p className="text-xs text-slate-400 mt-1 line-clamp-2">{item.answer}</p>
-            {item.tool_id > 0 && (
-              <span className="inline-block mt-2 text-xs text-teal-400 bg-teal-900/30 px-2 py-0.5 rounded">
-                {tools.find((t) => t.id === item.tool_id)?.title || `Tool #${item.tool_id}`}
-              </span>
-            )}
+    <div className="page active">
+      <div className="page-header">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h1>{t('knowledge.title')}</h1>
+            <p>{t('knowledge.description')}</p>
           </div>
-        ))}
-      </div>
-
-      {totalPages > 1 && (
-        <div className="flex justify-center gap-2 py-3">
-          <button
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            disabled={page === 1}
-            className="px-3 py-1 text-xs bg-slate-700 hover:bg-slate-600 disabled:opacity-40 rounded"
-          >
-            ‹
-          </button>
-          <span className="text-xs text-slate-400 self-center">{page} / {totalPages}</span>
-          <button
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            disabled={page === totalPages}
-            className="px-3 py-1 text-xs bg-slate-700 hover:bg-slate-600 disabled:opacity-40 rounded"
-          >
-            ›
+          <button className="btn btn-primary" onClick={() => setModal('create')}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+            {t('knowledge.create')}
           </button>
         </div>
-      )}
+      </div>
+
+      <div className="page-content">
+        <div className="knowledge-search">
+          <input
+            type="text"
+            className="knowledge-search-input"
+            placeholder={t('knowledge.search')}
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setPage(1) }}
+          />
+        </div>
+
+        {items.length === 0 ? (
+          <div className="empty-state">
+            <p>{t('knowledge.noKnowledge')}</p>
+          </div>
+        ) : (
+          <div className="knowledge-list">
+            {items.map((item) => (
+              <div key={item.id} className="knowledge-card">
+                <div className="knowledge-card-header">
+                  <div style={{ flex: 1 }}>
+                    <p className="knowledge-card-title">{item.question}</p>
+                  </div>
+                  <div className="knowledge-card-actions">
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => setModal(item)}
+                    >{t('common.edit')}</button>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      style={{ color: '#D32F2F' }}
+                      onClick={() => handleDelete(item.id)}
+                    >{t('common.delete')}</button>
+                  </div>
+                </div>
+                <p className="knowledge-card-content">{item.answer}</p>
+                {item.tool_id > 0 && (
+                  <div className="knowledge-card-apis">
+                    <span className="knowledge-api-badge">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+                      </svg>
+                      {tools.find((t) => t.id === item.tool_id)?.title || `Tool #${item.tool_id}`}
+                    </span>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {totalPages > 1 && (
+          <div className="pagination">
+            <button
+              className="pagination-btn"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page === 1}
+            >‹</button>
+            <span className="pagination-info">{page} / {totalPages}</span>
+            <button
+              className="pagination-btn"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page === totalPages}
+            >›</button>
+          </div>
+        )}
+      </div>
 
       {modal && (
         <KnowledgeModal

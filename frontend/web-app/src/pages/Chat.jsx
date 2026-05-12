@@ -1,16 +1,19 @@
 import { useState, useRef, useEffect } from 'react'
 import { queryStream } from '../services/api'
+import { useI18n } from '../i18n'
 
 function genId() {
   return Math.random().toString(36).slice(2)
 }
 
 export default function Chat() {
+  const { t } = useI18n()
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const abortRef = useRef(null)
   const bottomRef = useRef(null)
+  const textareaRef = useRef(null)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -20,6 +23,7 @@ export default function Chat() {
     const text = input.trim()
     if (!text || streaming) return
     setInput('')
+    if (textareaRef.current) textareaRef.current.style.height = 'auto'
 
     const queryId = genId()
     setMessages((m) => [...m, { role: 'user', content: text, id: genId() }])
@@ -72,7 +76,7 @@ export default function Chat() {
         setMessages((m) =>
           m.map((msg) =>
             msg.id === assistantId
-              ? { ...msg, content: '请求失败，请重试。' }
+              ? { ...msg, content: t('chat.queryFailed') }
               : msg
           )
         )
@@ -90,60 +94,73 @@ export default function Chat() {
     }
   }
 
+  function handleInput(e) {
+    setInput(e.target.value)
+    e.target.style.height = 'auto'
+    e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px'
+  }
+
   function abort() {
     abortRef.current?.abort()
   }
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="px-4 py-3 border-b border-slate-800">
-        <h2 className="text-sm font-semibold text-slate-200">对话</h2>
-      </div>
+    <div className="page active">
+      <div className="chat-container">
+        <div className="chat-messages">
+          {messages.length === 0 && (
+            <div className="chat-message-wrapper">
+              <div className="empty-state">
+                <h3>{t('chat.welcome.greeting')}</h3>
+                <p>{t('chat.welcome.prompt')}</p>
+              </div>
+            </div>
+          )}
+          {messages.map((msg) => (
+            <div key={msg.id} className={`chat-message-wrapper ${msg.role}`}>
+              <div className={`chat-message ${msg.role}`}>
+                {msg.content || (msg.role === 'assistant' && streaming ? '▋' : '')}
+              </div>
+            </div>
+          ))}
+          <div ref={bottomRef} />
+        </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3">
-        {messages.length === 0 && (
-          <p className="text-slate-500 text-sm text-center mt-8">发送消息开始对话</p>
-        )}
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`max-w-[80%] rounded-xl px-3 py-2 text-sm whitespace-pre-wrap break-words ${
-              msg.role === 'user'
-                ? 'self-start bg-slate-700 text-slate-200'
-                : 'self-end bg-teal-600 text-white'
-            }`}
-          >
-            {msg.content || (msg.role === 'assistant' && streaming ? '▋' : '')}
+        <div className="chat-input-container">
+          <div className="chat-input-wrapper">
+            <textarea
+              ref={textareaRef}
+              className="chat-input"
+              value={input}
+              onChange={handleInput}
+              onKeyDown={handleKeyDown}
+              placeholder={t('chat.placeholder')}
+              rows={1}
+            />
+            {streaming ? (
+              <button
+                className="send-btn"
+                onClick={abort}
+                style={{ background: 'var(--color-text-secondary)' }}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="6" y="6" width="12" height="12" />
+                </svg>
+              </button>
+            ) : (
+              <button
+                className="send-btn"
+                onClick={send}
+                disabled={!input.trim()}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="22" y1="2" x2="11" y2="13" />
+                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                </svg>
+              </button>
+            )}
           </div>
-        ))}
-        <div ref={bottomRef} />
-      </div>
-
-      <div className="px-4 py-3 border-t border-slate-800 flex gap-2">
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="输入消息..."
-          rows={1}
-          className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 resize-none focus:outline-none focus:border-teal-500"
-        />
-        {streaming ? (
-          <button
-            onClick={abort}
-            className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-sm text-white rounded-lg"
-          >
-            停止
-          </button>
-        ) : (
-          <button
-            onClick={send}
-            disabled={!input.trim()}
-            className="px-4 py-2 bg-teal-600 hover:bg-teal-500 disabled:opacity-40 text-sm text-white rounded-lg"
-          >
-            发送
-          </button>
-        )}
+        </div>
       </div>
     </div>
   )
