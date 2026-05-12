@@ -889,7 +889,7 @@ Begin your response now:
                         # 打印 response 信息
                         self.logger.info(f"Response status code: {response.status_code}")
                         self.logger.info(f"Response headers: {response.headers}")
-                        self.logger.info(f"Response content: {response.text}")
+                        # self.logger.info(f"Response content: {response.text}")
                         # 处理响应结果
                         if response.status_code == 200:
                             content_type = response.headers.get("Content-Type", "").lower()
@@ -1080,6 +1080,7 @@ Begin your response now:
                         f"### Items {batch_start + 1}–{batch_end}\n\n"
                     )
                     batch_text = self._format_batch_for_llm(batch, batch_start)
+                    self.logger.info(f"batch_text:{batch_text}")
                     await self.llm.stream_simple(
                         system_prompt=system_prompt,
                         user_content=(
