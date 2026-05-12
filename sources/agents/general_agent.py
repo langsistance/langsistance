@@ -91,17 +91,65 @@ class GeneralAgent(Agent):
             return params_str
     
     def set_knowledge_tool(self, knowledge_tool: Dict[str, Any]) -> None:
-        """
-        设置知识工具字典
-        Args:
-            knowledge_tool (Dict[str, Any]): 知识工具字典
-        """
+        """Set the knowledge tool dictionary."""
         self.knowledgeTool = knowledge_tool
 
+    def _flatten_dict(self, d: dict) -> str:
+        """Flatten a dict into readable 'key: value' pairs, skipping empty values."""
+        parts = []
+        for k, v in d.items():
+            if v is None or v == "" or v == {} or v == []:
+                continue
+            if isinstance(v, dict):
+                sub = self._flatten_dict(v)
+                if sub:
+                    parts.append(f"{k}: {sub}")
+            elif isinstance(v, list):
+                if v and not isinstance(v[0], (dict, list)):
+                    parts.append(f"{k}: {', '.join(str(i) for i in v)}")
+            else:
+                parts.append(f"{k}: {v}")
+        return " | ".join(parts)
+
+    def _render_list_as_md(self, label: str | None, items: list) -> str:
+        """Render every item in a list as readable markdown bullets without JSON dumps."""
+        header = f"**{label}** ({len(items)} items total):\n\n" if label else f"({len(items)} items total):\n\n"
+        blocks = [header]
+        for i, item in enumerate(items, 1):
+            if isinstance(item, dict):
+                scalar_parts = [
+                    f"**{k}**: {v}" for k, v in item.items()
+                    if not isinstance(v, (dict, list)) and v is not None and v != ""
+                ]
+                nested_parts = [
+                    (k, v) for k, v in item.items()
+                    if isinstance(v, (dict, list)) and v
+                ]
+                top = f"- **[{i}]** " + (" | ".join(scalar_parts) if scalar_parts else "")
+                sub_lines = []
+                for nk, nv in nested_parts:
+                    if isinstance(nv, dict):
+                        flat = self._flatten_dict(nv)
+                        if flat:
+                            sub_lines.append(f"  - **{nk}**: {flat}")
+                    elif isinstance(nv, list):
+                        if nv and not isinstance(nv[0], (dict, list)):
+                            sub_lines.append(f"  - **{nk}**: {', '.join(str(x) for x in nv)}")
+                        elif nv:
+                            sub_lines.append(f"  - **{nk}**: [{len(nv)} items]")
+                blocks.append("\n".join([top] + sub_lines) if sub_lines else top)
+            elif isinstance(item, list):
+                if item and not isinstance(item[0], (dict, list)):
+                    blocks.append(f"- **[{i}]** {', '.join(str(x) for x in item)}")
+                else:
+                    blocks.append(f"- **[{i}]** [{len(item)} items]")
+            else:
+                blocks.append(f"- **[{i}]** {item}")
+        return "\n".join(blocks)
+
+
     def _get_markdown_formatting_guide(self) -> str:
-        """
-        获取 Markdown 格式化指南，用于指导大模型输出美观的内容
-        """
+        """Return a Markdown formatting guide injected into direct-mode system prompts."""
         return """
 ## Markdown Formatting Guidelines
 
@@ -130,96 +178,22 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
 - Indent sub-items with 2-4 spaces
 - **CRITICAL**: When the tool returns a list, display ALL items from the list. Do NOT summarize, truncate, or selectively show items.
 
-Example:
-```
-- Main item
-  - Sub item
-  - Another sub item
-- Another main item
-```
-
 ### 5. Emphasis
 - Use **bold** for important terms: `**text**`
 - Use *italic* for emphasis: `*text*`
-- Use ***bold italic*** for very important: `***text***`
 - Use `code` for technical terms: `` `code` ``
 
-### 6. Code Blocks
-- Use fenced code blocks with language specification:
-```
-```python
-def example():
-    return "formatted code"
-```
-```
+### 6. Tables (for structured data)
+- Use tables for comparing information
 
-### 7. Tables (for structured data)
-- Use tables for comparing information:
-```
-| Column 1 | Column 2 | Column 3 |
-|----------|----------|----------|
-| Data 1   | Data 2   | Data 3   |
-```
-
-### 8. Quotes
-- Use `>` for important quotes or highlights
-- Example: `> This is an important note`
-
-### 9. Horizontal Rules
-- Use `---` to separate major sections (use sparingly)
-
-### 10. Special Formatting for Your Response
-
-**When presenting tool results:**
-
-a) **If result contains URLs**: Format as clickable links with context
-   - ❌ Bad: `https://example.com/article`
-   - ✅ Good: `[Read the full article](https://example.com/article)`
-
-b) **If result contains images**: Display them directly
-   - Format: `![Description](image_URL)`
-   - Add captions below if needed
-
-c) **If result is a list**: Use proper list formatting
-   - **CRITICAL**: Display ALL items from the list, do NOT truncate or summarize
-   - Keep items concise
-   - Use sub-lists for hierarchy
-
-d) **If result contains data**: Consider using tables for clarity
-
-e) **Summary structure** (recommended):
-   ```
-   ## [Main Topic]
-
-   [Brief introduction or summary]
-
-   ### Key Information
-   - Point 1 (with details)
-   - Point 2 (with details)
-   - ... (include ALL items from the tool result)
-
-   ### Details
-   [Detailed information organized by topic]
-
-   [Display images inline where relevant]
-   ![Image Description](image_URL)
-   ```
-
-### 11. Content Organization Tips
-- Start with a brief summary (2-3 sentences)
-- Present ALL content from the tool result - do NOT omit items to save space
-- Place images inline with relevant content
-- **DO NOT** add a separate "Resources" or "Sources" section at the end
-- **DO NOT** create a list of links at the bottom of your response
-
-### 12. CRITICAL Rules
+### 7. CRITICAL Rules
 - **Display completeness**: Show ALL items when the tool returns a list or array
 - **No source sections**: Do NOT add "Sources:", "References:", or "Resources:" sections at the end
 - **Inline links only**: Integrate links naturally within the content, not as a separate list at the bottom
+- **No code block wrapper**: Output DIRECT Markdown content, do NOT wrap your entire response in a code block
 
-**Remember**: Your goal is to make the content scannable, visually appealing, and easy to read. Use whitespace effectively!
+**Remember**: Your goal is to make the content scannable, visually appealing, and easy to read.
 """
-    
     def expand_prompt(self, prompt):
         """
         Expands the prompt with the tools available.
@@ -232,10 +206,7 @@ e) **Summary structure** (recommended):
         return prompt
 
     def is_query_and_body_empty(self) -> bool:
-        """
-        判断 self.knowledgeTool 中的 tool_info 的 params 中的 query 和 body 是否都为空。
-        如果都为空，返回 True；否则返回 False。
-        """
+        """Return True if both query and body in tool_info.params are empty."""
         # 获取工具信息
         _, tool_info = self.knowledgeTool
 
@@ -254,9 +225,7 @@ e) **Summary structure** (recommended):
             return False
 
     def generate_fixed_system_prompt(self) -> str:
-        """
-        生成系统提示
-        """
+        """Generate system prompt for fixed (no-parameter) tools."""
         knowledge_item, tool_info = self.knowledgeTool
         self.logger.info(f"knowledge item:{knowledge_item} - tool:{tool_info}")
 
@@ -308,15 +277,15 @@ e) **Summary structure** (recommended):
             try:
                 params_data = json.loads(tool_info.params)
                 if isinstance(params_data, dict):
-                    tool_params_info = "工具参数要求:user id - query id\n"
+                    tool_params_info = "Tool parameters: user_id, query_id\n"
                     for param_name, param_type in params_data.items():
                         if param_name in ("method", "content-type", "header"):
                             continue
                         tool_params_info += f"  - {param_name} ({param_type})\n"
                 else:
-                    tool_params_info = f"工具参数: {tool_info.params}"
+                    tool_params_info = f"Tool parameters: {tool_info.params}"
             except json.JSONDecodeError:
-                tool_params_info = f"工具参数: {tool_info.params}"
+                tool_params_info = f"Tool parameters: {tool_info.params}"
 
         system_prompt = f"""
         You are an intelligent assistant capable of deciding when and how to use APIs to complete tasks.
@@ -343,9 +312,7 @@ e) **Summary structure** (recommended):
         return system_prompt
 
     def generate_template_system_prompt(self) -> str:
-        """
-        生成系统提示
-        """
+        """Generate system prompt for template-parameter tools (LLM fills params)."""
         knowledge_item, tool_info = self.knowledgeTool
         self.logger.info(f"knowledge item:{knowledge_item} - tool:{tool_info}")
 
@@ -502,9 +469,7 @@ e) **Summary structure** (recommended):
         return system_prompt
 
     def generate_system_prompt(self, tool_data) -> str:
-        """
-        生成系统提示
-        """
+        """Select and return the appropriate system prompt based on push mode."""
         _, tool_info = self.knowledgeTool
 
         # 根据tool_info.push的值选择不同系统提示词
@@ -537,9 +502,7 @@ e) **Summary structure** (recommended):
         return user_prompt
 
     def generate_frontend_tool_direct_system_prompt(self, tool_data: str) -> str:
-        """
-        直接解析 tool_data 并生成系统提示词，无需发起 HTTP 请求。
-        """
+        """Generate system prompt from pre-fetched tool_data without making an HTTP request."""
         # self.logger.info(f"generate_frontend_tool_direct_system_prompt - tool_data: {tool_data}")
 
         try:
@@ -559,15 +522,26 @@ e) **Summary structure** (recommended):
             if "text/html" in tool_data:
                 # 如果是 HTML 内容，使用公用方法清理文本
                 result_str = clean_html_text(tool_data)
-
+                list_count = 0
             else:
                 # 尝试将 tool_data 解析为 JSON
                 try:
                     result_data = json.loads(tool_data)
-                    result_str = json.dumps(result_data, ensure_ascii=False, indent=2)
+                    result_str, list_count = self._preformat_result(result_data)
                 except json.JSONDecodeError:
                     # 如果不是有效的 JSON，则直接使用原始内容
                     result_str = tool_data
+                    list_count = 0
+
+            list_completeness_block = ""
+            if list_count > 0:
+                list_completeness_block = f"""
+⚠️ LIST COMPLETENESS REQUIREMENT:
+The Input Data section below contains exactly {list_count} items.
+Your response MUST include ALL {list_count} items — do not stop before item {list_count}.
+The list is already pre-formatted as markdown bullets. Embed it verbatim in your response.
+Outputting fewer than {list_count} items is NOT acceptable under any circumstances.
+"""
 
             # 获取格式化指南
             formatting_guide = self._get_markdown_formatting_guide()
@@ -586,6 +560,7 @@ Act as a self-contained intelligent assistant. Follow these instructions strictl
 5.  **Content Completeness:** When the input data contains a list or array, display ALL items in your response. Do NOT truncate, summarize, or selectively show items.
 6.  **No Source Sections:** Do NOT add a "Sources", "References", or "Resources" section at the end of your response. Do NOT create a separate list of links at the bottom.
 
+{list_completeness_block}
 {formatting_guide}
 
 ## Input Data
@@ -599,7 +574,7 @@ Generate a beautiful, well-formatted Markdown response based on the above data. 
 - Easy to scan with clear headings
 - Rich with properly formatted links and images (integrated naturally within content)
 - Professional and polished
-- Complete - display ALL items if the data contains lists or arrays
+- Complete - include ALL {list_count} items if the data contains a list
 
 **CRITICAL OUTPUT FORMAT**:
 - Output your response as DIRECT Markdown content
@@ -609,7 +584,7 @@ Generate a beautiful, well-formatted Markdown response based on the above data. 
 - Only use code blocks for actual code snippets within your content, not for the entire response
 
 **CRITICAL CONTENT RULES**:
-- Display ALL items from lists/arrays in the input data
+- Display ALL {list_count} items from the Input Data — not a subset, not a summary
 - Do NOT add a separate "Sources" or "References" section at the end
 - Integrate all links naturally within the content
 
@@ -622,10 +597,7 @@ Begin your response now:
             return self.generate_template_system_prompt()
 
     def generate_backend_tool_direct_system_prompt(self) -> str:
-        """
-        直接利用 tool_info 发起 HTTP 请求，将结果写入系统提示词并返回。
-        告诉大模型无需调用工具，直接基于返回的数据生成结果。
-        """
+        """Make the HTTP request from tool_info, embed the result in the system prompt, and return it."""
         # 获取工具信息
         knowledge_item, tool_info = self.knowledgeTool
         self.logger.info(f"generate_tool_direct_system_prompt - tool:{tool_info}")
@@ -701,12 +673,24 @@ Begin your response now:
                 else:
                     try:
                         result_data = response.json() if response.content else {}
-                        result_str = json.dumps(result_data, ensure_ascii=False, indent=2)
+                        result_str, list_count = self._preformat_result(result_data)
                     except json.JSONDecodeError:
                         # 如果JSON解析失败，使用原始响应内容
                         result_str = response.text if response.text else "Empty response"
+                        list_count = 0
             else:
-                result_str = f"request failed，status code: {response.status_code}"
+                result_str = f"Request failed, status code: {response.status_code}"
+                list_count = 0
+
+            list_completeness_block = ""
+            if list_count > 0:
+                list_completeness_block = f"""
+⚠️ LIST COMPLETENESS REQUIREMENT:
+The Input Data section below contains exactly {list_count} items.
+Your response MUST include ALL {list_count} items — do not stop before item {list_count}.
+The list is already pre-formatted as markdown bullets. Embed it verbatim in your response.
+Outputting fewer than {list_count} items is NOT acceptable under any circumstances.
+"""
 
             # 获取格式化指南
             formatting_guide = self._get_markdown_formatting_guide()
@@ -725,6 +709,7 @@ Act as a self-contained intelligent assistant. Follow these instructions strictl
 5.  **Content Completeness:** When the input data contains a list or array, display ALL items in your response. Do NOT truncate, summarize, or selectively show items.
 6.  **No Source Sections:** Do NOT add a "Sources", "References", or "Resources" section at the end of your response. Do NOT create a separate list of links at the bottom.
 
+{list_completeness_block}
 {formatting_guide}
 
 ## Input Data
@@ -738,7 +723,7 @@ Generate a beautiful, well-formatted Markdown response based on the above data. 
 - Easy to scan with clear headings
 - Rich with properly formatted links and images (integrated naturally within content)
 - Professional and polished
-- Complete - display ALL items if the data contains lists or arrays
+- Complete - include ALL {list_count} items if the data contains a list
 
 **CRITICAL OUTPUT FORMAT**:
 - Output your response as DIRECT Markdown content
@@ -748,7 +733,7 @@ Generate a beautiful, well-formatted Markdown response based on the above data. 
 - Only use code blocks for actual code snippets within your content, not for the entire response
 
 **CRITICAL CONTENT RULES**:
-- Display ALL items from lists/arrays in the input data
+- Display ALL {list_count} items from the Input Data — not a subset, not a summary
 - Do NOT add a separate "Sources" or "References" section at the end
 - Integrate all links naturally within the content
 
@@ -862,7 +847,7 @@ Begin your response now:
                         # 打印 response 信息
                         self.logger.info(f"Response status code: {response.status_code}")
                         self.logger.info(f"Response headers: {response.headers}")
-                        self.logger.info(f"Response content: {response.text}")
+                        # self.logger.info(f"Response content: {response.text}")
                         # 处理响应结果
                         if response.status_code == 200:
                             content_type = response.headers.get("Content-Type", "").lower()
@@ -883,7 +868,34 @@ Begin your response now:
                             else:
                                 # JSON 或其他格式
                                 try:
-                                    result = response.json() if response.content else None
+                                    result_data = response.json() if response.content else None
+                                    if isinstance(result_data, (dict, list)):
+                                        # Extract raw items list for batch LLM analysis
+                                        if isinstance(result_data, list) and result_data:
+                                            raw_items = result_data
+                                        elif isinstance(result_data, dict):
+                                            raw_items = next(
+                                                (v for v in result_data.values() if isinstance(v, list) and v),
+                                                None
+                                            )
+                                        else:
+                                            raw_items = None
+
+                                        if raw_items:
+                                            list_count = len(raw_items)
+                                            # Store raw items; invoke_agent will batch-analyze them via LLM
+                                            self._pending_raw_items = raw_items
+                                            result = (
+                                                f"The query returned {list_count} items. "
+                                                f"Please write a brief 2–3 sentence summary of what was found. "
+                                                f"The complete list will be analyzed and displayed item by item automatically — "
+                                                f"do NOT enumerate the items yourself."
+                                            )
+                                        else:
+                                            formatted, _ = self._preformat_result(result_data)
+                                            result = formatted
+                                    else:
+                                        result = result_data
                                 except json.JSONDecodeError:
                                     # JSON 解析失败，返回原始文本
                                     result = response.text if response.text else None
@@ -931,15 +943,19 @@ Begin your response now:
         except Exception as e:
             raise Exception(f"get_tool failed: {str(e)}") from e
 
-    async def get_tools(self) -> list:
-        """
-        选择方法
-        """
+    async def get_tools(self, tool_data: str = "") -> list:
+        """Select and return the appropriate LangChain tool list based on push mode."""
         _, tool_info = self.knowledgeTool
 
         tools = []
         # 根据tool_info.push的值选择不同系统提示词
         if tool_info.push == 1:
+            # If tool_data is already provided, the system prompt contains the
+            # pre-fetched result. Do NOT give the LLM a LangChain tool —
+            # it would call the tool, receive a ToolMessage, and ignore the
+            # pre-formatted list we placed in the system prompt.
+            if tool_data and tool_data.strip():
+                return tools
             if self.is_query_and_body_empty():
                 return tools
             else:
@@ -991,15 +1007,46 @@ Begin your response now:
         self.memory.push('system', system_prompt)
 
         self.logger.info(f"memory.get():{self.memory.get()}")
-        self.tools = await self.get_tools()
+        self.tools = await self.get_tools(tool_data)
 
         return self.llm.openai_create(self.tools, self.memory.get(), callback_handler)
 
 
     async def invoke_agent(self, agent, callback_handler):
-        # self.logger.info(f"invoke agent memory:{self.memory.get()}")
         try:
             await self.llm.openai_invoke(agent, self.memory.get(), callback_handler)
+            # LangGraph agents don't call on_agent_finish — inject batch analysis here,
+            # after all LLM tokens have been streamed but before core.py sends 'end'.
+            pending = getattr(self, '_pending_raw_items', None)
+            if pending:
+                self._pending_raw_items = None
+                total = len(pending)
+                batch_size = 5
+                await callback_handler.on_llm_new_token(
+                    f"\n\n---\n\n## Full Results ({total} items)\n\n"
+                )
+                system_prompt = (
+                    "You are presenting search result items clearly and concisely. "
+                    "For each item, extract and present the most important information as clean Markdown. "
+                    "Use **bold** for field names. Number each item. "
+                    "Do NOT add any preamble, summary, or conclusion — output only the formatted items."
+                )
+                for batch_start in range(0, total, batch_size):
+                    batch = pending[batch_start:batch_start + batch_size]
+                    batch_end = min(batch_start + batch_size, total)
+                    await callback_handler.on_llm_new_token(
+                        f"### Items {batch_start + 1}–{batch_end}\n\n"
+                    )
+                    batch_json = json.dumps(batch, ensure_ascii=False, indent=2)
+                    await self.llm.stream_simple(
+                        system_prompt=system_prompt,
+                        user_content=(
+                            f"Format and analyze these {len(batch)} search result items as readable Markdown:\n\n"
+                            f"{batch_json}"
+                        ),
+                        callback_handler=callback_handler,
+                    )
+                    await callback_handler.on_llm_new_token("\n\n")
         except Exception as e:
             raise e
 

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { queryPublicKnowledge, copyKnowledge } from '@/services/api'
 import { useI18n } from '@/lib/app-i18n'
+import Pagination from '@/components/app/Pagination'
 
 interface CommunityItem {
   id: number
@@ -28,7 +29,7 @@ export default function Community() {
   const load = useCallback(async () => {
     try {
       const res = await queryPublicKnowledge({ search: debouncedSearch, page, limit: PAGE_SIZE })
-      setItems(res.items || res.knowledge || [])
+      setItems(res.data || [])
       setTotal(res.total || 0)
     } catch (e) { console.error(e) }
   }, [debouncedSearch, page])
@@ -93,19 +94,7 @@ export default function Community() {
         )}
 
         {totalPages > 1 && (
-          <div className="pagination">
-            <button
-              className="pagination-btn"
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page === 1}
-            >‹</button>
-            <span className="pagination-info">{page} / {totalPages}</span>
-            <button
-              className="pagination-btn"
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={page === totalPages}
-            >›</button>
-          </div>
+          <Pagination page={page} totalPages={totalPages} onChange={setPage} />
         )}
       </div>
     </div>

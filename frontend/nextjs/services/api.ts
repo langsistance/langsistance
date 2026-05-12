@@ -41,18 +41,23 @@ async function get<T>(path: string, params: Record<string, string | number> = {}
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ApiResult = Promise<any>
 
-export const queryTools = (params: Record<string, string | number>): ApiResult => get('/query_tools', params)
+export const queryTools = (params: Record<string, string | number> = {}): ApiResult => {
+  const { page = 1, limit = 200, ...rest } = params
+  return get('/query_tools', { ...rest, offset: Number(page) - 1, limit })
+}
 export const createToolFromCustom = (body: unknown): ApiResult => post('/create_tool_from_custom', body)
 export const createToolFromOpenapi = (body: unknown): ApiResult => post('/create_tool_from_openapi', body)
 export const updateTool = (body: unknown): ApiResult => post('/update_tool', body)
 export const deleteTool = (body: unknown): ApiResult => post('/delete_tool', body)
 
-export const queryKnowledge = (params: Record<string, string | number>): ApiResult => get('/query_knowledge', params)
+export const queryKnowledge = ({ search = '', page = 1, limit = 10 }: { search?: string; page?: number; limit?: number } = {}): ApiResult =>
+  get('/query_knowledge', { query: search, offset: page - 1, limit })
 export const createKnowledge = (body: unknown): ApiResult => post('/create_knowledge', body)
 export const updateKnowledge = (body: unknown): ApiResult => post('/update_knowledge', body)
 export const deleteKnowledge = (body: unknown): ApiResult => post('/delete_knowledge', body)
 
-export const queryPublicKnowledge = (params: Record<string, string | number>): ApiResult => get('/query_public_knowledge', params)
+export const queryPublicKnowledge = ({ search = '', page = 1, limit = 10 }: { search?: string; page?: number; limit?: number } = {}): ApiResult =>
+  get('/query_public_knowledge', { query: search, offset: page - 1, limit })
 export const copyKnowledge = (body: unknown): ApiResult => post('/copy_knowledge', body)
 
 export const authorizeKnowledgeAccess = (body: unknown): ApiResult => post('/authorize_knowledge_access', body)

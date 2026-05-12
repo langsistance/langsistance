@@ -429,7 +429,7 @@ async def update_knowledge_record(request: KnowledgeUpdateRequest, http_request:
             connection.close()
 
 @router.get("/query_knowledge", response_model=KnowledgeQueryResponse)
-async def query_knowledge_records(http_request: Request, query: str, limit: int = 10, offset: int = 0):
+async def query_knowledge_records(http_request: Request, query: str = "", limit: int = 10, offset: int = 0):
     """
     查询知识记录接口
     """
@@ -612,7 +612,7 @@ async def query_knowledge_records(http_request: Request, query: str, limit: int 
             connection.close()
 
 @router.get("/query_public_knowledge", response_model=KnowledgeQueryResponse)
-async def query_public_knowledge(query: str, limit: int = 10, offset: int = 0):
+async def query_public_knowledge(query: str = "", limit: int = 10, offset: int = 0):
     """
     查询公开知识记录接口
     """
