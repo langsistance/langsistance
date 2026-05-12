@@ -18,6 +18,8 @@ interface KnowledgeItem {
   description: string
   tool_id: number | string
   public: number
+  title?: string
+  update_time?: string
 }
 
 interface Tool {
@@ -28,11 +30,12 @@ interface Tool {
   url?: string
 }
 
-function KnowledgeModal({ item, tools, onClose, onSave }: {
+function KnowledgeModal({ item, tools, onClose, onSave, onDelete }: {
   item: KnowledgeItem | null
   tools: Tool[]
   onClose: () => void
   onSave: (form: KnowledgeItem) => Promise<void>
+  onDelete: (id: number) => Promise<void>
 }) {
   const { t, lang } = useI18n()
   const [form, setForm] = useState<KnowledgeItem>(
@@ -134,6 +137,14 @@ function KnowledgeModal({ item, tools, onClose, onSave }: {
             )}
           </div>
           <div className="modal-footer">
+            {item && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ color: '#D32F2F', marginRight: 'auto' }}
+                onClick={() => onDelete(item.id!)}
+              >{t('common.delete')}</button>
+            )}
             <button type="button" className="btn btn-secondary" onClick={onClose}>{t('common.cancel')}</button>
             <button type="submit" className="btn btn-primary">{t('common.save')}</button>
           </div>
@@ -163,7 +174,13 @@ export default function Knowledge() {
     try {
       const res = await queryKnowledge({ search: debouncedSearch, page, limit: PAGE_SIZE })
       const data = res.data
-      setItems(Array.isArray(data) ? data : (data?.knowledge || []))
+      const knowledge: KnowledgeItem[] = Array.isArray(data) ? data : (data?.knowledge || [])
+      const toolsInResponse: Tool[] = Array.isArray(data) ? [] : (data?.tools || [])
+      const processed = knowledge.map((item) => ({
+        ...item,
+        title: toolsInResponse.find((t) => t.id === item.tool_id)?.title || '',
+      }))
+      setItems(processed)
       setTotal(res.total || 0)
     } catch (e) {
       console.error(e)
@@ -190,6 +207,7 @@ export default function Knowledge() {
   async function handleDelete(id: number) {
     if (!confirm(t('alerts.confirmDeleteKnowledge'))) return
     await deleteKnowledge({ id })
+    setModal(null)
     load()
   }
 
@@ -231,34 +249,19 @@ export default function Knowledge() {
         ) : (
           <div className="knowledge-list">
             {items.map((item) => (
-              <div key={item.id} className="knowledge-card">
+              <div key={item.id} className="knowledge-card" onClick={() => setModal(item)}>
                 <div className="knowledge-card-header">
-                  <div style={{ flex: 1 }}>
-                    <p className="knowledge-card-title">{item.question}</p>
-                  </div>
-                  <div className="knowledge-card-actions">
-                    <button
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => setModal(item)}
-                    >{t('common.edit')}</button>
-                    <button
-                      className="btn btn-secondary btn-sm"
-                      style={{ color: '#D32F2F' }}
-                      onClick={() => handleDelete(item.id!)}
-                    >{t('common.delete')}</button>
-                  </div>
+                  <div className="knowledge-card-title">{item.question}</div>
                 </div>
-                <p className="knowledge-card-content">{item.answer}</p>
-                {Number(item.tool_id) > 0 && (
+                <div className="knowledge-card-content">{item.answer}</div>
+                {item.title && (
                   <div className="knowledge-card-apis">
-                    <span className="knowledge-api-badge">
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
-                      </svg>
-                      {tools.find((tool) => tool.id === Number(item.tool_id))?.title || `Tool #${item.tool_id}`}
-                    </span>
+                    <span className="knowledge-api-badge">{item.title}</span>
                   </div>
                 )}
+                <div className="knowledge-card-footer">
+                  <span>📅 {item.update_time ? new Date(item.update_time).toLocaleDateString('zh-CN') : ''}</span>
+                </div>
               </div>
             ))}
           </div>
@@ -275,6 +278,7 @@ export default function Knowledge() {
           tools={tools}
           onClose={() => setModal(null)}
           onSave={handleSave}
+          onDelete={handleDelete}
         />
       )}
     </div>
