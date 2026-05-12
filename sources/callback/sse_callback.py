@@ -8,6 +8,7 @@ class SSECallbackHandler(AsyncCallbackHandler):
     def __init__(self, queue: asyncio.Queue):
         super().__init__()
         self.queue = queue
+        self.pending_injections: list[str] = []
 
     async def on_llm_new_token(self, token: str, **kwargs) -> None:
         """每个 token 生成时触发 - 最重要！"""
@@ -73,6 +74,10 @@ class SSECallbackHandler(AsyncCallbackHandler):
         # })
 
     async def on_agent_finish(self, finish, **kwargs):
+        for injection in self.pending_injections:
+            if injection:
+                await self.queue.put({'type': 'token', 'content': injection})
+        self.pending_injections.clear()
         await self.queue.put({
             'type': 'end',
             'content': ''

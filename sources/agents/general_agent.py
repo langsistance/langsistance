@@ -953,12 +953,29 @@ Begin your response now:
                                     if isinstance(result_data, (dict, list)):
                                         formatted, list_count = self._preformat_result(result_data)
                                         if list_count > 0:
-                                            result = (
-                                                f"⚠️ This result contains exactly {list_count} items. "
-                                                f"ALL {list_count} items are listed below. "
-                                                f"Your response MUST include every single item "
-                                                f"without omission or truncation:\n\n{formatted}"
-                                            )
+                                            # Inject the full list directly into the SSE stream
+                                            # after the LLM's own response, bypassing LLM summarization.
+                                            cb = getattr(self, '_callback_handler', None)
+                                            if cb is not None and hasattr(cb, 'pending_injections'):
+                                                injection = (
+                                                    f"\n\n---\n\n"
+                                                    f"## 完整数据 / Full Results ({list_count} items)\n\n"
+                                                    f"{formatted}"
+                                                )
+                                                cb.pending_injections.append(injection)
+                                                result = (
+                                                    f"The query returned {list_count} items. "
+                                                    f"Please write a brief 2–3 sentence summary of what was found. "
+                                                    f"The complete item list will be appended automatically — "
+                                                    f"do NOT enumerate the items yourself."
+                                                )
+                                            else:
+                                                result = (
+                                                    f"⚠️ This result contains exactly {list_count} items. "
+                                                    f"ALL {list_count} items are listed below. "
+                                                    f"Your response MUST include every single item "
+                                                    f"without omission or truncation:\n\n{formatted}"
+                                                )
                                         else:
                                             result = formatted
                                     else:
@@ -1067,6 +1084,7 @@ Begin your response now:
         return answer, reasoning
 
     async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler, push_filter=None):
+        self._callback_handler = callback_handler
         #self.knowledgeTool = get_knowledge_tool(user_id,  prompt)
         self.knowledgeTool = await asyncio.to_thread(get_knowledge_tool, user_id, prompt, push_filter=push_filter)
         user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
