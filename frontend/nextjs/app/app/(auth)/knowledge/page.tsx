@@ -9,6 +9,7 @@ import {
   queryTools,
 } from '@/services/api'
 import { useI18n } from '@/lib/app-i18n'
+import Pagination from '@/components/app/Pagination'
 
 interface KnowledgeItem {
   id?: number
@@ -161,7 +162,8 @@ export default function Knowledge() {
   const load = useCallback(async () => {
     try {
       const res = await queryKnowledge({ search: debouncedSearch, page, limit: PAGE_SIZE })
-      setItems(res.items || res.knowledge || [])
+      const data = res.data
+      setItems(Array.isArray(data) ? data : (data?.knowledge || []))
       setTotal(res.total || 0)
     } catch (e) {
       console.error(e)
@@ -171,8 +173,8 @@ export default function Knowledge() {
   useEffect(() => { load() }, [load])
 
   useEffect(() => {
-    queryTools({ push: 2 })
-      .then((res) => setTools((res.tools || res.items || []).filter((tool: Tool) => tool.push === 2)))
+    queryTools({})
+      .then((res) => setTools((res.data || []).filter((tool: Tool) => tool.push === 2)))
       .catch(() => {})
   }, [])
 
@@ -263,19 +265,7 @@ export default function Knowledge() {
         )}
 
         {totalPages > 1 && (
-          <div className="pagination">
-            <button
-              className="pagination-btn"
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page === 1}
-            >‹</button>
-            <span className="pagination-info">{page} / {totalPages}</span>
-            <button
-              className="pagination-btn"
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={page === totalPages}
-            >›</button>
-          </div>
+          <Pagination page={page} totalPages={totalPages} onChange={setPage} />
         )}
       </div>
 

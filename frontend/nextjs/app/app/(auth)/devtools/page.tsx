@@ -31,7 +31,7 @@ export default function DevTools() {
   async function loadTools() {
     try {
       const res = await queryTools({})
-      setTools((res.tools || res.items || []).filter((tool: Tool) => tool.push === 2))
+      setTools((res.data || []).filter((tool: Tool) => tool.push === 2))
     } catch (e) { console.error(e) }
   }
 
