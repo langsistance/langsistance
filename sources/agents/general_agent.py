@@ -147,48 +147,6 @@ class GeneralAgent(Agent):
                 blocks.append(f"- **[{i}]** {item}")
         return "\n".join(blocks)
 
-    def _format_batch_for_llm(self, batch: list, start_idx: int) -> str:
-        """Format a batch of raw items as structured text for LLM input."""
-        parts = []
-        for i, item in enumerate(batch, start_idx + 1):
-            if isinstance(item, dict):
-                lines = [f"Item {i}:"]
-                for k, v in item.items():
-                    if v is None or v == "" or v == {} or v == []:
-                        continue
-                    if isinstance(v, dict):
-                        flat = self._flatten_dict(v)
-                        if flat:
-                            lines.append(f"  {k}: {flat}")
-                    elif isinstance(v, list):
-                        if v and not isinstance(v[0], (dict, list)):
-                            lines.append(f"  {k}: {', '.join(str(x) for x in v)}")
-                    else:
-                        lines.append(f"  {k}: {v}")
-                parts.append("\n".join(lines))
-            else:
-                parts.append(f"Item {i}: {item}")
-        return "\n\n".join(parts)
-
-
-        """Pre-format tool result data into Markdown.
-
-        When the data is (or contains) a list, every item is rendered as a
-        bullet line so the LLM can copy it verbatim rather than regenerate it.
-        Returns (formatted_markdown, list_item_count).
-        list_item_count == 0 means no list was found.
-        """
-        if isinstance(data, list):
-            return self._render_list_as_md(None, data), len(data)
-
-        if isinstance(data, dict):
-            for key, val in data.items():
-                if isinstance(val, list) and len(val) > 0:
-                    meta = {k: v for k, v in data.items() if k != key}
-                    meta_str = (json.dumps(meta, ensure_ascii=False, indent=2) + "\n\n") if meta else ""
-                    return meta_str + self._render_list_as_md(key, val), len(val)
-
-        return json.dumps(data, ensure_ascii=False, indent=2), 0
 
     def _get_markdown_formatting_guide(self) -> str:
         """Return a Markdown formatting guide injected into direct-mode system prompts."""
@@ -1079,13 +1037,12 @@ Begin your response now:
                     await callback_handler.on_llm_new_token(
                         f"### Items {batch_start + 1}–{batch_end}\n\n"
                     )
-                    self.logger.info(f"batch_text:{batch}")
-                    batch_text = self._format_batch_for_llm(batch, batch_start)
+                    batch_json = json.dumps(batch, ensure_ascii=False, indent=2)
                     await self.llm.stream_simple(
                         system_prompt=system_prompt,
                         user_content=(
                             f"Format and analyze these {len(batch)} search result items as readable Markdown:\n\n"
-                            f"{batch_text}"
+                            f"{batch_json}"
                         ),
                         callback_handler=callback_handler,
                     )
