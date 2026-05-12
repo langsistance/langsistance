@@ -9,7 +9,8 @@ interface CommunityItem {
   id: number
   question: string
   answer: string
-  user_email?: string
+  update_time?: string
+  extra_info?: { email?: string }
 }
 
 export default function Community() {
@@ -74,20 +75,29 @@ export default function Community() {
         ) : (
           <div className="knowledge-list">
             {items.map((item) => (
-              <div key={item.id} className="community-card">
-                <div className="community-card-header">
-                  <p className="knowledge-card-title" style={{ flex: 1 }}>{item.question}</p>
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => handleCopy(item.id)}
-                  >{t('common.copy')}</button>
+              <div key={item.id} className="share-card">
+                <div className="share-card-header">
+                  <div className="share-card-title">{item.question}</div>
                 </div>
-                <p className="knowledge-card-content">{item.answer}</p>
-                {item.user_email && (
-                  <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-                    by {item.user_email}
-                  </p>
+                {item.extra_info?.email && (
+                  <div className="share-card-info">
+                    <span>📧 {item.extra_info.email}</span>
+                  </div>
                 )}
+                {item.answer && (
+                  <div className="share-card-message">
+                    &ldquo;{item.answer}&rdquo;
+                  </div>
+                )}
+                <div className="share-card-meta">
+                  <span>📅 {item.update_time ? new Date(item.update_time).toLocaleDateString('zh-CN') : ''}</span>
+                </div>
+                <div className="share-card-actions">
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={() => handleCopy(item.id)}
+                  >{t('share.downloadKnowledge')}</button>
+                </div>
               </div>
             ))}
           </div>
