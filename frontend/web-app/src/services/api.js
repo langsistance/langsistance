@@ -32,7 +32,7 @@ async function get(path, params = {}) {
 
 // Tools
 export const queryTools = (params = {}) => {
-  const { page = 1, limit = 200, ...rest } = params
+  const { page = 1, limit = 100, ...rest } = params
   return get('/query_tools', { ...rest, offset: page - 1, limit })
 }
 export const createToolFromCustom = (body) => post('/create_tool_from_custom', body)

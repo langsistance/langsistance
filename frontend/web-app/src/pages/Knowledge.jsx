@@ -6,15 +6,11 @@ import {
   deleteKnowledge,
   queryTools,
 } from '../services/api'
-import { useI18n } from '../i18n'
 import Pagination from '../components/Pagination'
 
-function KnowledgeModal({ item, tools, onClose, onSave }) {
-  const { t, lang } = useI18n()
+function KnowledgeModal({ item, tools, onClose, onSave, onDelete }) {
   const [form, setForm] = useState(
-    item
-      ? { ...item }
-      : { question: '', answer: '', description: '', tool_id: '', public: 0 }
+    item ? { ...item } : { question: '', answer: '', description: '', tool_id: '', public: 0 }
   )
   const [saveError, setSaveError] = useState('')
 
@@ -29,7 +25,7 @@ function KnowledgeModal({ item, tools, onClose, onSave }) {
       await onSave(form)
       onClose()
     } catch (err) {
-      setSaveError(err.message || (lang === 'en' ? 'Save failed' : '保存失败'))
+      setSaveError(err.message || '保存失败')
     }
   }
 
@@ -38,7 +34,7 @@ function KnowledgeModal({ item, tools, onClose, onSave }) {
       <div className="modal-overlay" onClick={onClose} />
       <div className="modal-content knowledge-editor-modal">
         <div className="modal-header">
-          <h2>{item ? t('knowledge.edit') : t('knowledge.create')}</h2>
+          <h2>{item ? '编辑知识库' : '创建知识库'}</h2>
           <button className="modal-close-btn" onClick={onClose}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <line x1="18" y1="6" x2="6" y2="18" />
@@ -49,22 +45,20 @@ function KnowledgeModal({ item, tools, onClose, onSave }) {
         <form onSubmit={submit}>
           <div className="modal-body">
             <div className="form-group">
-              <label>{t('modals.knowledgeCreate.question')}</label>
+              <label>问题</label>
               <input
-                id="knowledgeQuestion"
                 className="form-input"
-                placeholder={t('modals.knowledgeCreate.questionPlaceholder')}
+                placeholder="问题（AI 匹配时使用）"
                 value={form.question}
                 onChange={(e) => set('question', e.target.value)}
                 required
               />
             </div>
             <div className="form-group">
-              <label>{t('modals.knowledgeCreate.answer')}</label>
+              <label>答案</label>
               <textarea
-                id="knowledgeAnswer"
                 className="form-textarea"
-                placeholder={t('modals.knowledgeCreate.answerPlaceholder')}
+                placeholder="答案 / 工具调用说明"
                 value={form.answer}
                 onChange={(e) => set('answer', e.target.value)}
                 required
@@ -72,26 +66,25 @@ function KnowledgeModal({ item, tools, onClose, onSave }) {
               />
             </div>
             <div className="form-group">
-              <label>{lang === 'en' ? 'Description (optional)' : '描述（可选）'}</label>
+              <label>描述（可选）</label>
               <textarea
                 className="form-textarea"
-                placeholder={lang === 'en' ? 'Additional notes' : '补充说明'}
+                placeholder="补充说明"
                 value={form.description}
                 onChange={(e) => set('description', e.target.value)}
                 rows={2}
               />
             </div>
             <div className="form-group">
-              <label>{lang === 'en' ? 'Associated Tool' : '关联工具'}</label>
+              <label>关联工具</label>
               <select
-                id="knowledgeToolSelect"
                 className="form-input"
-                value={form.tool_id}
+                value={String(form.tool_id)}
                 onChange={(e) => set('tool_id', e.target.value)}
               >
-                <option value="">{lang === 'en' ? 'No linked tool' : '无关联工具'}</option>
-                {tools.map((t) => (
-                  <option key={t.id} value={t.id}>{t.title}</option>
+                <option value="">无关联工具</option>
+                {tools.map((tool) => (
+                  <option key={tool.id} value={tool.id}>{tool.title}</option>
                 ))}
               </select>
             </div>
@@ -102,16 +95,22 @@ function KnowledgeModal({ item, tools, onClose, onSave }) {
                   checked={!!form.public}
                   onChange={(e) => set('public', e.target.checked ? 1 : 0)}
                 />
-                {t('modals.knowledgeCreate.makePublic')}
+                公开（在社区可见）
               </label>
             </div>
-            {saveError && (
-              <p style={{ color: '#D32F2F', fontSize: 14, marginTop: -8 }}>{saveError}</p>
-            )}
+            {saveError && <p style={{ color: '#D32F2F', fontSize: 14, marginTop: -8 }}>{saveError}</p>}
           </div>
           <div className="modal-footer">
-            <button type="button" className="btn btn-secondary" onClick={onClose}>{t('common.cancel')}</button>
-            <button type="submit" className="btn btn-primary">{t('common.save')}</button>
+            {item && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ color: '#D32F2F', marginRight: 'auto' }}
+                onClick={() => onDelete(item.id)}
+              >删除</button>
+            )}
+            <button type="button" className="btn btn-secondary" onClick={onClose}>取消</button>
+            <button type="submit" className="btn btn-primary">保存</button>
           </div>
         </form>
       </div>
@@ -120,7 +119,6 @@ function KnowledgeModal({ item, tools, onClose, onSave }) {
 }
 
 export default function Knowledge() {
-  const { t } = useI18n()
   const [items, setItems] = useState([])
   const [tools, setTools] = useState([])
   const [search, setSearch] = useState('')
@@ -139,11 +137,15 @@ export default function Knowledge() {
     try {
       const res = await queryKnowledge({ search: debouncedSearch, page, limit: PAGE_SIZE })
       const data = res.data
-      setItems(Array.isArray(data) ? data : (data?.knowledge || []))
+      const knowledge = Array.isArray(data) ? data : (data?.knowledge || [])
+      const toolsInResponse = Array.isArray(data) ? [] : (data?.tools || [])
+      const processed = knowledge.map((item) => ({
+        ...item,
+        title: toolsInResponse.find((t) => t.id === item.tool_id)?.title || '',
+      }))
+      setItems(processed)
       setTotal(res.total || 0)
-    } catch (e) {
-      console.error(e)
-    }
+    } catch (e) { console.error(e) }
   }, [debouncedSearch, page])
 
   useEffect(() => { load() }, [load])
@@ -164,8 +166,9 @@ export default function Knowledge() {
   }
 
   async function handleDelete(id) {
-    if (!confirm(t('alerts.confirmDeleteKnowledge'))) return
+    if (!confirm('确认删除？')) return
     await deleteKnowledge({ id })
+    setModal(null)
     load()
   }
 
@@ -176,15 +179,15 @@ export default function Knowledge() {
       <div className="page-header">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
-            <h1>{t('knowledge.title')}</h1>
-            <p>{t('knowledge.description')}</p>
+            <h1>知识库</h1>
+            <p>管理 API 文档和使用说明</p>
           </div>
           <button className="btn btn-primary" onClick={() => setModal('create')}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <line x1="12" y1="5" x2="12" y2="19" />
               <line x1="5" y1="12" x2="19" y2="12" />
             </svg>
-            {t('knowledge.create')}
+            创建知识库
           </button>
         </div>
       </div>
@@ -194,7 +197,7 @@ export default function Knowledge() {
           <input
             type="text"
             className="knowledge-search-input"
-            placeholder={t('knowledge.search')}
+            placeholder="搜索知识库..."
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(1) }}
           />
@@ -202,47 +205,30 @@ export default function Knowledge() {
 
         {items.length === 0 ? (
           <div className="empty-state">
-            <p>{t('knowledge.noKnowledge')}</p>
+            <p>暂无知识库，点击右上角创建</p>
           </div>
         ) : (
           <div className="knowledge-list">
             {items.map((item) => (
-              <div key={item.id} className="knowledge-card">
+              <div key={item.id} className="knowledge-card" onClick={() => setModal(item)}>
                 <div className="knowledge-card-header">
-                  <div style={{ flex: 1 }}>
-                    <p className="knowledge-card-title">{item.question}</p>
-                  </div>
-                  <div className="knowledge-card-actions">
-                    <button
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => setModal(item)}
-                    >{t('common.edit')}</button>
-                    <button
-                      className="btn btn-secondary btn-sm"
-                      style={{ color: '#D32F2F' }}
-                      onClick={() => handleDelete(item.id)}
-                    >{t('common.delete')}</button>
-                  </div>
+                  <div className="knowledge-card-title">{item.question}</div>
                 </div>
-                <p className="knowledge-card-content">{item.answer}</p>
-                {item.tool_id > 0 && (
+                <div className="knowledge-card-content">{item.answer}</div>
+                {item.title && (
                   <div className="knowledge-card-apis">
-                    <span className="knowledge-api-badge">
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
-                      </svg>
-                      {tools.find((t) => t.id === item.tool_id)?.title || `Tool #${item.tool_id}`}
-                    </span>
+                    <span className="knowledge-api-badge">{item.title}</span>
                   </div>
                 )}
+                <div className="knowledge-card-footer">
+                  <span>📅 {item.update_time ? new Date(item.update_time).toLocaleDateString('zh-CN') : ''}</span>
+                </div>
               </div>
             ))}
           </div>
         )}
 
-        {totalPages > 1 && (
-          <Pagination page={page} totalPages={totalPages} onChange={setPage} />
-        )}
+        <Pagination page={page} totalPages={totalPages} onChange={setPage} />
       </div>
 
       {modal && (
@@ -251,6 +237,7 @@ export default function Knowledge() {
           tools={tools}
           onClose={() => setModal(null)}
           onSave={handleSave}
+          onDelete={handleDelete}
         />
       )}
     </div>

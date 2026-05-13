@@ -1,10 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { queryPublicKnowledge, copyKnowledge } from '../services/api'
-import { useI18n } from '../i18n'
 import Pagination from '../components/Pagination'
 
 export default function Community() {
-  const { t } = useI18n()
   const [items, setItems] = useState([])
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
@@ -30,9 +28,9 @@ export default function Community() {
   async function handleCopy(id) {
     try {
       await copyKnowledge({ knowledge_id: id })
-      alert(t('community.copySuccess'))
+      alert('已复制到我的知识库')
     } catch (e) {
-      alert(t('community.copyFailed') + ': ' + e.message)
+      alert('复制失败：' + e.message)
     }
   }
 
@@ -42,8 +40,8 @@ export default function Community() {
     <div className="page active">
       <div className="page-header">
         <div>
-          <h1>{t('community.title')}</h1>
-          <p>{t('community.description')}</p>
+          <h1>社区</h1>
+          <p>探索其他用户分享的知识库</p>
         </div>
       </div>
 
@@ -52,7 +50,7 @@ export default function Community() {
           <input
             type="text"
             className="knowledge-search-input"
-            placeholder={t('community.searchTip')}
+            placeholder="搜索社区知识库..."
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(1) }}
           />
@@ -60,33 +58,40 @@ export default function Community() {
 
         {items.length === 0 ? (
           <div className="empty-state">
-            <p>{t('community.noData')}</p>
+            <p>暂无公开知识库</p>
           </div>
         ) : (
           <div className="knowledge-list">
             {items.map((item) => (
-              <div key={item.id} className="community-card">
-                <div className="community-card-header">
-                  <p className="knowledge-card-title" style={{ flex: 1 }}>{item.question}</p>
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => handleCopy(item.id)}
-                  >{t('common.copy')}</button>
+              <div key={item.id} className="share-card">
+                <div className="share-card-header">
+                  <div className="share-card-title">{item.question}</div>
                 </div>
-                <p className="knowledge-card-content">{item.answer}</p>
-                {item.user_email && (
-                  <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-                    by {item.user_email}
-                  </p>
+                {item.extra_info?.email && (
+                  <div className="share-card-info">
+                    <span>📧 {item.extra_info.email}</span>
+                  </div>
                 )}
+                {item.answer && (
+                  <div className="share-card-message">
+                    &ldquo;{item.answer}&rdquo;
+                  </div>
+                )}
+                <div className="share-card-meta">
+                  <span>📅 {item.update_time ? new Date(item.update_time).toLocaleDateString('zh-CN') : ''}</span>
+                </div>
+                <div className="share-card-actions">
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={() => handleCopy(item.id)}
+                  >下载知识库</button>
+                </div>
               </div>
             ))}
           </div>
         )}
 
-        {totalPages > 1 && (
-          <Pagination page={page} totalPages={totalPages} onChange={setPage} />
-        )}
+        <Pagination page={page} totalPages={totalPages} onChange={setPage} />
       </div>
     </div>
   )
