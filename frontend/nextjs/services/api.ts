@@ -42,7 +42,7 @@ async function get<T>(path: string, params: Record<string, string | number> = {}
 type ApiResult = Promise<any>
 
 export const queryTools = (params: Record<string, string | number> = {}): ApiResult => {
-  const { page = 1, limit = 200, ...rest } = params
+  const { page = 1, limit = 100, ...rest } = params
   return get('/query_tools', { ...rest, offset: Number(page) - 1, limit })
 }
 export const createToolFromCustom = (body: unknown): ApiResult => post('/create_tool_from_custom', body)
