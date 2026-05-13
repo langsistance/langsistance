@@ -98,7 +98,7 @@ function ToolModal({ toolId, onClose, onSaved, onDeleted }) {
 
     setSaving(true)
     try {
-      await updateTool({ toolId: tool.id, title: form.title, description: form.description, url: form.url, params })
+      await updateTool({ toolId: tool.id, title: form.title, description: form.description, url: form.url, params: JSON.stringify(params) })
       onSaved()
     } catch (e) {
       setError('保存失败：' + e.message)
@@ -110,7 +110,7 @@ function ToolModal({ toolId, onClose, onSaved, onDeleted }) {
   async function handleDelete() {
     if (!confirm('确认删除该 API？')) return
     try {
-      await deleteTool({ id: tool.id })
+      await deleteTool({ toolId: tool.id })
       onDeleted()
     } catch (e) {
       setError('删除失败：' + e.message)
@@ -120,7 +120,7 @@ function ToolModal({ toolId, onClose, onSaved, onDeleted }) {
   return (
     <div className="modal">
       <div className="modal-overlay" onClick={onClose} />
-      <div className="modal-content">
+      <div className="modal-content" style={{ maxWidth: 800 }}>
         <div className="modal-header">
           <h2>编辑工具</h2>
           <button className="modal-close-btn" onClick={onClose}>
@@ -174,9 +174,9 @@ function ToolModal({ toolId, onClose, onSaved, onDeleted }) {
               {error && <p style={{ color: '#D32F2F', fontSize: 14, marginTop: -8 }}>{error}</p>}
             </div>
             <div className="modal-footer">
-              <button type="button" className="btn btn-secondary" style={{ color: '#D32F2F', marginRight: 'auto' }} onClick={handleDelete}>删除</button>
-              <button type="button" className="btn btn-secondary" onClick={onClose}>取消</button>
-              <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? '保存中...' : '保存'}</button>
+              <button type="button" className="btn btn-secondary" style={{ color: '#D32F2F' }} onClick={handleDelete}>删除工具</button>
+              <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? '保存中...' : '保存工具'}</button>
+              <button type="button" className="btn btn-secondary" onClick={onClose}>关闭</button>
             </div>
           </form>
         )}
