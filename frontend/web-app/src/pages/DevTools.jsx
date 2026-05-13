@@ -61,8 +61,8 @@ export default function DevTools() {
         <p>导入自定义 API 工具，与知识库结合使用</p>
       </div>
 
-      <div className="page-content">
-        <div className="browser-capture-layout" style={{ height: 'auto', minHeight: 500 }}>
+      <div className="page-content" style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <div className="browser-capture-layout" style={{ flex: 1, minHeight: 0 }}>
           {/* Left panel: API list */}
           <div className="browser-capture-sidebar">
             <div className="sidebar-section" style={{ flex: 1 }}>
@@ -92,7 +92,7 @@ export default function DevTools() {
 
           {/* Right panel: Paste raw */}
           <div className="browser-capture-main">
-            <div className="import-method-card" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <div className="import-method-card" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
               <h3>粘贴 OpenAPI 规范内容</h3>
               <p style={{ color: 'var(--color-text-secondary)', fontSize: 13, marginBottom: 16 }}>
                 直接粘贴自定义 JSON 或 OpenAPI/Swagger 规范
