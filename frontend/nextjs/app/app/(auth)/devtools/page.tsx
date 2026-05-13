@@ -165,8 +165,8 @@ function ToolModal({ toolId, onClose, onSaved, onDeleted }: {
         ) : !form ? (
           <div className="modal-body" style={{ padding: 32, textAlign: 'center', color: '#D32F2F' }}>{error || t('tools.noTools')}</div>
         ) : (
-          <form onSubmit={handleSave}>
-            <div className="modal-body">
+          <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+            <div className="modal-body" style={{ flex: 1, overflowY: 'auto' }}>
               <div className="form-group">
                 <label>{t('tools.name')}</label>
                 <input className="form-input" value={form.title} onChange={(e) => set('title', e.target.value)} required />
