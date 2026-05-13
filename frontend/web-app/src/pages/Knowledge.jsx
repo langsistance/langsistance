@@ -158,16 +158,33 @@ export default function Knowledge() {
 
   async function handleSave(form) {
     if (form.id) {
-      await updateKnowledge(form)
+      await updateKnowledge({
+        knowledgeId: form.id,
+        question: form.question,
+        description: form.description,
+        answer: form.answer,
+        public: form.public,
+        modelName: form.model_name,
+        toolId: form.tool_id ? Number(form.tool_id) : 0,
+        params: form.params || '',
+      })
     } else {
-      await createKnowledge(form)
+      await createKnowledge({
+        question: form.question,
+        answer: form.answer,
+        description: form.description,
+        public: form.public || 0,
+        toolId: form.tool_id ? Number(form.tool_id) : 0,
+        params: form.params || '',
+        modelName: form.model_name,
+      })
     }
     load()
   }
 
   async function handleDelete(id) {
     if (!confirm('确认删除？')) return
-    await deleteKnowledge({ id })
+    await deleteKnowledge({ knowledgeId: id })
     setModal(null)
     load()
   }
