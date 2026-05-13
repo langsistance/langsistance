@@ -73,8 +73,8 @@ export default function DevTools() {
         <p>{t('developer.description')}</p>
       </div>
 
-      <div className="page-content">
-        <div className="browser-capture-layout" style={{ height: 'auto', minHeight: 500 }}>
+      <div className="page-content" style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <div className="browser-capture-layout" style={{ flex: 1, minHeight: 0 }}>
           <div className="browser-capture-sidebar">
             <div className="sidebar-section" style={{ flex: 1 }}>
               <div className="sidebar-header">
@@ -102,7 +102,7 @@ export default function DevTools() {
           </div>
 
           <div className="browser-capture-main">
-            <div className="import-method-card" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <div className="import-method-card" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
               <h3>{t('developer.pasteOpenApi')}</h3>
               <p style={{ color: 'var(--color-text-secondary)', fontSize: 13, marginBottom: 16 }}>
                 {t('developer.pasteOpenApiDesc')}
