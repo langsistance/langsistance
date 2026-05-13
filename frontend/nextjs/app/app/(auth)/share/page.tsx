@@ -10,6 +10,9 @@ import {
   queryKnowledge,
 } from '@/services/api'
 import { useI18n } from '@/lib/app-i18n'
+import Pagination from '@/components/app/Pagination'
+
+const PAGE_SIZE = 10
 
 interface ExtraInfo {
   to_user_email?: string
@@ -135,44 +138,61 @@ export default function Share() {
   const { t, lang } = useI18n()
   const [tab, setTab] = useState('sent')
   const [sent, setSent] = useState<ShareItem[]>([])
+  const [sentPage, setSentPage] = useState(1)
+  const [sentTotal, setSentTotal] = useState(0)
   const [received, setReceived] = useState<ShareItem[]>([])
+  const [receivedPage, setReceivedPage] = useState(1)
+  const [receivedTotal, setReceivedTotal] = useState(0)
   const [showModal, setShowModal] = useState(false)
 
-  const loadSent = useCallback(async () => {
+  const loadSent = useCallback(async (page = 1) => {
     try {
-      const res = await getUserSharedKnowledge({})
+      const res = await getUserSharedKnowledge({ limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE })
       setSent(res.data || [])
+      setSentTotal(res.total || 0)
     } catch (e) { console.error(e) }
   }, [])
 
-  const loadReceived = useCallback(async () => {
+  const loadReceived = useCallback(async (page = 1) => {
     try {
-      const res = await queryKnowledgeShares({})
+      const res = await queryKnowledgeShares({ limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE })
       setReceived(res.data || [])
+      setReceivedTotal(res.total || 0)
     } catch (e) { console.error(e) }
   }, [])
 
-  useEffect(() => { loadSent(); loadReceived() }, [loadSent, loadReceived])
+  useEffect(() => { loadSent(1); loadReceived(1) }, [loadSent, loadReceived])
+
+  function handleSentPageChange(p: number) {
+    setSentPage(p)
+    loadSent(p)
+  }
+
+  function handleReceivedPageChange(p: number) {
+    setReceivedPage(p)
+    loadReceived(p)
+  }
 
   async function handleCreate({ email, knowledgeIds }: { email: string; knowledgeIds: number[] }) {
     for (const knowledgeId of knowledgeIds) {
       await authorizeKnowledgeAccess({ knowledgeId, email })
     }
-    loadSent()
+    setSentPage(1)
+    loadSent(1)
   }
 
   async function handleCancel(shareId: number) {
     if (!confirm(t('confirmations.cancelShare'))) return
     try {
       await cancelKnowledgeShare({ share_id: shareId })
-      loadSent()
+      loadSent(sentPage)
     } catch (e) { alert((e as Error).message) }
   }
 
   async function handleAccept(shareId: number) {
     try {
       await handleKnowledgeShare({ share_id: shareId, action: 'accept' })
-      loadReceived()
+      loadReceived(receivedPage)
     } catch (e) { alert((e as Error).message) }
   }
 
@@ -180,11 +200,9 @@ export default function Share() {
     if (!confirm(t('confirmations.refuseShare'))) return
     try {
       await handleKnowledgeShare({ share_id: shareId, action: 'reject' })
-      loadReceived()
+      loadReceived(receivedPage)
     } catch (e) { alert((e as Error).message) }
   }
-
-  const list = tab === 'sent' ? sent : received
 
   const statusText = (status: number | undefined) => {
     if (status === 1) return t('common.pending')
@@ -193,6 +211,9 @@ export default function Share() {
     if (status === 4) return lang === 'en' ? 'Cancelled' : '已撤销'
     return ''
   }
+
+  const sentTotalPages = Math.ceil(sentTotal / PAGE_SIZE)
+  const receivedTotalPages = Math.ceil(receivedTotal / PAGE_SIZE)
 
   return (
     <div className="page active">
@@ -223,57 +244,93 @@ export default function Share() {
         </div>
 
         <div style={{ marginTop: 24 }}>
-          {list.length === 0 ? (
-            <div className="empty-state">
-              <p>{tab === 'sent' ? t('share.noSharedDesc') : t('share.noReceived')}</p>
-            </div>
-          ) : (
-            <div className="share-list">
-              {list.map((share, i) => {
-                const info = share.extra_info || {}
-                const statusCls = STATUS_CLASS[info.status ?? 0] || 'pending'
-                const email = tab === 'sent' ? info.to_user_email : info.from_user_email
-                const date = info.share_update_time
-                  ? new Date(info.share_update_time).toLocaleDateString(lang === 'en' ? 'en-US' : 'zh-CN')
-                  : ''
-                return (
-                  <div key={info.share_id ?? i} className="share-card">
-                    <div className="share-card-header">
-                      <div className="share-card-title">{share.question}</div>
-                      <span className={`share-card-status ${statusCls}`}>{statusText(info.status)}</span>
-                    </div>
-                    {email && (
-                      <div className="share-card-info">
-                        <span>📧 {email}</span>
+          {tab === 'sent' && (
+            <>
+              {sent.length === 0 ? (
+                <div className="empty-state"><p>{t('share.noSharedDesc')}</p></div>
+              ) : (
+                <div className="knowledge-list">
+                  {sent.map((share, i) => {
+                    const info = share.extra_info || {}
+                    const statusCls = STATUS_CLASS[info.status ?? 0] || 'pending'
+                    const date = info.share_update_time
+                      ? new Date(info.share_update_time).toLocaleDateString(lang === 'en' ? 'en-US' : 'zh-CN')
+                      : ''
+                    return (
+                      <div key={info.share_id ?? i} className="share-card">
+                        <div className="share-card-header">
+                          <div className="share-card-title">{share.question}</div>
+                          <span className={`share-card-status ${statusCls}`}>{statusText(info.status)}</span>
+                        </div>
+                        {info.to_user_email && (
+                          <div className="share-card-info"><span>📧 {info.to_user_email}</span></div>
+                        )}
+                        {share.answer && (
+                          <div className="share-card-message">&ldquo;{share.answer}&rdquo;</div>
+                        )}
+                        {date && (
+                          <div className="share-card-meta"><span>📅 {date}</span></div>
+                        )}
+                        <div className="share-card-actions">
+                          {info.status === 1 && (
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              style={{ color: '#D32F2F' }}
+                              onClick={() => handleCancel(info.share_id!)}
+                            >{t('share.unshare')}</button>
+                          )}
+                        </div>
                       </div>
-                    )}
-                    {share.answer && (
-                      <div className="share-card-message">&ldquo;{share.answer}&rdquo;</div>
-                    )}
-                    {date && (
-                      <div className="share-card-meta">
-                        <span>📅 {date}</span>
+                    )
+                  })}
+                </div>
+              )}
+              <Pagination page={sentPage} totalPages={sentTotalPages} onChange={handleSentPageChange} />
+            </>
+          )}
+
+          {tab === 'received' && (
+            <>
+              {received.length === 0 ? (
+                <div className="empty-state"><p>{t('share.noReceived')}</p></div>
+              ) : (
+                <div className="knowledge-list">
+                  {received.map((share, i) => {
+                    const info = share.extra_info || {}
+                    const statusCls = STATUS_CLASS[info.status ?? 0] || 'pending'
+                    const date = info.share_update_time
+                      ? new Date(info.share_update_time).toLocaleDateString(lang === 'en' ? 'en-US' : 'zh-CN')
+                      : ''
+                    return (
+                      <div key={info.share_id ?? i} className="share-card">
+                        <div className="share-card-header">
+                          <div className="share-card-title">{share.question}</div>
+                          <span className={`share-card-status ${statusCls}`}>{statusText(info.status)}</span>
+                        </div>
+                        {info.from_user_email && (
+                          <div className="share-card-info"><span>📧 {info.from_user_email}</span></div>
+                        )}
+                        {share.answer && (
+                          <div className="share-card-message">&ldquo;{share.answer}&rdquo;</div>
+                        )}
+                        {date && (
+                          <div className="share-card-meta"><span>📅 {date}</span></div>
+                        )}
+                        <div className="share-card-actions">
+                          {info.status === 1 && (
+                            <>
+                              <button className="btn btn-primary btn-sm" onClick={() => handleAccept(info.share_id!)}>{t('common.accept')}</button>
+                              <button className="btn btn-secondary btn-sm" onClick={() => handleReject(info.share_id!)}>{t('common.refuse')}</button>
+                            </>
+                          )}
+                        </div>
                       </div>
-                    )}
-                    <div className="share-card-actions">
-                      {tab === 'sent' && info.status === 1 && (
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          style={{ color: '#D32F2F' }}
-                          onClick={() => handleCancel(info.share_id!)}
-                        >{t('share.unshare')}</button>
-                      )}
-                      {tab === 'received' && info.status === 1 && (
-                        <>
-                          <button className="btn btn-primary btn-sm" onClick={() => handleAccept(info.share_id!)}>{t('common.accept')}</button>
-                          <button className="btn btn-secondary btn-sm" onClick={() => handleReject(info.share_id!)}>{t('common.refuse')}</button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
+                    )
+                  })}
+                </div>
+              )}
+              <Pagination page={receivedPage} totalPages={receivedTotalPages} onChange={handleReceivedPageChange} />
+            </>
           )}
         </div>
       </div>
