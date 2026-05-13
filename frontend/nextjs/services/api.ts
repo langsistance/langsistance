@@ -45,6 +45,7 @@ export const queryTools = (params: Record<string, string | number> = {}): ApiRes
   const { page = 1, limit = 100, ...rest } = params
   return get('/query_tools', { ...rest, offset: Number(page) - 1, limit })
 }
+export const queryToolById = (toolId: number | string): ApiResult => get('/query_tool_by_id', { tool_id: toolId })
 export const createToolFromCustom = (body: unknown): ApiResult => post('/create_tool_from_custom', body)
 export const createToolFromOpenapi = (body: unknown): ApiResult => post('/create_tool_from_openapi', body)
 export const updateTool = (body: unknown): ApiResult => post('/update_tool', body)
