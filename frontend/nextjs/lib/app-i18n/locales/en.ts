@@ -124,7 +124,7 @@ export default {
     noResult: "Sorry, I haven't found any relevant information to answer your question.\n\nYou can try：\n1. 📝Record relevant API requests as a tool\n2. 📚Add relevant information to the knowledge base\n3. 🔄 Describe your question in different ways",
     error: "Sorry, an error occurred while processing your request.\nError message：{message}\n\nYou can try：\n1. Rephrase your question\n2. Check network connection\n3. Try again later",
     welcome: {
-      greeting: '👋 Welcome to APIForge AI Assistant!',
+      greeting: '👋 Welcome to CopiioAI!',
       canHelp: 'I can help you:',
       feature1: '🔍 Query information from knowledge base',
       feature2: '🛠️ Call configured tools to retrieve data',

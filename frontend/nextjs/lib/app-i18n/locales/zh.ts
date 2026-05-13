@@ -124,7 +124,7 @@ export default {
     noResult: "抱歉，我没有找到相关的信息来回答您的问题。\n\n您可以尝试：\n1. 📝 录制相关的API请求作为工具\n2. 📚 在知识库中添加相关信息\n3. 🔄 用不同的方式描述您的问题",
     error: "抱歉，处理您的请求时出现了错误。\n错误信息：{message}\n\n您可以尝试：\n1. 重新描述您问题\n2. 检查网络连接\n3. 稍后再试",
     welcome: {
-      greeting: '👋 欢迎使用 APIForge AI 助手！',
+      greeting: '👋 欢迎使用 CopiioAI！',
       canHelp: '我可以帮助您：',
       feature1: '🔍 查询知识库中的信息',
       feature2: '🛠️ 调用已配置的工具获取数据',
