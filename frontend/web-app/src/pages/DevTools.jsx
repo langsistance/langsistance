@@ -72,27 +72,18 @@ export default function DevTools() {
               </div>
               <div className="apis-sidebar-list">
                 {tools.length === 0 ? (
-                  <div style={{ padding: '16px', textAlign: 'center', color: 'var(--color-text-secondary)', fontSize: 14 }}>
-                    暂无 API
-                  </div>
+                  <div className="empty-state-small"><p>暂无 API</p></div>
                 ) : (
                   tools.map((t) => (
-                    <div key={t.id} className="api-sidebar-item">
+                    <button key={t.id} className="api-sidebar-item" onClick={() => handleDelete(t.id)}>
                       <div className="api-sidebar-item-name">
                         <span className={`api-sidebar-item-method ${t.method || 'GET'}`}>
                           {t.method || 'GET'}
                         </span>
                         {t.title}
                       </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <p className="api-sidebar-item-path">{t.url?.replace(/^https?:\/\/[^/]+/, '') || ''}</p>
-                        <button
-                          className="btn btn-sm"
-                          style={{ color: '#D32F2F', background: 'none', border: 'none', padding: '2px 4px' }}
-                          onClick={() => handleDelete(t.id)}
-                        >✕</button>
-                      </div>
-                    </div>
+                      <div className="api-sidebar-item-path">{t.url?.replace(/^https?:\/\/[^/]+/, '') || ''}</div>
+                    </button>
                   ))
                 )}
               </div>
@@ -116,15 +107,14 @@ export default function DevTools() {
               />
               {error && <p style={{ color: '#D32F2F', fontSize: 14, marginTop: 8 }}>{error}</p>}
               {success && <p style={{ color: '#388E3C', fontSize: 14, marginTop: 8 }}>{success}</p>}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
-                <button
-                  className="btn btn-primary"
-                  onClick={handleImport}
-                  disabled={!raw.trim() || importing}
-                >
-                  {importing ? '导入中...' : '导入'}
-                </button>
-              </div>
+              <button
+                className="btn btn-primary"
+                style={{ marginTop: 10 }}
+                onClick={handleImport}
+                disabled={!raw.trim() || importing}
+              >
+                {importing ? '导入中...' : '导入'}
+              </button>
             </div>
           </div>
         </div>
