@@ -7,6 +7,10 @@ export const metadata: Metadata = {
     template: '%s | CopiioAI',
   },
   description: 'Build AI-powered tools from your APIs. CopiioAI converts browser-captured API requests into conversational AI tools.',
+  icons: {
+    icon: '/icon.png',
+    apple: '/icon.png',
+  },
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
