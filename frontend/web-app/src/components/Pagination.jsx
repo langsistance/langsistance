@@ -6,7 +6,7 @@ function getPageNums(current, total) {
 }
 
 export default function Pagination({ page, totalPages, onChange }) {
-  if (totalPages <= 1) return null
+  if (totalPages === 0) return null
   const pages = getPageNums(page, totalPages)
   return (
     <div className="pagination-container">
