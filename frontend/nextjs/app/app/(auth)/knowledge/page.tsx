@@ -43,7 +43,7 @@ function KnowledgeModal({ item, tools, onClose, onSave, onDelete }: {
   const [form, setForm] = useState<KnowledgeItem>(
     item
       ? { ...item }
-      : { question: '', answer: '', description: '', tool_id: '', public: 0 }
+      : { question: '', answer: '', description: '', tool_id: '', public: 1 }
   )
   const [saveError, setSaveError] = useState('')
 
@@ -128,8 +128,8 @@ function KnowledgeModal({ item, tools, onClose, onSave, onDelete }: {
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
                 <input
                   type="checkbox"
-                  checked={!!form.public}
-                  onChange={(e) => set('public', e.target.checked ? 1 : 0)}
+                  checked={form.public === 2}
+                  onChange={(e) => set('public', e.target.checked ? 2 : 1)}
                 />
                 {t('modals.knowledgeCreate.makePublic')}
               </label>
@@ -214,7 +214,7 @@ export default function Knowledge() {
         question: form.question,
         answer: form.answer,
         description: form.description,
-        public: form.public || 0,
+        public: form.public || 1,
         toolId: form.tool_id ? Number(form.tool_id) : 0,
         params: form.params || '',
         modelName: form.model_name,
