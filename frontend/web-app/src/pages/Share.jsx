@@ -7,6 +7,9 @@ import {
   handleKnowledgeShare,
   queryKnowledge,
 } from '../services/api'
+import Pagination from '../components/Pagination'
+
+const PAGE_SIZE = 10
 
 const STATUS_MAP = {
   1: { text: '待处理', cls: 'pending' },
@@ -108,44 +111,61 @@ function CreateShareModal({ onClose, onSave }) {
 export default function Share() {
   const [tab, setTab] = useState('sent')
   const [sent, setSent] = useState([])
+  const [sentPage, setSentPage] = useState(1)
+  const [sentTotal, setSentTotal] = useState(0)
   const [received, setReceived] = useState([])
+  const [receivedPage, setReceivedPage] = useState(1)
+  const [receivedTotal, setReceivedTotal] = useState(0)
   const [showModal, setShowModal] = useState(false)
 
-  const loadSent = useCallback(async () => {
+  const loadSent = useCallback(async (page = 1) => {
     try {
-      const res = await getUserSharedKnowledge({})
+      const res = await getUserSharedKnowledge({ limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE })
       setSent(res.data || [])
+      setSentTotal(res.total || 0)
     } catch (e) { console.error(e) }
   }, [])
 
-  const loadReceived = useCallback(async () => {
+  const loadReceived = useCallback(async (page = 1) => {
     try {
-      const res = await queryKnowledgeShares({})
+      const res = await queryKnowledgeShares({ limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE })
       setReceived(res.data || [])
+      setReceivedTotal(res.total || 0)
     } catch (e) { console.error(e) }
   }, [])
 
-  useEffect(() => { loadSent(); loadReceived() }, [loadSent, loadReceived])
+  useEffect(() => { loadSent(1); loadReceived(1) }, [loadSent, loadReceived])
+
+  function handleSentPageChange(p) {
+    setSentPage(p)
+    loadSent(p)
+  }
+
+  function handleReceivedPageChange(p) {
+    setReceivedPage(p)
+    loadReceived(p)
+  }
 
   async function handleCreate({ email, knowledgeIds }) {
     for (const knowledgeId of knowledgeIds) {
       await authorizeKnowledgeAccess({ knowledgeId, email })
     }
-    loadSent()
+    setSentPage(1)
+    loadSent(1)
   }
 
   async function handleCancel(shareId) {
     if (!confirm('确认撤销分享？')) return
     try {
       await cancelKnowledgeShare({ share_id: shareId })
-      loadSent()
+      loadSent(sentPage)
     } catch (e) { alert('撤销失败：' + e.message) }
   }
 
   async function handleAccept(shareId) {
     try {
       await handleKnowledgeShare({ share_id: shareId, action: 'accept' })
-      loadReceived()
+      loadReceived(receivedPage)
     } catch (e) { alert('接受失败：' + e.message) }
   }
 
@@ -153,11 +173,12 @@ export default function Share() {
     if (!confirm('确认拒绝该分享？')) return
     try {
       await handleKnowledgeShare({ share_id: shareId, action: 'reject' })
-      loadReceived()
+      loadReceived(receivedPage)
     } catch (e) { alert('拒绝失败：' + e.message) }
   }
 
-  const list = tab === 'sent' ? sent : received
+  const sentTotalPages = Math.ceil(sentTotal / PAGE_SIZE)
+  const receivedTotalPages = Math.ceil(receivedTotal / PAGE_SIZE)
 
   return (
     <div className="page active">
@@ -188,57 +209,93 @@ export default function Share() {
         </div>
 
         <div style={{ marginTop: 24 }}>
-          {list.length === 0 ? (
-            <div className="empty-state">
-              <p>{tab === 'sent' ? '暂无分享记录' : '暂无收到的分享'}</p>
-            </div>
-          ) : (
-            <div className="share-list">
-              {list.map((share, i) => {
-                const info = share.extra_info || {}
-                const status = STATUS_MAP[info.status] || { text: '未知', cls: 'pending' }
-                const email = tab === 'sent' ? info.to_user_email : info.from_user_email
-                const date = info.share_update_time
-                  ? new Date(info.share_update_time).toLocaleDateString('zh-CN')
-                  : ''
-                return (
-                  <div key={info.share_id || i} className="share-card">
-                    <div className="share-card-header">
-                      <div className="share-card-title">{share.question}</div>
-                      <span className={`share-card-status ${status.cls}`}>{status.text}</span>
-                    </div>
-                    {email && (
-                      <div className="share-card-info">
-                        <span>📧 {email}</span>
+          {tab === 'sent' && (
+            <>
+              {sent.length === 0 ? (
+                <div className="empty-state"><p>暂无分享记录</p></div>
+              ) : (
+                <div className="knowledge-list">
+                  {sent.map((share, i) => {
+                    const info = share.extra_info || {}
+                    const status = STATUS_MAP[info.status] || { text: '未知', cls: 'pending' }
+                    const date = info.share_update_time
+                      ? new Date(info.share_update_time).toLocaleDateString('zh-CN')
+                      : ''
+                    return (
+                      <div key={info.share_id || i} className="share-card">
+                        <div className="share-card-header">
+                          <div className="share-card-title">{share.question}</div>
+                          <span className={`share-card-status ${status.cls}`}>{status.text}</span>
+                        </div>
+                        {info.to_user_email && (
+                          <div className="share-card-info"><span>📧 {info.to_user_email}</span></div>
+                        )}
+                        {share.answer && (
+                          <div className="share-card-message">"{share.answer}"</div>
+                        )}
+                        {date && (
+                          <div className="share-card-meta"><span>📅 {date}</span></div>
+                        )}
+                        <div className="share-card-actions">
+                          {info.status === 1 && (
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              style={{ color: '#D32F2F' }}
+                              onClick={() => handleCancel(info.share_id)}
+                            >撤销分享</button>
+                          )}
+                        </div>
                       </div>
-                    )}
-                    {share.answer && (
-                      <div className="share-card-message">"{share.answer}"</div>
-                    )}
-                    {date && (
-                      <div className="share-card-meta">
-                        <span>📅 {date}</span>
+                    )
+                  })}
+                </div>
+              )}
+              <Pagination page={sentPage} totalPages={sentTotalPages} onChange={handleSentPageChange} />
+            </>
+          )}
+
+          {tab === 'received' && (
+            <>
+              {received.length === 0 ? (
+                <div className="empty-state"><p>暂无收到的分享</p></div>
+              ) : (
+                <div className="knowledge-list">
+                  {received.map((share, i) => {
+                    const info = share.extra_info || {}
+                    const status = STATUS_MAP[info.status] || { text: '未知', cls: 'pending' }
+                    const date = info.share_update_time
+                      ? new Date(info.share_update_time).toLocaleDateString('zh-CN')
+                      : ''
+                    return (
+                      <div key={info.share_id || i} className="share-card">
+                        <div className="share-card-header">
+                          <div className="share-card-title">{share.question}</div>
+                          <span className={`share-card-status ${status.cls}`}>{status.text}</span>
+                        </div>
+                        {info.from_user_email && (
+                          <div className="share-card-info"><span>📧 {info.from_user_email}</span></div>
+                        )}
+                        {share.answer && (
+                          <div className="share-card-message">"{share.answer}"</div>
+                        )}
+                        {date && (
+                          <div className="share-card-meta"><span>📅 {date}</span></div>
+                        )}
+                        <div className="share-card-actions">
+                          {info.status === 1 && (
+                            <>
+                              <button className="btn btn-primary btn-sm" onClick={() => handleAccept(info.share_id)}>接受</button>
+                              <button className="btn btn-secondary btn-sm" onClick={() => handleReject(info.share_id)}>拒绝</button>
+                            </>
+                          )}
+                        </div>
                       </div>
-                    )}
-                    <div className="share-card-actions">
-                      {tab === 'sent' && info.status === 1 && (
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          style={{ color: '#D32F2F' }}
-                          onClick={() => handleCancel(info.share_id)}
-                        >撤销分享</button>
-                      )}
-                      {tab === 'received' && info.status === 1 && (
-                        <>
-                          <button className="btn btn-primary btn-sm" onClick={() => handleAccept(info.share_id)}>接受</button>
-                          <button className="btn btn-secondary btn-sm" onClick={() => handleReject(info.share_id)}>拒绝</button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
+                    )
+                  })}
+                </div>
+              )}
+              <Pagination page={receivedPage} totalPages={receivedTotalPages} onChange={handleReceivedPageChange} />
+            </>
           )}
         </div>
       </div>
