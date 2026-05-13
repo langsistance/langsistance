@@ -8,14 +8,23 @@ import {
   queryKnowledge,
 } from '../services/api'
 
+const STATUS_MAP = {
+  1: { text: '待处理', cls: 'pending' },
+  2: { text: '已拒绝', cls: 'rejected' },
+  3: { text: '已接受', cls: 'accepted' },
+  4: { text: '已撤销', cls: 'rejected' },
+}
+
 function CreateShareModal({ onClose, onSave }) {
   const [recipient, setRecipient] = useState('')
   const [knowledgeIds, setKnowledgeIds] = useState([])
   const [allKnowledge, setAllKnowledge] = useState([])
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
 
   useEffect(() => {
     queryKnowledge({ page: 1, limit: 100 })
-      .then((res) => setAllKnowledge(res.items || res.knowledge || []))
+      .then((res) => setAllKnowledge(res.data || res.items || res.knowledge || []))
       .catch(() => {})
   }, [])
 
@@ -27,43 +36,68 @@ function CreateShareModal({ onClose, onSave }) {
 
   async function submit(e) {
     e.preventDefault()
-    await onSave({ recipient_email: recipient, knowledge_ids: knowledgeIds })
-    onClose()
+    setError('')
+    if (knowledgeIds.length === 0) { setError('请选择要分享的知识'); return }
+    setSaving(true)
+    try {
+      await onSave({ email: recipient, knowledgeIds })
+      onClose()
+    } catch (err) {
+      setError('分享失败：' + err.message)
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-slate-800 rounded-xl p-6 w-full max-w-lg border border-slate-700">
-        <h3 className="text-base font-semibold mb-4">创建分享</h3>
-        <form onSubmit={submit} className="flex flex-col gap-3">
-          <input
-            placeholder="接收人邮箱"
-            type="email"
-            value={recipient}
-            onChange={(e) => setRecipient(e.target.value)}
-            required
-            className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-teal-500"
-          />
-          <div className="max-h-48 overflow-y-auto flex flex-col gap-1">
-            {allKnowledge.map((k) => (
-              <label key={k.id} className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={knowledgeIds.includes(k.id)}
-                  onChange={() => toggleId(k.id)}
-                  className="accent-teal-600"
-                />
-                {k.question}
-              </label>
-            ))}
+    <div className="modal">
+      <div className="modal-overlay" onClick={onClose} />
+      <div className="modal-content">
+        <div className="modal-header">
+          <h2>创建分享</h2>
+          <button className="modal-close-btn" onClick={onClose}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+        <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          <div className="modal-body" style={{ flex: 1, overflowY: 'auto' }}>
+            <div className="form-group">
+              <label>分享给（用户邮箱）</label>
+              <input
+                type="email"
+                className="form-input"
+                placeholder="输入接收人邮箱..."
+                value={recipient}
+                onChange={(e) => setRecipient(e.target.value)}
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label>选择要分享的知识</label>
+              <div className="api-select-list">
+                {allKnowledge.length === 0 && (
+                  <p style={{ fontSize: 14, color: 'var(--color-text-secondary)', padding: 8 }}>暂无知识，请先创建知识</p>
+                )}
+                {allKnowledge.map((k) => (
+                  <div key={k.id} className="api-select-item">
+                    <input
+                      type="checkbox"
+                      id={`k-${k.id}`}
+                      checked={knowledgeIds.includes(k.id)}
+                      onChange={() => toggleId(k.id)}
+                    />
+                    <label htmlFor={`k-${k.id}`}>{k.question}</label>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {error && <p style={{ color: '#D32F2F', fontSize: 14 }}>{error}</p>}
           </div>
-          <div className="flex justify-end gap-2 mt-2">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-slate-300 hover:text-white">
-              取消
-            </button>
-            <button type="submit" className="px-4 py-2 bg-teal-600 hover:bg-teal-500 text-sm text-white rounded-lg">
-              发送分享
-            </button>
+          <div className="modal-footer">
+            <button type="button" className="btn btn-secondary" onClick={onClose}>取消</button>
+            <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? '发送中...' : '发送分享'}</button>
           </div>
         </form>
       </div>
@@ -72,115 +106,141 @@ function CreateShareModal({ onClose, onSave }) {
 }
 
 export default function Share() {
-  const [tab, setTab] = useState('sent') // 'sent' | 'received'
+  const [tab, setTab] = useState('sent')
   const [sent, setSent] = useState([])
   const [received, setReceived] = useState([])
   const [showModal, setShowModal] = useState(false)
 
   const loadSent = useCallback(async () => {
     try {
-      const res = await queryKnowledgeShares({})
-      setSent(res.shares || [])
+      const res = await getUserSharedKnowledge({})
+      setSent(res.data || [])
     } catch (e) { console.error(e) }
   }, [])
 
   const loadReceived = useCallback(async () => {
     try {
-      const res = await getUserSharedKnowledge({})
-      setReceived(res.shares || [])
+      const res = await queryKnowledgeShares({})
+      setReceived(res.data || [])
     } catch (e) { console.error(e) }
   }, [])
 
   useEffect(() => { loadSent(); loadReceived() }, [loadSent, loadReceived])
 
-  async function handleCreate(form) {
-    try {
-      await authorizeKnowledgeAccess(form)
-      loadSent()
-    } catch (e) {
-      alert('分享失败：' + e.message)
+  async function handleCreate({ email, knowledgeIds }) {
+    for (const knowledgeId of knowledgeIds) {
+      await authorizeKnowledgeAccess({ knowledgeId, email })
     }
+    loadSent()
   }
 
   async function handleCancel(shareId) {
     if (!confirm('确认撤销分享？')) return
-    await cancelKnowledgeShare({ share_id: shareId })
-    loadSent()
+    try {
+      await cancelKnowledgeShare({ share_id: shareId })
+      loadSent()
+    } catch (e) { alert('撤销失败：' + e.message) }
   }
 
   async function handleAccept(shareId) {
-    await handleKnowledgeShare({ share_id: shareId, action: 'accept' })
-    loadReceived()
+    try {
+      await handleKnowledgeShare({ share_id: shareId, action: 'accept' })
+      loadReceived()
+    } catch (e) { alert('接受失败：' + e.message) }
+  }
+
+  async function handleReject(shareId) {
+    if (!confirm('确认拒绝该分享？')) return
+    try {
+      await handleKnowledgeShare({ share_id: shareId, action: 'reject' })
+      loadReceived()
+    } catch (e) { alert('拒绝失败：' + e.message) }
   }
 
   const list = tab === 'sent' ? sent : received
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-        <div>
-          <h2 className="text-sm font-semibold text-slate-200">分享中心</h2>
-          <p className="text-xs text-slate-500">分享知识库给其他用户</p>
-        </div>
-        <button
-          onClick={() => setShowModal(true)}
-          className="px-3 py-1.5 bg-teal-600 hover:bg-teal-500 text-xs text-white rounded-lg"
-        >
-          + 创建分享
-        </button>
-      </div>
-
-      <div className="flex gap-2 px-4 py-3">
-        {['sent', 'received'].map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${
-              tab === t
-                ? 'bg-teal-600 text-white'
-                : 'bg-slate-800 text-slate-400 hover:text-white'
-            }`}
-          >
-            {t === 'sent' ? '我的分享' : '收到的分享'}
-          </button>
-        ))}
-      </div>
-
-      <div className="flex-1 overflow-y-auto px-4 flex flex-col gap-2">
-        {list.length === 0 && (
-          <p className="text-slate-500 text-sm text-center mt-8">暂无记录</p>
-        )}
-        {list.map((share) => (
-          <div key={share.id} className="bg-slate-800 rounded-lg p-4">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-sm font-medium text-slate-200">
-                  {tab === 'sent' ? `→ ${share.recipient_email}` : `← ${share.sender_email}`}
-                </p>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  {share.knowledge_count || 0} 条知识 · {share.create_time?.slice(0, 10)}
-                </p>
-              </div>
-              {tab === 'sent' ? (
-                <button
-                  onClick={() => handleCancel(share.id)}
-                  className="text-xs text-slate-400 hover:text-red-400"
-                >
-                  撤销
-                </button>
-              ) : share.status !== 'accepted' ? (
-                <button
-                  onClick={() => handleAccept(share.id)}
-                  className="text-xs text-teal-400 hover:text-teal-300"
-                >
-                  接受
-                </button>
-              ) : (
-                <span className="text-xs text-slate-500">已接受</span>
-              )}
-            </div>
+    <div className="page active">
+      <div className="page-header">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h1>分享中心</h1>
+            <p>分享知识库给其他用户，或接收他人分享的知识</p>
           </div>
-        ))}
+          <button className="btn btn-primary" onClick={() => setShowModal(true)}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" />
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" /><line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+            </svg>
+            创建分享
+          </button>
+        </div>
+      </div>
+
+      <div className="page-content">
+        <div className="tabs-container">
+          <button className={`tab-btn${tab === 'sent' ? ' active' : ''}`} onClick={() => setTab('sent')}>
+            我的分享
+          </button>
+          <button className={`tab-btn${tab === 'received' ? ' active' : ''}`} onClick={() => setTab('received')}>
+            收到的分享
+          </button>
+        </div>
+
+        <div style={{ marginTop: 24 }}>
+          {list.length === 0 ? (
+            <div className="empty-state">
+              <p>{tab === 'sent' ? '暂无分享记录' : '暂无收到的分享'}</p>
+            </div>
+          ) : (
+            <div className="share-list">
+              {list.map((share, i) => {
+                const info = share.extra_info || {}
+                const status = STATUS_MAP[info.status] || { text: '未知', cls: 'pending' }
+                const email = tab === 'sent' ? info.to_user_email : info.from_user_email
+                const date = info.share_update_time
+                  ? new Date(info.share_update_time).toLocaleDateString('zh-CN')
+                  : ''
+                return (
+                  <div key={info.share_id || i} className="share-card">
+                    <div className="share-card-header">
+                      <div className="share-card-title">{share.question}</div>
+                      <span className={`share-card-status ${status.cls}`}>{status.text}</span>
+                    </div>
+                    {email && (
+                      <div className="share-card-info">
+                        <span>📧 {email}</span>
+                      </div>
+                    )}
+                    {share.answer && (
+                      <div className="share-card-message">"{share.answer}"</div>
+                    )}
+                    {date && (
+                      <div className="share-card-meta">
+                        <span>📅 {date}</span>
+                      </div>
+                    )}
+                    <div className="share-card-actions">
+                      {tab === 'sent' && info.status === 1 && (
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          style={{ color: '#D32F2F' }}
+                          onClick={() => handleCancel(info.share_id)}
+                        >撤销分享</button>
+                      )}
+                      {tab === 'received' && info.status === 1 && (
+                        <>
+                          <button className="btn btn-primary btn-sm" onClick={() => handleAccept(info.share_id)}>接受</button>
+                          <button className="btn btn-secondary btn-sm" onClick={() => handleReject(info.share_id)}>拒绝</button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       {showModal && (
