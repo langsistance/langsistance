@@ -18,6 +18,8 @@ interface KnowledgeItem {
   description: string
   tool_id: number | string
   public: number
+  model_name?: string
+  params?: string
   title?: string
   update_time?: string
 }
