@@ -128,7 +128,7 @@ function ToolModal({ toolId, onClose, onSaved, onDeleted }: {
 
     setSaving(true)
     try {
-      await updateTool({ toolId: tool.id, title: form.title, description: form.description, url: form.url, params })
+      await updateTool({ toolId: tool.id, title: form.title, description: form.description, url: form.url, params: JSON.stringify(params) })
       onSaved()
     } catch (err) {
       setError((err as Error).message)
@@ -140,7 +140,7 @@ function ToolModal({ toolId, onClose, onSaved, onDeleted }: {
   async function handleDelete() {
     if (!tool || !confirm(t('confirmations.deleteTool'))) return
     try {
-      await deleteTool({ id: tool.id })
+      await deleteTool({ toolId: tool.id })
       onDeleted()
     } catch (err) {
       setError((err as Error).message)
@@ -150,7 +150,7 @@ function ToolModal({ toolId, onClose, onSaved, onDeleted }: {
   return (
     <div className="modal">
       <div className="modal-overlay" onClick={onClose} />
-      <div className="modal-content">
+      <div className="modal-content" style={{ maxWidth: 800 }}>
         <div className="modal-header">
           <h2>{t('tools.edit')}</h2>
           <button className="modal-close-btn" onClick={onClose}>
@@ -204,9 +204,9 @@ function ToolModal({ toolId, onClose, onSaved, onDeleted }: {
               {error && <p style={{ color: '#D32F2F', fontSize: 14, marginTop: -8 }}>{error}</p>}
             </div>
             <div className="modal-footer">
-              <button type="button" className="btn btn-secondary" style={{ color: '#D32F2F', marginRight: 'auto' }} onClick={handleDelete}>{t('common.delete')}</button>
-              <button type="button" className="btn btn-secondary" onClick={onClose}>{t('common.cancel')}</button>
-              <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? t('common.loading') : t('common.save')}</button>
+              <button type="button" className="btn btn-secondary" style={{ color: '#D32F2F' }} onClick={handleDelete}>{t('tools.delete')}</button>
+              <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? t('common.loading') : t('tools.save')}</button>
+              <button type="button" className="btn btn-secondary" onClick={onClose}>{t('common.close')}</button>
             </div>
           </form>
         )}
