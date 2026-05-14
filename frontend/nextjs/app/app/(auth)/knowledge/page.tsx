@@ -81,7 +81,7 @@ function KnowledgeModal({ item, tools, onClose, onSave, onDelete }: {
             </svg>
           </button>
         </div>
-        <form onSubmit={submit}>
+        <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
           <div className="modal-body">
             {showToolSelect && (
               <div className="form-group">
@@ -102,7 +102,7 @@ function KnowledgeModal({ item, tools, onClose, onSave, onDelete }: {
             <h4>{t('modals.knowledgeDetails.knowledgeContent')}</h4>
             <div className="form-section">
               <div className="form-group">
-                <label>{t('modals.knowledgeCreate.question')} <span style={{ color: 'red' }}>*</span></label>
+                <label>{t('modals.knowledgeCreate.question')}</label>
                 <input
                   id="knowledgeQuestion"
                   className="form-input"
@@ -113,7 +113,7 @@ function KnowledgeModal({ item, tools, onClose, onSave, onDelete }: {
                 />
               </div>
               <div className="form-group">
-                <label>{t('modals.knowledgeCreate.answer')} <span style={{ color: 'red' }}>*</span></label>
+                <label>{t('modals.knowledgeCreate.answer')}</label>
                 <textarea
                   id="knowledgeAnswer"
                   className="form-textarea"
