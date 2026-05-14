@@ -47,6 +47,12 @@ function KnowledgeModal({ item, tools, onClose, onSave, onDelete }: {
   )
   const [saveError, setSaveError] = useState('')
 
+  // Hide tool selector when editing and associated tool has push=2 (not in filtered list)
+  const hasValidTool = item?.tool_id
+    ? tools.some((t) => String(t.id) === String(item.tool_id))
+    : true
+  const showToolSelect = hasValidTool
+
   function set(key: string, val: unknown) {
     setForm((f) => ({ ...f, [key]: val }))
   }
@@ -77,63 +83,78 @@ function KnowledgeModal({ item, tools, onClose, onSave, onDelete }: {
         </div>
         <form onSubmit={submit}>
           <div className="modal-body">
-            <div className="form-group">
-              <label>{t('modals.knowledgeCreate.question')}</label>
-              <input
-                id="knowledgeQuestion"
-                className="form-input"
-                placeholder={t('modals.knowledgeCreate.questionPlaceholder')}
-                value={form.question}
-                onChange={(e) => set('question', e.target.value)}
-                required
-              />
-            </div>
-            <div className="form-group">
-              <label>{t('modals.knowledgeCreate.answer')}</label>
-              <textarea
-                id="knowledgeAnswer"
-                className="form-textarea"
-                placeholder={t('modals.knowledgeCreate.answerPlaceholder')}
-                value={form.answer}
-                onChange={(e) => set('answer', e.target.value)}
-                required
-                rows={4}
-              />
-            </div>
-            <div className="form-group">
-              <label>{lang === 'en' ? 'Description (optional)' : '描述（可选）'}</label>
-              <textarea
-                className="form-textarea"
-                placeholder={lang === 'en' ? 'Additional notes' : '补充说明'}
-                value={form.description}
-                onChange={(e) => set('description', e.target.value)}
-                rows={2}
-              />
-            </div>
-            <div className="form-group">
-              <label>{lang === 'en' ? 'Associated Tool' : '关联工具'}</label>
-              <select
-                id="knowledgeToolSelect"
-                className="form-input"
-                value={String(form.tool_id)}
-                onChange={(e) => set('tool_id', e.target.value)}
-              >
-                <option value="">{lang === 'en' ? 'No linked tool' : '无关联工具'}</option>
-                {tools.map((tool) => (
-                  <option key={tool.id} value={tool.id}>{tool.title}</option>
-                ))}
-              </select>
+            {showToolSelect && (
+              <div className="form-group">
+                <label>{t('modals.knowledgeCreate.selectTool')}</label>
+                <select
+                  id="knowledgeToolSelect"
+                  className="form-input"
+                  value={String(form.tool_id)}
+                  onChange={(e) => set('tool_id', e.target.value)}
+                >
+                  <option value="">{lang === 'en' ? 'No linked tool' : '无关联工具'}</option>
+                  {tools.map((tool) => (
+                    <option key={tool.id} value={tool.id}>{tool.title}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <h4>{t('modals.knowledgeDetails.knowledgeContent')}</h4>
+            <div className="form-section">
+              <div className="form-group">
+                <label>{t('modals.knowledgeCreate.question')} <span style={{ color: 'red' }}>*</span></label>
+                <input
+                  id="knowledgeQuestion"
+                  className="form-input"
+                  placeholder={t('modals.knowledgeCreate.questionPlaceholder')}
+                  value={form.question}
+                  onChange={(e) => set('question', e.target.value)}
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label>{t('modals.knowledgeCreate.answer')} <span style={{ color: 'red' }}>*</span></label>
+                <textarea
+                  id="knowledgeAnswer"
+                  className="form-textarea"
+                  placeholder={t('modals.knowledgeCreate.answerPlaceholder')}
+                  value={form.answer}
+                  onChange={(e) => set('answer', e.target.value)}
+                  required
+                  rows={4}
+                />
+              </div>
+              <div className="form-group">
+                <label>{t('modals.toolDetails.description')}</label>
+                <textarea
+                  className="form-textarea"
+                  placeholder={t('modals.toolCreate.knowledgeDescPlaceholder')}
+                  value={form.description}
+                  onChange={(e) => set('description', e.target.value)}
+                  rows={2}
+                />
+              </div>
             </div>
             <div className="form-group">
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
                 <input
                   type="checkbox"
+                  id="knowledgePublic"
                   checked={form.public === 2}
                   onChange={(e) => set('public', e.target.checked ? 2 : 1)}
                 />
                 {t('modals.knowledgeCreate.makePublic')}
               </label>
             </div>
+            {item && item.update_time && (
+              <div className="metadata-section">
+                <h4>{t('modals.knowledgeDetails.basicInfo')}</h4>
+                <div className="detail-item">
+                  <strong>{t('modals.knowledgeDetails.updatedAt')}:</strong>{' '}
+                  {new Date(item.update_time).toLocaleString(lang === 'en' ? 'en-US' : 'zh-CN')}
+                </div>
+              </div>
+            )}
             {saveError && (
               <p style={{ color: '#D32F2F', fontSize: 14, marginTop: -8 }}>{saveError}</p>
             )}
@@ -145,10 +166,12 @@ function KnowledgeModal({ item, tools, onClose, onSave, onDelete }: {
                 className="btn btn-secondary"
                 style={{ color: '#D32F2F', marginRight: 'auto' }}
                 onClick={() => onDelete(item.id!)}
-              >{t('common.delete')}</button>
+              >{t('modals.knowledgeDetails.deleteKnowledge')}</button>
             )}
             <button type="button" className="btn btn-secondary" onClick={onClose}>{t('common.cancel')}</button>
-            <button type="submit" className="btn btn-primary">{t('common.save')}</button>
+            <button type="submit" className="btn btn-primary">
+              {item ? t('knowledge.update') : t('modals.knowledgeCreate.createToolKnowledge')}
+            </button>
           </div>
         </form>
       </div>
@@ -193,7 +216,7 @@ export default function Knowledge() {
 
   useEffect(() => {
     queryTools({})
-      .then((res) => setTools((res.data || []).filter((tool: Tool) => tool.push === 2)))
+      .then((res) => setTools((res.data || []).filter((tool: Tool) => tool.push !== 2)))
       .catch(() => {})
   }, [])
 

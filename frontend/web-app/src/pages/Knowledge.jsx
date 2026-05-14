@@ -14,6 +14,12 @@ function KnowledgeModal({ item, tools, onClose, onSave, onDelete }) {
   )
   const [saveError, setSaveError] = useState('')
 
+  // Hide tool selector when editing and associated tool has push=2 (not in filtered list)
+  const hasValidTool = item?.tool_id
+    ? tools.some((t) => String(t.id) === String(item.tool_id))
+    : true
+  const showToolSelect = hasValidTool
+
   function set(key, val) {
     setForm((f) => ({ ...f, [key]: val }))
   }
@@ -44,60 +50,79 @@ function KnowledgeModal({ item, tools, onClose, onSave, onDelete }) {
         </div>
         <form onSubmit={submit}>
           <div className="modal-body">
-            <div className="form-group">
-              <label>问题</label>
-              <input
-                className="form-input"
-                placeholder="问题（AI 匹配时使用）"
-                value={form.question}
-                onChange={(e) => set('question', e.target.value)}
-                required
-              />
-            </div>
-            <div className="form-group">
-              <label>答案</label>
-              <textarea
-                className="form-textarea"
-                placeholder="答案 / 工具调用说明"
-                value={form.answer}
-                onChange={(e) => set('answer', e.target.value)}
-                required
-                rows={4}
-              />
-            </div>
-            <div className="form-group">
-              <label>描述（可选）</label>
-              <textarea
-                className="form-textarea"
-                placeholder="补充说明"
-                value={form.description}
-                onChange={(e) => set('description', e.target.value)}
-                rows={2}
-              />
-            </div>
-            <div className="form-group">
-              <label>关联工具</label>
-              <select
-                className="form-input"
-                value={String(form.tool_id)}
-                onChange={(e) => set('tool_id', e.target.value)}
-              >
-                <option value="">无关联工具</option>
-                {tools.map((tool) => (
-                  <option key={tool.id} value={tool.id}>{tool.title}</option>
-                ))}
-              </select>
+            {showToolSelect && (
+              <div className="form-group">
+                <label>选择工具</label>
+                <select
+                  id="knowledgeToolSelect"
+                  className="form-input"
+                  value={String(form.tool_id)}
+                  onChange={(e) => set('tool_id', e.target.value)}
+                >
+                  <option value="">无关联工具</option>
+                  {tools.map((tool) => (
+                    <option key={tool.id} value={tool.id}>{tool.title}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <h4>知识内容</h4>
+            <div className="form-section">
+              <div className="form-group">
+                <label>问题 <span style={{ color: 'red' }}>*</span></label>
+                <input
+                  id="knowledgeQuestion"
+                  className="form-input"
+                  placeholder="请输入问题，如：如何查询北京的天气？"
+                  value={form.question}
+                  onChange={(e) => set('question', e.target.value)}
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label>答案 <span style={{ color: 'red' }}>*</span></label>
+                <textarea
+                  id="knowledgeAnswer"
+                  className="form-textarea"
+                  placeholder="请输入对应的答案或解决方案"
+                  value={form.answer}
+                  onChange={(e) => set('answer', e.target.value)}
+                  required
+                  rows={4}
+                />
+              </div>
+              <div className="form-group">
+                <label>描述</label>
+                <textarea
+                  id="knowledgeDescription"
+                  className="form-textarea"
+                  placeholder="请输入描述"
+                  value={form.description}
+                  onChange={(e) => set('description', e.target.value)}
+                  rows={2}
+                />
+              </div>
             </div>
             <div className="form-group">
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
                 <input
                   type="checkbox"
+                  id="knowledgePublic"
                   checked={form.public === 2}
                   onChange={(e) => set('public', e.target.checked ? 2 : 1)}
                 />
-                公开（在社区可见）
+                设为公开
               </label>
             </div>
+            {item && item.update_time && (
+              <div className="metadata-section">
+                <h4>基本信息</h4>
+                <div className="detail-item">
+                  <strong>更新时间:</strong>{' '}
+                  {new Date(item.update_time).toLocaleString('zh-CN')}
+                </div>
+              </div>
+            )}
             {saveError && <p style={{ color: '#D32F2F', fontSize: 14, marginTop: -8 }}>{saveError}</p>}
           </div>
           <div className="modal-footer">
@@ -107,10 +132,12 @@ function KnowledgeModal({ item, tools, onClose, onSave, onDelete }) {
                 className="btn btn-secondary"
                 style={{ color: '#D32F2F', marginRight: 'auto' }}
                 onClick={() => onDelete(item.id)}
-              >删除</button>
+              >删除知识库</button>
             )}
             <button type="button" className="btn btn-secondary" onClick={onClose}>取消</button>
-            <button type="submit" className="btn btn-primary">保存</button>
+            <button type="submit" className="btn btn-primary">
+              {item ? '更新知识库' : '创建知识库'}
+            </button>
           </div>
         </form>
       </div>
@@ -152,7 +179,7 @@ export default function Knowledge() {
 
   useEffect(() => {
     queryTools({})
-      .then((res) => setTools((res.data || []).filter((t) => t.push === 2)))
+      .then((res) => setTools((res.data || []).filter((t) => t.push !== 2)))
       .catch(() => {})
   }, [])
 
