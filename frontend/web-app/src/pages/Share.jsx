@@ -108,6 +108,89 @@ function CreateShareModal({ onClose, onSave }) {
   )
 }
 
+function ShareDetailModal({ item, type, onClose, onCancel, onAccept, onReject }) {
+  const info = item.extra_info || {}
+  const shareDate = info.share_update_time
+    ? new Date(info.share_update_time).toLocaleString('zh-CN')
+    : ''
+  const updateDate = item.update_time
+    ? new Date(item.update_time).toLocaleString('zh-CN')
+    : ''
+
+  return (
+    <div className="modal">
+      <div className="modal-overlay" onClick={onClose} />
+      <div className="modal-content">
+        <div className="modal-header">
+          <h2>知识库详情</h2>
+          <button className="modal-close-btn" onClick={onClose}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+        <div className="modal-body">
+          <div className="metadata-section">
+            <h4>知识内容</h4>
+            <div className="detail-item">
+              <strong>问题：</strong>{item.question}
+            </div>
+            {item.answer && (
+              <div className="detail-item">
+                <strong>答案：</strong>{item.answer}
+              </div>
+            )}
+            {item.description && (
+              <div className="detail-item">
+                <strong>描述：</strong>{item.description}
+              </div>
+            )}
+          </div>
+          <div className="metadata-section">
+            <h4>基本信息</h4>
+            {type === 'sent' && info.to_user_email && (
+              <div className="detail-item">
+                <strong>📧 分享给：</strong>{info.to_user_email}
+              </div>
+            )}
+            {type === 'received' && info.from_user_email && (
+              <div className="detail-item">
+                <strong>📧 来自：</strong>{info.from_user_email}
+              </div>
+            )}
+            {updateDate && (
+              <div className="detail-item">
+                <strong>知识库更新时间：</strong>{updateDate}
+              </div>
+            )}
+            {shareDate && (
+              <div className="detail-item">
+                <strong>分享更新时间：</strong>{shareDate}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="modal-footer">
+          {type === 'sent' && info.status === 1 && (
+            <button
+              className="btn btn-secondary"
+              style={{ color: '#D32F2F' }}
+              onClick={() => { onClose(); onCancel(info.share_id) }}
+            >撤销分享</button>
+          )}
+          {type === 'received' && info.status === 1 && (
+            <>
+              <button className="btn btn-primary" onClick={() => { onClose(); onAccept(info.share_id) }}>接受</button>
+              <button className="btn btn-secondary" onClick={() => { onClose(); onReject(info.share_id) }}>拒绝</button>
+            </>
+          )}
+          <button className="btn btn-secondary" onClick={onClose}>关闭</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Share() {
   const [tab, setTab] = useState('sent')
   const [sent, setSent] = useState([])
@@ -117,6 +200,8 @@ export default function Share() {
   const [receivedPage, setReceivedPage] = useState(1)
   const [receivedTotal, setReceivedTotal] = useState(0)
   const [showModal, setShowModal] = useState(false)
+  const [selectedItem, setSelectedItem] = useState(null)
+  const [selectedType, setSelectedType] = useState('sent')
 
   const loadSent = useCallback(async (page = 1) => {
     try {
@@ -222,7 +307,7 @@ export default function Share() {
                       ? new Date(info.share_update_time).toLocaleDateString('zh-CN')
                       : ''
                     return (
-                      <div key={info.share_id || i} className="share-card">
+                      <div key={info.share_id || i} className="share-card" style={{ cursor: 'pointer' }} onClick={() => { setSelectedItem(share); setSelectedType('sent') }}>
                         <div className="share-card-header">
                           <div className="share-card-title">{share.question}</div>
                           <span className={`share-card-status ${status.cls}`}>{status.text}</span>
@@ -241,7 +326,7 @@ export default function Share() {
                             <button
                               className="btn btn-secondary btn-sm"
                               style={{ color: '#D32F2F' }}
-                              onClick={() => handleCancel(info.share_id)}
+                              onClick={(e) => { e.stopPropagation(); handleCancel(info.share_id) }}
                             >撤销分享</button>
                           )}
                         </div>
@@ -267,7 +352,7 @@ export default function Share() {
                       ? new Date(info.share_update_time).toLocaleDateString('zh-CN')
                       : ''
                     return (
-                      <div key={info.share_id || i} className="share-card">
+                      <div key={info.share_id || i} className="share-card" style={{ cursor: 'pointer' }} onClick={() => { setSelectedItem(share); setSelectedType('received') }}>
                         <div className="share-card-header">
                           <div className="share-card-title">{share.question}</div>
                           <span className={`share-card-status ${status.cls}`}>{status.text}</span>
@@ -284,8 +369,8 @@ export default function Share() {
                         <div className="share-card-actions">
                           {info.status === 1 && (
                             <>
-                              <button className="btn btn-primary btn-sm" onClick={() => handleAccept(info.share_id)}>接受</button>
-                              <button className="btn btn-secondary btn-sm" onClick={() => handleReject(info.share_id)}>拒绝</button>
+                              <button className="btn btn-primary btn-sm" onClick={(e) => { e.stopPropagation(); handleAccept(info.share_id) }}>接受</button>
+                              <button className="btn btn-secondary btn-sm" onClick={(e) => { e.stopPropagation(); handleReject(info.share_id) }}>拒绝</button>
                             </>
                           )}
                         </div>
@@ -302,6 +387,17 @@ export default function Share() {
 
       {showModal && (
         <CreateShareModal onClose={() => setShowModal(false)} onSave={handleCreate} />
+      )}
+
+      {selectedItem && (
+        <ShareDetailModal
+          item={selectedItem}
+          type={selectedType}
+          onClose={() => setSelectedItem(null)}
+          onCancel={handleCancel}
+          onAccept={handleAccept}
+          onReject={handleReject}
+        />
       )}
     </div>
   )

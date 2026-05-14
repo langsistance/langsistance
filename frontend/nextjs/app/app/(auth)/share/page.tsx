@@ -23,8 +23,11 @@ interface ExtraInfo {
 }
 
 interface ShareItem {
+  id?: number
   question: string
   answer?: string
+  description?: string
+  update_time?: string
   extra_info: ExtraInfo
 }
 
@@ -134,6 +137,98 @@ function CreateShareModal({ onClose, onSave }: {
   )
 }
 
+function ShareDetailModal({ item, type, lang, onClose, onCancel, onAccept, onReject }: {
+  item: ShareItem
+  type: 'sent' | 'received'
+  lang: string
+  onClose: () => void
+  onCancel: (shareId: number) => void
+  onAccept: (shareId: number) => void
+  onReject: (shareId: number) => void
+}) {
+  const { t } = useI18n()
+  const info = item.extra_info || {}
+  const shareDate = info.share_update_time
+    ? new Date(info.share_update_time).toLocaleString(lang === 'en' ? 'en-US' : 'zh-CN')
+    : ''
+  const updateDate = item.update_time
+    ? new Date(item.update_time).toLocaleString(lang === 'en' ? 'en-US' : 'zh-CN')
+    : ''
+
+  return (
+    <div className="modal">
+      <div className="modal-overlay" onClick={onClose} />
+      <div className="modal-content">
+        <div className="modal-header">
+          <h2>{t('modals.knowledgeDetails.title')}</h2>
+          <button className="modal-close-btn" onClick={onClose}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+        <div className="modal-body">
+          <div className="metadata-section">
+            <h4>{t('modals.knowledgeDetails.knowledgeContent')}</h4>
+            <div className="detail-item">
+              <strong>{t('knowledge.question')}：</strong>{item.question}
+            </div>
+            {item.answer && (
+              <div className="detail-item">
+                <strong>{t('knowledge.answer')}：</strong>{item.answer}
+              </div>
+            )}
+            {item.description && (
+              <div className="detail-item">
+                <strong>{lang === 'en' ? 'Description' : '描述'}：</strong>{item.description}
+              </div>
+            )}
+          </div>
+          <div className="metadata-section">
+            <h4>{t('modals.knowledgeDetails.basicInfo')}</h4>
+            {type === 'sent' && info.to_user_email && (
+              <div className="detail-item">
+                <strong>📧 {lang === 'en' ? 'Shared with' : '分享给'}：</strong>{info.to_user_email}
+              </div>
+            )}
+            {type === 'received' && info.from_user_email && (
+              <div className="detail-item">
+                <strong>📧 {lang === 'en' ? 'From' : '来自'}：</strong>{info.from_user_email}
+              </div>
+            )}
+            {updateDate && (
+              <div className="detail-item">
+                <strong>{t('share.knowledgeUpdateTime')}：</strong>{updateDate}
+              </div>
+            )}
+            {shareDate && (
+              <div className="detail-item">
+                <strong>{t('share.shareUpdateTime')}：</strong>{shareDate}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="modal-footer">
+          {type === 'sent' && info.status === 1 && (
+            <button
+              className="btn btn-secondary"
+              style={{ color: '#D32F2F' }}
+              onClick={() => { onClose(); onCancel(info.share_id!) }}
+            >{t('share.unshare')}</button>
+          )}
+          {type === 'received' && info.status === 1 && (
+            <>
+              <button className="btn btn-primary" onClick={() => { onClose(); onAccept(info.share_id!) }}>{t('common.accept')}</button>
+              <button className="btn btn-secondary" onClick={() => { onClose(); onReject(info.share_id!) }}>{t('common.refuse')}</button>
+            </>
+          )}
+          <button className="btn btn-secondary" onClick={onClose}>{t('modals.close')}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Share() {
   const { t, lang } = useI18n()
   const [tab, setTab] = useState('sent')
@@ -144,6 +239,8 @@ export default function Share() {
   const [receivedPage, setReceivedPage] = useState(1)
   const [receivedTotal, setReceivedTotal] = useState(0)
   const [showModal, setShowModal] = useState(false)
+  const [selectedItem, setSelectedItem] = useState<ShareItem | null>(null)
+  const [selectedType, setSelectedType] = useState<'sent' | 'received'>('sent')
 
   const loadSent = useCallback(async (page = 1) => {
     try {
@@ -257,7 +354,7 @@ export default function Share() {
                       ? new Date(info.share_update_time).toLocaleDateString(lang === 'en' ? 'en-US' : 'zh-CN')
                       : ''
                     return (
-                      <div key={info.share_id ?? i} className="share-card">
+                      <div key={info.share_id ?? i} className="share-card" style={{ cursor: 'pointer' }} onClick={() => { setSelectedItem(share); setSelectedType('sent') }}>
                         <div className="share-card-header">
                           <div className="share-card-title">{share.question}</div>
                           <span className={`share-card-status ${statusCls}`}>{statusText(info.status)}</span>
@@ -276,7 +373,7 @@ export default function Share() {
                             <button
                               className="btn btn-secondary btn-sm"
                               style={{ color: '#D32F2F' }}
-                              onClick={() => handleCancel(info.share_id!)}
+                              onClick={(e) => { e.stopPropagation(); handleCancel(info.share_id!) }}
                             >{t('share.unshare')}</button>
                           )}
                         </div>
@@ -302,7 +399,7 @@ export default function Share() {
                       ? new Date(info.share_update_time).toLocaleDateString(lang === 'en' ? 'en-US' : 'zh-CN')
                       : ''
                     return (
-                      <div key={info.share_id ?? i} className="share-card">
+                      <div key={info.share_id ?? i} className="share-card" style={{ cursor: 'pointer' }} onClick={() => { setSelectedItem(share); setSelectedType('received') }}>
                         <div className="share-card-header">
                           <div className="share-card-title">{share.question}</div>
                           <span className={`share-card-status ${statusCls}`}>{statusText(info.status)}</span>
@@ -319,8 +416,8 @@ export default function Share() {
                         <div className="share-card-actions">
                           {info.status === 1 && (
                             <>
-                              <button className="btn btn-primary btn-sm" onClick={() => handleAccept(info.share_id!)}>{t('common.accept')}</button>
-                              <button className="btn btn-secondary btn-sm" onClick={() => handleReject(info.share_id!)}>{t('common.refuse')}</button>
+                              <button className="btn btn-primary btn-sm" onClick={(e) => { e.stopPropagation(); handleAccept(info.share_id!) }}>{t('common.accept')}</button>
+                              <button className="btn btn-secondary btn-sm" onClick={(e) => { e.stopPropagation(); handleReject(info.share_id!) }}>{t('common.refuse')}</button>
                             </>
                           )}
                         </div>
@@ -337,6 +434,18 @@ export default function Share() {
 
       {showModal && (
         <CreateShareModal onClose={() => setShowModal(false)} onSave={handleCreate} />
+      )}
+
+      {selectedItem && (
+        <ShareDetailModal
+          item={selectedItem}
+          type={selectedType}
+          lang={lang}
+          onClose={() => setSelectedItem(null)}
+          onCancel={handleCancel}
+          onAccept={handleAccept}
+          onReject={handleReject}
+        />
       )}
     </div>
   )
