@@ -1,13 +1,11 @@
-import { getIdToken } from 'firebase/auth'
-import { auth } from '@/lib/firebase'
+import { getValidToken } from '@/lib/auth-client'
 
-const BASE_URL = 'https://api.copiioai.com'
+const BASE_URL = process.env.NEXT_PUBLIC_API_BASE || 'https://api.copiioai.com'
 
 async function authHeaders(): Promise<Record<string, string>> {
   if (typeof window === 'undefined') throw new Error('API service is client-only')
-  const user = auth.currentUser
-  if (!user) throw new Error('Not authenticated')
-  const token = await getIdToken(user)
+  const token = await getValidToken()
+  if (!token) throw new Error('Not authenticated')
   return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
 }
 

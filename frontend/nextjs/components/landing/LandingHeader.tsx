@@ -1,17 +1,15 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { onAuthStateChanged } from 'firebase/auth'
-import type { User } from 'firebase/auth'
-import { auth } from '@/lib/firebase'
+import { onAuthChange, type AuthUser } from '@/lib/auth-client'
 import { useLandingI18n, LANGUAGE_NAMES, type LangKey } from '@/lib/landing-i18n'
 
 export default function LandingHeader() {
   const { lang, setLanguage, t } = useLandingI18n()
-  const [user, setUser] = useState<User | null | undefined>(undefined)
+  const [user, setUser] = useState<AuthUser | null | undefined>(undefined)
 
   useEffect(() => {
-    return onAuthStateChanged(auth, setUser)
+    return onAuthChange(setUser)
   }, [])
 
   return (
