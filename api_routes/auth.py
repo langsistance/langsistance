@@ -17,14 +17,18 @@ from sources.logger import Logger
 logger = Logger("backend.log")
 router = APIRouter()
 
-FIREBASE_WEB_API_KEY = os.getenv("FIREBASE_WEB_API_KEY")
-if not FIREBASE_WEB_API_KEY:
-    logger.warning("FIREBASE_WEB_API_KEY not set; /auth/* endpoints will fail at runtime")
-
 IDENTITY_TOOLKIT = "https://identitytoolkit.googleapis.com/v1/accounts"
 SECURE_TOKEN = "https://securetoken.googleapis.com/v1/token"
 
 HTTP_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
+
+
+def _api_key() -> str:
+    key = os.getenv("FIREBASE_WEB_API_KEY")
+    if not key:
+        logger.error("FIREBASE_WEB_API_KEY not set in environment")
+        raise HTTPException(status_code=500, detail="Auth service misconfigured")
+    return key
 
 
 class EmailPasswordRequest(BaseModel):
@@ -41,7 +45,7 @@ class ResetPasswordRequest(BaseModel):
 
 
 async def _firebase_post(url: str, payload: dict) -> dict:
-    params = {"key": FIREBASE_WEB_API_KEY}
+    params = {"key": _api_key()}
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
             resp = await client.post(url, params=params, json=payload)

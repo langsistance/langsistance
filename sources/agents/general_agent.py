@@ -176,7 +176,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
 - Use numbered lists `1.` for sequential steps
 - Add space after list markers
 - Indent sub-items with 2-4 spaces
-- **CRITICAL**: When the tool returns a list, display ALL items from the list. Do NOT summarize, truncate, or selectively show items.
+- **Long list handling**: If the tool result is a JSON array with many items, provide a concise summary with count statistics (e.g., total count, counts per category) instead of enumerating every item.
 
 ### 5. Emphasis
 - Use **bold** for important terms: `**text**`
@@ -187,7 +187,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
 - Use tables for comparing information
 
 ### 7. CRITICAL Rules
-- **Display completeness**: Show ALL items when the tool returns a list or array
+- **Long list handling**: If the tool result is a JSON list with many items, summarize with count statistics (total, per-category counts) rather than listing each item.
 - **No source sections**: Do NOT add "Sources:", "References:", or "Resources:" sections at the end
 - **Inline links only**: Integrate links naturally within the content, not as a separate list at the bottom
 - **No code block wrapper**: Output DIRECT Markdown content, do NOT wrap your entire response in a code block
@@ -429,7 +429,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         6. **Tables**: Use tables for structured data comparison
         7. **Spacing**: Add blank lines between content blocks for readability
         8. **Code blocks**: Use fenced code blocks with language specification when showing code
-        9. **Completeness**: When tool returns a list, display ALL items - do NOT truncate or summarize
+        9. **Long list handling**: If the tool result is a JSON array with many items, provide a concise summary with count statistics (e.g., total count, counts per category) instead of enumerating every item.
 
         ### Response Structure Template:
 
@@ -442,10 +442,10 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         ### Key Information
         - Important point 1 (with details)
         - Important point 2 (with details)
-        - ... (include ALL items from the tool result)
+        - ... (if the tool result is a long JSON list, show a summary with count statistics instead)
 
         ### Details
-        [Organized detailed content - display ALL data from tool result]
+        [Organized detailed content — if the tool result is a long JSON list, show a summary with count statistics]
 
         [Display images inline where relevant]
         ![Image Description](image_URL)
@@ -458,7 +458,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         - Only use code blocks for actual code snippets within your content, not for the entire response
 
         **CRITICAL CONTENT RULES**:
-        - Display ALL items when the tool returns a list or array - do NOT omit any items
+        - If the tool result is a long JSON list, provide a concise summary with count statistics instead of listing every item
         - Do NOT add a "Resources", "Sources", or "References" section at the end of your response
         - Do NOT create a separate list of links at the bottom
         - Integrate all links naturally within the content itself
@@ -526,7 +526,27 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
                 # 尝试将 tool_data 解析为 JSON
                 try:
                     result_data = json.loads(tool_data)
-                    result_str = json.dumps(result_data, ensure_ascii=False, indent=2)
+                    # 如果结果是一个 list，提取 raw_items 以供后续批处理
+                    if isinstance(result_data, list) and result_data:
+                        raw_items = result_data
+                    elif isinstance(result_data, dict):
+                        raw_items = next(
+                            (v for v in result_data.values() if isinstance(v, list) and v),
+                            None
+                        )
+                    else:
+                        raw_items = None
+
+                    if raw_items:
+                        self._pending_raw_items = raw_items
+                        result_str = (
+                            f"The query returned {len(raw_items)} items. "
+                            f"Please write a brief 2–3 sentence summary of what was found. "
+                            f"The complete list will be analyzed and displayed item by item automatically — "
+                            f"do NOT enumerate the items yourself."
+                        )
+                    else:
+                        result_str = json.dumps(result_data, ensure_ascii=False, indent=2)
                 except json.JSONDecodeError:
                     # 如果不是有效的 JSON，则直接使用原始内容
                     result_str = tool_data
@@ -545,7 +565,7 @@ Act as a self-contained intelligent assistant. Follow these instructions strictl
 2.  **No External Access:** Do not attempt to invoke or use any internal or external tools (such as search functions, code interpreters, calculators, or knowledge retrieval from your base training data) to complete the task.
 3.  **Direct Processing:** Analyze, reason, and respond directly based on the provided input. If the necessary information is not contained in my messages, state that clearly instead of making assumptions.
 4.  **Privacy Protection:** Do NOT include or output any `user_id`, `query_id`, or similar internal identifiers in your response. These are system metadata and should never appear in user-facing output.
-5.  **Content Completeness:** When the input data contains a list or array, display ALL items in your response. Do NOT truncate, summarize, or selectively show items.
+5.  **Long list handling:** If the input data is a JSON array with many items, provide a concise summary with count statistics (e.g., total count, counts per category) instead of enumerating every item.
 6.  **No Source Sections:** Do NOT add a "Sources", "References", or "Resources" section at the end of your response. Do NOT create a separate list of links at the bottom.
 
 {formatting_guide}
@@ -561,7 +581,7 @@ Generate a beautiful, well-formatted Markdown response based on the above data. 
 - Easy to scan with clear headings
 - Rich with properly formatted links and images (integrated naturally within content)
 - Professional and polished
-- Complete - include ALL items if the data contains a list
+- If the data is a long JSON list, summarize with count statistics rather than listing every item
 
 **CRITICAL OUTPUT FORMAT**:
 - Output your response as DIRECT Markdown content
@@ -571,7 +591,7 @@ Generate a beautiful, well-formatted Markdown response based on the above data. 
 - Only use code blocks for actual code snippets within your content, not for the entire response
 
 **CRITICAL CONTENT RULES**:
-- Display ALL items from the Input Data — not a subset, not a summary
+- If the Input Data is a long JSON list, provide a summary with count statistics instead of enumerating every item
 - Do NOT add a separate "Sources" or "References" section at the end
 - Integrate all links naturally within the content
 
@@ -660,7 +680,26 @@ Begin your response now:
                 else:
                     try:
                         result_data = response.json() if response.content else {}
-                        result_str = json.dumps(result_data, ensure_ascii=False, indent=2)
+                        if isinstance(result_data, list) and result_data:
+                            raw_items = result_data
+                        elif isinstance(result_data, dict):
+                            raw_items = next(
+                                (v for v in result_data.values() if isinstance(v, list) and v),
+                                None
+                            )
+                        else:
+                            raw_items = None
+
+                        if raw_items:
+                            self._pending_raw_items = raw_items
+                            result_str = (
+                                f"The query returned {len(raw_items)} items. "
+                                f"Please write a brief 2–3 sentence summary of what was found. "
+                                f"The complete list will be analyzed and displayed item by item automatically — "
+                                f"do NOT enumerate the items yourself."
+                            )
+                        else:
+                            result_str = json.dumps(result_data, ensure_ascii=False, indent=2)
                     except json.JSONDecodeError:
                         # 如果JSON解析失败，使用原始响应内容
                         result_str = response.text if response.text else "Empty response"
@@ -681,7 +720,7 @@ Act as a self-contained intelligent assistant. Follow these instructions strictl
 2.  **No External Access:** Do not attempt to invoke or use any internal or external tools (such as search functions, code interpreters, calculators, or knowledge retrieval from your base training data) to complete the task.
 3.  **Direct Processing:** Analyze, reason, and respond directly based on the provided input. If the necessary information is not contained in my messages, state that clearly instead of making assumptions.
 4.  **Privacy Protection:** Do NOT include or output any `user_id`, `query_id`, or similar internal identifiers in your response. These are system metadata and should never appear in user-facing output.
-5.  **Content Completeness:** When the input data contains a list or array, display ALL items in your response. Do NOT truncate, summarize, or selectively show items.
+5.  **Long list handling:** If the input data is a JSON array with many items, provide a concise summary with count statistics (e.g., total count, counts per category) instead of enumerating every item.
 6.  **No Source Sections:** Do NOT add a "Sources", "References", or "Resources" section at the end of your response. Do NOT create a separate list of links at the bottom.
 
 {formatting_guide}
@@ -697,7 +736,7 @@ Generate a beautiful, well-formatted Markdown response based on the above data. 
 - Easy to scan with clear headings
 - Rich with properly formatted links and images (integrated naturally within content)
 - Professional and polished
-- Complete - include ALL items if the data contains a list
+- If the data is a long JSON list, summarize with count statistics rather than listing every item
 
 **CRITICAL OUTPUT FORMAT**:
 - Output your response as DIRECT Markdown content
@@ -707,7 +746,7 @@ Generate a beautiful, well-formatted Markdown response based on the above data. 
 - Only use code blocks for actual code snippets within your content, not for the entire response
 
 **CRITICAL CONTENT RULES**:
-- Display ALL items from the Input Data — not a subset, not a summary
+- If the Input Data is a long JSON list, provide a summary with count statistics instead of enumerating every item
 - Do NOT add a separate "Sources" or "References" section at the end
 - Integrate all links naturally within the content
 
