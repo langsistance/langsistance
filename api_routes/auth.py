@@ -10,9 +10,12 @@ Firebase Auth REST API proxy endpoints.
 import os
 import httpx
 from fastapi import APIRouter, HTTPException
+from firebase_admin import auth as fb_admin_auth
 from pydantic import BaseModel, EmailStr
 
 from sources.logger import Logger
+# 触发 firebase_admin.initialize_app 的调用（在 passport 模块顶层）
+import sources.user.passport  # noqa: F401
 
 logger = Logger("backend.log")
 router = APIRouter()
@@ -67,25 +70,44 @@ async def _firebase_post(url: str, payload: dict) -> dict:
 
 @router.post("/auth/signup")
 async def auth_signup(body: EmailPasswordRequest):
+    logger.info(f"/auth/signup attempt: {body.email}")
     data = await _firebase_post(
         f"{IDENTITY_TOOLKIT}:signUp",
         {"email": body.email, "password": body.password, "returnSecureToken": True},
     )
+    uid = data["localId"]
+
+    # 国内邮箱收 Firebase 验证邮件不稳定（163/QQ 常常被拒），
+    # 这里用 Admin SDK 直接标记为已验证，跳过 passport.py 的 email_verified 检查。
+    try:
+        fb_admin_auth.update_user(uid, email_verified=True)
+    except Exception as e:
+        logger.error(f"Failed to mark {uid} as email_verified: {e}")
+        raise HTTPException(status_code=500, detail="signup post-process failed")
+
+    # 标记 verified 后，重新签一个 idToken 让新 claims 生效
+    fresh = await _firebase_post(
+        f"{IDENTITY_TOOLKIT}:signInWithPassword",
+        {"email": body.email, "password": body.password, "returnSecureToken": True},
+    )
+    logger.info(f"/auth/signup ok: {body.email} -> {uid}")
     return {
-        "idToken": data["idToken"],
-        "refreshToken": data["refreshToken"],
-        "expiresIn": int(data["expiresIn"]),
-        "localId": data["localId"],
-        "email": data["email"],
+        "idToken": fresh["idToken"],
+        "refreshToken": fresh["refreshToken"],
+        "expiresIn": int(fresh["expiresIn"]),
+        "localId": fresh["localId"],
+        "email": fresh["email"],
     }
 
 
 @router.post("/auth/login")
 async def auth_login(body: EmailPasswordRequest):
+    logger.info(f"/auth/login attempt: {body.email}")
     data = await _firebase_post(
         f"{IDENTITY_TOOLKIT}:signInWithPassword",
         {"email": body.email, "password": body.password, "returnSecureToken": True},
     )
+    logger.info(f"/auth/login ok: {body.email} -> {data.get('localId')}")
     return {
         "idToken": data["idToken"],
         "refreshToken": data["refreshToken"],
