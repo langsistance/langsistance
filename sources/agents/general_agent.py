@@ -9,6 +9,7 @@ from sources.agents.agent import Agent
 from sources.tools.mcpFinder import MCP_finder
 from sources.memory import Memory
 from sources.logger import Logger
+from sources.dynamic_tool_params import _coerce_json_object
 
 from langchain_core.tools import StructuredTool
 
@@ -31,6 +32,15 @@ class DynamicToolFunction(BaseModel):
     user_id: str = Field(description="user id")
     query_id: str = Field(description="query id")
     params: str = Field(description="params")
+
+
+class DynamicBackendToolFunction(BaseModel):
+    user_id: str = Field(description="user id")
+    query_id: str = Field(description="query id")
+    params: Dict[str, Any] | str = Field(
+        description="API request parameters as a JSON object; legacy JSON strings are also accepted"
+    )
+
 
 class GeneralAgent(Agent):
 
@@ -359,6 +369,23 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
             tool_description = tool_title
 
         tool_params_info = "tool requires three parameters:user id - query id - params\n"
+        if tool_info.push == 2:
+            params_call_instruction = """
+        3. params: A JSON object containing ONLY the API request parameters (template below).
+           Pass params as a structured object in the tool call, not as a JSON-encoded string.
+           Do NOT wrap the whole params object in quotes.
+            """
+            params_output_rule = """
+           - When invoking the tool, provide params as a JSON object, not a string
+           - The params object must be valid JSON and must not contain extra closing braces
+            """
+        else:
+            params_call_instruction = """
+        3. params: A valid JSON string containing ONLY the API request parameters (template below)
+            """
+            params_output_rule = """
+           - The params string must contain valid, strictly formatted JSON
+            """
 
         system_prompt = f"""
         You are an intelligent assistant capable of deciding when and how to use APIs to complete tasks.
@@ -375,7 +402,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         IMPORTANT: The tool takes THREE separate parameters:
         1. user_id: The user identifier (provided in the user prompt, DO NOT include in params)
         2. query_id: The query identifier (provided in the user prompt, DO NOT include in params)
-        3. params: A JSON object containing ONLY the API request parameters (template below)
+        {params_call_instruction}
 
         The third parameter "params" template: {self._sanitize_params_for_llm(tool_info.params)}
 
@@ -403,7 +430,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         4. Output rules:
            - Output ONLY the final, complete JSON for the params parameter
            - DO NOT include explanations, reasoning, comments, or formatting outside JSON
-           - The output must be valid, strictly formatted JSON
+           {params_output_rule}
            - DO NOT include user_id or query_id fields in the JSON output
 
         Execute the tool with the appropriate parameters and generate the final response strictly based on the tool's output.
@@ -771,17 +798,14 @@ Begin your response now:
                             self.logger.error(f"Failed to write to Redis: {str(e)}")
                             return None
 
-                    def dynamic_backend_tool_function(user_id: str, query_id: str, params: str):
+                    def dynamic_backend_tool_function(user_id: str, query_id: str, params: Dict[str, Any] | str):
                         self.logger.info(f"dynamic_backend_tool_function user id is {user_id} - query id is {query_id} - param is {params}")
                         # 从tool_info中获取URL
                         url = tool_info.url
 
                         # 解析参数JSON
-                        try:
-                            params_data = json.loads(tool_info.params)
-                            user_params = json.loads(params)
-                        except json.JSONDecodeError:
-                            raise ValueError(f"Invalid JSON in tool_info.params: {tool_info.params}")
+                        params_data = _coerce_json_object(tool_info.params, "tool_info.params")
+                        user_params = _coerce_json_object(params, "LLM tool params")
 
                         # 获取HTTP方法和Content-Type
                         method = params_data.get("method", "GET").upper()
@@ -895,11 +919,17 @@ Begin your response now:
                         # 默认情况下使用前端工具函数
                         tool_func = dynamic_frontend_tool_function
 
+                    args_schema = (
+                        DynamicBackendToolFunction
+                        if tool_info.push == 2
+                        else DynamicToolFunction
+                    )
+
                     dynamic_tool = StructuredTool.from_function(
                         func=tool_func,
                         name=cleaned_tool_name,
                         description=tool_info.description if tool_info.description else "Dynamic knowledge tool",
-                        args_schema=DynamicToolFunction
+                        args_schema=args_schema
                     )
 
                     # 合并动态工具
