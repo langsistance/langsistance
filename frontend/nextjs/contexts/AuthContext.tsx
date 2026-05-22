@@ -1,24 +1,24 @@
 'use client'
 import { createContext, useContext, useCallback, useEffect, useState } from 'react'
-import type { User } from 'firebase/auth'
-import { onAuthStateChanged, signOut } from 'firebase/auth'
-import { auth } from '@/lib/firebase'
+import { onAuthChange, logout as clientLogout, type AuthUser } from '@/lib/auth-client'
 
 interface AuthContextValue {
-  user: User | null | undefined
+  user: AuthUser | null | undefined
   logout: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null | undefined>(undefined)
+  const [user, setUser] = useState<AuthUser | null | undefined>(undefined)
 
   useEffect(() => {
-    return onAuthStateChanged(auth, setUser)
+    return onAuthChange(setUser)
   }, [])
 
-  const logout = useCallback(() => signOut(auth), [])
+  const logout = useCallback(async () => {
+    clientLogout()
+  }, [])
 
   return (
     <AuthContext.Provider value={{ user, logout }}>

@@ -2,13 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import {
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  GoogleAuthProvider,
-  signInWithPopup,
-} from 'firebase/auth'
-import { auth } from '@/lib/firebase'
+import { login, signup } from '@/lib/auth-client'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { I18nProvider, useI18n } from '@/lib/app-i18n'
 
@@ -32,23 +26,13 @@ function LoginForm() {
     setError('')
     try {
       if (isSignUp) {
-        await createUserWithEmailAndPassword(auth, email, password)
+        await signup(email, password)
       } else {
-        await signInWithEmailAndPassword(auth, email, password)
+        await login(email, password)
       }
       router.push('/app/chat')
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Authentication failed')
-    }
-  }
-
-  async function handleGoogle() {
-    setError('')
-    try {
-      await signInWithPopup(auth, new GoogleAuthProvider())
-      router.push('/app/chat')
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Google sign-in failed')
     }
   }
 
@@ -100,16 +84,6 @@ function LoginForm() {
             {isSignUp ? (lang === 'en' ? 'Sign Up' : '注册') : (lang === 'en' ? 'Sign In' : '登录')}
           </button>
         </form>
-
-        <div className="login-divider">
-          <hr />
-          <span>{lang === 'en' ? 'or' : '或'}</span>
-          <hr />
-        </div>
-
-        <button className="btn btn-secondary" style={{ width: '100%' }} onClick={handleGoogle}>
-          {lang === 'en' ? 'Continue with Google' : '使用 Google 登录'}
-        </button>
 
         <p className="login-footer">
           {isSignUp
