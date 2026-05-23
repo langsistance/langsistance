@@ -84,7 +84,17 @@ class TestResultPipeline(unittest.IsolatedAsyncioTestCase):
             }),
             json.dumps({
                 "matches": [
+                    {"index": 0, "keep": True, "reason": "verified"},
+                ]
+            }),
+            json.dumps({
+                "matches": [
                     {"index": 2, "keep": True, "reason": "fits"},
+                ]
+            }),
+            json.dumps({
+                "matches": [
+                    {"index": 0, "keep": True, "reason": "verified"},
                 ]
             }),
         ])
@@ -104,7 +114,7 @@ class TestResultPipeline(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(summary.total, 3)
         self.assertEqual(summary.matched, 2)
-        self.assertEqual(len(llm.filter_requests), 2)
+        self.assertEqual(len(llm.filter_requests), 4)
         self.assertEqual(len(llm.format_requests), 2)
         self.assertIn("正在筛选 1-2 / 3", callback.text)
         self.assertIn("找到 1 条匹配项", callback.text)
@@ -128,6 +138,53 @@ class TestResultPipeline(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(llm.filter_requests), 0)
         self.assertEqual(len(llm.format_requests), 2)
         self.assertIn("已获取 3 条结果，正在整理输出", callback.text)
+
+
+    async def test_filter_verifier_rejects_candidates_that_do_not_strictly_match_instruction(self):
+        llm = FakeLLM([
+            json.dumps({
+                "matches": [
+                    {"index": 0, "keep": True, "reason": "company"},
+                    {"index": 1, "keep": True, "reason": "incorrectly kept individual"},
+                ]
+            }),
+            json.dumps({
+                "matches": [
+                    {"index": 0, "keep": True, "reason": "assignor is a company"},
+                    {"index": 1, "keep": False, "reason": "assignor is an individual"},
+                ]
+            })
+        ])
+        callback = FakeCallback()
+        pipeline = ResultPipeline(llm=llm, callback_handler=callback, batch_size=2)
+        items = [
+            {
+                "title": "Company-originated patent",
+                "assignee": "Samsung Display Co., Ltd.",
+                "assignors": ["Samsung Display Co., Ltd."],
+            },
+            {
+                "title": "Individual-originated patent",
+                "assignee": "Samsung Display Co., Ltd.",
+                "assignors": ["KIM, JIN SOO"],
+            },
+        ]
+
+        summary = await pipeline.stream_items(
+            items,
+            user_instruction=(
+                "Search for patents with Samsung Display Co., Ltd. as the patent assignee. "
+                "I only want patents where the assignors are companies, not individual."
+            ),
+            requires_filter=True,
+        )
+
+        self.assertEqual(summary.total, 2)
+        self.assertEqual(summary.matched, 1)
+        self.assertEqual(len(llm.format_requests), 1)
+        formatted_payload = llm.format_requests[0][1]
+        self.assertIn("Company-originated patent", formatted_payload)
+        self.assertNotIn("Individual-originated patent", formatted_payload)
 
 
 if __name__ == "__main__":

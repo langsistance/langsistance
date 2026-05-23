@@ -6,7 +6,6 @@ from typing import Any, Dict, List, Optional
 
 COMMON_LIST_KEYS = ("items", "results", "records", "rows", "data", "list")
 
-
 @dataclass
 class LocatedItems:
     path: str
@@ -201,10 +200,41 @@ class ResultPipeline:
             for match in payload.get("matches", [])
             if isinstance(match, dict) and match.get("keep") is True and "index" in match
         }
-        return [
+        kept_items = [
             item
             for offset, item in enumerate(batch)
             if batch_start + offset in keep_indexes
+        ]
+        if not kept_items:
+            return []
+        return await self._verify_kept_batch(kept_items, user_instruction)
+
+    async def _verify_kept_batch(self, kept_items: List[Any], user_instruction: str) -> List[Any]:
+        response = await self.llm.complete_simple(
+            system_prompt=(
+                "You are a strict JSON verifier. Review only the candidate items "
+                "provided by the previous filtering step. For each item, decide "
+                "whether it strictly satisfies the full original user instruction. "
+                "If an item is ambiguous or lacks evidence for the requested condition, "
+                "set keep to false. Return only valid JSON with a top-level 'matches' "
+                "array. Each match must include the zero-based candidate index, "
+                "a boolean keep value, and a short reason. Do not output Markdown."
+            ),
+            user_content=(
+                f"Original user instruction:\n{user_instruction}\n\n"
+                f"Candidate items JSON:\n{json.dumps(kept_items, ensure_ascii=False, indent=2)}"
+            ),
+        )
+        payload = _parse_json_object(response)
+        keep_indexes = {
+            int(match["index"])
+            for match in payload.get("matches", [])
+            if isinstance(match, dict) and match.get("keep") is True and "index" in match
+        }
+        return [
+            item
+            for index, item in enumerate(kept_items)
+            if index in keep_indexes
         ]
 
     async def _format_batch(self, batch: List[Any]) -> None:
