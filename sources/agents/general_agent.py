@@ -11,13 +11,7 @@ from sources.memory import Memory
 from sources.logger import Logger
 from sources.dynamic_tool_params import _coerce_json_object
 from sources.result_pipeline import ResultPipeline, find_primary_list, user_intent_requests_filter
-from sources.tool_param_policy import (
-    PARAMS_FIELD_DESCRIPTION,
-    TEMPLATE_PARAM_RULES,
-    normalize_tool_request_params,
-    should_expose_dynamic_tool,
-    should_prefetch_tool_result,
-)
+from sources.tool_param_policy import should_expose_dynamic_tool, should_prefetch_tool_result
 
 from langchain_core.tools import StructuredTool
 
@@ -39,14 +33,14 @@ _SENSITIVE_HEADER_RE = re.compile(
 class DynamicToolFunction(BaseModel):
     user_id: str = Field(description="user id")
     query_id: str = Field(description="query id")
-    params: str = Field(description=PARAMS_FIELD_DESCRIPTION)
+    params: str = Field(description="params")
 
 
 class DynamicBackendToolFunction(BaseModel):
     user_id: str = Field(description="user id")
     query_id: str = Field(description="query id")
     params: Dict[str, Any] | str = Field(
-        description=PARAMS_FIELD_DESCRIPTION
+        description="API request parameters as a JSON object; legacy JSON strings are also accepted"
     )
 
 
@@ -415,11 +409,26 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
 
         The third parameter "params" template: {self._sanitize_params_for_llm(tool_info.params)}
 
-        Your task is to analyze the user's input, start from the third parameter "params" template, and return the complete params JSON after applying only the changes allowed by the user's specific requirements.
+        Your task is to analyze the user's input and modify the third parameter "params" template according to the user's specific requirements. Generate a new JSON object containing only the parameters that need to be changed or specified based on the user's request.
 
         You MUST follow all rules below without exception:
 
-        {TEMPLATE_PARAM_RULES}
+        1. You may ONLY modify existing values in the JSON.
+           - DO NOT add new fields, If a field is empty in the template, then leave it empty.
+           - DO NOT change the JSON structure or nesting
+           - CRITICAL: DO NOT include user_id or query_id in the params JSON - these are separate parameters
+
+        2. Field semantics:
+           - method MUST remain unchanged
+           - query contains URL query parameters
+           - header contains HTTP headers
+           - body contains the HTTP request body
+
+        3. Value replacement rules:
+           - Replace a value only if the user query clearly maps to the meaning of an existing field
+           - If the user query does not mention or imply a field, keep its original value unchanged
+           - Do NOT infer or invent information not explicitly expressed by the user
+           - DO NOT extract or infer user_id or query_id from the user's request into the params JSON
 
         4. Output rules:
            - Output ONLY the final, complete JSON for the params parameter
@@ -789,9 +798,7 @@ Begin your response now:
                             #     # 将参数转换为JSON并存储到Redis
                             #     param_dict["llm_params"] = params
 
-                            params_data = _coerce_json_object(tool_info.params, "tool_info.params")
-                            user_params = _coerce_json_object(params, "LLM tool params")
-                            params_json = json.dumps(normalize_tool_request_params(params_data, user_params))
+                            params_json = json.dumps(params)
 
                             redis_conn.set(redis_key, params_json, ex=1200)
 
@@ -825,10 +832,7 @@ Begin your response now:
 
                         # 解析参数JSON
                         params_data = _coerce_json_object(tool_info.params, "tool_info.params")
-                        user_params = normalize_tool_request_params(
-                            params_data,
-                            _coerce_json_object(params, "LLM tool params")
-                        )
+                        user_params = _coerce_json_object(params, "LLM tool params")
 
                         # 获取HTTP方法和Content-Type
                         method = params_data.get("method", "GET").upper()
