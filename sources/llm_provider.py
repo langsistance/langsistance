@@ -3,6 +3,7 @@ import platform
 import socket
 import subprocess
 import time
+import asyncio
 from urllib.parse import urlparse
 
 import httpx
@@ -507,6 +508,26 @@ class Provider:
         async for chunk in llm.astream(messages):
             if chunk.content and callback_handler:
                 await callback_handler.on_llm_new_token(chunk.content)
+
+    async def complete_simple(self, system_prompt: str, user_content: str) -> str:
+        """Return a single chat completion directly, bypassing the agent framework."""
+        if self.provider_name == "openai":
+            llm = ChatOpenAI(
+                model=self.model,
+                api_key=self.api_key,
+                temperature=0,
+            )
+            response = await llm.ainvoke([
+                ("system", system_prompt),
+                ("human", user_content),
+            ])
+            return response.content
+
+        messages = [
+            {"role": "user", "content": user_content},
+            {"role": "system", "content": system_prompt},
+        ]
+        return await asyncio.to_thread(self.respond, {}, messages, False)
 
     def test_fn(self, tools, history, verbose=True):
         """

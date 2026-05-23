@@ -10,6 +10,7 @@ from sources.tools.mcpFinder import MCP_finder
 from sources.memory import Memory
 from sources.logger import Logger
 from sources.dynamic_tool_params import _coerce_json_object
+from sources.result_pipeline import ResultPipeline, find_primary_list, user_intent_requests_filter
 
 from langchain_core.tools import StructuredTool
 
@@ -64,6 +65,7 @@ class GeneralAgent(Agent):
         self.enabled = True
         self.knowledgeTool = {}
         self.logger = Logger("general_agent.log")
+        self._pending_user_instruction = ""
 
     def get_api_keys(self) -> dict:
         """
@@ -553,16 +555,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
                 # 尝试将 tool_data 解析为 JSON
                 try:
                     result_data = json.loads(tool_data)
-                    # 如果结果是一个 list，提取 raw_items 以供后续批处理
-                    if isinstance(result_data, list) and result_data:
-                        raw_items = result_data
-                    elif isinstance(result_data, dict):
-                        raw_items = next(
-                            (v for v in result_data.values() if isinstance(v, list) and v),
-                            None
-                        )
-                    else:
-                        raw_items = None
+                    raw_items = find_primary_list(result_data).items
 
                     if raw_items:
                         self._pending_raw_items = raw_items
@@ -707,15 +700,7 @@ Begin your response now:
                 else:
                     try:
                         result_data = response.json() if response.content else {}
-                        if isinstance(result_data, list) and result_data:
-                            raw_items = result_data
-                        elif isinstance(result_data, dict):
-                            raw_items = next(
-                                (v for v in result_data.values() if isinstance(v, list) and v),
-                                None
-                            )
-                        else:
-                            raw_items = None
+                        raw_items = find_primary_list(result_data).items
 
                         if raw_items:
                             self._pending_raw_items = raw_items
@@ -907,16 +892,7 @@ Begin your response now:
                                 try:
                                     result_data = response.json() if response.content else None
                                     if isinstance(result_data, (dict, list)):
-                                        # Extract raw items list for batch LLM analysis
-                                        if isinstance(result_data, list) and result_data:
-                                            raw_items = result_data
-                                        elif isinstance(result_data, dict):
-                                            raw_items = next(
-                                                (v for v in result_data.values() if isinstance(v, list) and v),
-                                                None
-                                            )
-                                        else:
-                                            raw_items = None
+                                        raw_items = find_primary_list(result_data).items
 
                                         if raw_items:
                                             list_count = len(raw_items)
@@ -1041,6 +1017,7 @@ Begin your response now:
 
     async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler, push_filter=None):
         #self.knowledgeTool = get_knowledge_tool(user_id,  prompt)
+        self._pending_user_instruction = prompt
         self.knowledgeTool = await asyncio.to_thread(get_knowledge_tool, user_id, prompt, push_filter=push_filter)
         user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
         system_prompt = self.generate_system_prompt(tool_data)
@@ -1062,6 +1039,18 @@ Begin your response now:
             pending = getattr(self, '_pending_raw_items', None)
             if pending:
                 self._pending_raw_items = None
+                user_instruction = getattr(self, "_pending_user_instruction", "")
+                pipeline = ResultPipeline(
+                    llm=self.llm,
+                    callback_handler=callback_handler,
+                    batch_size=5,
+                )
+                await pipeline.stream_items(
+                    pending,
+                    user_instruction=user_instruction,
+                    requires_filter=user_intent_requests_filter(user_instruction),
+                )
+                return
                 total = len(pending)
                 batch_size = 5
                 await callback_handler.on_llm_new_token(
