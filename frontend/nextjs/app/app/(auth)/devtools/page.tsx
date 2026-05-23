@@ -236,16 +236,26 @@ export default function DevTools() {
   async function handleImport() {
     setImportError('')
     setImportSuccess('')
-    let parsed
+    const text = raw.trim()
+    if (!text) return
+
+    let specFormat = 'Unknown'
     try {
-      parsed = JSON.parse(raw)
+      JSON.parse(text)
+      specFormat = 'json'
     } catch {
       setImportError(t('alerts.openApiCheckTips'))
       return
     }
+
+    if (specFormat === 'Unknown') {
+      setImportError(t('alerts.openApiCheckTips'))
+      return
+    }
+
     setImporting(true)
     try {
-      await createToolFromCustom({ ...parsed, push: 2 })
+      await createToolFromCustom({ spec_format: specFormat, spec_content: text })
       setImportSuccess(t('notifications.dataImported'))
       setRaw('')
       await loadTools()
