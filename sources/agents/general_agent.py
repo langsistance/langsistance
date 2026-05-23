@@ -12,6 +12,7 @@ from sources.logger import Logger
 from sources.dynamic_tool_params import _coerce_json_object
 from sources.result_pipeline import ResultPipeline, find_primary_list, user_intent_requests_filter
 from sources.tool_param_policy import (
+    PARAMS_FIELD_DESCRIPTION,
     TEMPLATE_PARAM_RULES,
     normalize_tool_request_params,
     should_expose_dynamic_tool,
@@ -38,14 +39,14 @@ _SENSITIVE_HEADER_RE = re.compile(
 class DynamicToolFunction(BaseModel):
     user_id: str = Field(description="user id")
     query_id: str = Field(description="query id")
-    params: str = Field(description="params")
+    params: str = Field(description=PARAMS_FIELD_DESCRIPTION)
 
 
 class DynamicBackendToolFunction(BaseModel):
     user_id: str = Field(description="user id")
     query_id: str = Field(description="query id")
     params: Dict[str, Any] | str = Field(
-        description="API request parameters as a JSON object; legacy JSON strings are also accepted"
+        description=PARAMS_FIELD_DESCRIPTION
     )
 
 
@@ -414,7 +415,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
 
         The third parameter "params" template: {self._sanitize_params_for_llm(tool_info.params)}
 
-        Your task is to analyze the user's input and modify the third parameter "params" template according to the user's specific requirements. Generate a new JSON object containing only the parameters that need to be changed or specified based on the user's request.
+        Your task is to analyze the user's input, start from the third parameter "params" template, and return the complete params JSON after applying only the changes allowed by the user's specific requirements.
 
         You MUST follow all rules below without exception:
 
