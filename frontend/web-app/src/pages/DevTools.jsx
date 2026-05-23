@@ -205,16 +205,26 @@ export default function DevTools() {
   async function handleImport() {
     setImportError('')
     setImportSuccess('')
-    let parsed
+    const text = raw.trim()
+    if (!text) return
+
+    let specFormat = 'Unknown'
     try {
-      parsed = JSON.parse(raw)
+      JSON.parse(text)
+      specFormat = 'json'
     } catch {
       setImportError('JSON 格式错误，请检查输入')
       return
     }
+
+    if (specFormat === 'Unknown') {
+      setImportError('JSON 格式错误，请检查输入')
+      return
+    }
+
     setImporting(true)
     try {
-      await createToolFromCustom({ ...parsed, push: 2 })
+      await createToolFromCustom({ spec_format: specFormat, spec_content: text })
       setImportSuccess('导入成功')
       setRaw('')
       await loadTools()

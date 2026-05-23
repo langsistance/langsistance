@@ -1,0 +1,158 @@
+/**
+ * 通过后端代理与 Firebase Auth 交互。
+ *
+ * 国内浏览器无法直连 *.googleapis.com，所以登录/刷新等流程都走后端代理。
+ * 拿到的 idToken 是 Firebase 真签的，可被现有 verify_firebase_token 校验。
+ *
+ * Token 存 localStorage；getValidToken 自动在过期前 60s 触发 refresh。
+ * 提供轻量订阅机制替代 Firebase 的 onAuthStateChanged。
+ */
+
+const STORAGE_KEY = 'cp_auth_v1'
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'https://api.copiioai.com'
+
+export interface AuthUser {
+  uid: string
+  email: string
+}
+
+interface StoredAuth {
+  idToken: string
+  refreshToken: string
+  expiresAt: number // ms epoch
+  uid: string
+  email: string
+}
+
+type Listener = (user: AuthUser | null) => void
+const listeners = new Set<Listener>()
+
+function isBrowser() {
+  return typeof window !== 'undefined'
+}
+
+function load(): StoredAuth | null {
+  if (!isBrowser()) return null
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as StoredAuth) : null
+  } catch {
+    return null
+  }
+}
+
+function save(s: StoredAuth | null) {
+  if (!isBrowser()) return
+  if (s) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(s))
+  else window.localStorage.removeItem(STORAGE_KEY)
+  notify(s ? { uid: s.uid, email: s.email } : null)
+}
+
+function notify(user: AuthUser | null) {
+  listeners.forEach((cb) => {
+    try {
+      cb(user)
+    } catch {
+      /* swallow */
+    }
+  })
+}
+
+if (isBrowser()) {
+  window.addEventListener('storage', (e) => {
+    if (e.key !== STORAGE_KEY) return
+    const s = load()
+    notify(s ? { uid: s.uid, email: s.email } : null)
+  })
+}
+
+async function call<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`${path} ${res.status}${text ? ` — ${text}` : ''}`)
+  }
+  return res.json() as Promise<T>
+}
+
+interface AuthResponse {
+  idToken: string
+  refreshToken: string
+  expiresIn: number
+  localId: string
+  email?: string
+}
+
+function persist(r: AuthResponse, email: string) {
+  const stored: StoredAuth = {
+    idToken: r.idToken,
+    refreshToken: r.refreshToken,
+    expiresAt: Date.now() + r.expiresIn * 1000,
+    uid: r.localId,
+    email: r.email ?? email,
+  }
+  save(stored)
+  return stored
+}
+
+export async function login(email: string, password: string): Promise<AuthUser> {
+  const r = await call<AuthResponse>('/auth/login', { email, password })
+  const s = persist(r, email)
+  return { uid: s.uid, email: s.email }
+}
+
+export async function signup(email: string, password: string): Promise<AuthUser> {
+  const r = await call<AuthResponse>('/auth/signup', { email, password })
+  const s = persist(r, email)
+  return { uid: s.uid, email: s.email }
+}
+
+export async function resetPassword(email: string): Promise<void> {
+  await call<{ ok: boolean }>('/auth/reset', { email })
+}
+
+export function logout(): void {
+  save(null)
+}
+
+let refreshing: Promise<string | null> | null = null
+
+export async function getValidToken(): Promise<string | null> {
+  const s = load()
+  if (!s) return null
+  if (Date.now() < s.expiresAt - 60_000) return s.idToken
+
+  if (!refreshing) {
+    refreshing = (async () => {
+      try {
+        const r = await call<AuthResponse>('/auth/refresh', { refreshToken: s.refreshToken })
+        const updated = persist(r, s.email)
+        return updated.idToken
+      } catch {
+        save(null)
+        return null
+      } finally {
+        refreshing = null
+      }
+    })()
+  }
+  return refreshing
+}
+
+export function getCurrentUser(): AuthUser | null {
+  const s = load()
+  return s ? { uid: s.uid, email: s.email } : null
+}
+
+export function onAuthChange(cb: Listener): () => void {
+  listeners.add(cb)
+  // fire current state synchronously (matches Firebase semantics: subscribe gets initial)
+  queueMicrotask(() => cb(getCurrentUser()))
+  return () => {
+    listeners.delete(cb)
+  }
+}
