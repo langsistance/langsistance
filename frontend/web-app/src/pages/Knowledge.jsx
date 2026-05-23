@@ -7,6 +7,7 @@ import {
   queryTools,
 } from '../services/api'
 import Pagination from '../components/Pagination'
+import { filterKnowledgeBaseTools } from '../utils/toolFilters'
 
 function KnowledgeModal({ item, tools, onClose, onSave, onDelete }) {
   const [form, setForm] = useState(
@@ -14,7 +15,7 @@ function KnowledgeModal({ item, tools, onClose, onSave, onDelete }) {
   )
   const [saveError, setSaveError] = useState('')
 
-  // Hide tool selector when editing and associated tool has push=2 (not in filtered list)
+  // Hide tool selector when editing and associated tool is unavailable in the filtered list.
   const hasValidTool = item?.tool_id
     ? tools.some((t) => String(t.id) === String(item.tool_id))
     : true
@@ -179,7 +180,7 @@ export default function Knowledge() {
 
   useEffect(() => {
     queryTools({})
-      .then((res) => setTools((res.data || []).filter((t) => t.push !== 2)))
+      .then((res) => setTools(filterKnowledgeBaseTools(res.data || [])))
       .catch(() => {})
   }, [])
 

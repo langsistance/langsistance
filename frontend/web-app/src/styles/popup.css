@@ -2181,12 +2181,15 @@ body {
 }
 
 .knowledge-card {
+  display: flex;
+  flex-direction: column;
   background: var(--color-bg-white);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   padding: var(--spacing-4);
   transition: all 0.2s;
   cursor: pointer;
+  overflow: hidden;
 }
 
 .knowledge-card:hover {
@@ -2212,11 +2215,12 @@ body {
   font-size: 16px;
   color: var(--color-text-secondary);
   line-height: 1.6;
-  margin-bottom: var(--spacing-3);
+  margin-bottom: auto;
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  overflow-wrap: anywhere;
 }
 
 .knowledge-card-tags {
@@ -2241,19 +2245,26 @@ body {
   flex-wrap: wrap;
   gap: var(--spacing-2);
   margin-bottom: var(--spacing-3);
+  margin-top: var(--spacing-3);
   padding-top: var(--spacing-3);
   border-top: 1px solid var(--color-border);
+  min-width: 0;
 }
 
 .knowledge-api-badge {
   display: inline-flex;
   align-items: center;
   gap: var(--spacing-1);
+  max-width: 100%;
+  min-width: 0;
   padding: 2px 8px;
   background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-hover) 100%);
   color: white;
   border-radius: var(--radius-sm);
   font-size: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .knowledge-card-footer {
@@ -2468,6 +2479,8 @@ body {
    ============================================================================= */
 
 .share-card {
+  display: flex;
+  flex-direction: column;
   background: var(--color-bg-white);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -2530,11 +2543,18 @@ body {
 .share-card-message {
   font-size: 16px;
   color: var(--color-text-secondary);
+  line-height: 1.55;
   padding: var(--spacing-3);
   background: var(--color-bg-hover);
   border-radius: var(--radius-md);
   margin-bottom: var(--spacing-3);
   font-style: italic;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .share-card-knowledge {
@@ -2566,6 +2586,7 @@ body {
   align-items: center;
   font-size: 16px;
   color: var(--color-text-secondary);
+  margin-top: auto;
   margin-bottom: var(--spacing-3);
 }
 
