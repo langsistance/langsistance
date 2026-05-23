@@ -11,6 +11,7 @@ from sources.memory import Memory
 from sources.logger import Logger
 from sources.dynamic_tool_params import _coerce_json_object
 from sources.result_pipeline import ResultPipeline, find_primary_list, user_intent_requests_filter
+from sources.tool_param_policy import TEMPLATE_PARAM_RULES, should_expose_dynamic_tool
 
 from langchain_core.tools import StructuredTool
 
@@ -412,22 +413,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
 
         You MUST follow all rules below without exception:
 
-        1. You may ONLY modify existing values in the JSON.
-           - DO NOT add new fields, If a field is empty in the template, then leave it empty.
-           - DO NOT change the JSON structure or nesting
-           - CRITICAL: DO NOT include user_id or query_id in the params JSON - these are separate parameters
-
-        2. Field semantics:
-           - method MUST remain unchanged
-           - query contains URL query parameters
-           - header contains HTTP headers
-           - body contains the HTTP request body
-
-        3. Value replacement rules:
-           - Replace a value only if the user query clearly maps to the meaning of an existing field
-           - If the user query does not mention or imply a field, keep its original value unchanged
-           - Do NOT infer or invent information not explicitly expressed by the user
-           - DO NOT extract or infer user_id or query_id from the user's request into the params JSON
+        {TEMPLATE_PARAM_RULES}
 
         4. Output rules:
            - Output ONLY the final, complete JSON for the params parameter
@@ -508,10 +494,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
             else:
                 return self.generate_template_system_prompt()
         elif tool_info.push == 2:
-            if self.is_query_and_body_empty():
-                return self.generate_backend_tool_direct_system_prompt()
-            else:
-                return self.generate_template_system_prompt()
+            return self.generate_template_system_prompt()
         elif tool_info.push == 3:
             return self.generate_frontend_tool_direct_system_prompt(tool_data)
         else:
@@ -966,28 +949,13 @@ Begin your response now:
         _, tool_info = self.knowledgeTool
 
         tools = []
-        # 根据tool_info.push的值选择不同系统提示词
-        if tool_info.push == 1:
-            # If tool_data is already provided, the system prompt contains the
-            # pre-fetched result. Do NOT give the LLM a LangChain tool —
-            # it would call the tool, receive a ToolMessage, and ignore the
-            # pre-formatted list we placed in the system prompt.
-            if tool_data and tool_data.strip():
-                return tools
-            if self.is_query_and_body_empty():
-                return tools
-            else:
-                return await self.get_dynamic_tools()
-        elif tool_info.push == 2:
-            if self.is_query_and_body_empty():
-                return tools
-            else:
-                return await self.get_dynamic_tools()
-        elif tool_info.push == 3:
-            return tools
-        else:
-            # 默认情况下固定的系统提示词
+        if should_expose_dynamic_tool(
+            push=tool_info.push,
+            has_tool_data=bool(tool_data and tool_data.strip()),
+            query_body_empty=self.is_query_and_body_empty(),
+        ):
             return await self.get_dynamic_tools()
+        return tools
 
     async def process(self, user_id, prompt, query_id, speech_module, push_filter=None) -> str | tuple[str, str]:
         if not self.enabled:
