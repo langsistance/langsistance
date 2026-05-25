@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { queryPublicKnowledge, copyKnowledge } from '@/services/api'
 import { useI18n } from '@/lib/app-i18n'
+import { KNOWLEDGE_LIST_PAGE_SIZE } from '@/lib/appUiConfig'
 import Pagination from '@/components/app/Pagination'
 
 interface CommunityItem {
@@ -89,7 +90,7 @@ export default function Community() {
   const [total, setTotal] = useState(0)
   const [selected, setSelected] = useState<CommunityItem | null>(null)
   const [copying, setCopying] = useState(false)
-  const PAGE_SIZE = 10
+  const PAGE_SIZE = KNOWLEDGE_LIST_PAGE_SIZE
 
   const [debouncedSearch, setDebouncedSearch] = useState(search)
   useEffect(() => {

@@ -10,6 +10,7 @@ import {
 } from '@/services/api'
 import { useI18n } from '@/lib/app-i18n'
 import { filterKnowledgeBaseTools } from '@/lib/toolFilters'
+import { KNOWLEDGE_LIST_PAGE_SIZE } from '@/lib/appUiConfig'
 import Pagination from '@/components/app/Pagination'
 
 interface KnowledgeItem {
@@ -188,7 +189,7 @@ export default function Knowledge() {
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [modal, setModal] = useState<KnowledgeItem | 'create' | null>(null)
-  const PAGE_SIZE = 10
+  const PAGE_SIZE = KNOWLEDGE_LIST_PAGE_SIZE
 
   const [debouncedSearch, setDebouncedSearch] = useState(search)
   useEffect(() => {
@@ -310,9 +311,7 @@ export default function Knowledge() {
           </div>
         )}
 
-        {totalPages > 1 && (
-          <Pagination page={page} totalPages={totalPages} onChange={setPage} />
-        )}
+        <Pagination page={page} totalPages={totalPages} onChange={setPage} />
       </div>
 
       {modal && (

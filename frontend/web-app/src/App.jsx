@@ -7,6 +7,7 @@ import Knowledge from './pages/Knowledge'
 import Share from './pages/Share'
 import Community from './pages/Community'
 import DevTools from './pages/DevTools'
+import { ChatProvider } from './contexts/ChatContext'
 
 function RequireAuth({ children }) {
   const { user } = useAuth()
@@ -23,7 +24,9 @@ export default function App() {
         path="/*"
         element={
           <RequireAuth>
-            <Layout />
+            <ChatProvider>
+              <Layout />
+            </ChatProvider>
           </RequireAuth>
         }
       >

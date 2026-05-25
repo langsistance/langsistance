@@ -3,6 +3,7 @@
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
+import { ChatProvider } from '@/contexts/ChatContext'
 import { I18nProvider } from '@/lib/app-i18n'
 import AppLayout from '@/components/app/AppLayout'
 
@@ -36,7 +37,9 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
   return (
     <AuthProvider>
       <I18nProvider>
-        <AuthGuard>{children}</AuthGuard>
+        <ChatProvider>
+          <AuthGuard>{children}</AuthGuard>
+        </ChatProvider>
       </I18nProvider>
     </AuthProvider>
   )

@@ -8,6 +8,7 @@ import {
 } from '../services/api'
 import Pagination from '../components/Pagination'
 import { filterKnowledgeBaseTools } from '../utils/toolFilters'
+import { KNOWLEDGE_LIST_PAGE_SIZE } from '../utils/appUiConfig'
 
 function KnowledgeModal({ item, tools, onClose, onSave, onDelete }) {
   const [form, setForm] = useState(
@@ -153,7 +154,7 @@ export default function Knowledge() {
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [modal, setModal] = useState(null)
-  const PAGE_SIZE = 10
+  const PAGE_SIZE = KNOWLEDGE_LIST_PAGE_SIZE
 
   const [debouncedSearch, setDebouncedSearch] = useState(search)
   useEffect(() => {

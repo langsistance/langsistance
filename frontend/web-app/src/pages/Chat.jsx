@@ -1,17 +1,22 @@
-import { useState, useRef, useEffect } from 'react'
+import { useRef, useEffect } from 'react'
 import { queryStream } from '../services/api'
 import { useI18n } from '../i18n'
-
-function genId() {
-  return Math.random().toString(36).slice(2)
-}
+import { useChatSession } from '../contexts/ChatContext'
+import { createChatId, createChatMessage, updateAssistantMessage } from '../utils/chatSession'
 
 export default function Chat() {
   const { t } = useI18n()
-  const [messages, setMessages] = useState([])
-  const [input, setInput] = useState('')
-  const [streaming, setStreaming] = useState(false)
-  const abortRef = useRef(null)
+  const {
+    messages,
+    setMessages,
+    input,
+    setInput,
+    streaming,
+    setStreaming,
+    streamingId,
+    setStreamingId,
+    abortRef,
+  } = useChatSession()
   const bottomRef = useRef(null)
   const textareaRef = useRef(null)
 
@@ -25,12 +30,14 @@ export default function Chat() {
     setInput('')
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
 
-    const queryId = genId()
-    setMessages((m) => [...m, { role: 'user', content: text, id: genId() }])
+    const queryId = createChatId()
+    setMessages((m) => [...m, createChatMessage('user', text)])
 
-    const assistantId = genId()
-    setMessages((m) => [...m, { role: 'assistant', content: '', id: assistantId }])
+    const assistant = createChatMessage('assistant', '')
+    const assistantId = assistant.id
+    setMessages((m) => [...m, assistant])
     setStreaming(true)
+    setStreamingId(assistantId)
 
     const controller = new AbortController()
     abortRef.current = controller
@@ -58,13 +65,7 @@ export default function Chat() {
               ? evt
               : (evt.content ?? evt.token ?? evt.answer ?? '')
             if (token) {
-              setMessages((m) =>
-                m.map((msg) =>
-                  msg.id === assistantId
-                    ? { ...msg, content: msg.content + token }
-                    : msg
-                )
-              )
+              setMessages((m) => updateAssistantMessage(m, assistantId, token))
             }
           } catch {
             // non-JSON line, ignore
@@ -83,6 +84,7 @@ export default function Chat() {
       }
     } finally {
       setStreaming(false)
+      setStreamingId(null)
       abortRef.current = null
     }
   }
@@ -119,7 +121,7 @@ export default function Chat() {
           {messages.map((msg) => (
             <div key={msg.id} className={`chat-message-wrapper ${msg.role}`}>
               <div className={`chat-message ${msg.role}`}>
-                {msg.content || (msg.role === 'assistant' && streaming ? '▋' : '')}
+                {msg.content || (msg.role === 'assistant' && streaming && streamingId === msg.id ? '▋' : '')}
               </div>
             </div>
           ))}

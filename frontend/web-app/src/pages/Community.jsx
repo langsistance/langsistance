@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { queryPublicKnowledge, copyKnowledge } from '../services/api'
 import Pagination from '../components/Pagination'
+import { KNOWLEDGE_LIST_PAGE_SIZE } from '../utils/appUiConfig'
 
 function KnowledgeDetailModal({ item, onClose, onCopy, copying }) {
   const date = item.update_time
@@ -70,7 +71,7 @@ export default function Community() {
   const [total, setTotal] = useState(0)
   const [selected, setSelected] = useState(null)
   const [copying, setCopying] = useState(false)
-  const PAGE_SIZE = 10
+  const PAGE_SIZE = KNOWLEDGE_LIST_PAGE_SIZE
 
   const [debouncedSearch, setDebouncedSearch] = useState(search)
   useEffect(() => {
