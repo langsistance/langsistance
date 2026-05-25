@@ -1098,8 +1098,10 @@ Begin your response now:
                     "Use **bold** for field names. Number each item. "
                     "Do NOT add any preamble, summary, or conclusion — output only the formatted items."
                 )
+                self.logger.info(f"pending: {pending}")
                 for batch_start in range(0, total, batch_size):
                     batch = pending[batch_start:batch_start + batch_size]
+                    self.logger.info(f"batch: {batch}")
                     _replace_uspto_download_urls_for_batch(
                         batch,
                         download_headers,
