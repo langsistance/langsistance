@@ -310,6 +310,92 @@ button { cursor: pointer; }
   margin: 20px 0;
 }
 
+.chat-message.assistant.assistant-is-waiting > div:not(.assistant-waiting) {
+  display: none;
+}
+
+.assistant-waiting {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 260px;
+  max-width: 100%;
+  min-height: 48px;
+  padding: 10px 14px;
+  overflow: hidden;
+  border: 1px solid rgba(16, 163, 127, 0.22);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(16, 163, 127, 0.08), rgba(48, 123, 255, 0.06)),
+    var(--color-bg-white);
+  box-shadow: 0 8px 24px rgba(16, 163, 127, 0.08);
+}
+
+.assistant-waiting-orbit {
+  position: relative;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(16, 163, 127, 0.26);
+  border-radius: 999px;
+}
+
+.assistant-waiting-orbit::before {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  border-radius: inherit;
+  border: 1px solid rgba(48, 123, 255, 0.22);
+}
+
+.assistant-waiting-orbit span {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-primary);
+  box-shadow: 0 0 12px rgba(16, 163, 127, 0.55);
+  animation: assistantPulse 1.35s ease-in-out infinite;
+}
+
+.assistant-waiting-orbit span:nth-child(1) { top: -2px; left: 11px; }
+.assistant-waiting-orbit span:nth-child(2) { right: 1px; bottom: 4px; animation-delay: 0.18s; }
+.assistant-waiting-orbit span:nth-child(3) { left: 1px; bottom: 4px; animation-delay: 0.36s; }
+
+.assistant-waiting-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.assistant-waiting-title {
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.assistant-waiting-scan {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.72), transparent);
+  transform: translateX(-120%);
+  animation: assistantScan 1.8s ease-in-out infinite;
+}
+
+@keyframes assistantPulse {
+  0%, 100% { opacity: 0.38; transform: scale(0.86); }
+  50% { opacity: 1; transform: scale(1.08); }
+}
+
+@keyframes assistantScan {
+  0% { transform: translateX(-120%); }
+  58%, 100% { transform: translateX(120%); }
+}
+
 .chat-message.assistant img {
   max-width: 100%;
   height: auto;

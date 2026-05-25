@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import 'highlight.js/styles/github.css'
 import { useI18n } from '@/lib/app-i18n'
 import { attachImageRetryHandlers } from '@/lib/imageRetry'
+import { shouldShowAssistantWaiting } from '@/lib/messagePresentation'
 import { renderMarkdownToHtml } from '@/lib/markdownRender'
 
 interface Props {
@@ -24,6 +25,7 @@ export default function MarkdownMessage({ content, streaming }: Props) {
   const latestContentRef = useRef(content)
   const latestStreamingRef = useRef(streaming)
   const messageContentRef = useRef<HTMLDivElement | null>(null)
+  const showWaiting = shouldShowAssistantWaiting(content, streaming)
 
   const doRender = useCallback((text: string, isStreaming: boolean) => {
     const src = isStreaming ? text + ' ▋' : text
@@ -107,7 +109,20 @@ export default function MarkdownMessage({ content, streaming }: Props) {
   }
 
   return (
-    <div ref={messageContentRef} className="chat-message assistant">
+    <div ref={messageContentRef} className={`chat-message assistant${showWaiting ? ' assistant-is-waiting' : ''}`}>
+      {showWaiting && (
+        <div className="assistant-waiting" role="status" aria-live="polite" aria-label={t('chat.processing')}>
+          <span className="assistant-waiting-orbit" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+          <span className="assistant-waiting-copy">
+            <span className="assistant-waiting-title">{t('chat.processing')}</span>
+          </span>
+          <span className="assistant-waiting-scan" aria-hidden="true" />
+        </div>
+      )}
       <div dangerouslySetInnerHTML={{ __html: html || '▋' }} />
       {!streaming && content.trim() && (
         <div className="message-action-buttons">
