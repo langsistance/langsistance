@@ -13,7 +13,7 @@ from sources.dynamic_tool_params import (
     _append_path_to_url,
     _coerce_json_object,
     _is_path_query_body_empty,
-    _replace_uspto_download_urls,
+    _replace_uspto_download_urls_for_batch,
 )
 
 from langchain_core.tools import StructuredTool
@@ -724,14 +724,6 @@ Begin your response now:
                 else:
                     try:
                         result_data = response.json() if response.content else {}
-                        result_data = _replace_uspto_download_urls(
-                            result_data,
-                            headers,
-                            lambda download_url, request_headers: requests.get(
-                                download_url,
-                                headers=request_headers
-                            ).text
-                        )
                         if isinstance(result_data, list) and result_data:
                             raw_items = result_data
                         elif isinstance(result_data, dict):
@@ -743,6 +735,7 @@ Begin your response now:
                             raw_items = None
 
                         if raw_items:
+                            self._pending_download_headers = headers
                             self._pending_raw_items = raw_items
                             result_str = (
                                 f"The query returned {len(raw_items)} items. "
@@ -936,14 +929,6 @@ Begin your response now:
                                 try:
                                     result_data = response.json() if response.content else None
                                     if isinstance(result_data, (dict, list)):
-                                        result_data = _replace_uspto_download_urls(
-                                            result_data,
-                                            headers,
-                                            lambda download_url, request_headers: requests.get(
-                                                download_url,
-                                                headers=request_headers
-                                            ).text
-                                        )
                                         # Extract raw items list for batch LLM analysis
                                         if isinstance(result_data, list) and result_data:
                                             raw_items = result_data
@@ -958,6 +943,7 @@ Begin your response now:
                                         if raw_items:
                                             list_count = len(raw_items)
                                             # Store raw items; invoke_agent will batch-analyze them via LLM
+                                            self._pending_download_headers = headers
                                             self._pending_raw_items = raw_items
                                             result = (
                                                 f"The query returned {list_count} items. "
@@ -1099,6 +1085,8 @@ Begin your response now:
             pending = getattr(self, '_pending_raw_items', None)
             if pending:
                 self._pending_raw_items = None
+                download_headers = getattr(self, '_pending_download_headers', {})
+                self._pending_download_headers = {}
                 total = len(pending)
                 batch_size = 5
                 await callback_handler.on_llm_new_token(
@@ -1112,6 +1100,14 @@ Begin your response now:
                 )
                 for batch_start in range(0, total, batch_size):
                     batch = pending[batch_start:batch_start + batch_size]
+                    _replace_uspto_download_urls_for_batch(
+                        batch,
+                        download_headers,
+                        lambda download_url, request_headers: requests.get(
+                            download_url,
+                            headers=request_headers
+                        ).text
+                    )
                     batch_end = min(batch_start + batch_size, total)
                     await callback_handler.on_llm_new_token(
                         f"### Items {batch_start + 1}–{batch_end}\n\n"

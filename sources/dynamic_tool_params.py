@@ -138,3 +138,13 @@ def _replace_uspto_download_urls(
                     option["downloadUrl"] = resolved_url
 
     return result_data
+
+
+def _replace_uspto_download_urls_for_batch(
+    batch: list,
+    headers: Dict[str, Any],
+    fetch_text: Callable[[str, Dict[str, Any]], str],
+) -> list:
+    """Resolve USPTO download URLs only for the current display batch."""
+    _replace_uspto_download_urls(batch, headers, fetch_text)
+    return batch
