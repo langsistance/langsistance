@@ -1,6 +1,11 @@
 import json
-from typing import Any, Dict
+import re
+from typing import Any, Callable, Dict
 from urllib.parse import urlsplit, urlunsplit
+
+
+USPTO_DOWNLOAD_API_PREFIX = "https://api.uspto.gov/api/v1/download/applications"
+_URL_RE = re.compile(r'https?://[^\s"\'<>\])}]+')
 
 
 def _coerce_json_object(value: Any, value_name: str) -> Dict[str, Any]:
@@ -75,3 +80,61 @@ def _append_path_to_url(base_url: str, path: Any) -> str:
         combined_path = f"/{path_value.lstrip('/')}"
 
     return urlunsplit(base_parts._replace(path=combined_path))
+
+
+def _extract_first_url(value: Any) -> str | None:
+    """Extract the first URL from a response string."""
+    if not isinstance(value, str):
+        return None
+
+    match = _URL_RE.search(value)
+    if not match:
+        return None
+
+    return match.group(0).rstrip(".,;")
+
+
+def _iter_document_bags(result_data: Any):
+    if isinstance(result_data, dict):
+        document_bag = result_data.get("documentBag")
+        if isinstance(document_bag, list):
+            yield document_bag
+        for value in result_data.values():
+            if isinstance(value, (dict, list)):
+                yield from _iter_document_bags(value)
+    elif isinstance(result_data, list):
+        for item in result_data:
+            yield from _iter_document_bags(item)
+
+
+def _replace_uspto_download_urls(
+    result_data: Any,
+    headers: Dict[str, Any],
+    fetch_text: Callable[[str, Dict[str, Any]], str],
+) -> Any:
+    """Replace USPTO download API URLs in documentBag with resolved URLs."""
+    for document_bag in _iter_document_bags(result_data):
+        for document in document_bag:
+            if not isinstance(document, dict):
+                continue
+            download_options = document.get("downloadOptionBag")
+            if not isinstance(download_options, list):
+                continue
+            for option in download_options:
+                if not isinstance(option, dict):
+                    continue
+                download_url = option.get("downloadUrl")
+                if (
+                    not isinstance(download_url, str)
+                    or not download_url.startswith(USPTO_DOWNLOAD_API_PREFIX)
+                ):
+                    continue
+                try:
+                    resolved_text = fetch_text(download_url, headers)
+                except Exception:
+                    continue
+                resolved_url = _extract_first_url(resolved_text)
+                if resolved_url:
+                    option["downloadUrl"] = resolved_url
+
+    return result_data

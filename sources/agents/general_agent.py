@@ -13,6 +13,7 @@ from sources.dynamic_tool_params import (
     _append_path_to_url,
     _coerce_json_object,
     _is_path_query_body_empty,
+    _replace_uspto_download_urls,
 )
 
 from langchain_core.tools import StructuredTool
@@ -723,6 +724,14 @@ Begin your response now:
                 else:
                     try:
                         result_data = response.json() if response.content else {}
+                        result_data = _replace_uspto_download_urls(
+                            result_data,
+                            headers,
+                            lambda download_url, request_headers: requests.get(
+                                download_url,
+                                headers=request_headers
+                            ).text
+                        )
                         if isinstance(result_data, list) and result_data:
                             raw_items = result_data
                         elif isinstance(result_data, dict):
@@ -927,6 +936,14 @@ Begin your response now:
                                 try:
                                     result_data = response.json() if response.content else None
                                     if isinstance(result_data, (dict, list)):
+                                        result_data = _replace_uspto_download_urls(
+                                            result_data,
+                                            headers,
+                                            lambda download_url, request_headers: requests.get(
+                                                download_url,
+                                                headers=request_headers
+                                            ).text
+                                        )
                                         # Extract raw items list for batch LLM analysis
                                         if isinstance(result_data, list) and result_data:
                                             raw_items = result_data
