@@ -887,7 +887,7 @@ Begin your response now:
                         if request_params is None:
                             request_params = {}
                         request_params["_t"] = str(int(time.time() * 1000))
-
+                        self.logger.info(f"tool url is {url}")
                         if method == "GET":
                             response = requests.get(url, params=request_params, headers=headers)
                         elif method == "POST":
