@@ -15,6 +15,7 @@ from sources.dynamic_tool_params import (
     _is_path_query_body_empty,
     _replace_uspto_download_urls_for_batch,
 )
+from sources.tool_result_filter import filter_tool_result_items
 
 from langchain_core.tools import StructuredTool
 
@@ -1051,6 +1052,7 @@ Begin your response now:
     async def process(self, user_id, prompt, query_id, speech_module, push_filter=None) -> str | tuple[str, str]:
         if not self.enabled:
             return "general Agent is disabled."
+        self._last_user_prompt = prompt
         self.knowledgeTool = get_knowledge_tool(user_id, prompt, push_filter=push_filter)
         # user_prompt = self.expand_prompt(prompt)
         user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
@@ -1076,6 +1078,7 @@ Begin your response now:
 
     async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler, push_filter=None):
         #self.knowledgeTool = get_knowledge_tool(user_id,  prompt)
+        self._last_user_prompt = prompt
         self.knowledgeTool = await asyncio.to_thread(get_knowledge_tool, user_id, prompt, push_filter=push_filter)
         user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
         system_prompt = self.generate_system_prompt(tool_data)
@@ -1097,10 +1100,22 @@ Begin your response now:
             pending = getattr(self, '_pending_raw_items', None)
             if pending:
                 self._pending_raw_items = None
+                original_total = len(pending)
+                filter_result = await filter_tool_result_items(
+                    pending,
+                    getattr(self, "_last_user_prompt", ""),
+                    self.llm.complete_json,
+                )
+                pending = filter_result.items
                 total = len(pending)
                 batch_size = 5
+                heading = (
+                    f"## Filtered Results ({filter_result.filtered_count} of {filter_result.original_count} items)"
+                    if filter_result.applied
+                    else f"## Full Results ({original_total} items)"
+                )
                 await callback_handler.on_llm_new_token(
-                    f"\n\n---\n\n## Full Results ({total} items)\n\n"
+                    f"\n\n---\n\n{heading}\n\n"
                 )
                 system_prompt = (
                     "You are presenting search result items clearly and concisely. "

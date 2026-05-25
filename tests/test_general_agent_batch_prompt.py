@@ -25,8 +25,13 @@ class FakeLogger:
 
 
 class FakeLlm:
-    def __init__(self):
+    def __init__(self, complete_json_response=None):
         self.stream_calls = []
+        self.complete_json_calls = []
+        self.complete_json_response = complete_json_response or {
+            "has_filter_requirement": False,
+            "decisions": [],
+        }
 
     async def openai_invoke(self, agent, memory, callback_handler):
         return None
@@ -36,6 +41,13 @@ class FakeLlm:
             "system_prompt": system_prompt,
             "user_content": user_content,
         })
+
+    async def complete_json(self, system_prompt, user_content):
+        self.complete_json_calls.append({
+            "system_prompt": system_prompt,
+            "user_content": user_content,
+        })
+        return self.complete_json_response
 
 
 class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
@@ -150,6 +162,38 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
         self.assertIn("https://example.com/result-1", combined_prompt)
         self.assertIn("https://example.com/result-2?x=1", combined_prompt)
         self.assertIn("https://api.copiioai.com/uspto/download?url=", combined_prompt)
+
+    async def test_filters_pending_raw_items_before_batch_display(self):
+        GeneralAgent = self._load_general_agent_class()
+
+        agent = GeneralAgent.__new__(GeneralAgent)
+        agent.llm = FakeLlm({
+            "has_filter_requirement": True,
+            "decisions": [
+                {"index": 0, "keep": True, "confidence": 0.98, "reason": "Tokyo"},
+                {"index": 1, "keep": False, "confidence": 0.94, "reason": "Osaka"},
+                {"index": 2, "keep": True, "confidence": 0.97, "reason": "Tokyo"},
+            ],
+        })
+        agent.memory = FakeMemory()
+        agent.logger = FakeLogger()
+        agent._last_user_prompt = "只保留东京的公司"
+        agent._pending_raw_items = [
+            {"name": "Alpha", "city": "Tokyo", "url": "https://example.com/a"},
+            {"name": "Beta", "city": "Osaka", "url": "https://example.com/b"},
+            {"name": "Gamma", "city": "Tokyo", "url": "https://example.com/c"},
+        ]
+        callback_handler = FakeCallbackHandler()
+
+        await agent.invoke_agent(agent=None, callback_handler=callback_handler)
+
+        self.assertEqual(len(agent.llm.complete_json_calls), 1)
+        self.assertEqual(len(agent.llm.stream_calls), 1)
+        self.assertIn("Filtered Results (2 of 3 items)", "".join(callback_handler.tokens))
+        batch_content = agent.llm.stream_calls[0]["user_content"]
+        self.assertIn("Alpha", batch_content)
+        self.assertIn("Gamma", batch_content)
+        self.assertNotIn("Beta", batch_content)
 
 
 if __name__ == "__main__":

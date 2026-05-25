@@ -3,6 +3,7 @@ import platform
 import socket
 import subprocess
 import time
+import json
 from urllib.parse import urlparse
 
 import httpx
@@ -17,6 +18,27 @@ from langchain.agents import create_agent  # 更改导入
 
 from sources.logger import Logger
 from sources.utility import pretty_print, animate_thinking
+
+
+def _parse_json_object_response(value):
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        raise ValueError(f"JSON response must be dict or str, got {type(value).__name__}")
+
+    text = value.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+
+    parsed = json.loads(text)
+    if not isinstance(parsed, dict):
+        raise ValueError("JSON response must decode to an object")
+    return parsed
 
 class Provider:
     def __init__(self, provider_name, model, server_address="127.0.0.1:5000", is_local=False):
@@ -507,6 +529,22 @@ class Provider:
         async for chunk in llm.astream(messages):
             if chunk.content and callback_handler:
                 await callback_handler.on_llm_new_token(chunk.content)
+
+    async def complete_json(self, system_prompt: str, user_content: str):
+        """Run a non-streaming chat completion and parse a JSON object response."""
+        llm = ChatOpenAI(
+            model=self.model,
+            api_key=self.api_key,
+            temperature=0,
+            streaming=False,
+        )
+        messages = [
+            ("system", system_prompt),
+            ("human", user_content),
+        ]
+        response = await llm.ainvoke(messages)
+        content = getattr(response, "content", response)
+        return _parse_json_object_response(content)
 
     def test_fn(self, tools, history, verbose=True):
         """
