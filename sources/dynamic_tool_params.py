@@ -106,6 +106,12 @@ def _iter_document_bags(result_data: Any):
             if isinstance(value, (dict, list)):
                 yield from _iter_document_bags(value)
     elif isinstance(result_data, list):
+        if any(
+            isinstance(item, dict)
+            and isinstance(item.get("downloadOptionBag"), list)
+            for item in result_data
+        ):
+            yield result_data
         for item in result_data:
             yield from _iter_document_bags(item)
 
