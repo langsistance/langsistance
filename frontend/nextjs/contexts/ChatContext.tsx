@@ -1,0 +1,55 @@
+'use client'
+
+import { createContext, useContext, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
+
+export interface ChatMessage {
+  id: string
+  role: string
+  content: string
+}
+
+interface ChatContextValue {
+  messages: ChatMessage[]
+  setMessages: Dispatch<SetStateAction<ChatMessage[]>>
+  input: string
+  setInput: Dispatch<SetStateAction<string>>
+  streaming: boolean
+  setStreaming: Dispatch<SetStateAction<boolean>>
+  streamingId: string | null
+  setStreamingId: Dispatch<SetStateAction<string | null>>
+  abortRef: MutableRefObject<AbortController | null>
+}
+
+const ChatContext = createContext<ChatContextValue | null>(null)
+
+export function ChatProvider({ children }: { children: React.ReactNode }) {
+  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [input, setInput] = useState('')
+  const [streaming, setStreaming] = useState(false)
+  const [streamingId, setStreamingId] = useState<string | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
+
+  return (
+    <ChatContext.Provider
+      value={{
+        messages,
+        setMessages,
+        input,
+        setInput,
+        streaming,
+        setStreaming,
+        streamingId,
+        setStreamingId,
+        abortRef,
+      }}
+    >
+      {children}
+    </ChatContext.Provider>
+  )
+}
+
+export function useChatSession() {
+  const ctx = useContext(ChatContext)
+  if (!ctx) throw new Error('useChatSession must be used within ChatProvider')
+  return ctx
+}

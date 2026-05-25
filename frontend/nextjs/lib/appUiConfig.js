@@ -1,0 +1,1 @@
+export const KNOWLEDGE_LIST_PAGE_SIZE = 12

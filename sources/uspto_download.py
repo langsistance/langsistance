@@ -3,7 +3,10 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict
 
-from sources.dynamic_tool_params import USPTO_DOWNLOAD_API_PREFIX
+from sources.dynamic_tool_params import (
+    USPTO_DOWNLOAD_API_PREFIX,
+    _extract_first_url,
+)
 from sources.logger import Logger
 
 
@@ -40,6 +43,23 @@ def _filename_from_download_url(download_url: str) -> str:
     return filename or "uspto-download"
 
 
+def _is_text_response(media_type: str) -> bool:
+    normalized = media_type.lower()
+    return (
+        normalized.startswith("text/")
+        or "json" in normalized
+        or "xml" in normalized
+        or "html" in normalized
+    )
+
+
+def _response_content(response: Any) -> bytes:
+    content = getattr(response, "content", b"")
+    if isinstance(content, str):
+        return content.encode("utf-8")
+    return content or b""
+
+
 def fetch_uspto_download_file(
     download_url: str,
     fetch_response: Callable[[str, Dict[str, str]], Any],
@@ -54,14 +74,33 @@ def fetch_uspto_download_file(
         response.raise_for_status()
 
     response_headers = getattr(response, "headers", {}) or {}
-    content = getattr(response, "content", b"")
-    if isinstance(content, str):
-        content = content.encode("utf-8")
+    content = _response_content(response)
 
     logger.info(f"USPTO download response status: {getattr(response, 'status_code', 'unknown')}")
     logger.info(f"USPTO download response content length: {len(content)}")
 
     media_type = response_headers.get("Content-Type", "application/octet-stream")
+    if _is_text_response(media_type):
+        response_text = content.decode("utf-8", errors="replace")
+        resolved_url = _extract_first_url(response_text)
+        if not resolved_url:
+            logger.warning(f"USPTO download non-file response: {response_text[:500]}")
+            raise ValueError("USPTO download response did not contain downloadable file content")
+
+        logger.info(f"USPTO download response contained file URL: {resolved_url}")
+        resolved_response = fetch_response(resolved_url, headers)
+        if hasattr(resolved_response, "raise_for_status"):
+            resolved_response.raise_for_status()
+        response = resolved_response
+        response_headers = getattr(response, "headers", {}) or {}
+        content = _response_content(response)
+        media_type = response_headers.get("Content-Type", "application/octet-stream")
+        logger.info(f"USPTO resolved file response status: {getattr(response, 'status_code', 'unknown')}")
+        logger.info(f"USPTO resolved file content length: {len(content)}")
+
+    if not content:
+        raise ValueError("USPTO download response did not contain downloadable file content")
+
     filename = (
         _filename_from_content_disposition(response_headers.get("Content-Disposition"))
         or _filename_from_download_url(download_url)

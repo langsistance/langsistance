@@ -26,7 +26,7 @@ async def download_uspto_file(url: str = Query(..., min_length=1)):
                 download_url,
                 headers=headers,
                 timeout=30,
-            ).text,
+            ),
             request_headers=get_uspto_download_headers(),
         )
     except ValueError as exc:
