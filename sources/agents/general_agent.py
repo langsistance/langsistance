@@ -31,6 +31,20 @@ _SENSITIVE_HEADER_RE = re.compile(
     r'(auth|api.?key|token|secret|credential|password|bearer)',
     re.IGNORECASE
 )
+_URL_IN_TEXT_RE = re.compile(r'https?://[^\s"\'<>\])}]+')
+
+
+def _collect_urls_from_value(value):
+    urls = []
+    if isinstance(value, dict):
+        for nested_value in value.values():
+            urls.extend(_collect_urls_from_value(nested_value))
+    elif isinstance(value, list):
+        for item in value:
+            urls.extend(_collect_urls_from_value(item))
+    elif isinstance(value, str):
+        urls.extend(match.rstrip(".,;") for match in _URL_IN_TEXT_RE.findall(value))
+    return urls
 
 # 定义参数模型
 class DynamicToolFunction(BaseModel):
@@ -1092,6 +1106,9 @@ Begin your response now:
                     "You are presenting search result items clearly and concisely. "
                     "For each item, extract and present the most important information as clean Markdown. "
                     "Use **bold** for field names. Number each item. "
+                    "Every URL is mandatory: copy every URL from the input exactly and verbatim. "
+                    "Do not omit, shorten, summarize, translate, decode, re-encode, or alter any URL. "
+                    "If an item has multiple URLs, include all of them under that item. "
                     "Do NOT add any preamble, summary, or conclusion — output only the formatted items."
                 )
                 for batch_start in range(0, total, batch_size):
@@ -1103,10 +1120,20 @@ Begin your response now:
                         f"### Items {batch_start + 1}–{batch_end}\n\n"
                     )
                     batch_json = json.dumps(batch, ensure_ascii=False, indent=2)
+                    batch_urls = _collect_urls_from_value(batch)
+                    url_checklist = ""
+                    if batch_urls:
+                        url_checklist = (
+                            "Mandatory URL checklist. Copy every line verbatim into the corresponding item. "
+                            "Do not omit any URL from this checklist:\n"
+                            + "\n".join(f"- {url}" for url in batch_urls)
+                            + "\n\n"
+                        )
                     await self.llm.stream_simple(
                         system_prompt=system_prompt,
                         user_content=(
                             f"Format and analyze these {len(batch)} search result items as readable Markdown:\n\n"
+                            f"{url_checklist}"
                             f"{batch_json}"
                         ),
                         callback_handler=callback_handler,
