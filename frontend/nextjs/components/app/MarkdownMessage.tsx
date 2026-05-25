@@ -1,22 +1,9 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { marked } from 'marked'
-import { markedHighlight } from 'marked-highlight'
-import hljs from 'highlight.js'
 import 'highlight.js/styles/github.css'
 import { useI18n } from '@/lib/app-i18n'
-
-marked.use({ gfm: true, breaks: true })
-marked.use(
-  markedHighlight({
-    langPrefix: 'hljs language-',
-    highlight(code, lang) {
-      const language = hljs.getLanguage(lang) ? lang : 'plaintext'
-      return hljs.highlight(code, { language }).value
-    },
-  })
-)
+import { renderMarkdownToHtml } from '@/lib/markdownRender'
 
 interface Props {
   content: string
@@ -38,7 +25,7 @@ export default function MarkdownMessage({ content, streaming }: Props) {
 
   const doRender = useCallback((text: string, isStreaming: boolean) => {
     const src = isStreaming ? text + ' ▋' : text
-    setHtml(marked.parse(src) as string)
+    setHtml(renderMarkdownToHtml(src) as string)
     lastRenderTimeRef.current = Date.now()
   }, [])
 

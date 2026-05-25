@@ -146,6 +146,7 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
             {
                 "title": "Item 2",
                 "url": "https://example.com/result-2?x=1",
+                "thumbnailUrl": "https://example.com/image.jpg",
             },
         ]
 
@@ -161,6 +162,9 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Mandatory URL checklist", combined_prompt)
         self.assertIn("https://example.com/result-1", combined_prompt)
         self.assertIn("https://example.com/result-2?x=1", combined_prompt)
+        self.assertIn("https://example.com/image.jpg", combined_prompt)
+        self.assertIn("image URL", combined_prompt)
+        self.assertIn("![alt text](image_URL)", combined_prompt)
         self.assertIn("https://api.copiioai.com/uspto/download?url=", combined_prompt)
 
     async def test_filters_pending_raw_items_before_batch_display(self):

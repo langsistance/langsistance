@@ -1124,6 +1124,8 @@ Begin your response now:
                     "Every URL is mandatory: copy every URL from the input exactly and verbatim. "
                     "Do not omit, shorten, summarize, translate, decode, re-encode, or alter any URL. "
                     "If an item has multiple URLs, include all of them under that item. "
+                    "If a URL is an image URL, display it using Markdown image syntax exactly as "
+                    "![alt text](image_URL) so the frontend can render the image inline. "
                     "Do NOT add any preamble, summary, or conclusion — output only the formatted items."
                 )
                 for batch_start in range(0, total, batch_size):
