@@ -1,12 +1,15 @@
 import json
+import os
 import re
-from typing import Any, Callable, Dict
-from urllib.parse import urlsplit, urlunsplit
+from typing import Any, Dict
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from sources.logger import Logger
 
 
 USPTO_DOWNLOAD_API_PREFIX = "https://api.uspto.gov/api/v1/download/applications"
+USPTO_DOWNLOAD_PROXY_PATH = "/uspto/download"
+DEFAULT_COPIIOAI_API_BASE_URL = "https://api.copiioai.com"
 _URL_RE = re.compile(r'https?://[^\s"\'<>\])}]+')
 logger = Logger("dynamic_tool_params.log")
 
@@ -97,6 +100,26 @@ def _extract_first_url(value: Any) -> str | None:
     return match.group(0).rstrip(".,;")
 
 
+def _get_copiioai_api_base_url(proxy_base_url: str | None = None) -> str:
+    return (
+        proxy_base_url
+        or os.getenv("COPIIOAI_API_BASE_URL")
+        or os.getenv("NEXT_PUBLIC_API_BASE")
+        or DEFAULT_COPIIOAI_API_BASE_URL
+    ).rstrip("/")
+
+
+def _build_uspto_download_proxy_url(
+    download_url: str,
+    proxy_base_url: str | None = None,
+) -> str:
+    api_base_url = _get_copiioai_api_base_url(proxy_base_url)
+    return (
+        f"{api_base_url}{USPTO_DOWNLOAD_PROXY_PATH}"
+        f"?url={quote(download_url, safe='')}"
+    )
+
+
 def _iter_document_bags(result_data: Any):
     if isinstance(result_data, dict):
         document_bag = result_data.get("documentBag")
@@ -118,10 +141,9 @@ def _iter_document_bags(result_data: Any):
 
 def _replace_uspto_download_urls(
     result_data: Any,
-    headers: Dict[str, Any],
-    fetch_text: Callable[[str, Dict[str, Any]], str],
+    proxy_base_url: str | None = None,
 ) -> Any:
-    """Replace USPTO download API URLs in documentBag with resolved URLs."""
+    """Replace USPTO download API URLs in documentBag with lazy proxy URLs."""
     for document_bag in _iter_document_bags(result_data):
         logger.info(f"documentBag: {document_bag}")
         for document in document_bag:
@@ -142,23 +164,17 @@ def _replace_uspto_download_urls(
                     or not download_url.startswith(USPTO_DOWNLOAD_API_PREFIX)
                 ):
                     continue
-                try:
-                    resolved_text = fetch_text(download_url, headers)
-                except Exception:
-                    continue
-                resolved_url = _extract_first_url(resolved_text)
-                if resolved_url:
-                    option["downloadUrl"] = resolved_url
-                    logger.info(f"replaced downloadUrl: {resolved_url}")
+                proxy_url = _build_uspto_download_proxy_url(download_url, proxy_base_url)
+                option["downloadUrl"] = proxy_url
+                logger.info(f"replaced downloadUrl: {proxy_url}")
 
     return result_data
 
 
 def _replace_uspto_download_urls_for_batch(
     batch: list,
-    headers: Dict[str, Any],
-    fetch_text: Callable[[str, Dict[str, Any]], str],
+    proxy_base_url: str | None = None,
 ) -> list:
-    """Resolve USPTO download URLs only for the current display batch."""
-    _replace_uspto_download_urls(batch, headers, fetch_text)
+    """Rewrite USPTO download URLs only for the current display batch."""
+    _replace_uspto_download_urls(batch, proxy_base_url)
     return batch

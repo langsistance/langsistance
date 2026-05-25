@@ -735,7 +735,6 @@ Begin your response now:
                             raw_items = None
 
                         if raw_items:
-                            self._pending_download_headers = headers
                             self._pending_raw_items = raw_items
                             result_str = (
                                 f"The query returned {len(raw_items)} items. "
@@ -943,7 +942,6 @@ Begin your response now:
                                         if raw_items:
                                             list_count = len(raw_items)
                                             # Store raw items; invoke_agent will batch-analyze them via LLM
-                                            self._pending_download_headers = headers
                                             self._pending_raw_items = raw_items
                                             result = (
                                                 f"The query returned {list_count} items. "
@@ -1085,8 +1083,6 @@ Begin your response now:
             pending = getattr(self, '_pending_raw_items', None)
             if pending:
                 self._pending_raw_items = None
-                download_headers = getattr(self, '_pending_download_headers', {})
-                self._pending_download_headers = {}
                 total = len(pending)
                 batch_size = 5
                 await callback_handler.on_llm_new_token(
@@ -1098,18 +1094,10 @@ Begin your response now:
                     "Use **bold** for field names. Number each item. "
                     "Do NOT add any preamble, summary, or conclusion — output only the formatted items."
                 )
-                self.logger.info(f"pending: {pending}")
                 for batch_start in range(0, total, batch_size):
                     batch = pending[batch_start:batch_start + batch_size]
                     self.logger.info(f"batch: {batch}")
-                    _replace_uspto_download_urls_for_batch(
-                        batch,
-                        download_headers,
-                        lambda download_url, request_headers: requests.get(
-                            download_url,
-                            headers=request_headers
-                        ).text
-                    )
+                    _replace_uspto_download_urls_for_batch(batch)
                     batch_end = min(batch_start + batch_size, total)
                     await callback_handler.on_llm_new_token(
                         f"### Items {batch_start + 1}–{batch_end}\n\n"
