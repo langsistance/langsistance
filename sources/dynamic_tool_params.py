@@ -3,9 +3,12 @@ import re
 from typing import Any, Callable, Dict
 from urllib.parse import urlsplit, urlunsplit
 
+from sources.logger import Logger
+
 
 USPTO_DOWNLOAD_API_PREFIX = "https://api.uspto.gov/api/v1/download/applications"
 _URL_RE = re.compile(r'https?://[^\s"\'<>\])}]+')
+logger = Logger("dynamic_tool_params.log")
 
 
 def _coerce_json_object(value: Any, value_name: str) -> Dict[str, Any]:
@@ -114,16 +117,20 @@ def _replace_uspto_download_urls(
 ) -> Any:
     """Replace USPTO download API URLs in documentBag with resolved URLs."""
     for document_bag in _iter_document_bags(result_data):
+        logger.info(f"documentBag: {document_bag}")
         for document in document_bag:
             if not isinstance(document, dict):
                 continue
             download_options = document.get("downloadOptionBag")
             if not isinstance(download_options, list):
                 continue
+            logger.info(f"downloadOptionBag: {download_options}")
             for option in download_options:
                 if not isinstance(option, dict):
                     continue
                 download_url = option.get("downloadUrl")
+                if isinstance(download_url, str):
+                    logger.info(f"downloadUrl: {download_url}")
                 if (
                     not isinstance(download_url, str)
                     or not download_url.startswith(USPTO_DOWNLOAD_API_PREFIX)
@@ -136,6 +143,7 @@ def _replace_uspto_download_urls(
                 resolved_url = _extract_first_url(resolved_text)
                 if resolved_url:
                     option["downloadUrl"] = resolved_url
+                    logger.info(f"replaced downloadUrl: {resolved_url}")
 
     return result_data
 
