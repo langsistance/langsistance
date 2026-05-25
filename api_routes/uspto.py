@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 
 from fastapi import APIRouter, Query
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, Response
 
 from sources.uspto_download import (
+    fetch_uspto_download_file,
     get_uspto_download_headers,
-    resolve_uspto_download_url,
 )
 from sources.logger import Logger
 
@@ -20,9 +20,9 @@ async def download_uspto_file(url: str = Query(..., min_length=1)):
     try:
         import requests
 
-        resolved_url = resolve_uspto_download_url(
+        download_file = fetch_uspto_download_file(
             url,
-            fetch_text=lambda download_url, headers: requests.get(
+            fetch_response=lambda download_url, headers: requests.get(
                 download_url,
                 headers=headers,
                 timeout=30,
@@ -36,5 +36,11 @@ async def download_uspto_file(url: str = Query(..., min_length=1)):
         logger.error(f"USPTO lazy download request failed: {exc}")
         return JSONResponse(status_code=502, content={"error": "USPTO download request failed"})
 
-    logger.info(f"USPTO lazy download resolved: {resolved_url}")
-    return RedirectResponse(url=resolved_url, status_code=302)
+    logger.info(f"USPTO lazy download proxied: {download_file.filename}")
+    return Response(
+        content=download_file.content,
+        media_type=download_file.media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{download_file.filename}"'
+        },
+    )
