@@ -60,6 +60,35 @@ def _response_content(response: Any) -> bytes:
     return content or b""
 
 
+def _decode_text_content(content: bytes) -> str | None:
+    sample = content[:2048]
+    if b"\x00" in sample:
+        return None
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    if not text.strip():
+        return None
+    return text
+
+
+def _should_parse_response_text(media_type: str, content: bytes) -> bool:
+    if _is_text_response(media_type):
+        return True
+
+    text = _decode_text_content(content)
+    if not text:
+        return False
+
+    normalized = text.lstrip().lower()
+    return (
+        normalized.startswith("please use redirect url")
+        or normalized.startswith("{")
+        or normalized.startswith("<")
+    )
+
+
 def fetch_uspto_download_file(
     download_url: str,
     fetch_response: Callable[[str, Dict[str, str]], Any],
@@ -80,14 +109,16 @@ def fetch_uspto_download_file(
     logger.info(f"USPTO download response content length: {len(content)}")
 
     media_type = response_headers.get("Content-Type", "application/octet-stream")
-    if _is_text_response(media_type):
-        response_text = content.decode("utf-8", errors="replace")
+    filename_url = download_url
+    if _should_parse_response_text(media_type, content):
+        response_text = _decode_text_content(content) or content.decode("utf-8", errors="replace")
         resolved_url = _extract_first_url(response_text)
         if not resolved_url:
             logger.warning(f"USPTO download non-file response: {response_text[:500]}")
             raise ValueError("USPTO download response did not contain downloadable file content")
 
         logger.info(f"USPTO download response contained file URL: {resolved_url}")
+        filename_url = resolved_url
         resolved_response = fetch_response(resolved_url, headers)
         if hasattr(resolved_response, "raise_for_status"):
             resolved_response.raise_for_status()
@@ -103,7 +134,7 @@ def fetch_uspto_download_file(
 
     filename = (
         _filename_from_content_disposition(response_headers.get("Content-Disposition"))
-        or _filename_from_download_url(download_url)
+        or _filename_from_download_url(filename_url)
     )
     return UsptoDownloadFile(
         content=content,
