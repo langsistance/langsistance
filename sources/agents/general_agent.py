@@ -9,7 +9,12 @@ from sources.agents.agent import Agent
 from sources.tools.mcpFinder import MCP_finder
 from sources.memory import Memory
 from sources.logger import Logger
-from sources.dynamic_tool_params import _coerce_json_object
+from sources.dynamic_tool_params import (
+    _append_path_to_url,
+    _coerce_json_object,
+    _is_path_query_body_empty,
+    _replace_uspto_download_urls_for_batch,
+)
 
 from langchain_core.tools import StructuredTool
 
@@ -38,7 +43,12 @@ class DynamicBackendToolFunction(BaseModel):
     user_id: str = Field(description="user id")
     query_id: str = Field(description="query id")
     params: Dict[str, Any] | str = Field(
-        description="API request parameters as a JSON object; legacy JSON strings are also accepted"
+        description=(
+            "API request parameters as a JSON object. For push=2 tools, "
+            "params may contain path, query, and body; path is appended to "
+            "the tool URL after replacing template placeholders from the user request. "
+            "Legacy JSON strings are also accepted."
+        )
     )
 
 
@@ -216,22 +226,13 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         return prompt
 
     def is_query_and_body_empty(self) -> bool:
-        """Return True if both query and body in tool_info.params are empty."""
-        # 获取工具信息
+        """Return True if path, query, and body in tool_info.params are empty."""
         _, tool_info = self.knowledgeTool
 
         try:
-            # 解析 params 字段
-            params_data = json.loads(tool_info.params)
-
-            # 获取 query 和 body 字段
-            query = params_data.get("query", {})
-            body = params_data.get("body", {})
-
-            # 判断 query 和 body 是否都为空
-            return not query and not body
-        except json.JSONDecodeError:
-            # 如果 params 不是合法的 JSON，视为非空
+            params_data = _coerce_json_object(tool_info.params, "tool_info.params")
+            return _is_path_query_body_empty(params_data)
+        except ValueError:
             return False
 
     def generate_fixed_system_prompt(self) -> str:
@@ -387,6 +388,19 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
            - The params string must contain valid, strictly formatted JSON
             """
 
+        path_field_semantics = ""
+        path_replacement_rules = ""
+        if tool_info.push == 2:
+            path_field_semantics = """
+           - path contains a relative URL path that will be appended to the configured tool URL
+            """
+            path_replacement_rules = """
+           - For path placeholders like `{applicationNumberText}`, replace the placeholder with the exact value from the user's request or the knowledge context
+           - Preserve the rest of the path string, including slashes and fixed suffixes such as `/document`
+           - Do not leave unresolved `{...}` placeholders in path. If the required value is missing, ask the user for it instead of calling the tool
+           - path must remain a relative URL path, never an absolute URL
+            """
+
         system_prompt = f"""
         You are an intelligent assistant capable of deciding when and how to use APIs to complete tasks.
         {context}
@@ -417,6 +431,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
 
         2. Field semantics:
            - method MUST remain unchanged
+           {path_field_semantics}
            - query contains URL query parameters
            - header contains HTTP headers
            - body contains the HTTP request body
@@ -426,6 +441,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
            - If the user query does not mention or imply a field, keep its original value unchanged
            - Do NOT infer or invent information not explicitly expressed by the user
            - DO NOT extract or infer user_id or query_id from the user's request into the params JSON
+           {path_replacement_rules}
 
         4. Output rules:
            - Output ONLY the final, complete JSON for the params parameter
@@ -650,7 +666,8 @@ Begin your response now:
 
             # 从 tool_info 中提取 URL 和参数模板
             url = tool_info.url
-            params_data = json.loads(tool_info.params)
+            params_data = _coerce_json_object(tool_info.params, "tool_info.params")
+            url = _append_path_to_url(url, params_data.get("path", ""))
 
             # 获取 HTTP 方法和 Content-Type
             method = params_data.get("method", "GET").upper()
@@ -845,6 +862,10 @@ Begin your response now:
                         # 解析参数JSON
                         params_data = _coerce_json_object(tool_info.params, "tool_info.params")
                         user_params = _coerce_json_object(params, "LLM tool params")
+                        url = _append_path_to_url(
+                            url,
+                            user_params.get("path", params_data.get("path", ""))
+                        )
 
                         # 获取HTTP方法和Content-Type
                         method = params_data.get("method", "GET").upper()
@@ -867,7 +888,7 @@ Begin your response now:
                         if request_params is None:
                             request_params = {}
                         request_params["_t"] = str(int(time.time() * 1000))
-
+                        self.logger.info(f"tool url is {url}")
                         if method == "GET":
                             response = requests.get(url, params=request_params, headers=headers)
                         elif method == "POST":
@@ -1075,6 +1096,8 @@ Begin your response now:
                 )
                 for batch_start in range(0, total, batch_size):
                     batch = pending[batch_start:batch_start + batch_size]
+                    self.logger.info(f"batch: {batch}")
+                    _replace_uspto_download_urls_for_batch(batch)
                     batch_end = min(batch_start + batch_size, total)
                     await callback_handler.on_llm_new_token(
                         f"### Items {batch_start + 1}–{batch_end}\n\n"

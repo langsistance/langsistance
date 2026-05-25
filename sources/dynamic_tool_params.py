@@ -1,5 +1,17 @@
 import json
+import os
+import re
 from typing import Any, Dict
+from urllib.parse import quote, urlsplit, urlunsplit
+
+from sources.logger import Logger
+
+
+USPTO_DOWNLOAD_API_PREFIX = "https://api.uspto.gov/api/v1/download/applications"
+USPTO_DOWNLOAD_PROXY_PATH = "/uspto/download"
+DEFAULT_COPIIOAI_API_BASE_URL = "https://api.copiioai.com"
+_URL_RE = re.compile(r'https?://[^\s"\'<>\])}]+')
+logger = Logger("dynamic_tool_params.log")
 
 
 def _coerce_json_object(value: Any, value_name: str) -> Dict[str, Any]:
@@ -28,3 +40,141 @@ def _coerce_json_object(value: Any, value_name: str) -> Dict[str, Any]:
         f"{value_name} must be a JSON object or JSON string, "
         f"got {type(value).__name__}"
     )
+
+
+def _is_empty_param_value(value: Any) -> bool:
+    """Return True for values treated as empty tool request parameters."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    if isinstance(value, (dict, list, tuple, set)):
+        return len(value) == 0
+    return False
+
+
+def _is_path_query_body_empty(params: Dict[str, Any]) -> bool:
+    """Return True when path, query, and body carry no request data."""
+    return all(
+        _is_empty_param_value(params.get(key))
+        for key in ("path", "query", "body")
+    )
+
+
+def _append_path_to_url(base_url: str, path: Any) -> str:
+    """Append a relative params.path value to the configured tool URL."""
+    if _is_empty_param_value(path):
+        return base_url
+
+    if not isinstance(path, str):
+        raise ValueError("path must be a URL path string")
+
+    path = path.strip()
+    path_parts = urlsplit(path)
+    if path_parts.scheme or path_parts.netloc or path_parts.query or path_parts.fragment:
+        raise ValueError("path must be a URL path, not an absolute URL or query string")
+
+    path_value = path_parts.path
+    if not path_value:
+        return base_url
+
+    base_parts = urlsplit(base_url)
+    base_path = base_parts.path or ""
+    if base_path and base_path != "/":
+        combined_path = f"{base_path.rstrip('/')}/{path_value.lstrip('/')}"
+    else:
+        combined_path = f"/{path_value.lstrip('/')}"
+
+    return urlunsplit(base_parts._replace(path=combined_path))
+
+
+def _extract_first_url(value: Any) -> str | None:
+    """Extract the first URL from a response string."""
+    if not isinstance(value, str):
+        return None
+
+    match = _URL_RE.search(value)
+    if not match:
+        return None
+
+    return match.group(0).rstrip(".,;")
+
+
+def _get_copiioai_api_base_url(proxy_base_url: str | None = None) -> str:
+    return (
+        proxy_base_url
+        or os.getenv("COPIIOAI_API_BASE_URL")
+        or os.getenv("NEXT_PUBLIC_API_BASE")
+        or DEFAULT_COPIIOAI_API_BASE_URL
+    ).rstrip("/")
+
+
+def _build_uspto_download_proxy_url(
+    download_url: str,
+    proxy_base_url: str | None = None,
+) -> str:
+    api_base_url = _get_copiioai_api_base_url(proxy_base_url)
+    return (
+        f"{api_base_url}{USPTO_DOWNLOAD_PROXY_PATH}"
+        f"?url={quote(download_url, safe='')}"
+    )
+
+
+def _iter_document_bags(result_data: Any):
+    if isinstance(result_data, dict):
+        document_bag = result_data.get("documentBag")
+        if isinstance(document_bag, list):
+            yield document_bag
+        for value in result_data.values():
+            if isinstance(value, (dict, list)):
+                yield from _iter_document_bags(value)
+    elif isinstance(result_data, list):
+        if any(
+            isinstance(item, dict)
+            and isinstance(item.get("downloadOptionBag"), list)
+            for item in result_data
+        ):
+            yield result_data
+        for item in result_data:
+            yield from _iter_document_bags(item)
+
+
+def _replace_uspto_download_urls(
+    result_data: Any,
+    proxy_base_url: str | None = None,
+) -> Any:
+    """Replace USPTO download API URLs in documentBag with lazy proxy URLs."""
+    for document_bag in _iter_document_bags(result_data):
+        logger.info(f"documentBag: {document_bag}")
+        for document in document_bag:
+            if not isinstance(document, dict):
+                continue
+            download_options = document.get("downloadOptionBag")
+            if not isinstance(download_options, list):
+                continue
+            logger.info(f"downloadOptionBag: {download_options}")
+            for option in download_options:
+                if not isinstance(option, dict):
+                    continue
+                download_url = option.get("downloadUrl")
+                if isinstance(download_url, str):
+                    logger.info(f"downloadUrl: {download_url}")
+                if (
+                    not isinstance(download_url, str)
+                    or not download_url.startswith(USPTO_DOWNLOAD_API_PREFIX)
+                ):
+                    continue
+                proxy_url = _build_uspto_download_proxy_url(download_url, proxy_base_url)
+                option["downloadUrl"] = proxy_url
+                logger.info(f"replaced downloadUrl: {proxy_url}")
+
+    return result_data
+
+
+def _replace_uspto_download_urls_for_batch(
+    batch: list,
+    proxy_base_url: str | None = None,
+) -> list:
+    """Rewrite USPTO download URLs only for the current display batch."""
+    _replace_uspto_download_urls(batch, proxy_base_url)
+    return batch

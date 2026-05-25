@@ -11,7 +11,7 @@ from celery import Celery
 from dotenv import load_dotenv
 
 # Import route modules
-from api_routes import knowledge, tools, system, core, auth
+from api_routes import knowledge, tools, system, core, auth, uspto
 from api_routes.models import *
 
 # Import existing components
@@ -168,6 +168,7 @@ async def create_agent():
 api.include_router(knowledge.router, tags=["knowledge"])
 api.include_router(tools.router, tags=["tools"])
 api.include_router(auth.router, tags=["auth"])
+api.include_router(uspto.router, tags=["uspto"])
 system_router = system.register_system_routes(logger, interaction, query_resp_history, config)
 api.include_router(system_router, tags=["system"])
 core_router = core.register_core_routes(logger, interaction, query_resp_history, config, is_generating, think_wrapper, create_agent)
