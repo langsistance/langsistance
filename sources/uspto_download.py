@@ -5,6 +5,10 @@ from sources.dynamic_tool_params import (
     USPTO_DOWNLOAD_API_PREFIX,
     _extract_first_url,
 )
+from sources.logger import Logger
+
+
+logger = Logger("backend.log")
 
 
 def get_uspto_download_headers() -> Dict[str, str]:
@@ -24,6 +28,7 @@ def resolve_uspto_download_url(
 
     headers = request_headers or {}
     response_text = fetch_text(download_url, headers)
+    logger.info(f"USPTO download response_text: {response_text}")
     resolved_url = _extract_first_url(response_text)
     if not resolved_url:
         raise ValueError("USPTO download response did not contain a URL")
