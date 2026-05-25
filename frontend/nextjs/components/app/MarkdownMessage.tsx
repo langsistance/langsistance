@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import 'highlight.js/styles/github.css'
 import { useI18n } from '@/lib/app-i18n'
+import { attachImageRetryHandlers } from '@/lib/imageRetry'
 import { renderMarkdownToHtml } from '@/lib/markdownRender'
 
 interface Props {
@@ -22,6 +23,7 @@ export default function MarkdownMessage({ content, streaming }: Props) {
   const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const latestContentRef = useRef(content)
   const latestStreamingRef = useRef(streaming)
+  const messageContentRef = useRef<HTMLDivElement | null>(null)
 
   const doRender = useCallback((text: string, isStreaming: boolean) => {
     const src = isStreaming ? text + ' ▋' : text
@@ -75,6 +77,12 @@ export default function MarkdownMessage({ content, streaming }: Props) {
     }
   }, [])
 
+  useEffect(() => {
+    if (!messageContentRef.current || !html) return
+
+    return attachImageRetryHandlers(messageContentRef.current)
+  }, [html])
+
   async function handleCopy() {
     try {
       await navigator.clipboard.writeText(content)
@@ -99,7 +107,7 @@ export default function MarkdownMessage({ content, streaming }: Props) {
   }
 
   return (
-    <div className="chat-message assistant">
+    <div ref={messageContentRef} className="chat-message assistant">
       <div dangerouslySetInnerHTML={{ __html: html || '▋' }} />
       {!streaming && content.trim() && (
         <div className="message-action-buttons">

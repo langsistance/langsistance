@@ -320,6 +320,19 @@ button { cursor: pointer; }
 }
 
 /* ── Action buttons (copy / download) ── */
+.chat-message.assistant img.image-loading,
+.chat-message.assistant img.image-retrying {
+  opacity: 0.72;
+  background: var(--color-bg-main);
+  transition: opacity 0.3s ease;
+}
+
+.chat-message.assistant img.image-load-failed {
+  opacity: 1;
+  border: 2px dashed var(--color-border);
+  box-shadow: none;
+}
+
 .message-action-buttons {
   position: absolute;
   top: 12px;
