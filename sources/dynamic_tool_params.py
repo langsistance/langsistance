@@ -1,8 +1,12 @@
 import json
 import os
 import re
+import time
 from typing import Any, Dict
 from urllib.parse import quote, urlsplit, urlunsplit
+
+import requests
+from bs4 import BeautifulSoup
 
 from sources.logger import Logger
 
@@ -178,3 +182,80 @@ def _replace_uspto_download_urls_for_batch(
     """Rewrite USPTO download URLs only for the current display batch."""
     _replace_uspto_download_urls(batch, proxy_base_url)
     return batch
+
+
+def _extract_raw_items(result_data: Any) -> list | None:
+    if isinstance(result_data, list) and result_data:
+        return result_data
+    if isinstance(result_data, dict):
+        return next(
+            (value for value in result_data.values() if isinstance(value, list) and value),
+            None,
+        )
+    return None
+
+
+def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | None) -> Dict[str, Any]:
+    """Execute a push=2 backend tool and return parsed data plus list metadata."""
+    params_data = _coerce_json_object(tool_info.params, "tool_info.params")
+    user_params = _coerce_json_object(params or {}, "LLM tool params")
+    url = _append_path_to_url(
+        tool_info.url,
+        user_params.get("path", params_data.get("path", "")),
+    )
+
+    method = params_data.get("method", "GET").upper()
+    content_type = params_data.get("Content-Type", "application/json")
+    headers = {"Content-Type": content_type}
+    server_headers = params_data.get("header", {})
+    if isinstance(server_headers, dict):
+        headers.update(server_headers)
+
+    request_params = user_params.get("query")
+    request_body = user_params.get("body")
+    if request_params is None:
+        request_params = {}
+    if not isinstance(request_params, dict):
+        raise ValueError("LLM tool params query must be a JSON object")
+    request_params["_t"] = str(int(time.time() * 1000))
+
+    timeout = getattr(tool_info, "timeout", None) or 30
+    if method == "GET":
+        response = requests.get(url, params=request_params, headers=headers, timeout=timeout)
+    elif method == "POST":
+        response = requests.post(url, params=request_params, headers=headers, json=request_body, timeout=timeout)
+    elif method == "PUT":
+        response = requests.put(url, params=request_params, headers=headers, json=request_body, timeout=timeout)
+    elif method == "DELETE":
+        response = requests.delete(url, params=request_params, headers=headers, timeout=timeout)
+    elif method == "PATCH":
+        response = requests.patch(url, params=request_params, headers=headers, json=request_body, timeout=timeout)
+    else:
+        raise ValueError(f"Unsupported HTTP method: {method}")
+
+    if response.status_code != 200:
+        result = f"Request failed, status code: {response.status_code}"
+        return {"data": result, "raw_items": None}
+
+    response_content_type = response.headers.get("Content-Type", "").lower()
+    if "text/html" in response_content_type:
+        result = BeautifulSoup(response.content, "html.parser").get_text()
+        return {"data": result, "raw_items": None}
+    if "application/xml" in response_content_type or "text/xml" in response_content_type:
+        try:
+            result = BeautifulSoup(response.content, "xml").get_text()
+            if not result.strip():
+                result = response.text
+        except Exception:
+            result = response.text
+        return {"data": result, "raw_items": None}
+
+    try:
+        result_data = response.json() if response.content else None
+    except json.JSONDecodeError:
+        result_data = response.text if response.text else None
+
+    return {
+        "data": result_data,
+        "raw_items": _extract_raw_items(result_data),
+    }

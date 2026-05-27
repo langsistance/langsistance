@@ -118,7 +118,8 @@ async def create_tool_and_knowledge(request: ToolAndKnowledgeCreateRequest, http
         'public': request.knowledge_public,
         'embedding_id': request.knowledge_embeddingId,
         'model_name': request.knowledge_model_name,
-        'params': request.knowledge_params
+        'params': request.knowledge_params,
+        'type': request.knowledge_type or 1
     }
 
     # 调用核心功能方法

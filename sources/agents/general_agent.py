@@ -14,8 +14,10 @@ from sources.dynamic_tool_params import (
     _coerce_json_object,
     _is_path_query_body_empty,
     _replace_uspto_download_urls_for_batch,
+    execute_backend_tool_request,
 )
 from sources.tool_result_filter import filter_tool_result_items
+from sources.workflow.workflow_executor import WorkflowExecutor, is_workflow_knowledge
 
 from langchain_core.tools import StructuredTool
 
@@ -871,6 +873,21 @@ Begin your response now:
 
                     def dynamic_backend_tool_function(user_id: str, query_id: str, params: Dict[str, Any] | str):
                         self.logger.info(f"dynamic_backend_tool_function user id is {user_id} - query id is {query_id} - param is {params}")
+                        tool_result = execute_backend_tool_request(tool_info, params)
+                        raw_items = tool_result.get("raw_items")
+                        if raw_items:
+                            list_count = len(raw_items)
+                            self._pending_raw_items = raw_items
+                            return (
+                                f"The query returned {list_count} items. "
+                                f"Please write a brief 2-3 sentence summary of what was found. "
+                                f"The complete list will be analyzed and displayed item by item automatically - "
+                                f"do NOT enumerate the items yourself."
+                            )
+                        data = tool_result.get("data")
+                        if isinstance(data, (dict, list)):
+                            return json.dumps(data, ensure_ascii=False, indent=2)
+                        return data
                         # 从tool_info中获取URL
                         url = tool_info.url
 
@@ -1080,6 +1097,27 @@ Begin your response now:
         #self.knowledgeTool = get_knowledge_tool(user_id,  prompt)
         self._last_user_prompt = prompt
         self.knowledgeTool = await asyncio.to_thread(get_knowledge_tool, user_id, prompt, push_filter=push_filter)
+        knowledge_item, tool_info = self.knowledgeTool
+        if is_workflow_knowledge(knowledge_item):
+            if callback_handler:
+                await callback_handler.on_llm_new_token(
+                    f"已匹配组合知识：{knowledge_item.question}\n\n"
+                )
+            workflow_result = await WorkflowExecutor(self.llm).execute(
+                workflow_spec=knowledge_item.params,
+                user_prompt=prompt,
+            )
+            if workflow_result.raw_items:
+                self._pending_raw_items = workflow_result.raw_items
+            tool_data = json.dumps(workflow_result.final_data, ensure_ascii=False, indent=2)
+            self.knowledgeTool = (knowledge_item, tool_info)
+            user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
+            system_prompt = self.generate_frontend_tool_direct_system_prompt(tool_data)
+            self.memory.reset([])
+            self.memory.push('user', user_prompt)
+            self.memory.push('system', system_prompt)
+            self.tools = []
+            return self.llm.openai_create(self.tools, self.memory.get(), callback_handler)
         user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
         system_prompt = self.generate_system_prompt(tool_data)
         self.memory.reset([])

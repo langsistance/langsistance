@@ -48,7 +48,11 @@ async def create_knowledge_record(request: KnowledgeCreateRequest, http_request:
     if len(request.params) > 5000:
         errors.append("params must be no more than 5000 characters")
 
-    if not request.toolId:
+    knowledge_type = request.type or 1
+    if knowledge_type not in (1, 2):
+        errors.append("type must be 1 or 2")
+
+    if knowledge_type == 1 and not request.toolId:
         errors.append("toolId is required")
 
     if errors:
@@ -68,25 +72,26 @@ async def create_knowledge_record(request: KnowledgeCreateRequest, http_request:
         connection = get_db_connection()
         with connection.cursor() as cursor:
             # 验证tool_id是否属于当前用户
-            check_tool_sql = "SELECT id FROM tools WHERE id = %s AND user_id = %s AND status = 1"
-            cursor.execute(check_tool_sql, (request.toolId, user_id))
-            tool_result = cursor.fetchone()
+            if request.toolId:
+                check_tool_sql = "SELECT id FROM tools WHERE id = %s AND user_id = %s AND status = 1"
+                cursor.execute(check_tool_sql, (request.toolId, user_id))
+                tool_result = cursor.fetchone()
 
-            if not tool_result:
-                logger.warning(f"Tool {request.toolId} not found or not owned by user {user_id}")
-                return JSONResponse(
-                    status_code=403,
-                    content={
-                        "success": False,
-                        "message": "Tool not found or not owned by current user"
-                    }
-                )
+                if not tool_result:
+                    logger.warning(f"Tool {request.toolId} not found or not owned by user {user_id}")
+                    return JSONResponse(
+                        status_code=403,
+                        content={
+                            "success": False,
+                            "message": "Tool not found or not owned by current user"
+                        }
+                    )
 
             # 插入数据
             sql = """
                   INSERT INTO knowledge
-                  (user_id, question, description, answer, public, model_name, tool_id, params, status, embedding_id)
-                  VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                  (user_id, question, description, answer, public, model_name, tool_id, params, status, embedding_id, `type`)
+                  VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                   """
             cursor.execute(sql, (
                 user_id,
@@ -95,10 +100,11 @@ async def create_knowledge_record(request: KnowledgeCreateRequest, http_request:
                 request.answer,
                 request.public,
                 "gpt-4o-mini",
-                request.toolId,
-                "",
+                request.toolId or 0,
+                request.params or "",
                 1,
-                0
+                0,
+                knowledge_type
             ))
             connection.commit()
 
@@ -280,6 +286,9 @@ async def update_knowledge_record(request: KnowledgeUpdateRequest, http_request:
     if request.params and len(request.params) > 5000:
         errors.append("params must be no more than 5000 characters")
 
+    if request.type is not None and request.type not in (1, 2):
+        errors.append("type must be 1 or 2")
+
     if request.toolId and not request.toolId:
         errors.append("toolId must be a valid integer")
 
@@ -357,6 +366,10 @@ async def update_knowledge_record(request: KnowledgeUpdateRequest, http_request:
             if request.params is not None:
                 update_fields.append("params = %s")
                 update_params.append(request.params)
+
+            if request.type is not None:
+                update_fields.append("`type` = %s")
+                update_params.append(request.type)
 
             # 如果没有任何字段需要更新
             if not update_fields:
@@ -512,7 +525,7 @@ async def query_knowledge_records(http_request: Request, query: str = "", limit:
                                    user_id,
                                    question,
                                    description,
-                                   answer, public, model_name, tool_id, params, create_time, update_time
+                                   answer, public, model_name, tool_id, params, `type`, create_time, update_time
                             FROM knowledge
                             WHERE status = %s
                                AND user_id = %s
@@ -528,7 +541,7 @@ async def query_knowledge_records(http_request: Request, query: str = "", limit:
                                    user_id,
                                    question,
                                    description,
-                                   answer, public, model_name, tool_id, params, create_time, update_time
+                                   answer, public, model_name, tool_id, params, `type`, create_time, update_time
                             FROM knowledge
                             WHERE status = %s
                                AND user_id = %s
@@ -554,7 +567,8 @@ async def query_knowledge_records(http_request: Request, query: str = "", limit:
                     public=row['public'],
                     model_name=row['model_name'] or "",
                     tool_id=row['tool_id'] or 0,
-                    params=row['params'] or ""
+                    params=row['params'] or "",
+                    type=row.get('type') or 1
                 )
                 # 处理时间字段
                 if row['create_time']:
@@ -688,7 +702,7 @@ async def query_public_knowledge(query: str = "", limit: int = 10, offset: int =
                                    user_id,
                                    question,
                                    description,
-                                   answer, public, model_name, tool_id, params, create_time, update_time
+                                   answer, public, model_name, tool_id, params, `type`, create_time, update_time
                             FROM knowledge
                             WHERE status = %s
                                AND public = %s
@@ -704,7 +718,7 @@ async def query_public_knowledge(query: str = "", limit: int = 10, offset: int =
                                    user_id,
                                    question,
                                    description,
-                                   answer, public, model_name, tool_id, params, create_time, update_time
+                                   answer, public, model_name, tool_id, params, `type`, create_time, update_time
                             FROM knowledge
                             WHERE status = %s
                                AND public = %s
@@ -729,7 +743,8 @@ async def query_public_knowledge(query: str = "", limit: int = 10, offset: int =
                     public=row['public'],
                     model_name=row['model_name'] or "",
                     tool_id=row['tool_id'] or 0,
-                    params=row['params'] or ""
+                    params=row['params'] or "",
+                    type=row.get('type') or 1
                 )
 
                 # 添加用户邮箱到extra_info字段
@@ -817,7 +832,7 @@ async def copy_knowledge(request: KnowledgeCopyRequest, http_request: Request):
             # 查询要复制的知识记录
             query_sql = """
                         SELECT id, user_id, question, description, answer, 
-                               public, model_name, tool_id, params
+                               public, model_name, tool_id, params, `type`
                         FROM knowledge
                         WHERE id = %s AND status = %s
                         """
@@ -847,7 +862,8 @@ async def copy_knowledge(request: KnowledgeCopyRequest, http_request: Request):
                 'public': 1,  # 设为私有
                 'embedding_id': 0,
                 'model_name': row["model_name"],
-                'params': row["params"]
+                'params': row["params"],
+                'type': row.get("type") or 1
             }
 
             # 准备工具数据（如果存在）
@@ -1126,7 +1142,7 @@ async def handle_knowledge_share(request: Request, handle_request: dict):
             else:  # accept
                 # 先查询知识详情
                 knowledge_query_sql = """
-                    SELECT question, description, answer, public, model_name, tool_id, params, user_id
+                    SELECT question, description, answer, public, model_name, tool_id, params, `type`, user_id
                     FROM knowledge
                     WHERE id = %s AND status = 1
                 """
@@ -1152,7 +1168,8 @@ async def handle_knowledge_share(request: Request, handle_request: dict):
                     'public': 1,  # 设为私有
                     'embedding_id': 0,
                     'model_name': knowledge_result['model_name'],
-                    'params': knowledge_result['params']
+                    'params': knowledge_result['params'],
+                    'type': knowledge_result.get('type') or 1
                 }
 
                 # 准备工具数据（如果存在）
@@ -1298,7 +1315,7 @@ async def query_knowledge_shares(http_request: Request, limit: int = 10, offset:
             if knowledge_ids:
                 knowledge_query_sql = f"""
                     SELECT id, user_id, question, description, answer, public, 
-                           model_name, tool_id, params, create_time, update_time
+                           model_name, tool_id, params, `type`, create_time, update_time
                     FROM knowledge
                     WHERE id IN ({','.join(['%s'] * len(knowledge_ids))}) AND status = 1
                 """
@@ -1326,6 +1343,7 @@ async def query_knowledge_shares(http_request: Request, limit: int = 10, offset:
                         model_name=knowledge_data["model_name"] or "",
                         tool_id=knowledge_data["tool_id"] or 0,
                         params=knowledge_data["params"] or "",
+                        type=knowledge_data.get("type") or 1,
                         extra_info={
                             "from_user_email": share["from_user_email"],  # 添加from_user_email字段
                             "share_id": share["id"],
@@ -1452,7 +1470,7 @@ async def get_user_shared_knowledge(http_request: Request, limit: int = 10, offs
             if knowledge_ids:
                 knowledge_query_sql = f"""
                     SELECT id, user_id, question, description, answer, public, 
-                           model_name, tool_id, params, create_time, update_time
+                           model_name, tool_id, params, `type`, create_time, update_time
                     FROM knowledge
                     WHERE id IN ({','.join(['%s'] * len(knowledge_ids))})
                 """
@@ -1480,6 +1498,7 @@ async def get_user_shared_knowledge(http_request: Request, limit: int = 10, offs
                         model_name=knowledge_data["model_name"] or "",
                         tool_id=knowledge_data["tool_id"] or 0,
                         params=knowledge_data["params"] or "",
+                        type=knowledge_data.get("type") or 1,
                         extra_info={
                             "share_id": share["id"],
                             "status": share["status"],

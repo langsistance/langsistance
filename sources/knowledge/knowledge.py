@@ -54,6 +54,7 @@ class KnowledgeItem(BaseModel):
     create_time: Optional[str] = None
     update_time: Optional[str] = None
     extra_info: Optional[Dict[str, Any]] = None
+    type: int = 1
 
 
 class ToolItem(BaseModel):
@@ -148,6 +149,7 @@ def search_knowledge_base(user_id: str, query_embedding: List[float], user_vecto
                 "model_name": item.model_name,
                 "tool_id": item.tool_id,
                 "params": item.params,
+                "type": item.type,
                 "create_time": item.create_time,
                 "update_time": item.update_time,
                 "similarity": float(similarity)
@@ -237,7 +239,7 @@ def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
             with connection.cursor() as cursor:
                 # 查询用户自己的知识记录 (status=1表示有效)
                 user_knowledge_sql = """
-                    SELECT id, user_id, question, description, answer, public, model_name, tool_id, params, create_time, update_time
+                    SELECT id, user_id, question, description, answer, public, model_name, tool_id, params, `type`, create_time, update_time
                     FROM knowledge
                     WHERE status = %s
                        AND user_id = %s
@@ -260,6 +262,7 @@ def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
                         model_name=row['model_name'] or "",
                         tool_id=row['tool_id'] or 0,
                         params=row['params'] or "",
+                        type=row.get('type') or 1,
                         create_time=row['create_time'].isoformat() if row['create_time'] else None,
                         update_time=row['update_time'].isoformat() if row['update_time'] else None
                     )
@@ -420,6 +423,7 @@ def get_knowledge_tool(user_id: str, question: str, top_k: int = 3,
             model_name=best_knowledge['model_name'] or "",
             tool_id=best_knowledge['tool_id'] or 0,
             params=best_knowledge['params'] or "",
+            type=best_knowledge.get('type') or 1,
         )
 
         return knowledge_item, tool_info
@@ -490,8 +494,8 @@ def create_tool_and_knowledge_records(tool_data: dict, knowledge_data: dict) -> 
             knowledge_sql = """
                             INSERT INTO knowledge
                             (user_id, question, description, answer, public, status, embedding_id, model_name, tool_id,
-                             params)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                             params, `type`)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             """
             cursor.execute(knowledge_sql, (
                 knowledge_data['user_id'],
@@ -503,7 +507,8 @@ def create_tool_and_knowledge_records(tool_data: dict, knowledge_data: dict) -> 
                 knowledge_data['embedding_id'],
                 knowledge_data['model_name'],
                 tool_id,  # 使用刚刚创建的 tool_id
-                knowledge_data['params']
+                knowledge_data['params'],
+                knowledge_data.get('type', 1)
             ))
 
             # 获取插入的 knowledge ID
@@ -599,4 +604,42 @@ def get_tool_by_id(tool_id: int) -> Optional[ToolItem]:
 
     except Exception as e:
         logger.error(f"Error retrieving tool by ID: {str(e)}")
+        return None
+
+
+def get_knowledge_by_id(knowledge_id: int) -> Optional[KnowledgeItem]:
+    """Return one active knowledge record by id."""
+    try:
+        connection = get_db_connection()
+        try:
+            with connection.cursor() as cursor:
+                query_sql = """
+                    SELECT id, user_id, question, description, answer, public,
+                           model_name, tool_id, params, `type`, create_time, update_time
+                    FROM knowledge
+                    WHERE id = %s AND status = 1
+                """
+                cursor.execute(query_sql, (knowledge_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+
+                return KnowledgeItem(
+                    id=row['id'],
+                    user_id=str(row['user_id']),
+                    question=row['question'],
+                    description=row['description'] or "",
+                    answer=row['answer'],
+                    public=row['public'],
+                    model_name=row['model_name'] or "",
+                    tool_id=row['tool_id'] or 0,
+                    params=row['params'] or "",
+                    type=row.get('type') or 1,
+                    create_time=row['create_time'].isoformat() if row.get('create_time') else None,
+                    update_time=row['update_time'].isoformat() if row.get('update_time') else None,
+                )
+        finally:
+            connection.close()
+    except Exception as e:
+        logger.error(f"Error retrieving knowledge by ID: {str(e)}")
         return None

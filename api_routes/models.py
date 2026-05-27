@@ -10,10 +10,11 @@ class KnowledgeCreateRequest(BaseModel):
     question: str
     answer: str
     public: int
-    toolId: int
+    toolId: Optional[int] = None
     params: str
     modelName: Optional[str] = None
     description: Optional[str] = None
+    type: Optional[int] = 1
 
 class KnowledgeCreateResponse(BaseModel):
     success: bool
@@ -36,6 +37,7 @@ class KnowledgeUpdateRequest(BaseModel):
     modelName: Optional[str] = None
     toolId: Optional[int] = None
     params: Optional[str] = None
+    type: Optional[int] = None
 
 class KnowledgeUpdateResponse(BaseModel):
     success: bool
@@ -72,6 +74,7 @@ class ToolAndKnowledgeCreateRequest(BaseModel):
     knowledge_embeddingId: int
     knowledge_model_name: str
     knowledge_params: str
+    knowledge_type: Optional[int] = 1
 
 class ToolAndKnowledgeCreateResponse(BaseModel):
     success: bool
