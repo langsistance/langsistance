@@ -78,12 +78,14 @@ class WorkflowExecutor:
                 raise ValueError(f"workflow step {index} knowledge not found")
             if not knowledge.tool_id:
                 raise ValueError(f"workflow step {index} knowledge has no linked tool")
+            logger.info(f"workflow step {index} knowledge: {knowledge}")
 
             tool = self.tool_resolver(int(knowledge.tool_id))
             if not tool:
                 raise ValueError(f"workflow step {index} tool not found")
             if tool.push != 2:
                 raise ValueError("workflow context_chain only supports backend tools with push=2")
+            logger.info(f"workflow step {index} tool: {tool}")
 
             params = await self._generate_tool_params(
                 user_prompt=user_prompt,
@@ -93,7 +95,9 @@ class WorkflowExecutor:
                 tool=tool,
                 previous_results=previous_results,
             )
+            logger.info(f"workflow step {index} params: {params}")
             tool_result = self.tool_executor(tool, params)
+            logger.info(f"workflow step {index} tool_result: {tool_result}")
             final_data = tool_result.get("data")
             raw_items = tool_result.get("raw_items")
 

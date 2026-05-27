@@ -101,7 +101,20 @@ class TestWorkflowExecutor(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(item.type, 2)
 
     async def test_context_chain_passes_previous_full_result_to_next_step(self):
+        import sources.workflow.workflow_executor as workflow_executor
         from sources.workflow.workflow_executor import WorkflowExecutor
+
+        class CaptureLogger:
+            def __init__(self):
+                self.messages = []
+
+            def info(self, message):
+                self.messages.append(message)
+
+        capture_logger = CaptureLogger()
+        original_logger = workflow_executor.logger
+        workflow_executor.logger = capture_logger
+        self.addCleanup(lambda: setattr(workflow_executor, "logger", original_logger))
 
         knowledge_by_id = {
             101: KnowledgeItem(
@@ -203,6 +216,15 @@ class TestWorkflowExecutor(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tool_calls[0], ("lookup_patent", {"query": {"publicationId": "US123"}}))
         self.assertEqual(tool_calls[1], ("list_documents", {"query": {"applicationId": "18244278"}}))
         self.assertIn("applicationNumberText", executor.llm.complete_json_calls[1]["user_content"])
+        log_text = "\n".join(capture_logger.messages)
+        self.assertIn("workflow step 1 knowledge:", log_text)
+        self.assertIn("workflow step 1 tool:", log_text)
+        self.assertIn("workflow step 1 params:", log_text)
+        self.assertIn("workflow step 1 tool_result:", log_text)
+        self.assertIn("workflow step 2 knowledge:", log_text)
+        self.assertIn("workflow step 2 tool:", log_text)
+        self.assertIn("workflow step 2 params:", log_text)
+        self.assertIn("workflow step 2 tool_result:", log_text)
 
 
 if __name__ == "__main__":
