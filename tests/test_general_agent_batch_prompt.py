@@ -15,8 +15,17 @@ class FakeCallbackHandler:
 
 
 class FakeMemory:
+    def __init__(self):
+        self.messages = []
+
     def get(self):
-        return []
+        return self.messages
+
+    def reset(self, messages):
+        self.messages = list(messages)
+
+    def push(self, role, content):
+        self.messages.append({"role": role, "content": content})
 
 
 class FakeLogger:
@@ -24,17 +33,46 @@ class FakeLogger:
         pass
 
 
+class FakeWorkflowResult:
+    def __init__(self, final_data, raw_items=None):
+        self.final_data = final_data
+        self.raw_items = raw_items
+
+
+class FakeWorkflowExecutor:
+    result = FakeWorkflowResult({"ok": True})
+
+    def __init__(self, llm):
+        self.llm = llm
+
+    async def execute(self, workflow_spec, user_prompt):
+        return self.result
+
+
 class FakeLlm:
     def __init__(self, complete_json_response=None):
         self.stream_calls = []
         self.complete_json_calls = []
+        self.openai_create_calls = []
+        self.openai_invoke_calls = []
         self.complete_json_response = complete_json_response or {
             "has_filter_requirement": False,
             "decisions": [],
         }
 
     async def openai_invoke(self, agent, memory, callback_handler):
+        self.openai_invoke_calls.append({
+            "agent": agent,
+            "memory": memory,
+        })
         return None
+
+    def openai_create(self, tools, history, callback_handler=None, verbose=False):
+        self.openai_create_calls.append({
+            "tools": tools,
+            "history": history,
+        })
+        return {"agent": "created"}
 
     async def stream_simple(self, system_prompt, user_content, callback_handler):
         self.stream_calls.append({
@@ -97,6 +135,10 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
 
         requests_module = types.ModuleType("requests")
 
+        workflow_module = types.ModuleType("sources.workflow.workflow_executor")
+        workflow_module.WorkflowExecutor = object
+        workflow_module.is_workflow_knowledge = lambda item: bool(getattr(item, "type", 1) == 2)
+
         stubs = {
             "pydantic": pydantic_module,
             "bs4": bs4_module,
@@ -107,6 +149,7 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
             "sources.tools.mcpFinder": mcp_module,
             "sources.memory": memory_module,
             "sources.logger": logger_module,
+            "sources.workflow.workflow_executor": workflow_module,
             "langchain_core.tools": langchain_tools_module,
         }
 
@@ -118,6 +161,90 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
         with patch.dict(sys.modules, stubs):
             spec.loader.exec_module(module)
         return module.GeneralAgent
+
+    def _patch_workflow_globals(self, GeneralAgent, workflow_result):
+        globals_dict = GeneralAgent.create_agent.__globals__
+        originals = {
+            "get_knowledge_tool": globals_dict["get_knowledge_tool"],
+            "WorkflowExecutor": globals_dict["WorkflowExecutor"],
+        }
+        knowledge = types.SimpleNamespace(
+            question="根据公开 ID 查询所有文档",
+            params='{"type":"workflow","mode":"context_chain","steps":[]}',
+            type=2,
+            tool_id=0,
+            answer="workflow",
+            description="",
+        )
+        globals_dict["get_knowledge_tool"] = lambda *args, **kwargs: (knowledge, None)
+        FakeWorkflowExecutor.result = workflow_result
+        globals_dict["WorkflowExecutor"] = FakeWorkflowExecutor
+        self.addCleanup(lambda: globals_dict.update(originals))
+
+    async def test_workflow_scalar_result_streams_once_without_creating_or_invoking_agent(self):
+        GeneralAgent = self._load_general_agent_class()
+        self._patch_workflow_globals(
+            GeneralAgent,
+            FakeWorkflowResult({"applicationNumberText": "18244278"}),
+        )
+
+        agent = GeneralAgent.__new__(GeneralAgent)
+        agent.llm = FakeLlm()
+        agent.memory = FakeMemory()
+        agent.logger = FakeLogger()
+        callback_handler = FakeCallbackHandler()
+
+        openai_agent = await agent.create_agent(
+            user_id="user-1",
+            prompt="根据公开 ID US123 查询专利",
+            query_id="query-1",
+            tool_data="",
+            callback_handler=callback_handler,
+            push_filter=2,
+        )
+        await agent.invoke_agent(openai_agent, callback_handler)
+
+        self.assertIsNone(openai_agent)
+        self.assertEqual(agent.llm.openai_create_calls, [])
+        self.assertEqual(agent.llm.openai_invoke_calls, [])
+        self.assertEqual(len(agent.llm.stream_calls), 1)
+        stream_content = agent.llm.stream_calls[0]["user_content"]
+        self.assertIn("根据公开 ID US123 查询专利", stream_content)
+        self.assertIn("applicationNumberText", stream_content)
+
+    async def test_workflow_list_result_uses_batch_output_without_creating_or_invoking_agent(self):
+        GeneralAgent = self._load_general_agent_class()
+        self._patch_workflow_globals(
+            GeneralAgent,
+            FakeWorkflowResult(
+                {"documentBag": [{"documentCode": "SPEC"}, {"documentCode": "CLM"}]},
+                raw_items=[{"documentCode": "SPEC"}, {"documentCode": "CLM"}],
+            ),
+        )
+
+        agent = GeneralAgent.__new__(GeneralAgent)
+        agent.llm = FakeLlm()
+        agent.memory = FakeMemory()
+        agent.logger = FakeLogger()
+        callback_handler = FakeCallbackHandler()
+
+        openai_agent = await agent.create_agent(
+            user_id="user-1",
+            prompt="根据公开 ID US123 查询所有文档",
+            query_id="query-1",
+            tool_data="",
+            callback_handler=callback_handler,
+            push_filter=2,
+        )
+        await agent.invoke_agent(openai_agent, callback_handler)
+
+        self.assertIsNone(openai_agent)
+        self.assertEqual(agent.llm.openai_create_calls, [])
+        self.assertEqual(agent.llm.openai_invoke_calls, [])
+        self.assertEqual(len(agent.llm.stream_calls), 1)
+        self.assertIn("Full Results (2 items)", "".join(callback_handler.tokens))
+        self.assertIn("SPEC", agent.llm.stream_calls[0]["user_content"])
+        self.assertIn("CLM", agent.llm.stream_calls[0]["user_content"])
 
     async def test_batch_prompt_requires_all_urls_verbatim(self):
         GeneralAgent = self._load_general_agent_class()

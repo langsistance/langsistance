@@ -1107,17 +1107,10 @@ Begin your response now:
                 workflow_spec=knowledge_item.params,
                 user_prompt=prompt,
             )
-            if workflow_result.raw_items:
-                self._pending_raw_items = workflow_result.raw_items
-            tool_data = json.dumps(workflow_result.final_data, ensure_ascii=False, indent=2)
             self.knowledgeTool = (knowledge_item, tool_info)
-            user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
-            system_prompt = self.generate_frontend_tool_direct_system_prompt(tool_data)
-            self.memory.reset([])
-            self.memory.push('user', user_prompt)
-            self.memory.push('system', system_prompt)
+            self._workflow_result = workflow_result
             self.tools = []
-            return self.llm.openai_create(self.tools, self.memory.get(), callback_handler)
+            return None
         user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
         system_prompt = self.generate_system_prompt(tool_data)
         self.memory.reset([])
@@ -1130,70 +1123,101 @@ Begin your response now:
         return self.llm.openai_create(self.tools, self.memory.get(), callback_handler)
 
 
+    async def _stream_workflow_final_result(self, workflow_result, callback_handler):
+        system_prompt = (
+            "You are a self-contained assistant answering from a completed composed-knowledge workflow result. "
+            "Use only the user request and workflow result provided here. "
+            "Do not call tools, search externally, or invent missing data. "
+            "Return a concise, well-formatted Markdown answer."
+        )
+        user_content = json.dumps({
+            "user_request": getattr(self, "_last_user_prompt", ""),
+            "workflow_result": workflow_result.final_data,
+        }, ensure_ascii=False, indent=2)
+        await self.llm.stream_simple(
+            system_prompt=system_prompt,
+            user_content=user_content,
+            callback_handler=callback_handler,
+        )
+
+    async def _stream_raw_items(self, raw_items, callback_handler):
+        self._pending_raw_items = None
+        original_total = len(raw_items)
+        filter_result = await filter_tool_result_items(
+            raw_items,
+            getattr(self, "_last_user_prompt", ""),
+            self.llm.complete_json,
+        )
+        pending = filter_result.items
+        total = len(pending)
+        batch_size = 5
+        heading = (
+            f"## Filtered Results ({filter_result.filtered_count} of {filter_result.original_count} items)"
+            if filter_result.applied
+            else f"## Full Results ({original_total} items)"
+        )
+        await callback_handler.on_llm_new_token(
+            f"\n\n---\n\n{heading}\n\n"
+        )
+        system_prompt = (
+            "You are presenting search result items clearly and concisely. "
+            "For each item, extract and present the most important information as clean Markdown. "
+            "Use **bold** for field names. Number each item. "
+            "Every URL is mandatory: copy every URL from the input exactly and verbatim. "
+            "Do not omit, shorten, summarize, translate, decode, re-encode, or alter any URL. "
+            "If an item has multiple URLs, include all of them under that item. "
+            "If a URL is an image URL, display it using Markdown image syntax exactly as "
+            "![alt text](image_URL) so the frontend can render the image inline. "
+            "Do NOT add any preamble, summary, or conclusion - output only the formatted items."
+        )
+        for batch_start in range(0, total, batch_size):
+            batch = pending[batch_start:batch_start + batch_size]
+            self.logger.info(f"batch: {batch}")
+            _replace_uspto_download_urls_for_batch(batch)
+            batch_end = min(batch_start + batch_size, total)
+            await callback_handler.on_llm_new_token(
+                f"### Items {batch_start + 1}-{batch_end}\n\n"
+            )
+            batch_json = json.dumps(batch, ensure_ascii=False, indent=2)
+            batch_urls = _collect_urls_from_value(batch)
+            url_checklist = ""
+            if batch_urls:
+                url_checklist = (
+                    "Mandatory URL checklist. Copy every line verbatim into the corresponding item. "
+                    "Do not omit any URL from this checklist:\n"
+                    + "\n".join(f"- {url}" for url in batch_urls)
+                    + "\n\n"
+                )
+            await self.llm.stream_simple(
+                system_prompt=system_prompt,
+                user_content=(
+                    f"Format and analyze these {len(batch)} search result items as readable Markdown:\n\n"
+                    f"{url_checklist}"
+                    f"{batch_json}"
+                ),
+                callback_handler=callback_handler,
+            )
+            await callback_handler.on_llm_new_token("\n\n")
+
+
     async def invoke_agent(self, agent, callback_handler):
         try:
+            workflow_result = getattr(self, "_workflow_result", None)
+            if workflow_result is not None:
+                self._workflow_result = None
+                raw_items = getattr(workflow_result, "raw_items", None)
+                if raw_items:
+                    await self._stream_raw_items(raw_items, callback_handler)
+                else:
+                    await self._stream_workflow_final_result(workflow_result, callback_handler)
+                return
+
             await self.llm.openai_invoke(agent, self.memory.get(), callback_handler)
             # LangGraph agents don't call on_agent_finish — inject batch analysis here,
             # after all LLM tokens have been streamed but before core.py sends 'end'.
             pending = getattr(self, '_pending_raw_items', None)
             if pending:
-                self._pending_raw_items = None
-                original_total = len(pending)
-                filter_result = await filter_tool_result_items(
-                    pending,
-                    getattr(self, "_last_user_prompt", ""),
-                    self.llm.complete_json,
-                )
-                pending = filter_result.items
-                total = len(pending)
-                batch_size = 5
-                heading = (
-                    f"## Filtered Results ({filter_result.filtered_count} of {filter_result.original_count} items)"
-                    if filter_result.applied
-                    else f"## Full Results ({original_total} items)"
-                )
-                await callback_handler.on_llm_new_token(
-                    f"\n\n---\n\n{heading}\n\n"
-                )
-                system_prompt = (
-                    "You are presenting search result items clearly and concisely. "
-                    "For each item, extract and present the most important information as clean Markdown. "
-                    "Use **bold** for field names. Number each item. "
-                    "Every URL is mandatory: copy every URL from the input exactly and verbatim. "
-                    "Do not omit, shorten, summarize, translate, decode, re-encode, or alter any URL. "
-                    "If an item has multiple URLs, include all of them under that item. "
-                    "If a URL is an image URL, display it using Markdown image syntax exactly as "
-                    "![alt text](image_URL) so the frontend can render the image inline. "
-                    "Do NOT add any preamble, summary, or conclusion — output only the formatted items."
-                )
-                for batch_start in range(0, total, batch_size):
-                    batch = pending[batch_start:batch_start + batch_size]
-                    self.logger.info(f"batch: {batch}")
-                    _replace_uspto_download_urls_for_batch(batch)
-                    batch_end = min(batch_start + batch_size, total)
-                    await callback_handler.on_llm_new_token(
-                        f"### Items {batch_start + 1}–{batch_end}\n\n"
-                    )
-                    batch_json = json.dumps(batch, ensure_ascii=False, indent=2)
-                    batch_urls = _collect_urls_from_value(batch)
-                    url_checklist = ""
-                    if batch_urls:
-                        url_checklist = (
-                            "Mandatory URL checklist. Copy every line verbatim into the corresponding item. "
-                            "Do not omit any URL from this checklist:\n"
-                            + "\n".join(f"- {url}" for url in batch_urls)
-                            + "\n\n"
-                        )
-                    await self.llm.stream_simple(
-                        system_prompt=system_prompt,
-                        user_content=(
-                            f"Format and analyze these {len(batch)} search result items as readable Markdown:\n\n"
-                            f"{url_checklist}"
-                            f"{batch_json}"
-                        ),
-                        callback_handler=callback_handler,
-                    )
-                    await callback_handler.on_llm_new_token("\n\n")
+                await self._stream_raw_items(pending, callback_handler)
         except Exception as e:
             raise e
 
