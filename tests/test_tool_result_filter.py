@@ -79,6 +79,35 @@ class TestToolResultFilter(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.items, items)
         self.assertEqual(len(llm_calls), 1)
 
+    async def test_criteria_prompt_distinguishes_core_goal_from_supplemental_filter(self):
+        from sources.tool_result_filter import filter_tool_result_items
+
+        items = [{"name": "Alpha"}]
+        llm_calls = []
+
+        async def llm_json_call(system_prompt, user_content):
+            llm_calls.append({
+                "system_prompt": system_prompt,
+                "user_content": user_content,
+            })
+            return {
+                "has_filter_criteria": False,
+                "filter_criteria": "",
+            }
+
+        await filter_tool_result_items(
+            items,
+            "Find patent documents for application 18893954.",
+            llm_json_call,
+        )
+
+        self.assertEqual(len(llm_calls), 1)
+        criteria_prompt = llm_calls[0]["system_prompt"]
+        self.assertIn("core goal", criteria_prompt)
+        self.assertIn("supplemental condition", criteria_prompt)
+        self.assertIn("single core goal", criteria_prompt)
+        self.assertIn("not a result filter", criteria_prompt)
+
     async def test_missing_and_low_confidence_reject_decisions_keep_items(self):
         from sources.tool_result_filter import filter_tool_result_items
 

@@ -33,6 +33,9 @@ FILTER_CRITERIA_SYSTEM_PROMPT = """You decide whether a user explicitly requeste
 Return JSON only.
 
 Rules:
+- First identify the user's core goal: the main thing they are asking the tool or assistant to retrieve, search, list, summarize, or answer.
+- If the question has only a single core goal, treat that goal as the task itself, not a result filter. For example, "find patent documents for application 18893954" has no result filter; the application number is part of the core goal.
+- A possible result filter is usually a supplemental condition added on top of the core goal. It narrows which returned result items should be kept or removed after the core result set is obtained.
 - A result filter narrows which returned items should be kept or removed.
 - Extract only criteria the user clearly stated, such as only/keep/show/include/return, filter, exclude, where, matching, containing, or a specific field/value condition for the result items.
 - Do not infer implicit filters from the general task, topic, formatting request, summary request, or tool lookup parameters.
@@ -51,8 +54,9 @@ def _build_filter_criteria_user_content(user_prompt: str) -> str:
     return (
         "User question:\n"
         f"{user_prompt}\n\n"
-        "Decide whether this question contains an explicit filter for a returned result list. "
-        "If it does, extract only that filter. If it does not, return false."
+        "Identify the core goal first. Then decide whether this question contains a supplemental "
+        "condition that explicitly filters the returned result list. If it does, extract only that "
+        "filter. If it does not, return false."
     )
 
 
