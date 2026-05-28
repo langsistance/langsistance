@@ -56,6 +56,7 @@ class FakeLlm:
     def __init__(
         self,
         complete_json_response=None,
+        complete_json_responses=None,
         stream_error=None,
         stream_errors=None,
         stream_outputs=None,
@@ -67,9 +68,13 @@ class FakeLlm:
         self.stream_error = stream_error
         self.stream_errors = list(stream_errors or [])
         self.stream_outputs = list(stream_outputs or [])
-        self.complete_json_response = complete_json_response or {
-            "has_filter_requirement": False,
-            "decisions": [],
+        if complete_json_responses is None and isinstance(complete_json_response, list):
+            complete_json_responses = complete_json_response
+            complete_json_response = None
+        self.complete_json_responses = list(complete_json_responses or [])
+        self.complete_json_response = complete_json_response if complete_json_response is not None else {
+            "has_filter_criteria": False,
+            "filter_criteria": "",
         }
 
     async def openai_invoke(self, agent, memory, callback_handler):
@@ -107,6 +112,8 @@ class FakeLlm:
             "system_prompt": system_prompt,
             "user_content": user_content,
         })
+        if self.complete_json_responses:
+            return self.complete_json_responses.pop(0)
         return self.complete_json_response
 
 
@@ -320,17 +327,23 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
         GeneralAgent = self._load_general_agent_class()
 
         agent = GeneralAgent.__new__(GeneralAgent)
-        agent.llm = FakeLlm({
-            "has_filter_requirement": True,
-            "decisions": [
-                {"index": 0, "keep": True, "confidence": 0.98, "reason": "Tokyo"},
-                {"index": 1, "keep": False, "confidence": 0.94, "reason": "Osaka"},
-                {"index": 2, "keep": True, "confidence": 0.97, "reason": "Tokyo"},
-            ],
-        })
+        agent.llm = FakeLlm([
+            {
+                "has_filter_criteria": True,
+                "filter_criteria": "Tokyo results",
+            },
+            {
+                "has_filter_requirement": True,
+                "decisions": [
+                    {"index": 0, "keep": True, "confidence": 0.98, "reason": "Tokyo"},
+                    {"index": 1, "keep": False, "confidence": 0.94, "reason": "Osaka"},
+                    {"index": 2, "keep": True, "confidence": 0.97, "reason": "Tokyo"},
+                ],
+            },
+        ])
         agent.memory = FakeMemory()
         agent.logger = FakeLogger()
-        agent._last_user_prompt = "只保留东京的公司"
+        agent._last_user_prompt = "Please show these companies, but only keep Tokyo results."
         agent._pending_raw_items = [
             {"name": "Alpha", "city": "Tokyo", "url": "https://example.com/a"},
             {"name": "Beta", "city": "Osaka", "url": "https://example.com/b"},
@@ -340,13 +353,33 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
 
         await agent.invoke_agent(agent=None, callback_handler=callback_handler)
 
-        self.assertEqual(len(agent.llm.complete_json_calls), 1)
+        self.assertEqual(len(agent.llm.complete_json_calls), 2)
         self.assertEqual(len(agent.llm.stream_calls), 1)
         self.assertIn("Filtered Results (2 of 3 items)", "".join(callback_handler.tokens))
         batch_content = agent.llm.stream_calls[0]["user_content"]
         self.assertIn("Alpha", batch_content)
         self.assertIn("Gamma", batch_content)
         self.assertNotIn("Beta", batch_content)
+
+    async def test_skips_result_filtering_when_user_prompt_has_no_filter_criteria(self):
+        GeneralAgent = self._load_general_agent_class()
+
+        agent = GeneralAgent.__new__(GeneralAgent)
+        agent.llm = FakeLlm(stream_outputs=["formatted full results"])
+        agent.memory = FakeMemory()
+        agent.logger = FakeLogger()
+        agent._last_user_prompt = "List the patent documents."
+        agent._pending_raw_items = [
+            {"documentCode": "SPEC"},
+            {"documentCode": "CLM"},
+        ]
+        callback_handler = FakeCallbackHandler()
+
+        await agent.invoke_agent(agent=None, callback_handler=callback_handler)
+
+        self.assertEqual(len(agent.llm.complete_json_calls), 1)
+        self.assertEqual(len(agent.llm.stream_calls), 1)
+        self.assertIn("Full Results (2 items)", "".join(callback_handler.tokens))
 
     async def test_mid_sized_raw_item_uses_formatter_llm(self):
         GeneralAgent = self._load_general_agent_class()

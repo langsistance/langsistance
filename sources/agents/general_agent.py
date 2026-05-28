@@ -1292,9 +1292,10 @@ Begin your response now:
     async def _stream_raw_items(self, raw_items, callback_handler):
         self._pending_raw_items = None
         original_total = len(raw_items)
+        user_prompt = getattr(self, "_last_user_prompt", "")
         filter_result = await filter_tool_result_items(
             raw_items,
-            getattr(self, "_last_user_prompt", ""),
+            user_prompt,
             self.llm.complete_json,
         )
         pending = filter_result.items

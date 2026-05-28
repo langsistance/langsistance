@@ -23,20 +23,29 @@ class TestToolResultFilter(unittest.IsolatedAsyncioTestCase):
             {"name": "Beta", "city": "Osaka", "url": "https://example.com/b"},
             {"name": "Gamma", "city": "Tokyo", "url": "https://example.com/c"},
         ]
-
-        async def llm_json_call(system_prompt, user_content):
-            return {
+        llm_calls = []
+        responses = [
+            {
+                "has_filter_criteria": True,
+                "filter_criteria": "Tokyo results",
+            },
+            {
                 "has_filter_requirement": True,
                 "decisions": [
                     {"index": 0, "keep": True, "confidence": 0.96, "reason": "Tokyo"},
                     {"index": 1, "keep": False, "confidence": 0.91, "reason": "Osaka"},
                     {"index": 2, "keep": True, "confidence": 0.93, "reason": "Tokyo"},
                 ],
-            }
+            },
+        ]
+
+        async def llm_json_call(system_prompt, user_content):
+            llm_calls.append({"system_prompt": system_prompt, "user_content": user_content})
+            return responses[len(llm_calls) - 1]
 
         result = await filter_tool_result_items(
             items,
-            "只保留东京的公司",
+            "Please show these companies, but only keep Tokyo results.",
             llm_json_call,
         )
 
@@ -44,47 +53,59 @@ class TestToolResultFilter(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.original_count, 3)
         self.assertEqual(result.filtered_count, 2)
         self.assertEqual(result.items, [items[0], items[2]])
+        self.assertEqual(len(llm_calls), 2)
+        self.assertIn("Filter criteria:\nTokyo results", llm_calls[1]["user_content"])
 
     async def test_keeps_all_items_when_no_filter_requirement(self):
         from sources.tool_result_filter import filter_tool_result_items
 
         items = [{"name": "Alpha"}, {"name": "Beta"}]
+        llm_calls = []
 
         async def llm_json_call(system_prompt, user_content):
+            llm_calls.append(user_content)
             return {
-                "has_filter_requirement": False,
-                "decisions": [
-                    {"index": 0, "keep": True, "confidence": 1.0},
-                    {"index": 1, "keep": True, "confidence": 1.0},
-                ],
+                "has_filter_criteria": False,
+                "filter_criteria": "",
             }
 
         result = await filter_tool_result_items(
             items,
-            "列出这些结果",
+            "List these results.",
             llm_json_call,
         )
 
         self.assertFalse(result.applied)
         self.assertEqual(result.items, items)
+        self.assertEqual(len(llm_calls), 1)
 
     async def test_missing_and_low_confidence_reject_decisions_keep_items(self):
         from sources.tool_result_filter import filter_tool_result_items
 
         items = [{"name": "Alpha"}, {"name": "Beta"}, {"name": "Gamma"}]
-
-        async def llm_json_call(system_prompt, user_content):
-            return {
+        responses = [
+            {
+                "has_filter_criteria": True,
+                "filter_criteria": "items that match the condition",
+            },
+            {
                 "has_filter_requirement": True,
                 "decisions": [
                     {"index": 0, "keep": False, "confidence": 0.95},
                     {"index": 2, "keep": False, "confidence": 0.42},
                 ],
-            }
+            },
+        ]
+        call_count = 0
+
+        async def llm_json_call(system_prompt, user_content):
+            nonlocal call_count
+            call_count += 1
+            return responses[call_count - 1]
 
         result = await filter_tool_result_items(
             items,
-            "过滤掉不符合条件的项目",
+            "Filter out items that do not match the condition.",
             llm_json_call,
         )
 
@@ -97,11 +118,16 @@ class TestToolResultFilter(unittest.IsolatedAsyncioTestCase):
         items = [{"name": "Alpha"}, {"name": "Beta"}]
 
         async def llm_json_call(system_prompt, user_content):
-            return "not json"
+            if "Return this JSON shape exactly" in user_content:
+                return "not json"
+            return {
+                "has_filter_criteria": True,
+                "filter_criteria": "matching items",
+            }
 
         result = await filter_tool_result_items(
             items,
-            "只保留符合条件的项目",
+            "Only keep matching items.",
             llm_json_call,
         )
 
@@ -118,15 +144,25 @@ class TestToolResultFilter(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(setattr, tool_result_filter, "logger", original_logger)
 
         items = [{"name": "Alpha"}, {"name": "Beta"}]
-
-        async def llm_json_call(system_prompt, user_content):
-            return {
+        responses = [
+            {
+                "has_filter_criteria": True,
+                "filter_criteria": "Alpha",
+            },
+            {
                 "has_filter_requirement": True,
                 "decisions": [
                     {"index": 0, "keep": True, "confidence": 0.99, "reason": "matches"},
                     {"index": 1, "keep": False, "confidence": 0.94, "reason": "does not match"},
                 ],
-            }
+            },
+        ]
+        call_count = 0
+
+        async def llm_json_call(system_prompt, user_content):
+            nonlocal call_count
+            call_count += 1
+            return responses[call_count - 1]
 
         result = await tool_result_filter.filter_tool_result_items(
             items,
@@ -140,12 +176,45 @@ class TestToolResultFilter(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Alpha", info_log)
         self.assertIn("Beta", info_log)
         self.assertIn("filter criteria", info_log)
-        self.assertIn("only keep Alpha", info_log)
+        self.assertIn("filter criteria/keywords: Alpha", info_log)
         self.assertIn("filter decisions", info_log)
         self.assertIn("does not match", info_log)
         self.assertIn("filtered result items", info_log)
         self.assertIn("Alpha", capture_logger.infos[-1])
         self.assertNotIn("Beta", capture_logger.infos[-1])
+
+    async def test_filter_prompt_uses_extracted_filter_criteria_not_full_user_question(self):
+        from sources.tool_result_filter import filter_tool_result_items
+
+        items = [{"name": "Alpha", "publication": "US20250014493A1"}]
+        captured_user_content = []
+        responses = [
+            {
+                "has_filter_criteria": True,
+                "filter_criteria": "patent publication number US20250014493A1",
+            },
+            {
+                "has_filter_requirement": True,
+                "decisions": [
+                    {"index": 0, "keep": True, "confidence": 0.99},
+                ],
+            },
+        ]
+
+        async def llm_json_call(system_prompt, user_content):
+            captured_user_content.append(user_content)
+            return responses[len(captured_user_content) - 1]
+
+        await filter_tool_result_items(
+            items,
+            "I want to obtain all patent documents with the patent publication number US20250014493A1.",
+            llm_json_call,
+        )
+
+        self.assertEqual(len(captured_user_content), 2)
+        self.assertIn("Filter criteria:", captured_user_content[1])
+        self.assertIn("patent publication number US20250014493A1", captured_user_content[1])
+        self.assertNotIn("I want to obtain all patent documents", captured_user_content[1])
 
     async def test_logs_fail_open_filter_error(self):
         from sources import tool_result_filter
@@ -158,7 +227,12 @@ class TestToolResultFilter(unittest.IsolatedAsyncioTestCase):
         items = [{"name": "Alpha"}]
 
         async def llm_json_call(system_prompt, user_content):
-            return "not json"
+            if "Return this JSON shape exactly" in user_content:
+                return "not json"
+            return {
+                "has_filter_criteria": True,
+                "filter_criteria": "Alpha",
+            }
 
         result = await tool_result_filter.filter_tool_result_items(
             items,

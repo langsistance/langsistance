@@ -21,13 +21,39 @@ class FilterResult:
 
 
 FILTER_SYSTEM_PROMPT = """You are a strict list filter.
-Use only the user request and item JSON.
+Use only the explicit filter criteria and item JSON.
 Do not invent facts or assume fields that are not present.
 Return one decision for every input index.
-If the user request does not contain explicit list filtering criteria, keep every item.
 If uncertain, keep the item.
 Output JSON only.
 """
+
+
+FILTER_CRITERIA_SYSTEM_PROMPT = """You decide whether a user explicitly requested filtering a returned result list.
+Return JSON only.
+
+Rules:
+- A result filter narrows which returned items should be kept or removed.
+- Extract only criteria the user clearly stated, such as only/keep/show/include/return, filter, exclude, where, matching, containing, or a specific field/value condition for the result items.
+- Do not infer implicit filters from the general task, topic, formatting request, summary request, or tool lookup parameters.
+- If the user did not clearly ask to filter the returned items, set has_filter_criteria to false and filter_criteria to an empty string.
+- The filter_criteria must be concise and must not repeat the full user question.
+
+Return exactly this JSON shape:
+{
+  "has_filter_criteria": true,
+  "filter_criteria": "concise explicit result filter"
+}
+"""
+
+
+def _build_filter_criteria_user_content(user_prompt: str) -> str:
+    return (
+        "User question:\n"
+        f"{user_prompt}\n\n"
+        "Decide whether this question contains an explicit filter for a returned result list. "
+        "If it does, extract only that filter. If it does not, return false."
+    )
 
 
 def _parse_json_response(value: Any) -> dict[str, Any]:
@@ -78,6 +104,38 @@ async def _maybe_await(value):
     return value
 
 
+async def extract_result_filter_criteria(
+    user_prompt: str,
+    llm_json_call: JsonCall,
+) -> str | None:
+    """Use the LLM to extract explicit result-filter criteria from a user prompt."""
+    prompt = " ".join((user_prompt or "").split())
+    if not prompt:
+        return None
+
+    raw_response: Any = None
+    try:
+        raw_response = await _maybe_await(
+            llm_json_call(
+                FILTER_CRITERIA_SYSTEM_PROMPT,
+                _build_filter_criteria_user_content(prompt),
+            )
+        )
+        response = _parse_json_response(raw_response)
+        filter_criteria = response.get("filter_criteria")
+        if response.get("has_filter_criteria") is True and isinstance(filter_criteria, str):
+            filter_criteria = filter_criteria.strip()
+            if filter_criteria:
+                return filter_criteria
+    except Exception as exc:
+        _log_error(
+            "tool_result_filter criteria extraction failed open; skip filtering. "
+            f"error={exc}; raw_response={_json_for_log(raw_response)}"
+        )
+
+    return None
+
+
 def _decision_index(decision: dict[str, Any]) -> int | None:
     index = decision.get("index")
     if isinstance(index, bool):
@@ -104,12 +162,12 @@ def _decision_should_keep(
 
 
 def _build_filter_user_content(
-    user_prompt: str,
+    filter_criteria: str,
     indexed_items: list[dict[str, Any]],
 ) -> str:
     return (
-        "User request:\n"
-        f"{user_prompt}\n\n"
+        "Filter criteria:\n"
+        f"{filter_criteria}\n\n"
         "Items to classify. Preserve indexes exactly:\n"
         f"{json.dumps(indexed_items, ensure_ascii=False, indent=2)}\n\n"
         "Return this JSON shape exactly:\n"
@@ -135,7 +193,6 @@ async def filter_tool_result_items(
         "tool_result_filter filter input items "
         f"({original_count}): {_json_for_log(items)}"
     )
-    _log_info(f"tool_result_filter filter criteria/keywords: {user_prompt}")
 
     if not items:
         _log_info("tool_result_filter filtered result items (0): []")
@@ -144,6 +201,18 @@ async def filter_tool_result_items(
             applied=False,
             original_count=0,
             filtered_count=0,
+        )
+
+    filter_criteria = await extract_result_filter_criteria(user_prompt, llm_json_call)
+    _log_info(f"tool_result_filter filter criteria/keywords: {filter_criteria or ''}")
+
+    if not filter_criteria:
+        _log_info("tool_result_filter no explicit result filter criteria; skip filtering")
+        return FilterResult(
+            items=items,
+            applied=False,
+            original_count=original_count,
+            filtered_count=original_count,
         )
 
     kept_items: list[Any] = []
@@ -161,7 +230,7 @@ async def filter_tool_result_items(
             raw_response = await _maybe_await(
                 llm_json_call(
                     FILTER_SYSTEM_PROMPT,
-                    _build_filter_user_content(user_prompt, indexed_items),
+                    _build_filter_user_content(filter_criteria, indexed_items),
                 )
             )
             latest_raw_response = raw_response
