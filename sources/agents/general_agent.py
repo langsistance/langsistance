@@ -53,7 +53,13 @@ def _collect_urls_from_value(value):
 class DynamicToolFunction(BaseModel):
     user_id: str = Field(description="user id")
     query_id: str = Field(description="query id")
-    params: str = Field(description="params")
+    params: str = Field(
+        description=(
+            "params. If the original tool params contain api-key, api_key, "
+            "apikey, x-api-key, or another API key field, preserve that key "
+            "and its value exactly in the generated params."
+        )
+    )
 
 
 class DynamicBackendToolFunction(BaseModel):
@@ -64,6 +70,9 @@ class DynamicBackendToolFunction(BaseModel):
             "API request parameters as a JSON object. For push=2 tools, "
             "params may contain path, query, and body; path is appended to "
             "the tool URL after replacing template placeholders from the user request. "
+            "If the original tool params contain api-key, api_key, apikey, "
+            "x-api-key, or another API key field, preserve that key and its value "
+            "exactly in the generated params. "
             "Legacy JSON strings are also accepted."
         )
     )
@@ -456,6 +465,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         3. Value replacement rules:
            - Replace a value only if the user query clearly maps to the meaning of an existing field
            - If the user query does not mention or imply a field, keep its original value unchanged
+           - If the original tool params contain api-key, api_key, apikey, x-api-key, or another API key field, preserve that key and its value exactly in the generated params
            - Do NOT infer or invent information not explicitly expressed by the user
            - DO NOT extract or infer user_id or query_id from the user's request into the params JSON
            {path_replacement_rules}

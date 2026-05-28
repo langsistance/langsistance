@@ -226,6 +226,55 @@ class TestWorkflowExecutor(unittest.IsolatedAsyncioTestCase):
         self.assertIn("workflow step 2 params:", log_text)
         self.assertIn("workflow step 2 tool_result:", log_text)
 
+    async def test_generate_tool_params_prompt_requires_preserving_original_api_key_params(self):
+        from sources.workflow.workflow_executor import WorkflowExecutor
+
+        knowledge = KnowledgeItem(
+            id=101,
+            user_id="user-1",
+            question="query patent",
+            description="",
+            answer="Use the patent API",
+            public=1,
+            model_name="gpt-4o-mini",
+            tool_id=201,
+            params="{}",
+            type=1,
+        )
+        tool = ToolItem(
+            id=201,
+            user_id="user-1",
+            title="lookup_patent",
+            description="lookup patent",
+            push=2,
+            url="https://example.test/patent",
+            status=True,
+            timeout=30,
+            params='{"method": "GET", "query": {"api-key": "secret", "publicationId": ""}}',
+        )
+        executor = WorkflowExecutor(
+            llm=FakeLlm(),
+            knowledge_resolver=lambda knowledge_id: knowledge,
+            tool_resolver=lambda tool_id: tool,
+            tool_executor=lambda tool_info, params: {"data": {}, "raw_items": None},
+        )
+
+        await executor._generate_tool_params(
+            user_prompt="lookup US123",
+            step_index=1,
+            total_steps=1,
+            knowledge=knowledge,
+            tool=tool,
+            previous_results=[],
+        )
+
+        call = executor.llm.complete_json_calls[0]
+        combined_prompt = f"{call['system_prompt']}\n{call['user_content']}"
+        self.assertIn("api-key", combined_prompt)
+        self.assertIn("preserve", combined_prompt.lower())
+        self.assertIn("exactly", combined_prompt.lower())
+        self.assertIn("secret", combined_prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

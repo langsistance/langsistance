@@ -1,6 +1,18 @@
 import unittest
 
 
+class CaptureLogger:
+    def __init__(self):
+        self.infos = []
+        self.errors = []
+
+    def info(self, message):
+        self.infos.append(message)
+
+    def error(self, message):
+        self.errors.append(message)
+
+
 class TestToolResultFilter(unittest.IsolatedAsyncioTestCase):
 
     async def test_filters_items_using_high_confidence_keep_decisions(self):
@@ -96,6 +108,69 @@ class TestToolResultFilter(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.applied)
         self.assertEqual(result.items, items)
         self.assertIsNotNone(result.error)
+
+    async def test_logs_filter_inputs_criteria_decisions_and_results(self):
+        from sources import tool_result_filter
+
+        capture_logger = CaptureLogger()
+        original_logger = tool_result_filter.logger
+        tool_result_filter.logger = capture_logger
+        self.addCleanup(setattr, tool_result_filter, "logger", original_logger)
+
+        items = [{"name": "Alpha"}, {"name": "Beta"}]
+
+        async def llm_json_call(system_prompt, user_content):
+            return {
+                "has_filter_requirement": True,
+                "decisions": [
+                    {"index": 0, "keep": True, "confidence": 0.99, "reason": "matches"},
+                    {"index": 1, "keep": False, "confidence": 0.94, "reason": "does not match"},
+                ],
+            }
+
+        result = await tool_result_filter.filter_tool_result_items(
+            items,
+            "only keep Alpha",
+            llm_json_call,
+        )
+
+        info_log = "\n".join(capture_logger.infos)
+        self.assertEqual(result.items, [items[0]])
+        self.assertIn("filter input items", info_log)
+        self.assertIn("Alpha", info_log)
+        self.assertIn("Beta", info_log)
+        self.assertIn("filter criteria", info_log)
+        self.assertIn("only keep Alpha", info_log)
+        self.assertIn("filter decisions", info_log)
+        self.assertIn("does not match", info_log)
+        self.assertIn("filtered result items", info_log)
+        self.assertIn("Alpha", capture_logger.infos[-1])
+        self.assertNotIn("Beta", capture_logger.infos[-1])
+
+    async def test_logs_fail_open_filter_error(self):
+        from sources import tool_result_filter
+
+        capture_logger = CaptureLogger()
+        original_logger = tool_result_filter.logger
+        tool_result_filter.logger = capture_logger
+        self.addCleanup(setattr, tool_result_filter, "logger", original_logger)
+
+        items = [{"name": "Alpha"}]
+
+        async def llm_json_call(system_prompt, user_content):
+            return "not json"
+
+        result = await tool_result_filter.filter_tool_result_items(
+            items,
+            "only keep Alpha",
+            llm_json_call,
+        )
+
+        error_log = "\n".join(capture_logger.errors)
+        self.assertEqual(result.items, items)
+        self.assertIn("filter failed open", error_log)
+        self.assertIn("not json", error_log)
+        self.assertIn("original items kept", error_log)
 
 
 if __name__ == "__main__":

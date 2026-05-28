@@ -131,6 +131,8 @@ class WorkflowExecutor:
             "You generate JSON parameters for one backend API tool in a composed knowledge workflow. "
             "Return only a JSON object. The object may contain path, query, and body. "
             "Use only the user request, the current knowledge instructions, and previous step results. "
+            "If the original tool params contain api-key, api_key, apikey, x-api-key, "
+            "or another API key field, preserve that key and its value exactly in the generated params. "
             "If a needed value is present in previous results, extract it exactly. Do not invent values."
         )
         user_content = json.dumps({

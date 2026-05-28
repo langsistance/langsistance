@@ -326,6 +326,29 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Gamma", batch_content)
         self.assertNotIn("Beta", batch_content)
 
+    async def test_template_prompt_requires_preserving_original_api_key_params(self):
+        GeneralAgent = self._load_general_agent_class()
+
+        agent = GeneralAgent.__new__(GeneralAgent)
+        agent.logger = FakeLogger()
+        agent.knowledgeTool = (
+            types.SimpleNamespace(answer=""),
+            types.SimpleNamespace(
+                title="patent_api",
+                description="patent api",
+                push=2,
+                params='{"method":"GET","query":{"api-key":"secret","q":""}}',
+            ),
+        )
+        GeneralAgent.generate_template_system_prompt.__globals__["ZoneInfo"] = lambda key: None
+
+        prompt = agent.generate_template_system_prompt()
+
+        self.assertIn("api-key", prompt)
+        self.assertIn("preserve", prompt.lower())
+        self.assertIn("exactly", prompt.lower())
+        self.assertIn("secret", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
