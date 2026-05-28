@@ -32,6 +32,9 @@ class FakeLogger:
     def info(self, message):
         pass
 
+    def error(self, message):
+        pass
+
 
 class FakeWorkflowResult:
     def __init__(self, final_data, raw_items=None):
@@ -50,11 +53,20 @@ class FakeWorkflowExecutor:
 
 
 class FakeLlm:
-    def __init__(self, complete_json_response=None):
+    def __init__(
+        self,
+        complete_json_response=None,
+        stream_error=None,
+        stream_errors=None,
+        stream_outputs=None,
+    ):
         self.stream_calls = []
         self.complete_json_calls = []
         self.openai_create_calls = []
         self.openai_invoke_calls = []
+        self.stream_error = stream_error
+        self.stream_errors = list(stream_errors or [])
+        self.stream_outputs = list(stream_outputs or [])
         self.complete_json_response = complete_json_response or {
             "has_filter_requirement": False,
             "decisions": [],
@@ -79,6 +91,16 @@ class FakeLlm:
             "system_prompt": system_prompt,
             "user_content": user_content,
         })
+        if self.stream_error:
+            raise self.stream_error
+        if self.stream_errors:
+            stream_error = self.stream_errors.pop(0)
+            if stream_error:
+                raise stream_error
+        if self.stream_outputs:
+            stream_output = self.stream_outputs.pop(0)
+            if stream_output and callback_handler:
+                await callback_handler.on_llm_new_token(stream_output)
 
     async def complete_json(self, system_prompt, user_content):
         self.complete_json_calls.append({
@@ -325,6 +347,102 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Alpha", batch_content)
         self.assertIn("Gamma", batch_content)
         self.assertNotIn("Beta", batch_content)
+
+    async def test_mid_sized_raw_item_uses_formatter_llm(self):
+        GeneralAgent = self._load_general_agent_class()
+
+        agent = GeneralAgent.__new__(GeneralAgent)
+        agent.llm = FakeLlm(stream_outputs=["formatted patent output"])
+        agent.memory = FakeMemory()
+        agent.logger = FakeLogger()
+        agent._last_user_prompt = "show patent details"
+        agent._pending_raw_items = [
+            {
+                "applicationNumberText": "18893954",
+                "applicationMetaData": {
+                    "earliestPublicationNumber": "US20250014493A1",
+                    "inventionTitle": "DISPLAY DEVICE",
+                },
+                "eventDataBag": [
+                    {"eventCode": "EPG/", "eventDescriptionText": "Recordation of Patent eGrant"}
+                ],
+                "largePayload": "x" * 15000,
+            }
+        ]
+        callback_handler = FakeCallbackHandler()
+
+        await agent.invoke_agent(agent=None, callback_handler=callback_handler)
+
+        streamed = "".join(callback_handler.tokens)
+        self.assertEqual(len(agent.llm.stream_calls), 1)
+        self.assertIn("formatted patent output", streamed)
+
+    async def test_formatter_error_retries_single_item_contexts_before_fallback(self):
+        GeneralAgent = self._load_general_agent_class()
+
+        agent = GeneralAgent.__new__(GeneralAgent)
+        agent.llm = FakeLlm(
+            stream_errors=[RuntimeError("context length exceeded"), None, None],
+            stream_outputs=["formatted item 1", "formatted item 2"],
+        )
+        agent.memory = FakeMemory()
+        agent.logger = FakeLogger()
+        agent._last_user_prompt = "show patent details"
+        agent._pending_raw_items = [
+            {
+                "applicationNumberText": "18893954",
+                "applicationMetaData": {
+                    "earliestPublicationNumber": "US20250014493A1",
+                    "inventionTitle": "DISPLAY DEVICE",
+                },
+            },
+            {
+                "applicationNumberText": "18893955",
+                "applicationMetaData": {
+                    "earliestPublicationNumber": "US20250014494A1",
+                    "inventionTitle": "DISPLAY DEVICE 2",
+                },
+            }
+        ]
+        callback_handler = FakeCallbackHandler()
+
+        await agent.invoke_agent(agent=None, callback_handler=callback_handler)
+
+        streamed = "".join(callback_handler.tokens)
+        self.assertEqual(len(agent.llm.stream_calls), 3)
+        self.assertIn("formatted item 1", streamed)
+        self.assertIn("formatted item 2", streamed)
+
+    async def test_oversized_single_item_is_split_by_top_level_fields(self):
+        GeneralAgent = self._load_general_agent_class()
+
+        agent = GeneralAgent.__new__(GeneralAgent)
+        agent.llm = FakeLlm(stream_outputs=["formatted field chunk 1", "formatted field chunk 2"])
+        agent.memory = FakeMemory()
+        agent.logger = FakeLogger()
+        agent._last_user_prompt = "show patent details"
+        agent._pending_raw_items = [
+            {
+                "applicationMetaData": {
+                    "earliestPublicationNumber": "US20250014493A1",
+                    "largeValue": "x" * 30000,
+                },
+                "eventDataBag": [
+                    {
+                        "eventDescriptionText": "Recordation of Patent eGrant",
+                        "largeValue": "y" * 30000,
+                    }
+                ],
+            }
+        ]
+        callback_handler = FakeCallbackHandler()
+
+        await agent.invoke_agent(agent=None, callback_handler=callback_handler)
+
+        streamed = "".join(callback_handler.tokens)
+        self.assertEqual(len(agent.llm.stream_calls), 2)
+        self.assertIn("formatted field chunk 1", streamed)
+        self.assertIn("formatted field chunk 2", streamed)
 
     async def test_template_prompt_requires_preserving_original_api_key_params(self):
         GeneralAgent = self._load_general_agent_class()

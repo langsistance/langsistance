@@ -35,6 +35,8 @@ _SENSITIVE_HEADER_RE = re.compile(
     re.IGNORECASE
 )
 _URL_IN_TEXT_RE = re.compile(r'https?://[^\s"\'<>\])}]+')
+MAX_BATCH_JSON_CHARS_FOR_LLM = 50000
+MAX_MARKDOWN_VALUE_CHARS = 500
 
 
 def _collect_urls_from_value(value):
@@ -48,6 +50,14 @@ def _collect_urls_from_value(value):
     elif isinstance(value, str):
         urls.extend(match.rstrip(".,;") for match in _URL_IN_TEXT_RE.findall(value))
     return urls
+
+
+def _format_markdown_value(value) -> str:
+    text = str(value)
+    if len(text) > MAX_MARKDOWN_VALUE_CHARS:
+        hidden_count = len(text) - MAX_MARKDOWN_VALUE_CHARS
+        return f"{text[:MAX_MARKDOWN_VALUE_CHARS]}... [truncated {hidden_count} chars]"
+    return text
 
 # 定义参数模型
 class DynamicToolFunction(BaseModel):
@@ -152,9 +162,9 @@ class GeneralAgent(Agent):
                     parts.append(f"{k}: {sub}")
             elif isinstance(v, list):
                 if v and not isinstance(v[0], (dict, list)):
-                    parts.append(f"{k}: {', '.join(str(i) for i in v)}")
+                    parts.append(f"{k}: {', '.join(_format_markdown_value(i) for i in v)}")
             else:
-                parts.append(f"{k}: {v}")
+                parts.append(f"{k}: {_format_markdown_value(v)}")
         return " | ".join(parts)
 
     def _render_list_as_md(self, label: str | None, items: list) -> str:
@@ -164,7 +174,7 @@ class GeneralAgent(Agent):
         for i, item in enumerate(items, 1):
             if isinstance(item, dict):
                 scalar_parts = [
-                    f"**{k}**: {v}" for k, v in item.items()
+                    f"**{k}**: {_format_markdown_value(v)}" for k, v in item.items()
                     if not isinstance(v, (dict, list)) and v is not None and v != ""
                 ]
                 nested_parts = [
@@ -180,17 +190,17 @@ class GeneralAgent(Agent):
                             sub_lines.append(f"  - **{nk}**: {flat}")
                     elif isinstance(nv, list):
                         if nv and not isinstance(nv[0], (dict, list)):
-                            sub_lines.append(f"  - **{nk}**: {', '.join(str(x) for x in nv)}")
+                            sub_lines.append(f"  - **{nk}**: {', '.join(_format_markdown_value(x) for x in nv)}")
                         elif nv:
                             sub_lines.append(f"  - **{nk}**: [{len(nv)} items]")
                 blocks.append("\n".join([top] + sub_lines) if sub_lines else top)
             elif isinstance(item, list):
                 if item and not isinstance(item[0], (dict, list)):
-                    blocks.append(f"- **[{i}]** {', '.join(str(x) for x in item)}")
+                    blocks.append(f"- **[{i}]** {', '.join(_format_markdown_value(x) for x in item)}")
                 else:
                     blocks.append(f"- **[{i}]** [{len(item)} items]")
             else:
-                blocks.append(f"- **[{i}]** {item}")
+                blocks.append(f"- **[{i}]** {_format_markdown_value(item)}")
         return "\n".join(blocks)
 
 
@@ -1150,6 +1160,135 @@ Begin your response now:
             callback_handler=callback_handler,
         )
 
+    def _build_formatter_user_content(self, batch, url_checklist: str = "") -> str:
+        batch_json = json.dumps(batch, ensure_ascii=False, indent=2)
+        return (
+            f"Format and analyze these {len(batch)} search result items as readable Markdown:\n\n"
+            f"{url_checklist}"
+            f"{batch_json}"
+        )
+
+    def _build_url_checklist(self, batch) -> str:
+        batch_urls = _collect_urls_from_value(batch)
+        if not batch_urls:
+            return ""
+        return (
+            "Mandatory URL checklist. Copy every line verbatim into the corresponding item. "
+            "Do not omit any URL from this checklist:\n"
+            + "\n".join(f"- {url}" for url in batch_urls)
+            + "\n\n"
+        )
+
+    def _split_large_dict_item(self, item: dict[str, Any]) -> list[dict[str, Any]]:
+        chunks: list[dict[str, Any]] = []
+        current: dict[str, Any] = {}
+        for key, value in item.items():
+            candidate = dict(current)
+            candidate[key] = value
+            candidate_json = json.dumps([candidate], ensure_ascii=False, indent=2, default=str)
+            if current and len(candidate_json) > MAX_BATCH_JSON_CHARS_FOR_LLM:
+                chunks.append(current)
+                current = {key: value}
+            else:
+                current = candidate
+        if current:
+            chunks.append(current)
+        return chunks
+
+    async def _stream_deterministic_batch(self, batch, callback_handler):
+        await callback_handler.on_llm_new_token(self._render_list_as_md(None, batch))
+
+    async def _stream_formatter_batch(self, system_prompt: str, batch, callback_handler) -> None:
+        await self.llm.stream_simple(
+            system_prompt=system_prompt,
+            user_content=self._build_formatter_user_content(
+                batch,
+                self._build_url_checklist(batch),
+            ),
+            callback_handler=callback_handler,
+        )
+
+    async def _stream_single_item_chunks(
+        self,
+        item,
+        system_prompt: str,
+        callback_handler,
+    ) -> None:
+        if not isinstance(item, dict):
+            await self._stream_deterministic_batch([item], callback_handler)
+            return
+
+        chunks = self._split_large_dict_item(item)
+        for chunk_index, chunk in enumerate(chunks, start=1):
+            chunk_batch = [chunk]
+            chunk_json = json.dumps(chunk_batch, ensure_ascii=False, indent=2, default=str)
+            if len(chunk_json) > MAX_BATCH_JSON_CHARS_FOR_LLM:
+                self.logger.info(
+                    "single item field chunk too large for formatter LLM; "
+                    f"streaming deterministic markdown. chunk={chunk_index}, chars={len(chunk_json)}"
+                )
+                await self._stream_deterministic_batch(chunk_batch, callback_handler)
+                continue
+
+            try:
+                await self._stream_formatter_batch(system_prompt, chunk_batch, callback_handler)
+            except Exception as exc:
+                self.logger.error(
+                    "formatter LLM failed for item field chunk; "
+                    f"streaming deterministic markdown fallback. chunk={chunk_index}, error={exc}"
+                )
+                await self._stream_deterministic_batch(chunk_batch, callback_handler)
+
+    async def _stream_items_individually(
+        self,
+        batch,
+        system_prompt: str,
+        callback_handler,
+    ) -> None:
+        for item_index, item in enumerate(batch, start=1):
+            item_batch = [item]
+            item_json = json.dumps(item_batch, ensure_ascii=False, indent=2, default=str)
+            if len(item_json) > MAX_BATCH_JSON_CHARS_FOR_LLM:
+                self.logger.info(
+                    "single item JSON too large for formatter LLM; "
+                    f"retrying by top-level fields. item={item_index}, chars={len(item_json)}"
+                )
+                await self._stream_single_item_chunks(item, system_prompt, callback_handler)
+                continue
+
+            try:
+                await self._stream_formatter_batch(system_prompt, item_batch, callback_handler)
+            except Exception as exc:
+                self.logger.error(
+                    "formatter LLM failed for single item retry; "
+                    f"retrying by top-level fields. item={item_index}, error={exc}"
+                )
+                await self._stream_single_item_chunks(item, system_prompt, callback_handler)
+
+    async def _stream_batch_with_retries(
+        self,
+        batch,
+        system_prompt: str,
+        callback_handler,
+    ) -> None:
+        batch_json = json.dumps(batch, ensure_ascii=False, indent=2, default=str)
+        if len(batch_json) > MAX_BATCH_JSON_CHARS_FOR_LLM:
+            self.logger.info(
+                "batch JSON too large for formatter LLM; "
+                f"retrying by item. chars={len(batch_json)}"
+            )
+            await self._stream_items_individually(batch, system_prompt, callback_handler)
+            return
+
+        try:
+            await self._stream_formatter_batch(system_prompt, batch, callback_handler)
+        except Exception as exc:
+            self.logger.error(
+                "formatter LLM failed for raw item batch; "
+                f"retrying by item. error={exc}"
+            )
+            await self._stream_items_individually(batch, system_prompt, callback_handler)
+
     async def _stream_raw_items(self, raw_items, callback_handler):
         self._pending_raw_items = None
         original_total = len(raw_items)
@@ -1188,25 +1327,7 @@ Begin your response now:
             await callback_handler.on_llm_new_token(
                 f"### Items {batch_start + 1}-{batch_end}\n\n"
             )
-            batch_json = json.dumps(batch, ensure_ascii=False, indent=2)
-            batch_urls = _collect_urls_from_value(batch)
-            url_checklist = ""
-            if batch_urls:
-                url_checklist = (
-                    "Mandatory URL checklist. Copy every line verbatim into the corresponding item. "
-                    "Do not omit any URL from this checklist:\n"
-                    + "\n".join(f"- {url}" for url in batch_urls)
-                    + "\n\n"
-                )
-            await self.llm.stream_simple(
-                system_prompt=system_prompt,
-                user_content=(
-                    f"Format and analyze these {len(batch)} search result items as readable Markdown:\n\n"
-                    f"{url_checklist}"
-                    f"{batch_json}"
-                ),
-                callback_handler=callback_handler,
-            )
+            await self._stream_batch_with_retries(batch, system_prompt, callback_handler)
             await callback_handler.on_llm_new_token("\n\n")
 
 
