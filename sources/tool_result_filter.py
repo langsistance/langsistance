@@ -3,8 +3,11 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
+from sources.logger import Logger
+
 
 JsonCall = Callable[[str, str], dict[str, Any] | str | Awaitable[dict[str, Any] | str]]
+logger = Logger("tool_result_filter.log")
 
 
 @dataclass
@@ -46,6 +49,27 @@ def _parse_json_response(value: Any) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise ValueError("LLM JSON response must decode to an object")
     return parsed
+
+
+def _json_for_log(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, indent=2, default=str)
+    except Exception:
+        return repr(value)
+
+
+def _log_info(message: str) -> None:
+    try:
+        logger.info(message)
+    except Exception:
+        pass
+
+
+def _log_error(message: str) -> None:
+    try:
+        logger.error(message)
+    except Exception:
+        pass
 
 
 async def _maybe_await(value):
@@ -107,7 +131,14 @@ async def filter_tool_result_items(
 ) -> FilterResult:
     """Filter tool result list items with fail-open LLM decisions."""
     original_count = len(items)
+    _log_info(
+        "tool_result_filter filter input items "
+        f"({original_count}): {_json_for_log(items)}"
+    )
+    _log_info(f"tool_result_filter filter criteria/keywords: {user_prompt}")
+
     if not items:
+        _log_info("tool_result_filter filtered result items (0): []")
         return FilterResult(
             items=[],
             applied=False,
@@ -118,6 +149,7 @@ async def filter_tool_result_items(
     kept_items: list[Any] = []
     all_decisions: list[dict[str, Any]] = []
     applied = False
+    latest_raw_response: Any = None
 
     try:
         for start in range(0, original_count, batch_size):
@@ -132,6 +164,7 @@ async def filter_tool_result_items(
                     _build_filter_user_content(user_prompt, indexed_items),
                 )
             )
+            latest_raw_response = raw_response
             response = _parse_json_response(raw_response)
             has_filter_requirement = response.get("has_filter_requirement") is True
             decisions = response.get("decisions", [])
@@ -143,6 +176,12 @@ async def filter_tool_result_items(
                 if isinstance(decision, dict) and _decision_index(decision) is not None
             ]
             all_decisions.extend(normalized_decisions)
+            _log_info(
+                "tool_result_filter filter decisions "
+                f"for batch {start}-{start + len(batch) - 1}: "
+                f"has_filter_requirement={has_filter_requirement}, "
+                f"decisions={_json_for_log(normalized_decisions)}"
+            )
 
             if not has_filter_requirement:
                 kept_items.extend(batch)
@@ -158,6 +197,12 @@ async def filter_tool_result_items(
                 if _decision_should_keep(decision, keep_threshold):
                     kept_items.append(item)
     except Exception as exc:
+        _log_error(
+            "tool_result_filter filter failed open; original items kept. "
+            f"error={exc}; decisions={_json_for_log(all_decisions)}; "
+            f"raw_response={_json_for_log(latest_raw_response)}; "
+            f"items={_json_for_log(items)}"
+        )
         return FilterResult(
             items=items,
             applied=False,
@@ -167,6 +212,10 @@ async def filter_tool_result_items(
             error=str(exc),
         )
 
+    _log_info(
+        "tool_result_filter filtered result items "
+        f"({len(kept_items)}): {_json_for_log(kept_items)}"
+    )
     return FilterResult(
         items=kept_items,
         applied=applied,
