@@ -12,6 +12,7 @@ from .models import (
     KnowledgeCopyRequest, KnowledgeCopyResponse
 )
 from sources.knowledge.knowledge import get_embedding, get_db_connection, get_redis_connection, create_tool_and_knowledge_records, get_tool_by_id
+from sources.knowledge.query_filters import build_knowledge_push_filter_condition, build_share_push_filter_condition
 from sources.logger import Logger
 from sources.user.passport import verify_firebase_token, get_user_by_id
 
@@ -442,7 +443,13 @@ async def update_knowledge_record(request: KnowledgeUpdateRequest, http_request:
             connection.close()
 
 @router.get("/query_knowledge", response_model=KnowledgeQueryResponse)
-async def query_knowledge_records(http_request: Request, query: str = "", limit: int = 10, offset: int = 0):
+async def query_knowledge_records(
+    http_request: Request,
+    query: str = "",
+    limit: int = 10,
+    offset: int = 0,
+    push_filter: int | None = None,
+):
     """
     查询知识记录接口
     """
@@ -486,19 +493,22 @@ async def query_knowledge_records(http_request: Request, query: str = "", limit:
             # 1. 用户ID匹配
             # 2. 公开的知识 或者 用户自己的知识
             # 3. question、description、answer字段模糊匹配
+            push_condition, push_params = build_knowledge_push_filter_condition(push_filter)
+
             if query:
                 search_pattern = f"%{query}%"
                 where_condition = "AND (question LIKE %s OR description LIKE %s OR answer LIKE %s)"
-                params = [1, user_id, search_pattern, search_pattern, search_pattern]
+                params = [1, user_id, *push_params, search_pattern, search_pattern, search_pattern]
             else:
                 where_condition = ""
-                params = [1, user_id]
+                params = [1, user_id, *push_params]
 
             count_sql = f"""
                         SELECT COUNT(*) as total
                         FROM knowledge
                         WHERE status = %s
                           AND  user_id = %s
+                          {push_condition}
                           {where_condition}
                         """
 
@@ -529,14 +539,15 @@ async def query_knowledge_records(http_request: Request, query: str = "", limit:
                             FROM knowledge
                             WHERE status = %s
                                AND user_id = %s
+                              {push_condition}
                               {where_condition}
                             ORDER BY update_time DESC
                                 LIMIT %s
                             OFFSET %s
                             """
-                params = [1, user_id, search_pattern, search_pattern, search_pattern, limit, offset * limit]
+                params = [1, user_id, *push_params, search_pattern, search_pattern, search_pattern, limit, offset * limit]
             else:
-                query_sql = """
+                query_sql = f"""
                             SELECT id,
                                    user_id,
                                    question,
@@ -545,11 +556,12 @@ async def query_knowledge_records(http_request: Request, query: str = "", limit:
                             FROM knowledge
                             WHERE status = %s
                                AND user_id = %s
+                              {push_condition}
                             ORDER BY update_time DESC
                                 LIMIT %s
                             OFFSET %s
                             """
-                params = [1, user_id, limit, offset * limit]
+                params = [1, user_id, *push_params, limit, offset * limit]
 
             cursor.execute(query_sql, params)
             results = cursor.fetchall()
@@ -626,7 +638,12 @@ async def query_knowledge_records(http_request: Request, query: str = "", limit:
             connection.close()
 
 @router.get("/query_public_knowledge", response_model=KnowledgeQueryResponse)
-async def query_public_knowledge(query: str = "", limit: int = 10, offset: int = 0):
+async def query_public_knowledge(
+    query: str = "",
+    limit: int = 10,
+    offset: int = 0,
+    push_filter: int | None = None,
+):
     """
     查询公开知识记录接口
     """
@@ -663,19 +680,22 @@ async def query_public_knowledge(query: str = "", limit: int = 10, offset: int =
             # 1. 用户ID匹配
             # 2. 公开的知识 或者 用户自己的知识
             # 3. question、description、answer字段模糊匹配
+            push_condition, push_params = build_knowledge_push_filter_condition(push_filter)
+
             if query:
                 search_pattern = f"%{query}%"
                 where_condition = "AND (question LIKE %s OR description LIKE %s OR answer LIKE %s)"
-                params = [1, 2, search_pattern, search_pattern, search_pattern]
+                params = [1, 2, *push_params, search_pattern, search_pattern, search_pattern]
             else:
                 where_condition = ""
-                params = [1, 2]
+                params = [1, 2, *push_params]
 
             count_sql = f"""
                         SELECT COUNT(*) as total
                         FROM knowledge
                         WHERE status = %s
                           AND  public = %s
+                          {push_condition}
                           {where_condition}
                         """
 
@@ -706,14 +726,15 @@ async def query_public_knowledge(query: str = "", limit: int = 10, offset: int =
                             FROM knowledge
                             WHERE status = %s
                                AND public = %s
+                              {push_condition}
                               {where_condition}
                             ORDER BY update_time DESC
                                 LIMIT %s
                             OFFSET %s
                             """
-                params = [1, 2, search_pattern, search_pattern, search_pattern, limit, offset * limit]
+                params = [1, 2, *push_params, search_pattern, search_pattern, search_pattern, limit, offset * limit]
             else:
-                query_sql = """
+                query_sql = f"""
                             SELECT id,
                                    user_id,
                                    question,
@@ -722,11 +743,12 @@ async def query_public_knowledge(query: str = "", limit: int = 10, offset: int =
                             FROM knowledge
                             WHERE status = %s
                                AND public = %s
+                              {push_condition}
                             ORDER BY update_time DESC
                                 LIMIT %s
                             OFFSET %s
                             """
-                params = [1, 2, limit, offset * limit]
+                params = [1, 2, *push_params, limit, offset * limit]
 
             cursor.execute(query_sql, params)
             results = cursor.fetchall()
@@ -1237,7 +1259,12 @@ async def handle_knowledge_share(request: Request, handle_request: dict):
             connection.close()
 
 @router.get("/query_knowledge_shares", response_model=KnowledgeQueryResponse)
-async def query_knowledge_shares(http_request: Request, limit: int = 10, offset: int = 0):
+async def query_knowledge_shares(
+    http_request: Request,
+    limit: int = 10,
+    offset: int = 0,
+    push_filter: int | None = None,
+):
     """
     查询用户收到的知识分享请求
     """
@@ -1276,12 +1303,16 @@ async def query_knowledge_shares(http_request: Request, limit: int = 10, offset:
         connection = get_db_connection()
         with connection.cursor() as cursor:
             # 先查询knowledge_share表获取分享记录总数
-            count_sql = """
+            share_push_condition, share_push_params = build_share_push_filter_condition(push_filter)
+            knowledge_push_condition, knowledge_push_params = build_knowledge_push_filter_condition(push_filter)
+
+            count_sql = f"""
                 SELECT COUNT(*) as total
                 FROM knowledge_share 
                 WHERE to_user_email = %s AND status = 1
+                {share_push_condition}
             """
-            cursor.execute(count_sql, (email,))
+            cursor.execute(count_sql, (email, *share_push_params))
             count_result = cursor.fetchone()
             total = count_result['total'] if count_result else 0
 
@@ -1298,14 +1329,15 @@ async def query_knowledge_shares(http_request: Request, limit: int = 10, offset:
                 )
 
             # 查询knowledge_share表获取分享记录
-            share_query_sql = """
+            share_query_sql = f"""
                 SELECT id, knowledge_id, from_user_id, from_user_email, to_user_email, status, create_time, update_time
                 FROM knowledge_share 
                 WHERE to_user_email = %s AND status = 1
+                {share_push_condition}
                 ORDER BY create_time DESC
                 LIMIT %s OFFSET %s
             """
-            cursor.execute(share_query_sql, (email, limit, offset * limit))
+            cursor.execute(share_query_sql, (email, *share_push_params, limit, offset * limit))
             share_results = cursor.fetchall()
 
             # 收集所有knowledge_id用于查询知识详情
@@ -1318,8 +1350,9 @@ async def query_knowledge_shares(http_request: Request, limit: int = 10, offset:
                            model_name, tool_id, params, `type`, create_time, update_time
                     FROM knowledge
                     WHERE id IN ({','.join(['%s'] * len(knowledge_ids))}) AND status = 1
+                    {knowledge_push_condition}
                 """
-                cursor.execute(knowledge_query_sql, knowledge_ids)
+                cursor.execute(knowledge_query_sql, [*knowledge_ids, *knowledge_push_params])
                 knowledge_results = cursor.fetchall()
 
                 # 创建knowledge_id到knowledge记录的映射
@@ -1393,7 +1426,12 @@ async def query_knowledge_shares(http_request: Request, limit: int = 10, offset:
             connection.close()
 
 @router.get("/get_user_shared_knowledge", response_model=KnowledgeQueryResponse)
-async def get_user_shared_knowledge(http_request: Request, limit: int = 10, offset: int = 0):
+async def get_user_shared_knowledge(
+    http_request: Request,
+    limit: int = 10,
+    offset: int = 0,
+    push_filter: int | None = None,
+):
     """
     根据分享人查询知识分享记录
     """
@@ -1431,12 +1469,16 @@ async def get_user_shared_knowledge(http_request: Request, limit: int = 10, offs
         connection = get_db_connection()
         with connection.cursor() as cursor:
             # 先查询knowledge_share表获取分享记录总数
-            count_sql = """
+            share_push_condition, share_push_params = build_share_push_filter_condition(push_filter)
+            knowledge_push_condition, knowledge_push_params = build_knowledge_push_filter_condition(push_filter)
+
+            count_sql = f"""
                 SELECT COUNT(*) as total
                 FROM knowledge_share 
                 WHERE from_user_id = %s
+                {share_push_condition}
             """
-            cursor.execute(count_sql, (user_id,))
+            cursor.execute(count_sql, (user_id, *share_push_params))
             count_result = cursor.fetchone()
             total = count_result['total'] if count_result else 0
 
@@ -1453,14 +1495,15 @@ async def get_user_shared_knowledge(http_request: Request, limit: int = 10, offs
                 )
 
             # 查询knowledge_share表获取分享记录
-            share_query_sql = """
+            share_query_sql = f"""
                 SELECT id, knowledge_id, to_user_email, status, create_time, update_time
                 FROM knowledge_share 
                 WHERE from_user_id = %s
+                {share_push_condition}
                 ORDER BY create_time DESC
                 LIMIT %s OFFSET %s
             """
-            cursor.execute(share_query_sql, (user_id, limit, offset * limit))
+            cursor.execute(share_query_sql, (user_id, *share_push_params, limit, offset * limit))
             share_results = cursor.fetchall()
 
             # 收集所有knowledge_id用于查询知识详情
@@ -1473,8 +1516,9 @@ async def get_user_shared_knowledge(http_request: Request, limit: int = 10, offs
                            model_name, tool_id, params, `type`, create_time, update_time
                     FROM knowledge
                     WHERE id IN ({','.join(['%s'] * len(knowledge_ids))})
+                    {knowledge_push_condition}
                 """
-                cursor.execute(knowledge_query_sql, knowledge_ids)
+                cursor.execute(knowledge_query_sql, [*knowledge_ids, *knowledge_push_params])
                 knowledge_results = cursor.fetchall()
 
                 # 创建knowledge_id到knowledge记录的映射
