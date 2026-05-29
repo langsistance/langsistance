@@ -143,7 +143,9 @@ export default function MarkdownMessage({ content, streaming, transientStatus = 
           <button
             className={`copy-button${copied ? ' copied' : ''}`}
             onClick={handleCopy}
-            title={t('chat.copy')}
+            data-tooltip={t('chat.copy')}
+            data-copied-tooltip={t('chat.copied')}
+            aria-label={t('chat.copyContent')}
           >
             {copied ? (
               <svg viewBox="0 0 24 24" fill="none" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -159,7 +161,9 @@ export default function MarkdownMessage({ content, streaming, transientStatus = 
           <button
             className={`download-button${downloaded ? ' downloaded' : ''}`}
             onClick={handleDownload}
-            title={t('chat.download')}
+            data-tooltip={t('chat.download')}
+            data-downloaded-tooltip={t('chat.downloaded')}
+            aria-label={t('chat.downloadContent')}
           >
             {downloaded ? (
               <svg viewBox="0 0 24 24" fill="none" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">

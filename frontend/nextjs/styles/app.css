@@ -530,6 +530,91 @@ button { cursor: pointer; }
 .copy-button.copied svg,
 .download-button.downloaded svg { stroke: white; }
 
+.copy-button.copied svg,
+.download-button.downloaded svg {
+  animation: checkmark 0.3s ease-in-out;
+}
+
+@keyframes checkmark {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.copy-button::before,
+.download-button::before {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: 50%;
+  transform: translateX(50%);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(17, 17, 17, 0.95);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  z-index: 1000;
+}
+
+.copy-button::after,
+.download-button::after {
+  content: '';
+  position: absolute;
+  bottom: calc(100% + 4px);
+  right: 50%;
+  transform: translateX(50%);
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid rgba(17, 17, 17, 0.95);
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.2s ease;
+  z-index: 1000;
+}
+
+.copy-button:hover::before,
+.copy-button:hover::after,
+.download-button:hover::before,
+.download-button:hover::after {
+  opacity: 1;
+  transform: translateX(50%) translateY(-2px);
+}
+
+.copy-button.copied::before {
+  content: attr(data-copied-tooltip);
+  background: var(--color-primary);
+  opacity: 1;
+}
+
+.download-button.downloaded::before {
+  content: attr(data-downloaded-tooltip);
+  background: var(--color-primary);
+  opacity: 1;
+}
+
+.copy-button.copied::after,
+.download-button.downloaded::after {
+  border-top-color: var(--color-primary);
+  opacity: 1;
+}
+
 /* ── User message copy button ── */
 .chat-message.user::before {
   content: '';
@@ -591,6 +676,61 @@ button { cursor: pointer; }
 }
 
 .user-copy-button.copied svg { stroke: var(--color-primary); }
+
+.user-copy-button::before {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(17, 17, 17, 0.95);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  z-index: 1000;
+}
+
+.user-copy-button::after {
+  content: '';
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid rgba(17, 17, 17, 0.95);
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.2s ease;
+  z-index: 1000;
+}
+
+.user-copy-button:hover::before,
+.user-copy-button:hover::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(-2px);
+}
+
+.user-copy-button.copied::before {
+  content: attr(data-copied-tooltip);
+  background: var(--color-primary);
+  opacity: 1;
+}
+
+.user-copy-button.copied::after {
+  border-top-color: var(--color-primary);
+  opacity: 1;
+}
 
 /* ── User menu dropdown ── */
 .user-menu {

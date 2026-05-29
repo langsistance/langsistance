@@ -8,6 +8,7 @@ import { useChatSession } from '@/contexts/ChatContext'
 import { createChatId, createChatMessage, updateAssistantMessage } from '@/lib/chatSession'
 
 function UserCopyButton({ content }: { content: string }) {
+  const { t } = useI18n()
   const [copied, setCopied] = useState(false)
   async function handleCopy() {
     try {
@@ -20,6 +21,9 @@ function UserCopyButton({ content }: { content: string }) {
     <button
       className={`user-copy-button${copied ? ' copied' : ''}`}
       onClick={handleCopy}
+      data-tooltip={t('chat.copy')}
+      data-copied-tooltip={t('chat.copied')}
+      aria-label={t('chat.copyContent')}
     >
       {copied ? (
         <svg viewBox="0 0 24 24" fill="none" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
