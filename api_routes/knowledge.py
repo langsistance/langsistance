@@ -573,8 +573,6 @@ async def query_knowledge_records(
             cursor.execute(query_sql, params)
             results = cursor.fetchall()
 
-            logger.info(f"sql: {query_sql} and result: {results}")
-
             # 转换为KnowledgeItem对象列表
             knowledge_items = []
             tool_ids = set()  # 收集所有相关的tool_id
