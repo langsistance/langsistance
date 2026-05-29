@@ -15,6 +15,19 @@ class CaptureLogger:
 
 class TestToolResultFilter(unittest.IsolatedAsyncioTestCase):
 
+    def test_filter_prompt_prevents_related_property_substitution_and_inconsistent_decisions(self):
+        from sources.tool_result_filter import FILTER_SYSTEM_PROMPT
+
+        prompt = " ".join(FILTER_SYSTEM_PROMPT.lower().split())
+
+        self.assertIn("keep value and reason must agree", prompt)
+        self.assertIn("exact item field, entity role, attribute, or property named in the filter criteria", prompt)
+        self.assertIn("different related field", prompt)
+        self.assertIn("core search goal", prompt)
+        self.assertIn("any member of a collection", prompt)
+        self.assertIn("all members do not match", prompt)
+        self.assertIn("set keep to false", prompt)
+
     async def test_filters_items_using_high_confidence_keep_decisions(self):
         from sources.tool_result_filter import filter_tool_result_items
 
@@ -47,6 +60,7 @@ class TestToolResultFilter(unittest.IsolatedAsyncioTestCase):
             items,
             "Please show these companies, but only keep Tokyo results.",
             llm_json_call,
+            batch_size=len(items),
         )
 
         self.assertTrue(result.applied)
@@ -169,6 +183,7 @@ class TestToolResultFilter(unittest.IsolatedAsyncioTestCase):
             items,
             "Filter out items that do not match the condition.",
             llm_json_call,
+            batch_size=len(items),
         )
 
         self.assertTrue(result.applied)
@@ -290,6 +305,7 @@ class TestToolResultFilter(unittest.IsolatedAsyncioTestCase):
             items,
             "only keep Alpha",
             llm_json_call,
+            batch_size=len(items),
         )
 
         info_log = "\n".join(capture_logger.infos)

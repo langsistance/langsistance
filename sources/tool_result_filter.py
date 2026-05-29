@@ -24,6 +24,12 @@ class FilterResult:
 FILTER_SYSTEM_PROMPT = """You are a strict list filter.
 Use only the explicit filter criteria and item JSON.
 Do not invent facts or assume fields that are not present.
+Apply the filter to the exact item field, entity role, attribute, or property named in the filter criteria.
+Do not satisfy a filter by using a different related field, entity role, attribute, or property from the core search goal or nearby item context.
+If the filter says to keep an item when any member of a collection matches and discard when all members do not match, keep only when at least one explicitly present member matches.
+If the item clearly violates the explicit filter criteria, set keep to false with high confidence.
+If the relevant field, role, attribute, or property is missing or ambiguous, keep the item because uncertainty should fail open.
+The keep value and reason must agree. If the reason says the item fails the filter, keep must be false; if keep is true, the reason must describe an explicit match or genuine uncertainty.
 Return one decision for every input index.
 If uncertain, keep the item.
 Output JSON only.
