@@ -886,6 +886,43 @@ body {
   margin: 20px 0;
 }
 
+.assistant-transient-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  margin-top: 10px;
+  padding: 7px 10px;
+  overflow: hidden;
+  border: 1px solid rgba(16, 163, 127, 0.18);
+  border-radius: 8px;
+  background: rgba(16, 163, 127, 0.06);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.assistant-transient-status span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-transient-status-dot {
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(16, 163, 127, 0.12);
+  animation: assistantStatusPulse 1.35s ease-in-out infinite;
+}
+
+@keyframes assistantStatusPulse {
+  0%, 100% { opacity: 0.38; transform: scale(0.86); }
+  50% { opacity: 1; transform: scale(1.08); }
+}
+
 /* Images */
 .chat-message.assistant img {
   max-width: 100%;

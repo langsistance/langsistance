@@ -50,6 +50,7 @@ export default function Chat() {
   } = useChatSession()
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const [transientStatus, setTransientStatus] = useState('')
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -62,6 +63,7 @@ export default function Chat() {
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
 
     const queryId = createChatId()
+    setTransientStatus('')
     setMessages((m) => [...m, createChatMessage('user', text)])
 
     const assistant = createChatMessage('assistant', '')
@@ -90,16 +92,37 @@ export default function Chat() {
           if (!line.startsWith('data:')) continue
           const raw = line.slice(5).trim()
           if (raw === '[DONE]') continue
+          let evt: unknown
           try {
-            const evt = JSON.parse(raw)
-            const token = typeof evt === 'string'
-              ? evt
-              : (evt.content ?? evt.token ?? evt.answer ?? '')
-            if (token) {
-              setMessages((m) => updateAssistantMessage(m, assistantId, token))
-            }
+            evt = JSON.parse(raw)
           } catch {
             // non-JSON line, ignore
+            continue
+          }
+
+          if (evt && typeof evt === 'object' && 'type' in evt && evt.type === 'status') {
+            setTransientStatus(String('message' in evt ? evt.message ?? '' : ''))
+            continue
+          }
+          if (evt && typeof evt === 'object' && 'error' in evt && evt.error) {
+            throw new Error(String(evt.error))
+          }
+
+          const token = typeof evt === 'string'
+            ? evt
+            : (
+              evt && typeof evt === 'object'
+                ? (
+                  ('content' in evt ? evt.content : undefined) ??
+                  ('token' in evt ? evt.token : undefined) ??
+                  ('answer' in evt ? evt.answer : undefined) ??
+                  ''
+                )
+                : ''
+            )
+          if (token) {
+            setTransientStatus('')
+            setMessages((m) => updateAssistantMessage(m, assistantId, String(token)))
           }
         }
       }
@@ -114,6 +137,7 @@ export default function Chat() {
         )
       }
     } finally {
+      setTransientStatus('')
       setStreaming(false)
       setStreamingId(null)
       abortRef.current = null
@@ -155,6 +179,7 @@ export default function Chat() {
                 <MarkdownMessage
                   content={msg.content}
                   streaming={streaming && streamingId === msg.id}
+                  transientStatus={streaming && streamingId === msg.id ? transientStatus : ''}
                 />
               ) : (
                 <div className="chat-message user">

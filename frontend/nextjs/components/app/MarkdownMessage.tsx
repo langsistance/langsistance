@@ -4,17 +4,21 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import 'highlight.js/styles/github.css'
 import { useI18n } from '@/lib/app-i18n'
 import { attachImageRetryHandlers } from '@/lib/imageRetry'
-import { shouldShowAssistantWaiting } from '@/lib/messagePresentation'
+import {
+  shouldShowAssistantTransientStatus,
+  shouldShowAssistantWaiting,
+} from '@/lib/messagePresentation'
 import { renderMarkdownToHtml } from '@/lib/markdownRender'
 
 interface Props {
   content: string
   streaming: boolean
+  transientStatus?: string
 }
 
 const THROTTLE_MS = 1000
 
-export default function MarkdownMessage({ content, streaming }: Props) {
+export default function MarkdownMessage({ content, streaming, transientStatus = '' }: Props) {
   const { t } = useI18n()
   const [copied, setCopied] = useState(false)
   const [downloaded, setDownloaded] = useState(false)
@@ -26,6 +30,7 @@ export default function MarkdownMessage({ content, streaming }: Props) {
   const latestStreamingRef = useRef(streaming)
   const messageContentRef = useRef<HTMLDivElement | null>(null)
   const showWaiting = shouldShowAssistantWaiting(content, streaming)
+  const showTransientStatus = shouldShowAssistantTransientStatus(transientStatus, streaming)
 
   const doRender = useCallback((text: string, isStreaming: boolean) => {
     const src = isStreaming ? text + ' ▋' : text
@@ -119,11 +124,20 @@ export default function MarkdownMessage({ content, streaming }: Props) {
           </span>
           <span className="assistant-waiting-copy">
             <span className="assistant-waiting-title">{t('chat.processing')}</span>
+            {transientStatus && (
+              <span className="assistant-waiting-detail">{transientStatus}</span>
+            )}
           </span>
           <span className="assistant-waiting-scan" aria-hidden="true" />
         </div>
       )}
       <div dangerouslySetInnerHTML={{ __html: html || '▋' }} />
+      {!showWaiting && showTransientStatus && (
+        <div className="assistant-transient-status" role="status" aria-live="polite">
+          <span className="assistant-transient-status-dot" aria-hidden="true" />
+          <span>{transientStatus}</span>
+        </div>
+      )}
       {!streaming && content.trim() && (
         <div className="message-action-buttons">
           <button

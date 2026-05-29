@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react'
+import { useRef, useEffect, useState } from 'react'
 import { queryStream } from '../services/api'
 import { useI18n } from '../i18n'
 import { useChatSession } from '../contexts/ChatContext'
@@ -19,6 +19,7 @@ export default function Chat() {
   } = useChatSession()
   const bottomRef = useRef(null)
   const textareaRef = useRef(null)
+  const [transientStatus, setTransientStatus] = useState('')
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -28,6 +29,7 @@ export default function Chat() {
     const text = input.trim()
     if (!text || streaming) return
     setInput('')
+    setTransientStatus('')
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
 
     const queryId = createChatId()
@@ -59,16 +61,28 @@ export default function Chat() {
           if (!line.startsWith('data:')) continue
           const raw = line.slice(5).trim()
           if (raw === '[DONE]') continue
+          let evt
           try {
-            const evt = JSON.parse(raw)
-            const token = typeof evt === 'string'
-              ? evt
-              : (evt.content ?? evt.token ?? evt.answer ?? '')
-            if (token) {
-              setMessages((m) => updateAssistantMessage(m, assistantId, token))
-            }
+            evt = JSON.parse(raw)
           } catch {
             // non-JSON line, ignore
+            continue
+          }
+
+          if (evt && typeof evt === 'object' && evt.type === 'status') {
+            setTransientStatus(String(evt.message ?? ''))
+            continue
+          }
+          if (evt && typeof evt === 'object' && evt.error) {
+            throw new Error(String(evt.error))
+          }
+
+          const token = typeof evt === 'string'
+            ? evt
+            : (evt?.content ?? evt?.token ?? evt?.answer ?? '')
+          if (token) {
+            setTransientStatus('')
+            setMessages((m) => updateAssistantMessage(m, assistantId, token))
           }
         }
       }
@@ -83,6 +97,7 @@ export default function Chat() {
         )
       }
     } finally {
+      setTransientStatus('')
       setStreaming(false)
       setStreamingId(null)
       abortRef.current = null
@@ -121,7 +136,15 @@ export default function Chat() {
           {messages.map((msg) => (
             <div key={msg.id} className={`chat-message-wrapper ${msg.role}`}>
               <div className={`chat-message ${msg.role}`}>
-                {msg.content || (msg.role === 'assistant' && streaming && streamingId === msg.id ? '▋' : '')}
+                {msg.content || (
+                  msg.role === 'assistant' && streaming && streamingId === msg.id ? '▋' : ''
+                )}
+                {msg.role === 'assistant' && streaming && streamingId === msg.id && transientStatus && (
+                  <div className="assistant-transient-status" role="status" aria-live="polite">
+                    <span className="assistant-transient-status-dot" aria-hidden="true" />
+                    <span>{transientStatus}</span>
+                  </div>
+                )}
               </div>
             </div>
           ))}
