@@ -1,4 +1,5 @@
 import { getValidToken } from '@/lib/auth-client'
+import { withWebKnowledgePushFilter } from '@/lib/webKnowledgeQueries'
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_BASE || 'https://api.copiioai.com'
 
@@ -50,19 +51,19 @@ export const updateTool = (body: unknown): ApiResult => post('/update_tool', bod
 export const deleteTool = (body: unknown): ApiResult => post('/delete_tool', body)
 
 export const queryKnowledge = ({ search = '', page = 1, limit = 10 }: { search?: string; page?: number; limit?: number } = {}): ApiResult =>
-  get('/query_knowledge', { query: search, offset: page - 1, limit })
+  get('/query_knowledge', withWebKnowledgePushFilter({ query: search, offset: page - 1, limit }))
 export const createKnowledge = (body: unknown): ApiResult => post('/create_knowledge', body)
 export const updateKnowledge = (body: unknown): ApiResult => post('/update_knowledge', body)
 export const deleteKnowledge = (body: unknown): ApiResult => post('/delete_knowledge', body)
 
 export const queryPublicKnowledge = ({ search = '', page = 1, limit = 10 }: { search?: string; page?: number; limit?: number } = {}): ApiResult =>
-  get('/query_public_knowledge', { query: search, offset: page - 1, limit })
+  get('/query_public_knowledge', withWebKnowledgePushFilter({ query: search, offset: page - 1, limit }))
 export const copyKnowledge = (body: unknown): ApiResult => post('/copy_knowledge', body)
 
 export const authorizeKnowledgeAccess = (body: unknown): ApiResult => post('/authorize_knowledge_access', body)
 export const handleKnowledgeShare = (body: unknown): ApiResult => post('/handle_knowledge_share', body)
-export const queryKnowledgeShares = (params: Record<string, string | number>): ApiResult => get('/query_knowledge_shares', params)
-export const getUserSharedKnowledge = (params: Record<string, string | number>): ApiResult => get('/get_user_shared_knowledge', params)
+export const queryKnowledgeShares = (params: Record<string, string | number>): ApiResult => get('/query_knowledge_shares', withWebKnowledgePushFilter(params))
+export const getUserSharedKnowledge = (params: Record<string, string | number>): ApiResult => get('/get_user_shared_knowledge', withWebKnowledgePushFilter(params))
 export const cancelKnowledgeShare = (body: unknown): ApiResult => post('/cancel_knowledge_share', body)
 
 export async function queryStream(query: string, queryId: string, abortSignal: AbortSignal): Promise<ReadableStream<Uint8Array>> {
