@@ -289,7 +289,7 @@ async def filter_tool_result_items(
 
     _log_info(
         "tool_result_filter filtered result items "
-        f"({len(kept_items)}): {_json_for_log(kept_items)}"
+        f"({len(kept_items)})"
     )
     return FilterResult(
         items=kept_items,
