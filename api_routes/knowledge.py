@@ -12,7 +12,12 @@ from .models import (
     KnowledgeCopyRequest, KnowledgeCopyResponse
 )
 from sources.knowledge.knowledge import get_embedding, get_db_connection, get_redis_connection, create_tool_and_knowledge_records, get_tool_by_id
-from sources.knowledge.query_filters import build_knowledge_push_filter_condition, build_share_push_filter_condition
+from sources.knowledge.query_filters import (
+    build_knowledge_push_filter_condition,
+    build_share_push_filter_condition,
+    fetch_push_knowledge_ids,
+    fetch_push_tool_ids,
+)
 from sources.logger import Logger
 from sources.user.passport import verify_firebase_token, get_user_by_id
 
@@ -493,7 +498,8 @@ async def query_knowledge_records(
             # 1. 用户ID匹配
             # 2. 公开的知识 或者 用户自己的知识
             # 3. question、description、answer字段模糊匹配
-            push_condition, push_params = build_knowledge_push_filter_condition(push_filter)
+            push_tool_ids = fetch_push_tool_ids(cursor, push_filter)
+            push_condition, push_params = build_knowledge_push_filter_condition(push_filter, push_tool_ids)
 
             if query:
                 search_pattern = f"%{query}%"
@@ -680,7 +686,8 @@ async def query_public_knowledge(
             # 1. 用户ID匹配
             # 2. 公开的知识 或者 用户自己的知识
             # 3. question、description、answer字段模糊匹配
-            push_condition, push_params = build_knowledge_push_filter_condition(push_filter)
+            push_tool_ids = fetch_push_tool_ids(cursor, push_filter)
+            push_condition, push_params = build_knowledge_push_filter_condition(push_filter, push_tool_ids)
 
             if query:
                 search_pattern = f"%{query}%"
@@ -1303,8 +1310,10 @@ async def query_knowledge_shares(
         connection = get_db_connection()
         with connection.cursor() as cursor:
             # 先查询knowledge_share表获取分享记录总数
-            share_push_condition, share_push_params = build_share_push_filter_condition(push_filter)
-            knowledge_push_condition, knowledge_push_params = build_knowledge_push_filter_condition(push_filter)
+            push_tool_ids = fetch_push_tool_ids(cursor, push_filter)
+            push_knowledge_ids = fetch_push_knowledge_ids(cursor, push_filter, push_tool_ids)
+            share_push_condition, share_push_params = build_share_push_filter_condition(push_filter, push_knowledge_ids)
+            knowledge_push_condition, knowledge_push_params = build_knowledge_push_filter_condition(push_filter, push_tool_ids)
 
             count_sql = f"""
                 SELECT COUNT(*) as total
@@ -1469,8 +1478,10 @@ async def get_user_shared_knowledge(
         connection = get_db_connection()
         with connection.cursor() as cursor:
             # 先查询knowledge_share表获取分享记录总数
-            share_push_condition, share_push_params = build_share_push_filter_condition(push_filter)
-            knowledge_push_condition, knowledge_push_params = build_knowledge_push_filter_condition(push_filter)
+            push_tool_ids = fetch_push_tool_ids(cursor, push_filter)
+            push_knowledge_ids = fetch_push_knowledge_ids(cursor, push_filter, push_tool_ids)
+            share_push_condition, share_push_params = build_share_push_filter_condition(push_filter, push_knowledge_ids)
+            knowledge_push_condition, knowledge_push_params = build_knowledge_push_filter_condition(push_filter, push_tool_ids)
 
             count_sql = f"""
                 SELECT COUNT(*) as total
