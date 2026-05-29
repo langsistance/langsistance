@@ -205,7 +205,7 @@ async def filter_tool_result_items(
     items: list[Any],
     user_prompt: str,
     llm_json_call: JsonCall,
-    batch_size: int = 5,
+    batch_size: int = 3,
     keep_threshold: float = 0.75,
     status_callback: StatusCallback | None = None,
 ) -> FilterResult:
