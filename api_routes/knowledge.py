@@ -559,7 +559,7 @@ async def query_knowledge_records(
                                    user_id,
                                    question,
                                    description,
-                                   answer, public, model_name, tool_id, params, `type`, create_time, update_time
+                                   answer, public, model_name, tool_id, params, type, create_time, update_time
                             FROM knowledge
                             WHERE status = %s
                                AND user_id = %s
