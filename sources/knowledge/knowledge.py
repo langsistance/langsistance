@@ -9,6 +9,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from bs4 import BeautifulSoup
 
 from sources.logger import Logger
+from sources.knowledge.type_utils import infer_knowledge_type
 import pymysql
 import pymysql.cursors
 import redis
@@ -262,7 +263,7 @@ def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
                         model_name=row['model_name'] or "",
                         tool_id=row['tool_id'] or 0,
                         params=row['params'] or "",
-                        type=row.get('type') or 1,
+                        type=infer_knowledge_type(row.get('type'), row.get('params')),
                         create_time=row['create_time'].isoformat() if row['create_time'] else None,
                         update_time=row['update_time'].isoformat() if row['update_time'] else None
                     )
@@ -423,7 +424,7 @@ def get_knowledge_tool(user_id: str, question: str, top_k: int = 3,
             model_name=best_knowledge['model_name'] or "",
             tool_id=best_knowledge['tool_id'] or 0,
             params=best_knowledge['params'] or "",
-            type=best_knowledge.get('type') or 1,
+            type=infer_knowledge_type(best_knowledge.get('type'), best_knowledge.get('params')),
         )
 
         return knowledge_item, tool_info
@@ -634,7 +635,7 @@ def get_knowledge_by_id(knowledge_id: int) -> Optional[KnowledgeItem]:
                     model_name=row['model_name'] or "",
                     tool_id=row['tool_id'] or 0,
                     params=row['params'] or "",
-                    type=row.get('type') or 1,
+                    type=infer_knowledge_type(row.get('type'), row.get('params')),
                     create_time=row['create_time'].isoformat() if row.get('create_time') else None,
                     update_time=row['update_time'].isoformat() if row.get('update_time') else None,
                 )

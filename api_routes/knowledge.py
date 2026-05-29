@@ -18,8 +18,11 @@ from sources.knowledge.query_filters import (
     fetch_push_knowledge_ids,
     fetch_push_tool_ids,
 )
+from sources.knowledge.type_utils import infer_knowledge_type
 from sources.logger import Logger
 from sources.user.passport import verify_firebase_token, get_user_by_id
+
+from ..sources.logger import Logger
 
 logger = Logger("backend.log")
 router = APIRouter()
@@ -572,6 +575,8 @@ async def query_knowledge_records(
             cursor.execute(query_sql, params)
             results = cursor.fetchall()
 
+            logger.info(f"sql: {query_sql} and result: {results}")
+
             # 转换为KnowledgeItem对象列表
             knowledge_items = []
             tool_ids = set()  # 收集所有相关的tool_id
@@ -586,7 +591,7 @@ async def query_knowledge_records(
                     model_name=row['model_name'] or "",
                     tool_id=row['tool_id'] or 0,
                     params=row['params'] or "",
-                    type=row.get('type') or 1
+                    type=infer_knowledge_type(row.get('type'), row.get('params'))
                 )
                 # 处理时间字段
                 if row['create_time']:
@@ -773,7 +778,7 @@ async def query_public_knowledge(
                     model_name=row['model_name'] or "",
                     tool_id=row['tool_id'] or 0,
                     params=row['params'] or "",
-                    type=row.get('type') or 1
+                    type=infer_knowledge_type(row.get('type'), row.get('params'))
                 )
 
                 # 添加用户邮箱到extra_info字段
@@ -892,7 +897,7 @@ async def copy_knowledge(request: KnowledgeCopyRequest, http_request: Request):
                 'embedding_id': 0,
                 'model_name': row["model_name"],
                 'params': row["params"],
-                'type': row.get("type") or 1
+                'type': infer_knowledge_type(row.get("type"), row.get("params"))
             }
 
             # 准备工具数据（如果存在）
@@ -1198,7 +1203,7 @@ async def handle_knowledge_share(request: Request, handle_request: dict):
                     'embedding_id': 0,
                     'model_name': knowledge_result['model_name'],
                     'params': knowledge_result['params'],
-                    'type': knowledge_result.get('type') or 1
+                    'type': infer_knowledge_type(knowledge_result.get('type'), knowledge_result.get('params'))
                 }
 
                 # 准备工具数据（如果存在）
@@ -1385,7 +1390,7 @@ async def query_knowledge_shares(
                         model_name=knowledge_data["model_name"] or "",
                         tool_id=knowledge_data["tool_id"] or 0,
                         params=knowledge_data["params"] or "",
-                        type=knowledge_data.get("type") or 1,
+                        type=infer_knowledge_type(knowledge_data.get("type"), knowledge_data.get("params")),
                         extra_info={
                             "from_user_email": share["from_user_email"],  # 添加from_user_email字段
                             "share_id": share["id"],
@@ -1553,7 +1558,7 @@ async def get_user_shared_knowledge(
                         model_name=knowledge_data["model_name"] or "",
                         tool_id=knowledge_data["tool_id"] or 0,
                         params=knowledge_data["params"] or "",
-                        type=knowledge_data.get("type") or 1,
+                        type=infer_knowledge_type(knowledge_data.get("type"), knowledge_data.get("params")),
                         extra_info={
                             "share_id": share["id"],
                             "status": share["status"],
