@@ -2222,6 +2222,61 @@ body {
   margin-bottom: var(--spacing-2);
 }
 
+.knowledge-type-badge {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.5;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  background: var(--color-bg-secondary);
+}
+
+.knowledge-type-badge.workflow {
+  color: #075985;
+  border-color: #7dd3fc;
+  background: #e0f2fe;
+}
+
+.knowledge-type-badge.normal {
+  color: #166534;
+  border-color: #86efac;
+  background: #dcfce7;
+}
+
+.workflow-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.workflow-step-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: var(--spacing-2);
+  align-items: center;
+}
+
+.workflow-step-index {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg-hover);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.workflow-step-remove {
+  white-space: nowrap;
+}
+
 .knowledge-card-content {
   font-size: 16px;
   color: var(--color-text-secondary);

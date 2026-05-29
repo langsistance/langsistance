@@ -20,6 +20,7 @@ interface KnowledgeItem {
   description: string
   tool_id: number | string
   public: number
+  type?: number
   model_name?: string
   params?: string
   title?: string
@@ -34,9 +35,10 @@ interface Tool {
   url?: string
 }
 
-function KnowledgeModal({ item, tools, onClose, onSave, onDelete }: {
+function KnowledgeModal({ item, tools, knowledgeOptions, onClose, onSave, onDelete }: {
   item: KnowledgeItem | null
   tools: Tool[]
+  knowledgeOptions: KnowledgeItem[]
   onClose: () => void
   onSave: (form: KnowledgeItem) => Promise<void>
   onDelete: (id: number) => Promise<void>
@@ -45,9 +47,22 @@ function KnowledgeModal({ item, tools, onClose, onSave, onDelete }: {
   const [form, setForm] = useState<KnowledgeItem>(
     item
       ? { ...item }
-      : { question: '', answer: '', description: '', tool_id: '', public: 1 }
+      : { question: '', answer: '', description: '', tool_id: '', public: 1, type: 1 }
   )
   const [saveError, setSaveError] = useState('')
+  const initialStepIds = (() => {
+    try {
+      const parsed = item?.params ? JSON.parse(item.params) : null
+      if (parsed?.type === 'workflow' && Array.isArray(parsed.steps)) {
+        return parsed.steps.map((step: { knowledge_id?: number }) => String(step.knowledge_id || '')).filter(Boolean)
+      }
+    } catch {
+      return []
+    }
+    return []
+  })()
+  const [stepIds, setStepIds] = useState<string[]>(initialStepIds.length ? initialStepIds : ['', ''])
+  const isWorkflow = Number(form.type || 1) === 2
 
   // Hide tool selector when editing and associated tool is unavailable in the filtered list.
   const hasValidTool = item?.tool_id
@@ -63,7 +78,28 @@ function KnowledgeModal({ item, tools, onClose, onSave, onDelete }: {
     e.preventDefault()
     setSaveError('')
     try {
-      await onSave(form)
+      const nextForm = { ...form }
+      if (isWorkflow) {
+        const selectedSteps = stepIds.filter(Boolean)
+        if (!nextForm.question.trim()) {
+          throw new Error(lang === 'en' ? 'Name is required' : '请输入组合知识名称')
+        }
+        if (selectedSteps.length < 2) {
+          throw new Error(lang === 'en' ? 'Select at least two knowledge steps' : '请至少选择两个步骤知识')
+        }
+        nextForm.tool_id = 0
+        nextForm.answer = `组合知识：按顺序执行 ${selectedSteps.length} 个知识步骤。`
+        nextForm.params = JSON.stringify({
+          type: 'workflow',
+          version: 1,
+          mode: 'context_chain',
+          steps: selectedSteps.map((knowledgeId, index) => ({
+            id: `step_${index + 1}`,
+            knowledge_id: Number(knowledgeId),
+          })),
+        })
+      }
+      await onSave(nextForm)
       onClose()
     } catch (err) {
       setSaveError((err as Error).message || (lang === 'en' ? 'Save failed' : '保存失败'))
@@ -85,7 +121,18 @@ function KnowledgeModal({ item, tools, onClose, onSave, onDelete }: {
         </div>
         <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
           <div className="modal-body">
-            {showToolSelect && (
+            <div className="form-group">
+              <label>{lang === 'en' ? 'Knowledge Type' : '知识类型'}</label>
+              <select
+                className="form-input"
+                value={String(form.type || 1)}
+                onChange={(e) => set('type', Number(e.target.value))}
+              >
+                <option value="1">{lang === 'en' ? 'Normal Knowledge' : '普通知识'}</option>
+                <option value="2">{lang === 'en' ? 'Composed Knowledge' : '组合知识'}</option>
+              </select>
+            </div>
+            {!isWorkflow && showToolSelect && (
               <div className="form-group">
                 <label>{t('modals.knowledgeCreate.selectTool')}</label>
                 <select
@@ -104,28 +151,73 @@ function KnowledgeModal({ item, tools, onClose, onSave, onDelete }: {
             <h4>{t('modals.knowledgeDetails.knowledgeContent')}</h4>
             <div className="form-section">
               <div className="form-group">
-                <label>{t('modals.knowledgeCreate.question')}</label>
+                <label>{isWorkflow ? (lang === 'en' ? 'Name' : '名称') : t('modals.knowledgeCreate.question')}</label>
                 <input
                   id="knowledgeQuestion"
                   className="form-input"
-                  placeholder={t('modals.knowledgeCreate.questionPlaceholder')}
+                  placeholder={isWorkflow ? (lang === 'en' ? 'e.g. Find all patent documents by publication ID' : '例如：根据专利公开 ID 查询所有文档') : t('modals.knowledgeCreate.questionPlaceholder')}
                   value={form.question}
                   onChange={(e) => set('question', e.target.value)}
                   required
                 />
               </div>
-              <div className="form-group">
-                <label>{t('modals.knowledgeCreate.answer')}</label>
-                <textarea
-                  id="knowledgeAnswer"
-                  className="form-textarea"
-                  placeholder={t('modals.knowledgeCreate.answerPlaceholder')}
-                  value={form.answer}
-                  onChange={(e) => set('answer', e.target.value)}
-                  required
-                  rows={4}
-                />
-              </div>
+              {isWorkflow ? (
+                <div className="form-group">
+                  <label>{lang === 'en' ? 'Steps' : '步骤知识'}</label>
+                  <div className="workflow-step-list">
+                    {stepIds.map((stepId, index) => (
+                      <div className="workflow-step-row" key={index}>
+                        <span className="workflow-step-index">{index + 1}</span>
+                        <select
+                          className="form-input"
+                          value={stepId}
+                          onChange={(e) => {
+                            const next = [...stepIds]
+                            next[index] = e.target.value
+                            setStepIds(next)
+                          }}
+                        >
+                          <option value="">{lang === 'en' ? 'Select knowledge' : '选择知识'}</option>
+                          {knowledgeOptions
+                            .filter((option) => option.id !== item?.id && Number(option.type || 1) === 1)
+                            .map((option) => (
+                              <option key={option.id} value={option.id}>{option.question}</option>
+                            ))}
+                        </select>
+                        {stepIds.length > 2 && (
+                          <button
+                            type="button"
+                            className="btn btn-secondary workflow-step-remove"
+                            onClick={() => setStepIds(stepIds.filter((_, i) => i !== index))}
+                          >
+                            {lang === 'en' ? 'Remove' : '移除'}
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => setStepIds([...stepIds, ''])}
+                    >
+                      {lang === 'en' ? 'Add Step' : '添加步骤'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="form-group">
+                  <label>{t('modals.knowledgeCreate.answer')}</label>
+                  <textarea
+                    id="knowledgeAnswer"
+                    className="form-textarea"
+                    placeholder={t('modals.knowledgeCreate.answerPlaceholder')}
+                    value={form.answer}
+                    onChange={(e) => set('answer', e.target.value)}
+                    required
+                    rows={4}
+                  />
+                </div>
+              )}
               <div className="form-group">
                 <label>{t('modals.toolDetails.description')}</label>
                 <textarea
@@ -182,7 +274,7 @@ function KnowledgeModal({ item, tools, onClose, onSave, onDelete }: {
 }
 
 export default function Knowledge() {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const [items, setItems] = useState<KnowledgeItem[]>([])
   const [tools, setTools] = useState<Tool[]>([])
   const [search, setSearch] = useState('')
@@ -233,6 +325,7 @@ export default function Knowledge() {
         modelName: form.model_name,
         toolId: form.tool_id ? Number(form.tool_id) : 0,
         params: form.params || '',
+        type: form.type || 1,
       })
     } else {
       await createKnowledge({
@@ -243,6 +336,7 @@ export default function Knowledge() {
         toolId: form.tool_id ? Number(form.tool_id) : 0,
         params: form.params || '',
         modelName: form.model_name,
+        type: form.type || 1,
       })
     }
     load()
@@ -296,6 +390,11 @@ export default function Knowledge() {
               <div key={item.id} className="knowledge-card" onClick={() => setModal(item)}>
                 <div className="knowledge-card-header">
                   <div className="knowledge-card-title">{item.question}</div>
+                  <span className={`knowledge-type-badge ${Number(item.type || 1) === 2 ? 'workflow' : 'normal'}`}>
+                    {Number(item.type || 1) === 2
+                      ? (lang === 'en' ? 'Composed' : '组合知识')
+                      : (lang === 'en' ? 'Normal' : '普通知识')}
+                  </span>
                 </div>
                 <div className="knowledge-card-content">{item.answer}</div>
                 {item.title && (
@@ -318,6 +417,7 @@ export default function Knowledge() {
         <KnowledgeModal
           item={modal === 'create' ? null : modal}
           tools={tools}
+          knowledgeOptions={items}
           onClose={() => setModal(null)}
           onSave={handleSave}
           onDelete={handleDelete}
