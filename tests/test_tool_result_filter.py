@@ -174,6 +174,66 @@ class TestToolResultFilter(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.applied)
         self.assertEqual(result.items, [items[1], items[2]])
 
+    async def test_emits_transient_status_while_filtering_batches(self):
+        from sources.tool_result_filter import filter_tool_result_items
+
+        items = [
+            {"name": "Alpha"},
+            {"name": "Beta"},
+            {"name": "Gamma"},
+        ]
+        responses = [
+            {
+                "has_filter_criteria": True,
+                "filter_criteria": "matching items",
+            },
+            {
+                "has_filter_requirement": True,
+                "decisions": [
+                    {"index": 0, "keep": True, "confidence": 0.99},
+                    {"index": 1, "keep": False, "confidence": 0.99},
+                ],
+            },
+            {
+                "has_filter_requirement": True,
+                "decisions": [
+                    {"index": 2, "keep": True, "confidence": 0.99},
+                ],
+            },
+        ]
+        statuses = []
+        call_count = 0
+
+        async def llm_json_call(system_prompt, user_content):
+            nonlocal call_count
+            call_count += 1
+            return responses[call_count - 1]
+
+        async def status_callback(event):
+            statuses.append(event)
+
+        result = await filter_tool_result_items(
+            items,
+            "Only keep matching items.",
+            llm_json_call,
+            batch_size=2,
+            status_callback=status_callback,
+        )
+
+        self.assertTrue(result.applied)
+        self.assertEqual(result.items, [items[0], items[2]])
+        self.assertGreaterEqual(len(statuses), 4)
+        self.assertEqual(statuses[0]["phase"], "criteria")
+        self.assertEqual(statuses[0]["transient"], True)
+        self.assertEqual(statuses[1]["phase"], "batch")
+        self.assertEqual(statuses[1]["current"], 1)
+        self.assertEqual(statuses[1]["end"], 2)
+        self.assertEqual(statuses[1]["total"], 3)
+        self.assertIn("Filtering results 1-2 of 3", statuses[1]["message"])
+        self.assertEqual(statuses[-1]["phase"], "complete")
+        self.assertEqual(statuses[-1]["kept"], 2)
+        self.assertEqual(statuses[-1]["total"], 3)
+
     async def test_invalid_llm_json_keeps_original_list(self):
         from sources.tool_result_filter import filter_tool_result_items
 
@@ -235,15 +295,14 @@ class TestToolResultFilter(unittest.IsolatedAsyncioTestCase):
         info_log = "\n".join(capture_logger.infos)
         self.assertEqual(result.items, [items[0]])
         self.assertIn("filter input items", info_log)
+        self.assertIn("filter input items (2)", info_log)
         self.assertIn("Alpha", info_log)
-        self.assertIn("Beta", info_log)
         self.assertIn("filter criteria", info_log)
         self.assertIn("filter criteria/keywords: Alpha", info_log)
         self.assertIn("filter decisions", info_log)
         self.assertIn("does not match", info_log)
         self.assertIn("filtered result items", info_log)
-        self.assertIn("Alpha", capture_logger.infos[-1])
-        self.assertNotIn("Beta", capture_logger.infos[-1])
+        self.assertIn("filtered result items (1)", capture_logger.infos[-1])
 
     async def test_filter_prompt_uses_extracted_filter_criteria_not_full_user_question(self):
         from sources.tool_result_filter import filter_tool_result_items

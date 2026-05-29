@@ -9,9 +9,13 @@ from unittest.mock import patch
 class FakeCallbackHandler:
     def __init__(self):
         self.tokens = []
+        self.statuses = []
 
     async def on_llm_new_token(self, token):
         self.tokens.append(token)
+
+    async def on_status(self, message, **kwargs):
+        self.statuses.append({"message": message, **kwargs})
 
 
 class FakeMemory:
@@ -360,6 +364,47 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Alpha", batch_content)
         self.assertIn("Gamma", batch_content)
         self.assertNotIn("Beta", batch_content)
+
+    async def test_stream_raw_items_forwards_filter_status_to_callback(self):
+        GeneralAgent = self._load_general_agent_class()
+
+        agent = GeneralAgent.__new__(GeneralAgent)
+        agent.llm = FakeLlm([
+            {
+                "has_filter_criteria": True,
+                "filter_criteria": "Tokyo results",
+            },
+            {
+                "has_filter_requirement": True,
+                "decisions": [
+                    {"index": 0, "keep": True, "confidence": 0.98, "reason": "Tokyo"},
+                    {"index": 1, "keep": False, "confidence": 0.94, "reason": "Osaka"},
+                    {"index": 2, "keep": True, "confidence": 0.97, "reason": "Tokyo"},
+                ],
+            },
+        ])
+        agent.memory = FakeMemory()
+        agent.logger = FakeLogger()
+        agent._last_user_prompt = "Please show these companies, but only keep Tokyo results."
+        agent._pending_raw_items = [
+            {"name": "Alpha", "city": "Tokyo"},
+            {"name": "Beta", "city": "Osaka"},
+            {"name": "Gamma", "city": "Tokyo"},
+        ]
+        callback_handler = FakeCallbackHandler()
+
+        await agent.invoke_agent(agent=None, callback_handler=callback_handler)
+
+        self.assertGreaterEqual(len(callback_handler.statuses), 3)
+        self.assertEqual(callback_handler.statuses[0]["phase"], "criteria")
+        batch_statuses = [
+            status for status in callback_handler.statuses
+            if status.get("phase") == "batch"
+        ]
+        self.assertEqual(len(batch_statuses), 1)
+        self.assertIn("Filtering results 1-3 of 3", batch_statuses[0]["message"])
+        self.assertTrue(batch_statuses[0]["transient"])
+        self.assertEqual(callback_handler.statuses[-1]["phase"], "complete")
 
     async def test_skips_result_filtering_when_user_prompt_has_no_filter_criteria(self):
         GeneralAgent = self._load_general_agent_class()

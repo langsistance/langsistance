@@ -1293,10 +1293,24 @@ Begin your response now:
         self._pending_raw_items = None
         original_total = len(raw_items)
         user_prompt = getattr(self, "_last_user_prompt", "")
+
+        async def emit_filter_status(event):
+            on_status = getattr(callback_handler, "on_status", None)
+            if not on_status:
+                return
+            message = event.get("message", "")
+            metadata = {
+                key: value
+                for key, value in event.items()
+                if key != "message"
+            }
+            await on_status(message, **metadata)
+
         filter_result = await filter_tool_result_items(
             raw_items,
             user_prompt,
             self.llm.complete_json,
+            status_callback=emit_filter_status,
         )
         pending = filter_result.items
         total = len(pending)

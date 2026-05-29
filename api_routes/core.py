@@ -365,7 +365,9 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
             token_buffer = []
             buffer_size = 5  # Send 5 tokens at once
             last_flush_time = asyncio.get_event_loop().time()
+            last_stream_time = last_flush_time
             flush_interval = 0.05  # Flush every 50ms
+            heartbeat_interval = 15.0
 
             try:
                 while True:
@@ -385,6 +387,19 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                 yield f"data:{token_json}\n\n"
                                 token_buffer.clear()
                                 last_flush_time = current_time
+                                last_stream_time = current_time
+
+                        elif event['type'] == 'status':
+                            if token_buffer:
+                                combined = ''.join(token_buffer)
+                                token_json = json.dumps(combined)
+                                yield f"data:{token_json}\n\n"
+                                token_buffer.clear()
+                            status_json = json.dumps(event)
+                            yield f"data:{status_json}\n\n"
+                            current_time = asyncio.get_event_loop().time()
+                            last_flush_time = current_time
+                            last_stream_time = current_time
 
                         elif event['type'] == 'end':
                             # Flush remaining tokens before ending
@@ -393,6 +408,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                 token_json = json.dumps(combined)
                                 yield f"data:{token_json}\n\n"
                                 token_buffer.clear()
+                                last_stream_time = asyncio.get_event_loop().time()
                             break
 
                         elif event['type'] == 'error':
@@ -402,20 +418,26 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                 token_json = json.dumps(combined)
                                 yield f"data:{token_json}\n\n"
                                 token_buffer.clear()
+                                last_stream_time = asyncio.get_event_loop().time()
                             error_json = json.dumps({'error': event.get('message', 'Unknown error')})
                             yield f"data:{error_json}\n\n"
+                            last_stream_time = asyncio.get_event_loop().time()
                             break
 
                     except asyncio.TimeoutError:
                         # Periodic flush even without new tokens
+                        current_time = asyncio.get_event_loop().time()
                         if token_buffer:
-                            current_time = asyncio.get_event_loop().time()
                             if (current_time - last_flush_time) >= flush_interval:
                                 combined = ''.join(token_buffer)
                                 token_json = json.dumps(combined)
                                 yield f"data:{token_json}\n\n"
                                 token_buffer.clear()
                                 last_flush_time = current_time
+                                last_stream_time = current_time
+                        elif (current_time - last_stream_time) >= heartbeat_interval:
+                            yield ": ping\n\n"
+                            last_stream_time = current_time
 
             except Exception as e:
                 app_logger.error(f"Error in generate loop: {str(e)}")

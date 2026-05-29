@@ -17,6 +17,18 @@ class SSECallbackHandler(AsyncCallbackHandler):
                 'content': token
             })
 
+    async def on_status(self, message: str, **kwargs) -> None:
+        """Send transient progress status to the streaming client."""
+        if not message:
+            return
+        event = {
+            'type': 'status',
+            'message': message,
+            'transient': True,
+        }
+        event.update(kwargs)
+        await self.queue.put(event)
+
     async def on_tool_start(
             self,
             serialized: dict,

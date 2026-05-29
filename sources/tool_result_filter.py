@@ -7,6 +7,7 @@ from sources.logger import Logger
 
 
 JsonCall = Callable[[str, str], dict[str, Any] | str | Awaitable[dict[str, Any] | str]]
+StatusCallback = Callable[[dict[str, Any]], Any | Awaitable[Any]]
 logger = Logger("tool_result_filter.log")
 
 
@@ -110,6 +111,20 @@ async def _maybe_await(value):
     return value
 
 
+async def _emit_filter_status(
+    status_callback: StatusCallback | None,
+    **event: Any,
+) -> None:
+    if not status_callback:
+        return
+
+    status_event = {"transient": True, **event}
+    try:
+        await _maybe_await(status_callback(status_event))
+    except Exception as exc:
+        _log_error(f"tool_result_filter status callback failed; continuing. error={exc}")
+
+
 async def extract_result_filter_criteria(
     user_prompt: str,
     llm_json_call: JsonCall,
@@ -192,6 +207,7 @@ async def filter_tool_result_items(
     llm_json_call: JsonCall,
     batch_size: int = 5,
     keep_threshold: float = 0.75,
+    status_callback: StatusCallback | None = None,
 ) -> FilterResult:
     """Filter tool result list items with fail-open LLM decisions."""
     original_count = len(items)
@@ -209,11 +225,25 @@ async def filter_tool_result_items(
             filtered_count=0,
         )
 
+    await _emit_filter_status(
+        status_callback,
+        phase="criteria",
+        message="Checking result filter criteria...",
+        total=original_count,
+    )
     filter_criteria = await extract_result_filter_criteria(user_prompt, llm_json_call)
     _log_info(f"tool_result_filter filter criteria/keywords: {filter_criteria or ''}")
 
     if not filter_criteria:
         _log_info("tool_result_filter no explicit result filter criteria; skip filtering")
+        await _emit_filter_status(
+            status_callback,
+            phase="complete",
+            message=f"No result filtering needed. Keeping all {original_count} items.",
+            kept=original_count,
+            total=original_count,
+            applied=False,
+        )
         return FilterResult(
             items=items,
             applied=False,
@@ -229,6 +259,15 @@ async def filter_tool_result_items(
     try:
         for start in range(0, original_count, batch_size):
             batch = items[start:start + batch_size]
+            batch_end = start + len(batch)
+            await _emit_filter_status(
+                status_callback,
+                phase="batch",
+                message=f"Filtering results {start + 1}-{batch_end} of {original_count}...",
+                current=start + 1,
+                end=batch_end,
+                total=original_count,
+            )
             indexed_items = [
                 {"index": start + offset, "item": item}
                 for offset, item in enumerate(batch)
@@ -278,6 +317,14 @@ async def filter_tool_result_items(
             f"raw_response={_json_for_log(latest_raw_response)}; "
             f"items={_json_for_log(items)}"
         )
+        await _emit_filter_status(
+            status_callback,
+            phase="error",
+            message="Result filtering failed. Keeping the original results.",
+            kept=original_count,
+            total=original_count,
+            applied=False,
+        )
         return FilterResult(
             items=items,
             applied=False,
@@ -290,6 +337,14 @@ async def filter_tool_result_items(
     _log_info(
         "tool_result_filter filtered result items "
         f"({len(kept_items)})"
+    )
+    await _emit_filter_status(
+        status_callback,
+        phase="complete",
+        message=f"Result filtering complete: kept {len(kept_items)} of {original_count}.",
+        kept=len(kept_items),
+        total=original_count,
+        applied=applied,
     )
     return FilterResult(
         items=kept_items,
