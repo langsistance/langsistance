@@ -11,6 +11,7 @@ import {
 import { useI18n } from '@/lib/app-i18n'
 import { filterKnowledgeBaseTools } from '@/lib/toolFilters'
 import { KNOWLEDGE_LIST_PAGE_SIZE } from '@/lib/appUiConfig'
+import { getKnowledgeTypeBadge } from '@/lib/knowledgeTypeBadge'
 import Pagination from '@/components/app/Pagination'
 
 interface KnowledgeItem {
@@ -386,27 +387,26 @@ export default function Knowledge() {
           </div>
         ) : (
           <div className="knowledge-list">
-            {items.map((item) => (
-              <div key={item.id} className="knowledge-card" onClick={() => setModal(item)}>
-                <div className="knowledge-card-header">
-                  <div className="knowledge-card-title">{item.question}</div>
-                  <span className={`knowledge-type-badge ${Number(item.type || 1) === 2 ? 'workflow' : 'normal'}`}>
-                    {Number(item.type || 1) === 2
-                      ? (lang === 'en' ? 'Composed' : '组合知识')
-                      : (lang === 'en' ? 'Normal' : '普通知识')}
-                  </span>
-                </div>
-                <div className="knowledge-card-content">{item.answer}</div>
-                {item.title && (
-                  <div className="knowledge-card-apis">
-                    <span className="knowledge-api-badge">{item.title}</span>
+            {items.map((item) => {
+              const typeBadge = getKnowledgeTypeBadge(item.type, lang)
+              return (
+                <div key={item.id} className="knowledge-card" onClick={() => setModal(item)}>
+                  <div className="knowledge-card-header">
+                    <div className="knowledge-card-title">{item.question}</div>
+                    <span className={typeBadge.className}>{typeBadge.label}</span>
                   </div>
-                )}
-                <div className="knowledge-card-footer">
-                  <span>📅 {item.update_time ? new Date(item.update_time).toLocaleDateString('zh-CN') : ''}</span>
+                  <div className="knowledge-card-content">{item.answer}</div>
+                  {item.title && (
+                    <div className="knowledge-card-apis">
+                      <span className="knowledge-api-badge">{item.title}</span>
+                    </div>
+                  )}
+                  <div className="knowledge-card-footer">
+                    <span>📅 {item.update_time ? new Date(item.update_time).toLocaleDateString('zh-CN') : ''}</span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
 

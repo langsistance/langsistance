@@ -10,6 +10,7 @@ import {
   queryKnowledge,
 } from '@/services/api'
 import { useI18n } from '@/lib/app-i18n'
+import { getKnowledgeTypeBadge } from '@/lib/knowledgeTypeBadge'
 import Pagination from '@/components/app/Pagination'
 
 const PAGE_SIZE = 10
@@ -27,6 +28,7 @@ interface ShareItem {
   question: string
   answer?: string
   description?: string
+  type?: number
   update_time?: string
   extra_info: ExtraInfo
 }
@@ -350,6 +352,7 @@ export default function Share() {
                   {sent.map((share, i) => {
                     const info = share.extra_info || {}
                     const statusCls = STATUS_CLASS[info.status ?? 0] || 'pending'
+                    const typeBadge = getKnowledgeTypeBadge(share.type, lang)
                     const date = info.share_update_time
                       ? new Date(info.share_update_time).toLocaleDateString(lang === 'en' ? 'en-US' : 'zh-CN')
                       : ''
@@ -357,7 +360,10 @@ export default function Share() {
                       <div key={info.share_id ?? i} className="share-card" style={{ cursor: 'pointer' }} onClick={() => { setSelectedItem(share); setSelectedType('sent') }}>
                         <div className="share-card-header">
                           <div className="share-card-title">{share.question}</div>
-                          <span className={`share-card-status ${statusCls}`}>{statusText(info.status)}</span>
+                          <div className="share-card-header-badges">
+                            <span className={typeBadge.className}>{typeBadge.label}</span>
+                            <span className={`share-card-status ${statusCls}`}>{statusText(info.status)}</span>
+                          </div>
                         </div>
                         {info.to_user_email && (
                           <div className="share-card-info"><span>📧 {info.to_user_email}</span></div>
@@ -395,6 +401,7 @@ export default function Share() {
                   {received.map((share, i) => {
                     const info = share.extra_info || {}
                     const statusCls = STATUS_CLASS[info.status ?? 0] || 'pending'
+                    const typeBadge = getKnowledgeTypeBadge(share.type, lang)
                     const date = info.share_update_time
                       ? new Date(info.share_update_time).toLocaleDateString(lang === 'en' ? 'en-US' : 'zh-CN')
                       : ''
@@ -402,7 +409,10 @@ export default function Share() {
                       <div key={info.share_id ?? i} className="share-card" style={{ cursor: 'pointer' }} onClick={() => { setSelectedItem(share); setSelectedType('received') }}>
                         <div className="share-card-header">
                           <div className="share-card-title">{share.question}</div>
-                          <span className={`share-card-status ${statusCls}`}>{statusText(info.status)}</span>
+                          <div className="share-card-header-badges">
+                            <span className={typeBadge.className}>{typeBadge.label}</span>
+                            <span className={`share-card-status ${statusCls}`}>{statusText(info.status)}</span>
+                          </div>
                         </div>
                         {info.from_user_email && (
                           <div className="share-card-info"><span>📧 {info.from_user_email}</span></div>

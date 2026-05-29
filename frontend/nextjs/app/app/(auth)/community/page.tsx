@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { queryPublicKnowledge, copyKnowledge } from '@/services/api'
 import { useI18n } from '@/lib/app-i18n'
 import { KNOWLEDGE_LIST_PAGE_SIZE } from '@/lib/appUiConfig'
+import { getKnowledgeTypeBadge } from '@/lib/knowledgeTypeBadge'
 import Pagination from '@/components/app/Pagination'
 
 interface CommunityItem {
@@ -11,6 +12,7 @@ interface CommunityItem {
   question: string
   answer?: string
   description?: string
+  type?: number
   update_time?: string
   extra_info?: { email?: string }
 }
@@ -149,37 +151,41 @@ export default function Community() {
           </div>
         ) : (
           <div className="knowledge-list">
-            {items.map((item) => (
-              <div
-                key={item.id}
-                className="share-card"
-                style={{ cursor: 'pointer' }}
-                onClick={() => setSelected(item)}
-              >
-                <div className="share-card-header">
-                  <div className="share-card-title">{item.question}</div>
-                </div>
-                {item.extra_info?.email && (
-                  <div className="share-card-info">
-                    <span>📧 {item.extra_info.email}</span>
+            {items.map((item) => {
+              const typeBadge = getKnowledgeTypeBadge(item.type, lang)
+              return (
+                <div
+                  key={item.id}
+                  className="share-card"
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => setSelected(item)}
+                >
+                  <div className="share-card-header">
+                    <div className="share-card-title">{item.question}</div>
+                    <span className={typeBadge.className}>{typeBadge.label}</span>
                   </div>
-                )}
-                {item.answer && (
-                  <div className="share-card-message">
-                    &ldquo;{item.answer}&rdquo;
+                  {item.extra_info?.email && (
+                    <div className="share-card-info">
+                      <span>📧 {item.extra_info.email}</span>
+                    </div>
+                  )}
+                  {item.answer && (
+                    <div className="share-card-message">
+                      &ldquo;{item.answer}&rdquo;
+                    </div>
+                  )}
+                  <div className="share-card-meta">
+                    <span>📅 {item.update_time ? new Date(item.update_time).toLocaleDateString(lang === 'en' ? 'en-US' : 'zh-CN') : ''}</span>
                   </div>
-                )}
-                <div className="share-card-meta">
-                  <span>📅 {item.update_time ? new Date(item.update_time).toLocaleDateString(lang === 'en' ? 'en-US' : 'zh-CN') : ''}</span>
+                  <div className="share-card-actions">
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={(e) => { e.stopPropagation(); handleCopy(item.id) }}
+                    >{t('share.downloadKnowledge')}</button>
+                  </div>
                 </div>
-                <div className="share-card-actions">
-                  <button
-                    className="btn btn-primary btn-sm"
-                    onClick={(e) => { e.stopPropagation(); handleCopy(item.id) }}
-                  >{t('share.downloadKnowledge')}</button>
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
 

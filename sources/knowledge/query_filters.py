@@ -19,12 +19,15 @@ def build_knowledge_push_filter_condition(
 
     return (
         f"""
-                          AND EXISTS (
-                              SELECT 1
-                              FROM tools
-                              WHERE tools.id = {knowledge_table}.tool_id
-                                AND tools.status = 1
-                                AND tools.push = %s
+                          AND (
+                              {knowledge_table}.type = 2
+                              OR EXISTS (
+                                  SELECT 1
+                                  FROM tools
+                                  WHERE tools.id = {knowledge_table}.tool_id
+                                    AND tools.status = 1
+                                    AND tools.push = %s
+                              )
                           )
         """,
         [normalized_push_filter],
@@ -44,11 +47,18 @@ def build_share_push_filter_condition(
                   AND EXISTS (
                       SELECT 1
                       FROM knowledge k
-                      JOIN tools ON tools.id = k.tool_id
                       WHERE k.id = {share_table}.knowledge_id
                         AND k.status = 1
-                        AND tools.status = 1
-                        AND tools.push = %s
+                        AND (
+                            k.type = 2
+                            OR EXISTS (
+                                SELECT 1
+                                FROM tools
+                                WHERE tools.id = k.tool_id
+                                  AND tools.status = 1
+                                  AND tools.push = %s
+                            )
+                        )
                   )
         """,
         [normalized_push_filter],

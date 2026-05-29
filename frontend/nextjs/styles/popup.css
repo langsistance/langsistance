@@ -2563,7 +2563,15 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
+  gap: var(--spacing-3);
   margin-bottom: var(--spacing-3);
+}
+
+.share-card-header-badges {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: var(--spacing-2);
 }
 
 .share-card-title {

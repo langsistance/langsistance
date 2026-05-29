@@ -3,24 +3,29 @@ import unittest
 
 class TestKnowledgeQueryPushFilter(unittest.TestCase):
 
-    def test_knowledge_push_filter_condition_requires_matching_tool_push(self):
+    def test_knowledge_push_filter_condition_includes_composed_or_matching_tool_push(self):
         from sources.knowledge.query_filters import build_knowledge_push_filter_condition
 
         sql, params = build_knowledge_push_filter_condition(2)
 
+        self.assertIn("knowledge.type = 2", sql)
+        self.assertIn("OR EXISTS", sql)
         self.assertIn("tools.id = knowledge.tool_id", sql)
         self.assertIn("tools.status = 1", sql)
         self.assertIn("tools.push = %s", sql)
         self.assertEqual(params, [2])
 
-    def test_share_push_filter_condition_requires_shared_knowledge_tool_push(self):
+    def test_share_push_filter_condition_includes_composed_or_matching_tool_push(self):
         from sources.knowledge.query_filters import build_share_push_filter_condition
 
         sql, params = build_share_push_filter_condition(2)
 
         self.assertIn("k.id = knowledge_share.knowledge_id", sql)
         self.assertIn("k.status = 1", sql)
+        self.assertIn("k.type = 2", sql)
+        self.assertIn("OR EXISTS", sql)
         self.assertIn("tools.id = k.tool_id", sql)
+        self.assertIn("tools.status = 1", sql)
         self.assertIn("tools.push = %s", sql)
         self.assertEqual(params, [2])
 
