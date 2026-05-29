@@ -22,8 +22,6 @@ from sources.knowledge.type_utils import infer_knowledge_type
 from sources.logger import Logger
 from sources.user.passport import verify_firebase_token, get_user_by_id
 
-from ..sources.logger import Logger
-
 logger = Logger("backend.log")
 router = APIRouter()
 
