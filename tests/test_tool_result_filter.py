@@ -108,6 +108,39 @@ class TestToolResultFilter(unittest.IsolatedAsyncioTestCase):
         self.assertIn("single core goal", criteria_prompt)
         self.assertIn("not a result filter", criteria_prompt)
 
+    async def test_criteria_prompt_allows_supplemental_attribute_constraints_as_filters(self):
+        from sources.tool_result_filter import filter_tool_result_items
+
+        items = [{"name": "Alpha"}]
+        llm_calls = []
+
+        async def llm_json_call(system_prompt, user_content):
+            llm_calls.append({
+                "system_prompt": system_prompt,
+                "user_content": user_content,
+            })
+            return {
+                "has_filter_criteria": True,
+                "filter_criteria": "patentee is an organization rather than a person",
+            }
+
+        await filter_tool_result_items(
+            items,
+            (
+                "Search for patents with Samsung Display Co., Ltd. as the patent assignee. "
+                "I only want patents whose patentee is a corporation rather than a natural person."
+            ),
+            llm_json_call,
+        )
+
+        self.assertGreaterEqual(len(llm_calls), 1)
+        criteria_prompt = llm_calls[0]["system_prompt"]
+        self.assertIn("supplemental", criteria_prompt)
+        self.assertIn("attribute", criteria_prompt)
+        self.assertIn("category", criteria_prompt)
+        self.assertIn("entity type", criteria_prompt)
+        self.assertIn("not a natural person", criteria_prompt)
+
     async def test_missing_and_low_confidence_reject_decisions_keep_items(self):
         from sources.tool_result_filter import filter_tool_result_items
 
