@@ -197,7 +197,7 @@ async def filter_tool_result_items(
     original_count = len(items)
     _log_info(
         "tool_result_filter filter input items "
-        f"({original_count}): {_json_for_log(items)}"
+        f"({original_count})"
     )
 
     if not items:
