@@ -190,7 +190,7 @@ async def filter_tool_result_items(
     items: list[Any],
     user_prompt: str,
     llm_json_call: JsonCall,
-    batch_size: int = 10,
+    batch_size: int = 1,
     keep_threshold: float = 0.75,
 ) -> FilterResult:
     """Filter tool result list items with fail-open LLM decisions."""
