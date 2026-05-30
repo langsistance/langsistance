@@ -388,7 +388,7 @@ export default function Knowledge() {
         ) : (
           <div className="knowledge-list">
             {items.map((item) => {
-              const typeBadge = getKnowledgeTypeBadge(item.type, lang)
+              const typeBadge = getKnowledgeTypeBadge(item.type, lang, item.params)
               return (
                 <div key={item.id} className="knowledge-card" onClick={() => setModal(item)}>
                   <div className="knowledge-card-header">

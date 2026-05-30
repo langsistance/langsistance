@@ -29,6 +29,7 @@ interface ShareItem {
   answer?: string
   description?: string
   type?: number
+  params?: string
   update_time?: string
   extra_info: ExtraInfo
 }
@@ -352,7 +353,7 @@ export default function Share() {
                   {sent.map((share, i) => {
                     const info = share.extra_info || {}
                     const statusCls = STATUS_CLASS[info.status ?? 0] || 'pending'
-                    const typeBadge = getKnowledgeTypeBadge(share.type, lang)
+                    const typeBadge = getKnowledgeTypeBadge(share.type, lang, share.params)
                     const date = info.share_update_time
                       ? new Date(info.share_update_time).toLocaleDateString(lang === 'en' ? 'en-US' : 'zh-CN')
                       : ''
@@ -401,7 +402,7 @@ export default function Share() {
                   {received.map((share, i) => {
                     const info = share.extra_info || {}
                     const statusCls = STATUS_CLASS[info.status ?? 0] || 'pending'
-                    const typeBadge = getKnowledgeTypeBadge(share.type, lang)
+                    const typeBadge = getKnowledgeTypeBadge(share.type, lang, share.params)
                     const date = info.share_update_time
                       ? new Date(info.share_update_time).toLocaleDateString(lang === 'en' ? 'en-US' : 'zh-CN')
                       : ''

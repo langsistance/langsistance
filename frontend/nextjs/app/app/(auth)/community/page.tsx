@@ -13,6 +13,7 @@ interface CommunityItem {
   answer?: string
   description?: string
   type?: number
+  params?: string
   update_time?: string
   extra_info?: { email?: string }
 }
@@ -152,7 +153,7 @@ export default function Community() {
         ) : (
           <div className="knowledge-list">
             {items.map((item) => {
-              const typeBadge = getKnowledgeTypeBadge(item.type, lang)
+              const typeBadge = getKnowledgeTypeBadge(item.type, lang, item.params)
               return (
                 <div
                   key={item.id}
