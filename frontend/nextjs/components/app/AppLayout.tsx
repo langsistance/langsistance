@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { useI18n } from '@/lib/app-i18n'
+import LanguageToggleButton from '@/components/app/LanguageToggleButton'
 
 const NAV_ITEMS = [
   {
@@ -73,7 +74,7 @@ function getInitialDevMode() {
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth()
-  const { lang, setLang, t } = useI18n()
+  const { t } = useI18n()
   const router = useRouter()
   const pathname = usePathname()
   const [devMode, setDevMode] = useState(getInitialDevMode)
@@ -96,10 +97,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     router.push('/app/login')
   }
 
-  function toggleLang() {
-    setLang(lang === 'en' ? 'zh' : 'en')
-  }
-
   function toggleDevMode() {
     const next = !devMode
     setDevMode(next)
@@ -120,10 +117,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
         <div className="header-right">
-          <button className="language-toggle-btn" onClick={toggleLang} title={lang === 'en' ? 'Switch to 中文' : 'Switch to English'}>
-            <span>{lang === 'en' ? '🇺🇸' : '🇨🇳'}</span>
-            <span>{lang === 'en' ? 'English' : '中文'}</span>
-          </button>
+          <LanguageToggleButton />
           <div className="user-menu" ref={menuRef}>
             <button className="user-avatar" onClick={() => setMenuOpen(v => !v)}>
               {user?.email?.[0]?.toUpperCase() ?? 'U'}

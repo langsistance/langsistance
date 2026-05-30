@@ -103,7 +103,7 @@ button { cursor: pointer; }
 .language-toggle-btn {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   padding: 6px 12px;
   border: 1px solid #ddd;
   border-radius: 6px;
@@ -116,6 +116,68 @@ button { cursor: pointer; }
   color: #333;
   min-width: 80px;
   justify-content: center;
+}
+
+.language-flag {
+  position: relative;
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 15px;
+  border-radius: 2px;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.16);
+}
+
+.language-flag-us {
+  background: repeating-linear-gradient(
+    to bottom,
+    #b22234 0,
+    #b22234 1.15px,
+    #fff 1.15px,
+    #fff 2.3px
+  );
+}
+
+.language-flag-us::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 9.4px;
+  height: 8.05px;
+  background: #3c3b6e;
+}
+
+.language-flag-cn {
+  background:
+    radial-gradient(circle at 44% 24%, #ffde00 0 1px, transparent 1.1px),
+    radial-gradient(circle at 51% 35%, #ffde00 0 1px, transparent 1.1px),
+    radial-gradient(circle at 51% 52%, #ffde00 0 1px, transparent 1.1px),
+    radial-gradient(circle at 43% 63%, #ffde00 0 1px, transparent 1.1px),
+    #de2910;
+}
+
+.language-flag-cn::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 6px;
+  height: 6px;
+  background: #ffde00;
+  clip-path: polygon(
+    50% 0,
+    61% 35%,
+    98% 35%,
+    68% 57%,
+    79% 91%,
+    50% 70%,
+    21% 91%,
+    32% 57%,
+    2% 35%,
+    39% 35%
+  );
 }
 
 .language-toggle-btn:hover {

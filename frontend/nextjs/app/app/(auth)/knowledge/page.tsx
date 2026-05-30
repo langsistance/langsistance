@@ -12,6 +12,7 @@ import { useI18n } from '@/lib/app-i18n'
 import { filterKnowledgeBaseTools } from '@/lib/toolFilters'
 import { KNOWLEDGE_LIST_PAGE_SIZE } from '@/lib/appUiConfig'
 import { getKnowledgeTypeBadge } from '@/lib/knowledgeTypeBadge'
+import { getKnowledgeWorkflowAnswer } from '@/lib/knowledgeWorkflowAnswer'
 import Pagination from '@/components/app/Pagination'
 
 interface KnowledgeItem {
@@ -89,7 +90,7 @@ function KnowledgeModal({ item, tools, knowledgeOptions, onClose, onSave, onDele
           throw new Error(lang === 'en' ? 'Select at least two knowledge steps' : '请至少选择两个步骤知识')
         }
         nextForm.tool_id = 0
-        nextForm.answer = `组合知识：按顺序执行 ${selectedSteps.length} 个知识步骤。`
+        nextForm.answer = getKnowledgeWorkflowAnswer(selectedSteps.length, lang)
         nextForm.params = JSON.stringify({
           type: 'workflow',
           version: 1,

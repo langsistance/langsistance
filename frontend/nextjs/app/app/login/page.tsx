@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { login, signup } from '@/lib/auth-client'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { I18nProvider, useI18n } from '@/lib/app-i18n'
+import LanguageToggleButton from '@/components/app/LanguageToggleButton'
 
 function LoginForm() {
   const [email, setEmail] = useState('')
@@ -13,7 +14,7 @@ function LoginForm() {
   const [error, setError] = useState('')
   const router = useRouter()
   const { user } = useAuth()
-  const { t, lang, setLang } = useI18n()
+  const { t, lang } = useI18n()
 
   useEffect(() => {
     if (user) {
@@ -44,13 +45,7 @@ function LoginForm() {
             <img src="/logo.png" alt="Logo" style={{ width: 40, height: 40, borderRadius: 10, objectFit: 'contain' }} />
             <h1 style={{ margin: 0 }}>CopiioAI</h1>
           </div>
-          <button
-            className="language-toggle-btn"
-            onClick={() => setLang(lang === 'en' ? 'zh' : 'en')}
-          >
-            <span>{lang === 'en' ? '🇺🇸' : '🇨🇳'}</span>
-            <span>{lang === 'en' ? 'English' : '中文'}</span>
-          </button>
+          <LanguageToggleButton />
         </div>
 
         <p className="subtitle">{isSignUp ? t('common.confirm') : t('app.description')}</p>

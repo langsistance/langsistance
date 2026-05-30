@@ -212,3 +212,10 @@ cython_debug/
 .pypirc
 
 mysql/data
+
+out
+
+frontend/nextjs/.agents
+frontend/nextjs/.npm-cache
+frontend/agentic-seek-front
+frontend/web-app/.npm-cache
