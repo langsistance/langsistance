@@ -18,12 +18,24 @@ from sources.knowledge.query_filters import (
     fetch_push_knowledge_ids,
     fetch_push_tool_ids,
 )
+from sources.knowledge.copying import KnowledgeCopyError, copy_knowledge_to_user
 from sources.knowledge.type_utils import infer_knowledge_type
 from sources.logger import Logger
 from sources.user.passport import verify_firebase_token, get_user_by_id
 
 logger = Logger("backend.log")
 router = APIRouter()
+
+
+def _store_copied_knowledge_embedding(knowledge_id: int, question: str, answer: str):
+    query_embedding = get_embedding(question + answer)
+    try:
+        redis_conn = get_redis_connection()
+        redis_key = f"knowledge_embedding_{knowledge_id}"
+        redis_conn.set(redis_key, str(query_embedding))
+        logger.info(f"Embedding stored in Redis with key: {redis_key}")
+    except Exception as redis_error:
+        logger.error(f"Failed to store embedding in Redis: {str(redis_error)}")
 
 @router.post("/create_knowledge", response_model=KnowledgeCreateResponse)
 async def create_knowledge_record(request: KnowledgeCreateRequest, http_request: Request):
@@ -855,93 +867,44 @@ async def copy_knowledge(request: KnowledgeCopyRequest, http_request: Request):
 
     connection = None
     try:
-        # 获取数据库连接
         connection = get_db_connection()
-        with connection.cursor() as cursor:
+        new_knowledge_id = copy_knowledge_to_user(
+            connection,
+            request.knowledgeId,
+            user_id,
+            embedding_writer=_store_copied_knowledge_embedding,
+        )
 
-            # 查询要复制的知识记录
-            query_sql = """
-                        SELECT id, user_id, question, description, answer, 
-                               public, model_name, tool_id, params, `type`
-                        FROM knowledge
-                        WHERE id = %s AND status = %s
-                        """
-            params = [request.knowledgeId, 1]
-
-            cursor.execute(query_sql, params)
-            results = cursor.fetchall()
-            if len(results) == 0:
-                logger.info(f"knowledge not exist: {request.knowledgeId}")
-                return JSONResponse(
-                    status_code=200,
-                    content={
-                        "success": True,
-                        "message": "knowledge not exist"
-                    }
-                )
-
-            row = results[0]
-            logger.info(f"row:{row}")
-
-            # 准备知识数据
-            knowledge_data = {
-                'user_id': user_id,  # 新的所有者
-                'question': row["question"],
-                'description': row["description"],
-                'answer': row["answer"],
-                'public': 1,  # 设为私有
-                'embedding_id': 0,
-                'model_name': row["model_name"],
-                'params': row["params"],
-                'type': infer_knowledge_type(row.get("type"), row.get("params"))
-            }
-
-            # 准备工具数据（如果存在）
-            tool_data = None
-            if row["tool_id"]:
-                # 查询工具详情
-                tool_query_sql = """
-                    SELECT title, description, url, push, public, timeout, params, user_id
-                    FROM tools
-                    WHERE id = %s AND status = 1
-                """
-                cursor.execute(tool_query_sql, (row["tool_id"],))
-                tool_result = cursor.fetchone()
-
-                if tool_result:
-                    tool_data = {
-                        'id': row["tool_id"],
-                        'user_id': user_id,  # 新的所有者
-                        'title': tool_result['title'],
-                        'description': tool_result['description'],
-                        'url': tool_result['url'],
-                        'push': tool_result['push'],
-                        'public': 1,  # 设为私有
-                        'timeout': tool_result['timeout'],
-                        'params': tool_result['params']
-                    }
-
-            # 调用核心方法创建工具和知识记录
-            result = create_tool_and_knowledge_records(tool_data, knowledge_data)
-
-            if not result["success"]:
-                raise Exception(result["message"])
-
-            new_knowledge_id = result["knowledge_id"]
-
+        if new_knowledge_id is None:
+            logger.info(f"knowledge not exist: {request.knowledgeId}")
             return JSONResponse(
                 status_code=200,
                 content={
                     "success": True,
-                    "message": "Knowledge record copied successfully",
-                    "id": new_knowledge_id
+                    "message": "knowledge not exist"
                 }
             )
 
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": True,
+                "message": "Knowledge record copied successfully",
+                "id": new_knowledge_id
+            }
+        )
+
+    except KnowledgeCopyError as e:
+        logger.error(f"Error copy knowledge: {str(e)}")
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "message": str(e)
+            }
+        )
     except Exception as e:
         logger.error(f"Error copy knowledge: {str(e)}")
-        if connection:
-            connection.rollback()
         return JSONResponse(
             status_code=500,
             content={
