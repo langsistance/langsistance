@@ -1,4 +1,5 @@
 import { getValidToken } from '@/lib/auth-client'
+import { assertApiResponseSuccess } from '@/lib/apiResponse'
 import { withWebKnowledgePushFilter } from '@/lib/webKnowledgeQueries'
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_BASE || 'https://api.copiioai.com'
@@ -21,7 +22,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     const errorBody = await res.text().catch(() => '')
     throw new Error(`${path} failed: ${res.status}${errorBody ? ` — ${errorBody}` : ''}`)
   }
-  return res.json()
+  return assertApiResponseSuccess(await res.json(), `${path} failed`) as T
 }
 
 async function get<T>(path: string, params: Record<string, string | number> = {}): Promise<T> {
@@ -34,7 +35,7 @@ async function get<T>(path: string, params: Record<string, string | number> = {}
     const errorBody = await res.text().catch(() => '')
     throw new Error(`${path} failed: ${res.status}${errorBody ? ` — ${errorBody}` : ''}`)
   }
-  return res.json()
+  return assertApiResponseSuccess(await res.json(), `${path} failed`) as T
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

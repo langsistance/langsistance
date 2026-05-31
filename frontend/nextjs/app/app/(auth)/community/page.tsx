@@ -6,6 +6,7 @@ import { useI18n } from '@/lib/app-i18n'
 import { KNOWLEDGE_LIST_PAGE_SIZE } from '@/lib/appUiConfig'
 import { getKnowledgeTypeBadge } from '@/lib/knowledgeTypeBadge'
 import Pagination from '@/components/app/Pagination'
+import KnowledgeDetailModal from '@/components/app/KnowledgeDetailModal'
 
 interface CommunityItem {
   id: number
@@ -16,73 +17,6 @@ interface CommunityItem {
   params?: string
   update_time?: string
   extra_info?: { email?: string }
-}
-
-function KnowledgeDetailModal({ item, onClose, onCopy, copying }: {
-  item: CommunityItem
-  onClose: () => void
-  onCopy: (id: number) => void
-  copying: boolean
-}) {
-  const { t, lang } = useI18n()
-  const date = item.update_time
-    ? new Date(item.update_time).toLocaleString(lang === 'en' ? 'en-US' : 'zh-CN')
-    : ''
-
-  return (
-    <div className="modal">
-      <div className="modal-overlay" onClick={onClose} />
-      <div className="modal-content">
-        <div className="modal-header">
-          <h2>{t('modals.knowledgeDetails.title')}</h2>
-          <button className="modal-close-btn" onClick={onClose}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
-        </div>
-        <div className="modal-body">
-          <div className="metadata-section">
-            <h4>{t('modals.knowledgeDetails.knowledgeContent')}</h4>
-            <div className="detail-item">
-              <strong>{t('knowledge.question')}：</strong>{item.question}
-            </div>
-            {item.answer && (
-              <div className="detail-item">
-                <strong>{t('knowledge.answer')}：</strong>{item.answer}
-              </div>
-            )}
-            {item.description && (
-              <div className="detail-item">
-                <strong>{t('modals.knowledgeDetails.noDescription') ? (lang === 'en' ? 'Description' : '描述') : ''}：</strong>{item.description}
-              </div>
-            )}
-          </div>
-          <div className="metadata-section">
-            <h4>{t('modals.knowledgeDetails.basicInfo')}</h4>
-            {item.extra_info?.email && (
-              <div className="detail-item">
-                <strong>📧 {lang === 'en' ? 'From' : '来自'}：</strong>{item.extra_info.email}
-              </div>
-            )}
-            {date && (
-              <div className="detail-item">
-                <strong>{t('share.knowledgeUpdateTime')}：</strong>{date}
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="modal-footer">
-          <button
-            className="btn btn-primary"
-            onClick={() => onCopy(item.id)}
-            disabled={copying}
-          >{copying ? t('common.loading') : t('share.downloadKnowledge')}</button>
-          <button className="btn btn-secondary" onClick={onClose}>{t('modals.close')}</button>
-        </div>
-      </div>
-    </div>
-  )
 }
 
 export default function Community() {
@@ -197,8 +131,28 @@ export default function Community() {
         <KnowledgeDetailModal
           item={selected}
           onClose={() => setSelected(null)}
-          onCopy={handleCopy}
-          copying={copying}
+          metadata={(
+            <>
+              {selected.extra_info?.email && (
+                <div className="detail-item">
+                  <strong>📧 {lang === 'en' ? 'From' : '来自'}：</strong>{selected.extra_info.email}
+                </div>
+              )}
+              {selected.update_time && (
+                <div className="detail-item">
+                  <strong>{t('share.knowledgeUpdateTime')}：</strong>
+                  {new Date(selected.update_time).toLocaleString(lang === 'en' ? 'en-US' : 'zh-CN')}
+                </div>
+              )}
+            </>
+          )}
+          footer={(
+            <button
+              className="btn btn-primary"
+              onClick={() => handleCopy(selected.id)}
+              disabled={copying}
+            >{copying ? t('common.loading') : t('share.downloadKnowledge')}</button>
+          )}
         />
       )}
     </div>

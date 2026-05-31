@@ -12,7 +12,10 @@ import { useI18n } from '@/lib/app-i18n'
 import { filterKnowledgeBaseTools } from '@/lib/toolFilters'
 import { KNOWLEDGE_LIST_PAGE_SIZE } from '@/lib/appUiConfig'
 import { getKnowledgeTypeBadge } from '@/lib/knowledgeTypeBadge'
-import { getKnowledgeWorkflowAnswer } from '@/lib/knowledgeWorkflowAnswer'
+import {
+  getWorkflowInstructionsEditorValue,
+  getWorkflowInstructionsForSave,
+} from '@/lib/knowledgeWorkflowAnswer'
 import Pagination from '@/components/app/Pagination'
 
 interface KnowledgeItem {
@@ -65,6 +68,9 @@ function KnowledgeModal({ item, tools, knowledgeOptions, onClose, onSave, onDele
   })()
   const [stepIds, setStepIds] = useState<string[]>(initialStepIds.length ? initialStepIds : ['', ''])
   const isWorkflow = Number(form.type || 1) === 2
+  const workflowInstructionsValue = isWorkflow
+    ? getWorkflowInstructionsEditorValue(form.answer, stepIds.filter(Boolean).length || stepIds.length)
+    : form.answer
 
   // Hide tool selector when editing and associated tool is unavailable in the filtered list.
   const hasValidTool = item?.tool_id
@@ -90,7 +96,7 @@ function KnowledgeModal({ item, tools, knowledgeOptions, onClose, onSave, onDele
           throw new Error(lang === 'en' ? 'Select at least two knowledge steps' : '请至少选择两个步骤知识')
         }
         nextForm.tool_id = 0
-        nextForm.answer = getKnowledgeWorkflowAnswer(selectedSteps.length, lang)
+        nextForm.answer = getWorkflowInstructionsForSave(nextForm.answer, selectedSteps.length, lang)
         nextForm.params = JSON.stringify({
           type: 'workflow',
           version: 1,
@@ -160,9 +166,23 @@ function KnowledgeModal({ item, tools, knowledgeOptions, onClose, onSave, onDele
                   placeholder={isWorkflow ? (lang === 'en' ? 'e.g. Find all patent documents by publication ID' : '例如：根据专利公开 ID 查询所有文档') : t('modals.knowledgeCreate.questionPlaceholder')}
                   value={form.question}
                   onChange={(e) => set('question', e.target.value)}
+                  maxLength={100}
                   required
                 />
               </div>
+              {isWorkflow && (
+                <div className="form-group">
+                  <label>{lang === 'en' ? 'Workflow instructions' : '执行说明'}</label>
+                  <textarea
+                    id="workflowInstructions"
+                    className="form-textarea"
+                    placeholder={lang === 'en' ? 'Optional instructions for how this composed knowledge should use the selected steps.' : '可选：补充组合知识执行步骤时需要遵循的说明。'}
+                    value={workflowInstructionsValue}
+                    onChange={(e) => set('answer', e.target.value)}
+                    rows={4}
+                  />
+                </div>
+              )}
               {isWorkflow ? (
                 <div className="form-group">
                   <label>{lang === 'en' ? 'Steps' : '步骤知识'}</label>

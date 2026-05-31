@@ -1,5 +1,6 @@
 import { getIdToken } from 'firebase/auth'
 import { auth } from '../firebase'
+import { assertApiResponseSuccess } from '../utils/apiResponse'
 
 const BASE_URL = 'https://api.copiioai.com'
 
@@ -18,7 +19,7 @@ async function post(path, body) {
     body: JSON.stringify(body),
   })
   if (!res.ok) throw new Error(`${path} failed: ${res.status}`)
-  return res.json()
+  return assertApiResponseSuccess(await res.json(), `${path} failed`)
 }
 
 async function get(path, params = {}) {
@@ -27,7 +28,7 @@ async function get(path, params = {}) {
   const url = `${BASE_URL}${path}${qs ? '?' + qs : ''}`
   const res = await fetch(url, { headers })
   if (!res.ok) throw new Error(`${path} failed: ${res.status}`)
-  return res.json()
+  return assertApiResponseSuccess(await res.json(), `${path} failed`)
 }
 
 // Tools
