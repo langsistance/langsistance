@@ -1,6 +1,7 @@
 import os
 import json
 import uuid
+import asyncio
 from openai import OpenAI
 import numpy as np
 from typing import Dict, List, Optional, Tuple, Any
@@ -9,7 +10,9 @@ from sklearn.metrics.pairwise import cosine_similarity
 from bs4 import BeautifulSoup
 
 from sources.logger import Logger
+from sources.knowledge.embedding_text import build_knowledge_embedding_text
 from sources.knowledge.type_utils import infer_knowledge_type
+from sources.knowledge.selection import choose_knowledge_candidate
 import pymysql
 import pymysql.cursors
 import redis
@@ -278,7 +281,153 @@ def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
         return []
 
 
+def _knowledge_item_from_search_result(search_result: Dict[str, Any]) -> KnowledgeItem:
+    knowledge_item = KnowledgeItem(
+        id=search_result['id'],
+        user_id=search_result['user_id'],
+        question=search_result['question'],
+        description=search_result['description'],
+        answer=search_result['answer'],
+        public=search_result['public'],
+        model_name=search_result['model_name'] or "",
+        tool_id=search_result['tool_id'] or 0,
+        params=search_result['params'] or "",
+        type=infer_knowledge_type(search_result.get('type'), search_result.get('params')),
+    )
+    knowledge_item.extra_info = {"similarity": search_result.get("similarity", 0)}
+    return knowledge_item
+
+
+def get_knowledge_tool_candidates(
+        user_id: str,
+        question: str,
+        top_k: int = 8,
+        similarity_threshold: float = 0,
+        push_filter: Optional[int] = None
+) -> List[Tuple[KnowledgeItem, Optional[ToolItem]]]:
+    """Return vector-recalled knowledge/tool candidates for final routing."""
+    try:
+        query_embedding = get_embedding(question)
+        logger.info(f"Generated embedding for question: {question}")
+
+        knowledge_results = get_user_knowledge(user_id)
+        if not knowledge_results:
+            logger.info(f"No knowledge records found for user: {user_id}")
+            return []
+
+        logger.info(f"Found {len(knowledge_results)} knowledge records for user: {user_id}")
+
+        redis_conn = get_redis_connection()
+        knowledge_embeddings = {}
+        for knowledge in knowledge_results:
+            knowledge_id = knowledge.id
+            redis_key = f"knowledge_embedding_{knowledge_id}"
+            embedding_str = redis_conn.get(redis_key)
+            logger.info(f"embedding key is {redis_key}")
+            if embedding_str:
+                embedding = eval(embedding_str)
+                knowledge_embeddings[knowledge_id] = embedding
+                logger.info(f"Retrieved embedding for knowledge ID: {knowledge_id}")
+            else:
+                logger.warning(f"No embedding found in Redis for knowledge ID: {knowledge_id}")
+
+        if not knowledge_embeddings:
+            logger.warning("No embeddings found for any knowledge records")
+            return []
+
+        embeddings_list = []
+        knowledge_items = []
+        for knowledge in knowledge_results:
+            knowledge_id = knowledge.id
+            if knowledge_id in knowledge_embeddings:
+                embeddings_list.append(knowledge_embeddings[knowledge_id])
+                knowledge_items.append(knowledge)
+
+        if not embeddings_list:
+            logger.warning("No valid embeddings available for similarity calculation")
+            return []
+
+        temp_user_vector_indices = get_user_vector_indices(user_id, embeddings_list, knowledge_items)
+        logger.info(f"temp_user_vector_indices:{temp_user_vector_indices}")
+        search_results = search_knowledge_base(
+            user_id,
+            query_embedding,
+            temp_user_vector_indices,
+            top_k,
+            similarity_threshold
+        )
+        logger.info(f"search_results:{search_results}")
+        if user_id in temp_user_vector_indices:
+            del temp_user_vector_indices[user_id]
+
+        candidates = []
+        for search_result in search_results:
+            knowledge_item = _knowledge_item_from_search_result(search_result)
+            tool_info = None
+            if knowledge_item.tool_id:
+                tool_info = get_tool_by_id(knowledge_item.tool_id, push_filter=push_filter)
+                if not tool_info:
+                    logger.warning(
+                        "Skipping knowledge because linked tool is unavailable "
+                        f"or does not match push filter. knowledge_id={knowledge_item.id}, "
+                        f"tool_id={knowledge_item.tool_id}, push_filter={push_filter}"
+                    )
+                    continue
+            elif knowledge_item.type != 2:
+                logger.warning(
+                    "Skipping non-workflow knowledge without linked tool. "
+                    f"knowledge_id={knowledge_item.id}"
+                )
+                continue
+            candidates.append((knowledge_item, tool_info))
+
+        return candidates
+
+    except Exception as e:
+        logger.error(f"Error building knowledge candidates: {str(e)}")
+        return []
+
+
+async def select_knowledge_tool_with_llm(
+        user_id: str,
+        question: str,
+        complete_json,
+        top_k: int = 8,
+        similarity_threshold: float = 0,
+        push_filter: Optional[int] = None
+) -> Tuple[Optional[KnowledgeItem], Optional[ToolItem]]:
+    """Select a knowledge/tool pair using vector recall plus LLM intent routing."""
+    candidates = await asyncio.to_thread(
+        get_knowledge_tool_candidates,
+        user_id,
+        question,
+        top_k,
+        similarity_threshold,
+        push_filter,
+    )
+    selected = await choose_knowledge_candidate(question, candidates, complete_json)
+    if selected:
+        return selected
+    return None, None
+
+
 def get_knowledge_tool(user_id: str, question: str, top_k: int = 3,
+                       similarity_threshold: float = 0,
+                       push_filter: Optional[int] = None) -> Tuple[
+    Optional[KnowledgeItem], Optional[ToolItem]]:
+    candidates = get_knowledge_tool_candidates(
+        user_id,
+        question,
+        top_k=top_k,
+        similarity_threshold=similarity_threshold,
+        push_filter=push_filter,
+    )
+    if candidates:
+        return candidates[0]
+    return None, None
+
+
+def _get_knowledge_tool_legacy(user_id: str, question: str, top_k: int = 3,
                        similarity_threshold: float = 0,
                        push_filter: Optional[int] = None) -> Tuple[
     Optional[KnowledgeItem], Optional[ToolItem]]:
@@ -516,7 +665,11 @@ def create_tool_and_knowledge_records(tool_data: dict, knowledge_data: dict) -> 
             knowledge_id = cursor.lastrowid
 
             # 计算并存储 embedding
-            query_embedding = get_embedding(knowledge_data['question'] + knowledge_data['answer'])
+            query_embedding = get_embedding(build_knowledge_embedding_text(
+                knowledge_data['question'],
+                knowledge_data.get('description', ''),
+                knowledge_data['answer'],
+            ))
 
             # 将 embedding 写入 Redis
             try:
@@ -556,7 +709,7 @@ def create_tool_and_knowledge_records(tool_data: dict, knowledge_data: dict) -> 
             connection.close()
 
 
-def get_tool_by_id(tool_id: int) -> Optional[ToolItem]:
+def get_tool_by_id(tool_id: int, push_filter: Optional[int] = None) -> Optional[ToolItem]:
     """
     根据tool_id查询数据库tools表
 
@@ -572,12 +725,20 @@ def get_tool_by_id(tool_id: int) -> Optional[ToolItem]:
         try:
             with connection.cursor() as cursor:
                 # 查询工具信息
-                tool_query_sql = """
-                    SELECT id, user_id, title, description, url, push, public, status, timeout, params, create_time, update_time
-                    FROM tools
-                    WHERE id = %s AND status = 1
-                """
-                cursor.execute(tool_query_sql, (tool_id,))
+                if push_filter is not None:
+                    tool_query_sql = """
+                        SELECT id, user_id, title, description, url, push, public, status, timeout, params, create_time, update_time
+                        FROM tools
+                        WHERE id = %s AND status = 1 AND push = %s
+                    """
+                    cursor.execute(tool_query_sql, (tool_id, push_filter))
+                else:
+                    tool_query_sql = """
+                        SELECT id, user_id, title, description, url, push, public, status, timeout, params, create_time, update_time
+                        FROM tools
+                        WHERE id = %s AND status = 1
+                    """
+                    cursor.execute(tool_query_sql, (tool_id,))
                 tool_result = cursor.fetchone()
 
                 if tool_result:

@@ -148,6 +148,11 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
         knowledge_module = types.ModuleType("sources.knowledge.knowledge")
         knowledge_module.get_redis_connection = lambda *args, **kwargs: None
         knowledge_module.get_knowledge_tool = lambda *args, **kwargs: {}
+
+        async def select_knowledge_tool_with_llm(*args, **kwargs):
+            return None, None
+
+        knowledge_module.select_knowledge_tool_with_llm = select_knowledge_tool_with_llm
         knowledge_module.clean_html_text = lambda value: value
 
         utility_module = types.ModuleType("sources.utility")
@@ -210,6 +215,7 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
         globals_dict = GeneralAgent.create_agent.__globals__
         originals = {
             "get_knowledge_tool": globals_dict["get_knowledge_tool"],
+            "select_knowledge_tool_with_llm": globals_dict["select_knowledge_tool_with_llm"],
             "WorkflowExecutor": globals_dict["WorkflowExecutor"],
         }
         knowledge = types.SimpleNamespace(
@@ -220,11 +226,68 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
             answer="Prefer PDF documents when available.",
             description="workflow admin notes should stay out",
         )
+        async def fake_selector(*args, **kwargs):
+            return knowledge, None
+
         globals_dict["get_knowledge_tool"] = lambda *args, **kwargs: (knowledge, None)
+        globals_dict["select_knowledge_tool_with_llm"] = fake_selector
         FakeWorkflowExecutor.result = workflow_result
         FakeWorkflowExecutor.calls = []
         globals_dict["WorkflowExecutor"] = FakeWorkflowExecutor
         self.addCleanup(lambda: globals_dict.update(originals))
+
+    async def test_create_agent_uses_llm_knowledge_selector(self):
+        GeneralAgent = self._load_general_agent_class()
+        globals_dict = GeneralAgent.create_agent.__globals__
+        originals = {
+            "select_knowledge_tool_with_llm": globals_dict["select_knowledge_tool_with_llm"],
+            "WorkflowExecutor": globals_dict["WorkflowExecutor"],
+        }
+        selector_calls = []
+        knowledge = types.SimpleNamespace(
+            question="workflow",
+            params='{"type":"workflow","mode":"context_chain","steps":[]}',
+            type=2,
+            tool_id=0,
+            answer="workflow instructions",
+            description="routing hint",
+        )
+
+        async def fake_selector(user_id, prompt, complete_json, **kwargs):
+            selector_calls.append({
+                "user_id": user_id,
+                "prompt": prompt,
+                "complete_json": complete_json,
+                "kwargs": kwargs,
+            })
+            return knowledge, None
+
+        globals_dict["select_knowledge_tool_with_llm"] = fake_selector
+        FakeWorkflowExecutor.result = FakeWorkflowResult({"ok": True})
+        FakeWorkflowExecutor.calls = []
+        globals_dict["WorkflowExecutor"] = FakeWorkflowExecutor
+        self.addCleanup(lambda: globals_dict.update(originals))
+
+        agent = GeneralAgent.__new__(GeneralAgent)
+        agent.llm = FakeLlm()
+        agent.memory = FakeMemory()
+        agent.logger = FakeLogger()
+
+        openai_agent = await agent.create_agent(
+            user_id="user-1",
+            prompt="run workflow",
+            query_id="query-1",
+            tool_data="",
+            callback_handler=FakeCallbackHandler(),
+            push_filter=2,
+        )
+
+        self.assertIsNone(openai_agent)
+        self.assertEqual(selector_calls[0]["user_id"], "user-1")
+        self.assertEqual(selector_calls[0]["prompt"], "run workflow")
+        self.assertIs(selector_calls[0]["complete_json"].__self__, agent.llm)
+        self.assertEqual(selector_calls[0]["complete_json"].__func__, agent.llm.complete_json.__func__)
+        self.assertEqual(selector_calls[0]["kwargs"]["push_filter"], 2)
 
     async def test_workflow_scalar_result_streams_once_without_creating_or_invoking_agent(self):
         GeneralAgent = self._load_general_agent_class()

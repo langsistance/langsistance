@@ -108,7 +108,7 @@ class WorkflowExecutor:
             )
             logger.info(f"workflow step {index} params: {params}")
             tool_result = self.tool_executor(tool, params)
-            logger.info(f"workflow step {index} tool_result: {tool_result}")
+            logger.info(f"workflow step {index}")
             final_data = tool_result.get("data")
             raw_items = tool_result.get("raw_items")
 

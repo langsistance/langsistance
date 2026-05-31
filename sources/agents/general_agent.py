@@ -3,7 +3,12 @@ import json
 from pydantic import BaseModel, Field
 from bs4 import BeautifulSoup
 
-from sources.knowledge.knowledge import get_redis_connection, get_knowledge_tool, clean_html_text
+from sources.knowledge.knowledge import (
+    get_redis_connection,
+    get_knowledge_tool,
+    select_knowledge_tool_with_llm,
+    clean_html_text,
+)
 from sources.utility import pretty_print, animate_thinking
 from sources.agents.agent import Agent
 from sources.tools.mcpFinder import MCP_finder
@@ -264,6 +269,8 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
     def is_query_and_body_empty(self) -> bool:
         """Return True if path, query, and body in tool_info.params are empty."""
         _, tool_info = self.knowledgeTool
+        if not tool_info:
+            return True
 
         try:
             params_data = _coerce_json_object(tool_info.params, "tool_info.params")
@@ -548,11 +555,14 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
 
         return system_prompt
 
-    def generate_system_prompt(self, tool_data) -> str:
+    def generate_system_prompt(self, tool_data: str = "") -> str:
         """Select and return the appropriate system prompt based on push mode."""
         _, tool_info = self.knowledgeTool
 
         # 根据tool_info.push的值选择不同系统提示词
+        if not tool_info:
+            return self.generate_fixed_system_prompt()
+
         if tool_info.push == 1:
             if tool_data and tool_data.strip():  # 判断tool_data是否非空
                 return self.generate_frontend_tool_direct_system_prompt(tool_data)
@@ -1061,6 +1071,8 @@ Begin your response now:
     async def get_tools(self, tool_data: str = "") -> list:
         """Select and return the appropriate LangChain tool list based on push mode."""
         _, tool_info = self.knowledgeTool
+        if not tool_info:
+            return []
 
         tools = []
         # 根据tool_info.push的值选择不同系统提示词
@@ -1090,7 +1102,12 @@ Begin your response now:
         if not self.enabled:
             return "general Agent is disabled."
         self._last_user_prompt = prompt
-        self.knowledgeTool = get_knowledge_tool(user_id, prompt, push_filter=push_filter)
+        self.knowledgeTool = await select_knowledge_tool_with_llm(
+            user_id,
+            prompt,
+            self.llm.complete_json,
+            push_filter=push_filter,
+        )
         # user_prompt = self.expand_prompt(prompt)
         user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
         system_prompt = self.generate_system_prompt()
@@ -1116,7 +1133,12 @@ Begin your response now:
     async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler, push_filter=None):
         #self.knowledgeTool = get_knowledge_tool(user_id,  prompt)
         self._last_user_prompt = prompt
-        self.knowledgeTool = await asyncio.to_thread(get_knowledge_tool, user_id, prompt, push_filter=push_filter)
+        self.knowledgeTool = await select_knowledge_tool_with_llm(
+            user_id,
+            prompt,
+            self.llm.complete_json,
+            push_filter=push_filter,
+        )
         knowledge_item, tool_info = self.knowledgeTool
         if is_workflow_knowledge(knowledge_item):
             if callback_handler:

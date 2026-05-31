@@ -5,7 +5,7 @@ from typing import Any, Callable, Optional
 from sources.knowledge.type_utils import infer_knowledge_type
 
 
-EmbeddingWriter = Callable[[int, str, str], None]
+EmbeddingWriter = Callable[[int, str, str, str], None]
 
 
 class KnowledgeCopyError(ValueError):
@@ -199,7 +199,12 @@ def _insert_knowledge(cursor, knowledge: dict, embedding_writer: Optional[Embedd
     ))
     knowledge_id = cursor.lastrowid
     if embedding_writer:
-        embedding_writer(knowledge_id, knowledge["question"], knowledge["answer"])
+        embedding_writer(
+            knowledge_id,
+            knowledge["question"],
+            knowledge["description"],
+            knowledge["answer"],
+        )
     return knowledge_id
 
 

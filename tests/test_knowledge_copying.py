@@ -176,7 +176,9 @@ class TestKnowledgeCopying(unittest.TestCase):
             connection,
             source_knowledge_id=10,
             target_user_id="target-user",
-            embedding_writer=lambda knowledge_id, question, answer: embedded.append((knowledge_id, question, answer)),
+            embedding_writer=lambda knowledge_id, question, description, answer: embedded.append(
+                (knowledge_id, question, description, answer)
+            ),
         )
 
         self.assertEqual(new_id, 1003)
@@ -196,9 +198,9 @@ class TestKnowledgeCopying(unittest.TestCase):
         self.assertEqual(
             embedded,
             [
-                (copied_first["id"], copied_first["question"], copied_first["answer"]),
-                (copied_second["id"], copied_second["question"], copied_second["answer"]),
-                (copied_workflow["id"], copied_workflow["question"], copied_workflow["answer"]),
+                (copied_first["id"], copied_first["question"], copied_first["description"], copied_first["answer"]),
+                (copied_second["id"], copied_second["question"], copied_second["description"], copied_second["answer"]),
+                (copied_workflow["id"], copied_workflow["question"], copied_workflow["description"], copied_workflow["answer"]),
             ],
         )
 
@@ -319,7 +321,7 @@ class TestKnowledgeCopying(unittest.TestCase):
                 connection,
                 10,
                 "target-user",
-                embedding_writer=lambda knowledge_id, question, answer: embedded.append(knowledge_id),
+                embedding_writer=lambda knowledge_id, question, description, answer: embedded.append(knowledge_id),
             )
 
         self.assertEqual(connection.commits, 0)

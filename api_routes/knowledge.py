@@ -19,6 +19,7 @@ from sources.knowledge.query_filters import (
     fetch_push_tool_ids,
 )
 from sources.knowledge.copying import KnowledgeCopyError, copy_knowledge_to_user
+from sources.knowledge.embedding_text import build_knowledge_embedding_text
 from sources.knowledge.public_dependencies import promote_public_workflow_dependencies
 from sources.knowledge.type_utils import infer_knowledge_type
 from sources.logger import Logger
@@ -28,8 +29,12 @@ logger = Logger("backend.log")
 router = APIRouter()
 
 
-def _store_copied_knowledge_embedding(knowledge_id: int, question: str, answer: str):
-    query_embedding = get_embedding(question + answer)
+def _store_copied_knowledge_embedding(
+        knowledge_id: int,
+        question: str,
+        description: str,
+        answer: str):
+    query_embedding = get_embedding(build_knowledge_embedding_text(question, description, answer))
     try:
         redis_conn = get_redis_connection()
         redis_key = f"knowledge_embedding_{knowledge_id}"
@@ -144,7 +149,11 @@ async def create_knowledge_record(request: KnowledgeCreateRequest, http_request:
             # 获取插入的记录ID
             logger.info(f"Knowledge record created successfully with ID: {record_id}")
 
-            query_embedding = get_embedding(request.question + request.answer)
+            query_embedding = get_embedding(build_knowledge_embedding_text(
+                request.question,
+                request.description,
+                request.answer,
+            ))
 
             # 将 embedding 写入 Redis
             try:
@@ -341,7 +350,7 @@ async def update_knowledge_record(request: KnowledgeUpdateRequest, http_request:
         connection = get_db_connection()
         with connection.cursor() as cursor:
             # 首先检查记录是否存在以及用户ID是否匹配
-            check_sql = "SELECT user_id, question, answer, public, params, `type` FROM knowledge WHERE id = %s AND status = %s"
+            check_sql = "SELECT user_id, question, description, answer, public, params, `type` FROM knowledge WHERE id = %s AND status = %s"
             cursor.execute(check_sql, (request.knowledgeId, 1))
             result = cursor.fetchone()
 
@@ -440,19 +449,26 @@ async def update_knowledge_record(request: KnowledgeUpdateRequest, http_request:
             # 检查是否需要重新计算embedding (question或answer有变更)
             need_recalculate_embedding = False
             original_question = result["question"]
+            original_description = result.get("description") or ""
             original_answer = result["answer"]
 
             if ((request.question is not None and request.question != original_question) or
+                    (request.description is not None and request.description != original_description) or
                     (request.answer is not None and request.answer != original_answer)):
                 need_recalculate_embedding = True
 
             if need_recalculate_embedding:
                 # 获取更新后的question和answer
                 new_question = request.question if request.question is not None else original_question
+                new_description = request.description if request.description is not None else original_description
                 new_answer = request.answer if request.answer is not None else original_answer
 
                 # 重新计算embedding
-                query_embedding = get_embedding(new_question + new_answer)
+                query_embedding = get_embedding(build_knowledge_embedding_text(
+                    new_question,
+                    new_description,
+                    new_answer,
+                ))
 
                 # 更新Redis中的embedding
                 try:
