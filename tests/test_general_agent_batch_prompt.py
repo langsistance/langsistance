@@ -408,6 +408,44 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
         self.assertIn("![alt text](image_URL)", combined_prompt)
         self.assertIn("https://api.copiioai.com/uspto/download?url=", combined_prompt)
 
+    def test_deterministic_markdown_renderer_preserves_nested_result_data(self):
+        GeneralAgent = self._load_general_agent_class()
+
+        agent = GeneralAgent.__new__(GeneralAgent)
+        long_url = "https://example.com/download/" + ("a" * 650) + ".pdf"
+
+        markdown = agent._render_list_as_md(None, [
+            {
+                "applicationNumberText": "18893954",
+                "documentBag": [
+                    {
+                        "documentCode": "SPEC",
+                        "downloadOptionBag": [
+                            {
+                                "mimeType": "application/pdf",
+                                "downloadUrl": long_url,
+                            }
+                        ],
+                    },
+                    {
+                        "documentCode": "CLM",
+                    },
+                ],
+            }
+        ])
+
+        self.assertIn("applicationNumberText", markdown)
+        self.assertIn("18893954", markdown)
+        self.assertIn("documentBag", markdown)
+        self.assertIn("documentCode", markdown)
+        self.assertIn("SPEC", markdown)
+        self.assertIn("downloadOptionBag", markdown)
+        self.assertIn("mimeType", markdown)
+        self.assertIn("application/pdf", markdown)
+        self.assertIn(long_url, markdown)
+        self.assertNotIn("[2 items]", markdown)
+        self.assertNotIn("[truncated", markdown)
+
     async def test_filters_pending_raw_items_before_batch_display(self):
         GeneralAgent = self._load_general_agent_class()
 

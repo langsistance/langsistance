@@ -177,36 +177,56 @@ class GeneralAgent(Agent):
         header = f"**{label}** ({len(items)} items total):\n\n" if label else f"({len(items)} items total):\n\n"
         blocks = [header]
         for i, item in enumerate(items, 1):
-            if isinstance(item, dict):
-                scalar_parts = [
-                    f"**{k}**: {_format_markdown_value(v)}" for k, v in item.items()
-                    if not isinstance(v, (dict, list)) and v is not None and v != ""
-                ]
-                nested_parts = [
-                    (k, v) for k, v in item.items()
-                    if isinstance(v, (dict, list)) and v
-                ]
-                top = f"- **[{i}]** " + (" | ".join(scalar_parts) if scalar_parts else "")
-                sub_lines = []
-                for nk, nv in nested_parts:
-                    if isinstance(nv, dict):
-                        flat = self._flatten_dict(nv)
-                        if flat:
-                            sub_lines.append(f"  - **{nk}**: {flat}")
-                    elif isinstance(nv, list):
-                        if nv and not isinstance(nv[0], (dict, list)):
-                            sub_lines.append(f"  - **{nk}**: {', '.join(_format_markdown_value(x) for x in nv)}")
-                        elif nv:
-                            sub_lines.append(f"  - **{nk}**: [{len(nv)} items]")
-                blocks.append("\n".join([top] + sub_lines) if sub_lines else top)
-            elif isinstance(item, list):
-                if item and not isinstance(item[0], (dict, list)):
-                    blocks.append(f"- **[{i}]** {', '.join(_format_markdown_value(x) for x in item)}")
-                else:
-                    blocks.append(f"- **[{i}]** [{len(item)} items]")
+            if isinstance(item, (dict, list)):
+                nested_lines = self._render_markdown_node(item, indent_level=1)
+                blocks.append("\n".join([f"- **[{i}]**"] + nested_lines))
             else:
-                blocks.append(f"- **[{i}]** {_format_markdown_value(item)}")
+                blocks.append(f"- **[{i}]** {self._format_full_markdown_value(item)}")
         return "\n".join(blocks)
+
+    def _format_full_markdown_value(self, value) -> str:
+        return str(value)
+
+    def _is_empty_markdown_value(self, value) -> bool:
+        return value is None or value == "" or value == {} or value == []
+
+    def _render_markdown_node(self, value, indent_level: int, label: str | None = None) -> list[str]:
+        indent = "  " * indent_level
+
+        if isinstance(value, dict):
+            lines = []
+            child_indent = indent_level
+            if label is not None:
+                lines.append(f"{indent}- **{label}**:")
+                child_indent += 1
+
+            for key, nested_value in value.items():
+                if self._is_empty_markdown_value(nested_value):
+                    continue
+                lines.extend(self._render_markdown_node(nested_value, child_indent, str(key)))
+            return lines
+
+        if isinstance(value, list):
+            lines = []
+            child_indent = indent_level
+            if label is not None:
+                lines.append(f"{indent}- **{label}**:")
+                child_indent += 1
+
+            item_indent = "  " * child_indent
+            for index, item in enumerate(value, 1):
+                if self._is_empty_markdown_value(item):
+                    continue
+                if isinstance(item, (dict, list)):
+                    lines.append(f"{item_indent}- **[{index}]**")
+                    lines.extend(self._render_markdown_node(item, child_indent + 1))
+                else:
+                    lines.append(f"{item_indent}- **[{index}]** {self._format_full_markdown_value(item)}")
+            return lines
+
+        if label is not None:
+            return [f"{indent}- **{label}**: {self._format_full_markdown_value(value)}"]
+        return [f"{indent}- {self._format_full_markdown_value(value)}"]
 
 
     def _get_markdown_formatting_guide(self) -> str:
