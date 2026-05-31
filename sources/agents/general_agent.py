@@ -1126,6 +1126,7 @@ Begin your response now:
             workflow_result = await WorkflowExecutor(self.llm).execute(
                 workflow_spec=knowledge_item.params,
                 user_prompt=prompt,
+                workflow_knowledge=knowledge_item,
             )
             self.knowledgeTool = (knowledge_item, tool_info)
             self._workflow_result = workflow_result
@@ -1152,6 +1153,10 @@ Begin your response now:
         )
         user_content = json.dumps({
             "user_request": getattr(self, "_last_user_prompt", ""),
+            "workflow": {
+                "question": getattr(workflow_result, "workflow_question", ""),
+                "instructions": getattr(workflow_result, "workflow_instructions", ""),
+            },
             "workflow_result": workflow_result.final_data,
         }, ensure_ascii=False, indent=2)
         await self.llm.stream_simple(
@@ -1293,6 +1298,7 @@ Begin your response now:
         self._pending_raw_items = None
         original_total = len(raw_items)
         user_prompt = getattr(self, "_last_user_prompt", "")
+        batch_size = 1
 
         async def emit_filter_status(event):
             on_status = getattr(callback_handler, "on_status", None)
@@ -1310,11 +1316,11 @@ Begin your response now:
             raw_items,
             user_prompt,
             self.llm.complete_json,
+            batch_size=batch_size,
             status_callback=emit_filter_status,
         )
         pending = filter_result.items
         total = len(pending)
-        batch_size = 5
         heading = (
             f"## Filtered Results ({filter_result.filtered_count} of {filter_result.original_count} items)"
             if filter_result.applied

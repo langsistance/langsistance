@@ -24,6 +24,8 @@ class WorkflowResult:
     final_data: Any
     raw_items: list | None
     steps: List[WorkflowStepResult]
+    workflow_question: str = ""
+    workflow_instructions: str = ""
 
 
 def is_workflow_knowledge(knowledge_item: KnowledgeItem | None) -> bool:
@@ -65,12 +67,19 @@ class WorkflowExecutor:
         self.tool_resolver = tool_resolver
         self.tool_executor = tool_executor
 
-    async def execute(self, workflow_spec: str | Dict[str, Any], user_prompt: str) -> WorkflowResult:
+    async def execute(
+        self,
+        workflow_spec: str | Dict[str, Any],
+        user_prompt: str,
+        workflow_knowledge: KnowledgeItem | None = None,
+    ) -> WorkflowResult:
         spec = parse_workflow_spec(workflow_spec)
         previous_results: List[Dict[str, Any]] = []
         step_results: List[WorkflowStepResult] = []
         raw_items = None
         final_data = None
+        workflow_question = getattr(workflow_knowledge, "question", "") if workflow_knowledge else ""
+        workflow_instructions = getattr(workflow_knowledge, "answer", "") if workflow_knowledge else ""
 
         for index, step in enumerate(spec["steps"], start=1):
             knowledge = self.knowledge_resolver(int(step["knowledge_id"]))
@@ -94,6 +103,8 @@ class WorkflowExecutor:
                 knowledge=knowledge,
                 tool=tool,
                 previous_results=previous_results,
+                workflow_question=workflow_question,
+                workflow_instructions=workflow_instructions,
             )
             logger.info(f"workflow step {index} params: {params}")
             tool_result = self.tool_executor(tool, params)
@@ -116,7 +127,13 @@ class WorkflowExecutor:
                 "result": final_data,
             })
 
-        return WorkflowResult(final_data=final_data, raw_items=raw_items, steps=step_results)
+        return WorkflowResult(
+            final_data=final_data,
+            raw_items=raw_items,
+            steps=step_results,
+            workflow_question=workflow_question,
+            workflow_instructions=workflow_instructions,
+        )
 
     async def _generate_tool_params(
         self,
@@ -126,6 +143,8 @@ class WorkflowExecutor:
         knowledge: KnowledgeItem,
         tool: ToolItem,
         previous_results: List[Dict[str, Any]],
+        workflow_question: str = "",
+        workflow_instructions: str = "",
     ) -> Dict[str, Any]:
         system_prompt = (
             "You generate JSON parameters for one backend API tool in a composed knowledge workflow. "
@@ -136,6 +155,10 @@ class WorkflowExecutor:
             "If a needed value is present in previous results, extract it exactly. Do not invent values."
         )
         user_content = json.dumps({
+            "workflow": {
+                "question": workflow_question,
+                "instructions": workflow_instructions,
+            },
             "step": {
                 "index": step_index,
                 "total": total_steps,
@@ -143,7 +166,6 @@ class WorkflowExecutor:
             "user_request": user_prompt,
             "current_knowledge": {
                 "question": knowledge.question,
-                "description": knowledge.description,
                 "answer": knowledge.answer,
             },
             "tool": {

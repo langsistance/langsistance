@@ -19,6 +19,7 @@ from sources.knowledge.query_filters import (
     fetch_push_tool_ids,
 )
 from sources.knowledge.copying import KnowledgeCopyError, copy_knowledge_to_user
+from sources.knowledge.public_dependencies import promote_public_workflow_dependencies
 from sources.knowledge.type_utils import infer_knowledge_type
 from sources.logger import Logger
 from sources.user.passport import verify_firebase_token, get_user_by_id
@@ -125,10 +126,22 @@ async def create_knowledge_record(request: KnowledgeCreateRequest, http_request:
                 0,
                 knowledge_type
             ))
+            record_id = cursor.lastrowid
+            promoted_dependency_ids = promote_public_workflow_dependencies(
+                cursor,
+                user_id=user_id,
+                public=request.public,
+                knowledge_type=knowledge_type,
+                params=request.params or "",
+            )
+            if promoted_dependency_ids:
+                logger.info(
+                    "Promoted workflow dependency knowledge to public: "
+                    f"{promoted_dependency_ids}"
+                )
             connection.commit()
 
             # 获取插入的记录ID
-            record_id = cursor.lastrowid
             logger.info(f"Knowledge record created successfully with ID: {record_id}")
 
             query_embedding = get_embedding(request.question + request.answer)
@@ -328,7 +341,7 @@ async def update_knowledge_record(request: KnowledgeUpdateRequest, http_request:
         connection = get_db_connection()
         with connection.cursor() as cursor:
             # 首先检查记录是否存在以及用户ID是否匹配
-            check_sql = "SELECT user_id, question, answer FROM knowledge WHERE id = %s AND status = %s"
+            check_sql = "SELECT user_id, question, answer, public, params, `type` FROM knowledge WHERE id = %s AND status = %s"
             cursor.execute(check_sql, (request.knowledgeId, 1))
             result = cursor.fetchone()
 
@@ -407,6 +420,21 @@ async def update_knowledge_record(request: KnowledgeUpdateRequest, http_request:
             # 更新数据库记录
             update_sql = f"UPDATE knowledge SET {', '.join(update_fields)} WHERE id = %s"
             cursor.execute(update_sql, update_params)
+            final_public = request.public if request.public is not None else result["public"]
+            final_type = request.type if request.type is not None else result.get("type")
+            final_params = request.params if request.params is not None else result.get("params", "")
+            promoted_dependency_ids = promote_public_workflow_dependencies(
+                cursor,
+                user_id=user_id,
+                public=final_public,
+                knowledge_type=final_type,
+                params=final_params,
+            )
+            if promoted_dependency_ids:
+                logger.info(
+                    "Promoted workflow dependency knowledge to public: "
+                    f"{promoted_dependency_ids}"
+                )
             connection.commit()
 
             # 检查是否需要重新计算embedding (question或answer有变更)

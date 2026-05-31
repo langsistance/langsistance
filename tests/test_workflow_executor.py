@@ -275,6 +275,69 @@ class TestWorkflowExecutor(unittest.IsolatedAsyncioTestCase):
         self.assertIn("exactly", combined_prompt.lower())
         self.assertIn("secret", combined_prompt)
 
+    async def test_workflow_instructions_are_in_prompt_but_descriptions_are_not(self):
+        from sources.workflow.workflow_executor import WorkflowExecutor
+
+        workflow_knowledge = KnowledgeItem(
+            id=10,
+            user_id="user-1",
+            question="workflow name",
+            description="workflow admin notes should stay out",
+            answer="Prefer publication ID over application ID when both are available.",
+            public=1,
+            model_name="gpt-4o-mini",
+            tool_id=0,
+            params="{}",
+            type=2,
+        )
+        step_knowledge = KnowledgeItem(
+            id=101,
+            user_id="user-1",
+            question="query patent",
+            description="step admin notes should stay out",
+            answer="Use the patent API",
+            public=1,
+            model_name="gpt-4o-mini",
+            tool_id=201,
+            params="{}",
+            type=1,
+        )
+        tool = ToolItem(
+            id=201,
+            user_id="user-1",
+            title="lookup_patent",
+            description="lookup patent",
+            push=2,
+            url="https://example.test/patent",
+            status=True,
+            timeout=30,
+            params='{"method": "GET"}',
+        )
+        executor = WorkflowExecutor(
+            llm=FakeLlm(),
+            knowledge_resolver=lambda knowledge_id: step_knowledge,
+            tool_resolver=lambda tool_id: tool,
+            tool_executor=lambda tool_info, params: {"data": {}, "raw_items": None},
+        )
+
+        await executor.execute(
+            workflow_spec=json.dumps({
+                "type": "workflow",
+                "version": 1,
+                "mode": "context_chain",
+                "steps": [{"id": "step_1", "knowledge_id": 101}],
+            }),
+            user_prompt="lookup US123",
+            workflow_knowledge=workflow_knowledge,
+        )
+
+        user_content = executor.llm.complete_json_calls[0]["user_content"]
+        self.assertIn("workflow name", user_content)
+        self.assertIn("Prefer publication ID over application ID", user_content)
+        self.assertIn("Use the patent API", user_content)
+        self.assertNotIn("workflow admin notes should stay out", user_content)
+        self.assertNotIn("step admin notes should stay out", user_content)
+
 
 if __name__ == "__main__":
     unittest.main()

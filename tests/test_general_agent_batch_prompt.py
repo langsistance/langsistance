@@ -41,18 +41,29 @@ class FakeLogger:
 
 
 class FakeWorkflowResult:
-    def __init__(self, final_data, raw_items=None):
+    def __init__(self, final_data, raw_items=None, workflow_question="", workflow_instructions=""):
         self.final_data = final_data
         self.raw_items = raw_items
+        self.workflow_question = workflow_question
+        self.workflow_instructions = workflow_instructions
 
 
 class FakeWorkflowExecutor:
     result = FakeWorkflowResult({"ok": True})
+    calls = []
 
     def __init__(self, llm):
         self.llm = llm
 
-    async def execute(self, workflow_spec, user_prompt):
+    async def execute(self, workflow_spec, user_prompt, workflow_knowledge=None):
+        self.calls.append({
+            "workflow_spec": workflow_spec,
+            "user_prompt": user_prompt,
+            "workflow_knowledge": workflow_knowledge,
+        })
+        if workflow_knowledge:
+            self.result.workflow_question = workflow_knowledge.question
+            self.result.workflow_instructions = workflow_knowledge.answer
         return self.result
 
 
@@ -206,11 +217,12 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
             params='{"type":"workflow","mode":"context_chain","steps":[]}',
             type=2,
             tool_id=0,
-            answer="workflow",
-            description="",
+            answer="Prefer PDF documents when available.",
+            description="workflow admin notes should stay out",
         )
         globals_dict["get_knowledge_tool"] = lambda *args, **kwargs: (knowledge, None)
         FakeWorkflowExecutor.result = workflow_result
+        FakeWorkflowExecutor.calls = []
         globals_dict["WorkflowExecutor"] = FakeWorkflowExecutor
         self.addCleanup(lambda: globals_dict.update(originals))
 
@@ -244,6 +256,12 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
         stream_content = agent.llm.stream_calls[0]["user_content"]
         self.assertIn("根据公开 ID US123 查询专利", stream_content)
         self.assertIn("applicationNumberText", stream_content)
+        self.assertEqual(
+            FakeWorkflowExecutor.calls[0]["workflow_knowledge"].answer,
+            "Prefer PDF documents when available.",
+        )
+        self.assertIn("Prefer PDF documents when available.", stream_content)
+        self.assertNotIn("workflow admin notes should stay out", stream_content)
 
     async def test_workflow_list_result_uses_batch_output_without_creating_or_invoking_agent(self):
         GeneralAgent = self._load_general_agent_class()
