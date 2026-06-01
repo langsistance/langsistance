@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { login, signup } from '@/lib/auth-client'
+import { validateSignupPasswordConfirmation } from '@/lib/authValidation'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { I18nProvider, useI18n } from '@/lib/app-i18n'
 import LanguageToggleButton from '@/components/app/LanguageToggleButton'
@@ -10,6 +11,7 @@ import LanguageToggleButton from '@/components/app/LanguageToggleButton'
 function LoginForm() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [isSignUp, setIsSignUp] = useState(false)
   const [error, setError] = useState('')
   const router = useRouter()
@@ -27,6 +29,11 @@ function LoginForm() {
     setError('')
     try {
       if (isSignUp) {
+        const validationError = validateSignupPasswordConfirmation(password, confirmPassword, lang)
+        if (validationError) {
+          setError(validationError)
+          return
+        }
         await signup(email, password)
       } else {
         await login(email, password)
@@ -75,6 +82,19 @@ function LoginForm() {
               required
             />
           </div>
+          {isSignUp && (
+            <div className="form-group">
+              <label>{lang === 'en' ? 'Confirm Password' : '确认密码'}</label>
+              <input
+                type="password"
+                className="form-input"
+                placeholder={lang === 'en' ? 'Enter your password again' : '请再次输入密码'}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                required
+              />
+            </div>
+          )}
           <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
             {isSignUp ? (lang === 'en' ? 'Sign Up' : '注册') : (lang === 'en' ? 'Sign In' : '登录')}
           </button>
@@ -84,7 +104,11 @@ function LoginForm() {
           {isSignUp
             ? (lang === 'en' ? 'Already have an account?' : '已有账号？')
             : (lang === 'en' ? "Don't have an account?" : '没有账号？')}
-          <button onClick={() => setIsSignUp(!isSignUp)}>
+          <button onClick={() => {
+            setIsSignUp(!isSignUp)
+            setConfirmPassword('')
+            setError('')
+          }}>
             {isSignUp ? (lang === 'en' ? 'Sign In' : '登录') : (lang === 'en' ? 'Sign Up' : '注册')}
           </button>
         </p>

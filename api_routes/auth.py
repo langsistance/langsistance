@@ -14,8 +14,9 @@ from firebase_admin import auth as fb_admin_auth
 from pydantic import BaseModel, EmailStr
 
 from sources.logger import Logger
+from sources.user.local_user import ensure_local_user_record
 # 触发 firebase_admin.initialize_app 的调用（在 passport 模块顶层）
-import sources.user.passport  # noqa: F401
+from sources.user import passport as passport_module  # noqa: F401
 
 logger = Logger("backend.log")
 router = APIRouter()
@@ -89,6 +90,12 @@ async def auth_signup(body: EmailPasswordRequest):
     fresh = await _firebase_post(
         f"{IDENTITY_TOOLKIT}:signInWithPassword",
         {"email": body.email, "password": body.password, "returnSecureToken": True},
+    )
+    ensure_local_user_record(
+        uid,
+        fresh.get("email", body.email),
+        redis_client=getattr(passport_module, "redis_client", None),
+        use_cache=False,
     )
     logger.info(f"/auth/signup ok: {body.email} -> {uid}")
     return {
