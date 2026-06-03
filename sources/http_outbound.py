@@ -1,5 +1,6 @@
 import ipaddress
 import os
+import threading
 import time
 from urllib.parse import urlparse
 
@@ -12,6 +13,9 @@ from sources.logger import Logger
 
 
 logger = Logger("backend.log")
+USPTO_API_HOST = "api.uspto.gov"
+USPTO_API_CONCURRENCY_TIMEOUT_SECONDS = 1.0
+_uspto_api_semaphore = threading.BoundedSemaphore(value=1)
 
 
 class OutboundHttpError(Exception):
@@ -20,6 +24,10 @@ class OutboundHttpError(Exception):
 
 class OutboundHttpBlockedError(OutboundHttpError):
     """Raised when an outbound URL is blocked by local policy."""
+
+
+class OutboundHttpConcurrencyTimeoutError(OutboundHttpError):
+    """Raised when a host-specific outbound concurrency slot is unavailable."""
 
 
 def _domain_blacklist() -> set[str]:
@@ -58,6 +66,22 @@ def validate_outbound_url(url: str) -> None:
         raise OutboundHttpBlockedError("Outbound HTTP domain is blocked")
 
 
+def _is_uspto_api_url(url: str) -> bool:
+    hostname = urlparse(url).hostname
+    return bool(hostname and hostname.lower().rstrip(".") == USPTO_API_HOST)
+
+
+def _acquire_uspto_api_slot(url: str) -> bool:
+    if not _is_uspto_api_url(url):
+        return False
+    acquired = _uspto_api_semaphore.acquire(timeout=USPTO_API_CONCURRENCY_TIMEOUT_SECONDS)
+    if not acquired:
+        raise OutboundHttpConcurrencyTimeoutError(
+            f"Outbound HTTP concurrency limit reached for {USPTO_API_HOST}"
+        )
+    return True
+
+
 class OutboundHttpClient:
     def request(self, method: str, url: str, *, purpose: str = "general", **kwargs):
         global requests
@@ -67,22 +91,43 @@ class OutboundHttpClient:
             requests = requests_module
 
         validate_outbound_url(url)
-        started_at = time.monotonic()
-        response = requests.request(method, url, **kwargs)
-        elapsed_ms = int((time.monotonic() - started_at) * 1000)
-        self._log_request(method, url, purpose, response.status_code, elapsed_ms)
-        return response
+        acquired_uspto_slot = _acquire_uspto_api_slot(url)
+        try:
+            started_at = time.monotonic()
+            response = requests.request(method, url, **kwargs)
+            elapsed_ms = int((time.monotonic() - started_at) * 1000)
+            self._log_request(method, url, purpose, response.status_code, elapsed_ms)
+            return response
+        finally:
+            if acquired_uspto_slot:
+                _uspto_api_semaphore.release()
 
     async def arequest(self, method: str, url: str, *, purpose: str = "general", **kwargs):
+        import asyncio
         import httpx
 
         validate_outbound_url(url)
-        started_at = time.monotonic()
-        async with httpx.AsyncClient() as client:
-            response = await client.request(method, url, **kwargs)
-        elapsed_ms = int((time.monotonic() - started_at) * 1000)
-        self._log_request(method, url, purpose, response.status_code, elapsed_ms)
-        return response
+        acquired_uspto_slot = False
+        if _is_uspto_api_url(url):
+            acquired_uspto_slot = await asyncio.to_thread(
+                _uspto_api_semaphore.acquire,
+                True,
+                USPTO_API_CONCURRENCY_TIMEOUT_SECONDS,
+            )
+            if not acquired_uspto_slot:
+                raise OutboundHttpConcurrencyTimeoutError(
+                    f"Outbound HTTP concurrency limit reached for {USPTO_API_HOST}"
+                )
+        try:
+            started_at = time.monotonic()
+            async with httpx.AsyncClient() as client:
+                response = await client.request(method, url, **kwargs)
+            elapsed_ms = int((time.monotonic() - started_at) * 1000)
+            self._log_request(method, url, purpose, response.status_code, elapsed_ms)
+            return response
+        finally:
+            if acquired_uspto_slot:
+                _uspto_api_semaphore.release()
 
     def get(self, url: str, *, purpose: str = "general", **kwargs):
         return self.request("GET", url, purpose=purpose, **kwargs)
