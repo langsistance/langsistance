@@ -7,6 +7,7 @@ from sources.uspto_download import (
     fetch_uspto_download_file,
     get_uspto_download_headers,
 )
+from sources.http_outbound import outbound_http
 from sources.logger import Logger
 
 
@@ -18,12 +19,11 @@ router = APIRouter()
 async def download_uspto_file(url: str = Query(..., min_length=1)):
     logger.info(f"USPTO lazy download requested: {url}")
     try:
-        import requests
-
         download_file = fetch_uspto_download_file(
             url,
-            fetch_response=lambda download_url, headers: requests.get(
+            fetch_response=lambda download_url, headers: outbound_http.get(
                 download_url,
+                purpose="download",
                 headers=headers,
                 timeout=30,
             ),

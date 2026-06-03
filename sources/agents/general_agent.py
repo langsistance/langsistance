@@ -23,13 +23,13 @@ from sources.dynamic_tool_params import (
 )
 from sources.tool_result_filter import filter_tool_result_items
 from sources.workflow.workflow_executor import WorkflowExecutor, is_workflow_knowledge
+from sources.http_outbound import outbound_http
 
 from langchain_core.tools import StructuredTool
 
 import os
 import time
 import re
-import requests
 import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -754,18 +754,15 @@ Begin your response now:
             cache_bust_params = {"_t": str(int(time.time() * 1000))}
 
             # 发起 HTTP 请求
-            if method == "GET":
-                response = requests.get(url, params=cache_bust_params, headers=headers)
-            elif method == "POST":
-                response = requests.post(url, params=cache_bust_params, headers=headers, json={})
-            elif method == "PUT":
-                response = requests.put(url, params=cache_bust_params, headers=headers, json={})
-            elif method == "DELETE":
-                response = requests.delete(url, params=cache_bust_params, headers=headers)
-            elif method == "PATCH":
-                response = requests.patch(url, params=cache_bust_params, headers=headers, json={})
-            else:
+            if method not in {"GET", "POST", "PUT", "DELETE", "PATCH"}:
                 raise ValueError(f"Unsupported HTTP method: {method}")
+            request_kwargs = {
+                "params": cache_bust_params,
+                "headers": headers,
+            }
+            if method in {"POST", "PUT", "PATCH"}:
+                request_kwargs["json"] = {}
+            response = outbound_http.request(method, url, purpose="backend_tool_direct", **request_kwargs)
 
             # 处理响应结果
             if response.status_code == 200:
@@ -971,18 +968,15 @@ Begin your response now:
                             request_params = {}
                         request_params["_t"] = str(int(time.time() * 1000))
                         self.logger.info(f"tool url is {url}")
-                        if method == "GET":
-                            response = requests.get(url, params=request_params, headers=headers)
-                        elif method == "POST":
-                            response = requests.post(url, params=request_params, headers=headers, json=request_body)
-                        elif method == "PUT":
-                            response = requests.put(url, params=request_params, headers=headers, json=request_body)
-                        elif method == "DELETE":
-                            response = requests.delete(url, params=request_params, headers=headers)
-                        elif method == "PATCH":
-                            response = requests.patch(url, params=request_params, headers=headers, json=request_body)
-                        else:
+                        if method not in {"GET", "POST", "PUT", "DELETE", "PATCH"}:
                             raise ValueError(f"Unsupported HTTP method: {method}")
+                        request_kwargs = {
+                            "params": request_params,
+                            "headers": headers,
+                        }
+                        if method in {"POST", "PUT", "PATCH"}:
+                            request_kwargs["json"] = request_body
+                        response = outbound_http.request(method, url, purpose="backend_tool", **request_kwargs)
 
                         # 打印 response 信息
                         self.logger.info(f"Response status code: {response.status_code}")

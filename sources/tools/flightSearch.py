@@ -7,6 +7,7 @@ dotenv.load_dotenv()
 if __name__ == "__main__": # if running as a script for individual testing
     sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from sources.http_outbound import outbound_http
 from sources.tools.tools import Tools
 
 class FlightSearch(Tools):
@@ -38,7 +39,7 @@ class FlightSearch(Tools):
                     "type": "2"  # Flight status search
                 }
                 
-                response = requests.get(url, params=params)
+                response = outbound_http.get(url, purpose="builtin_tool", params=params)
                 response.raise_for_status()
                 data = response.json()
                 

@@ -5,6 +5,7 @@ import dotenv
 
 dotenv.load_dotenv()
 
+from sources.http_outbound import outbound_http
 from sources.tools.tools import Tools
 from sources.utility import animate_thinking, pretty_print
 
@@ -32,7 +33,7 @@ class webSearch(Tools):
         
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         try:
-            response = requests.get(link, headers=headers, timeout=5)
+            response = outbound_http.get(link, purpose="builtin_tool", headers=headers, timeout=5)
             status = response.status_code
             if status == 200:
                 content = response.text[:1000].lower()
@@ -74,7 +75,7 @@ class webSearch(Tools):
                     "num": 50,
                     "output": "json"
                 }
-                response = requests.get(url, params=params)
+                response = outbound_http.get(url, purpose="builtin_tool", params=params)
                 response.raise_for_status()
 
                 data = response.json()

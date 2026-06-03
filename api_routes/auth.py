@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException
 from firebase_admin import auth as fb_admin_auth
 from pydantic import BaseModel, EmailStr
 
+from sources.http_outbound import outbound_http
 from sources.logger import Logger
 from sources.user.local_user import ensure_local_user_record
 # 触发 firebase_admin.initialize_app 的调用（在 passport 模块顶层）
@@ -51,8 +52,13 @@ class ResetPasswordRequest(BaseModel):
 async def _firebase_post(url: str, payload: dict) -> dict:
     params = {"key": _api_key()}
     try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-            resp = await client.post(url, params=params, json=payload)
+        resp = await outbound_http.apost(
+            url,
+            purpose="auth",
+            params=params,
+            json=payload,
+            timeout=HTTP_TIMEOUT,
+        )
     except httpx.HTTPError as e:
         logger.error(f"Firebase REST call failed: {e}")
         raise HTTPException(status_code=502, detail="Auth upstream unreachable")

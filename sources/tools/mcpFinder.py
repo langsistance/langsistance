@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 if __name__ == "__main__": # if running as a script for individual testing
     sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from sources.http_outbound import outbound_http
 from sources.tools.tools import Tools
 
 class MCP_finder(Tools):
@@ -27,9 +28,10 @@ class MCP_finder(Tools):
                      data: Optional[Dict] = None) -> Dict[str, Any]:
         url = urljoin(self.base_url.rstrip(), endpoint)
         try:
-            response = requests.request(
+            response = outbound_http.request(
                 method=method,
                 url=url,
+                purpose="builtin_tool",
                 headers=self.headers,
                 params=params,
                 json=data

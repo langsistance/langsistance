@@ -1,0 +1,115 @@
+import ipaddress
+import os
+import time
+from urllib.parse import urlparse
+
+try:
+    import requests
+except ImportError:
+    requests = None
+
+from sources.logger import Logger
+
+
+logger = Logger("backend.log")
+
+
+class OutboundHttpError(Exception):
+    """Base error for centralized outbound HTTP policy failures."""
+
+
+class OutboundHttpBlockedError(OutboundHttpError):
+    """Raised when an outbound URL is blocked by local policy."""
+
+
+def _domain_blacklist() -> set[str]:
+    raw_value = os.getenv("OUTBOUND_HTTP_DOMAIN_BLACKLIST", "")
+    return {
+        item.strip().lower().rstrip(".")
+        for item in raw_value.split(",")
+        if item.strip()
+    }
+
+
+def _is_localhost(hostname: str) -> bool:
+    normalized = hostname.lower().rstrip(".")
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
+def validate_outbound_url(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise OutboundHttpBlockedError("Only http and https outbound URLs are allowed")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise OutboundHttpBlockedError("Outbound URL must include a hostname")
+
+    if _is_localhost(hostname):
+        raise OutboundHttpBlockedError("Outbound HTTP to localhost is blocked")
+
+    normalized_host = hostname.lower().rstrip(".")
+    if normalized_host in _domain_blacklist():
+        raise OutboundHttpBlockedError("Outbound HTTP domain is blocked")
+
+
+class OutboundHttpClient:
+    def request(self, method: str, url: str, *, purpose: str = "general", **kwargs):
+        global requests
+        if requests is None:
+            import requests as requests_module
+
+            requests = requests_module
+
+        validate_outbound_url(url)
+        started_at = time.monotonic()
+        response = requests.request(method, url, **kwargs)
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        self._log_request(method, url, purpose, response.status_code, elapsed_ms)
+        return response
+
+    async def arequest(self, method: str, url: str, *, purpose: str = "general", **kwargs):
+        import httpx
+
+        validate_outbound_url(url)
+        started_at = time.monotonic()
+        async with httpx.AsyncClient() as client:
+            response = await client.request(method, url, **kwargs)
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        self._log_request(method, url, purpose, response.status_code, elapsed_ms)
+        return response
+
+    def get(self, url: str, *, purpose: str = "general", **kwargs):
+        return self.request("GET", url, purpose=purpose, **kwargs)
+
+    def post(self, url: str, *, purpose: str = "general", **kwargs):
+        return self.request("POST", url, purpose=purpose, **kwargs)
+
+    def put(self, url: str, *, purpose: str = "general", **kwargs):
+        return self.request("PUT", url, purpose=purpose, **kwargs)
+
+    def delete(self, url: str, *, purpose: str = "general", **kwargs):
+        return self.request("DELETE", url, purpose=purpose, **kwargs)
+
+    def patch(self, url: str, *, purpose: str = "general", **kwargs):
+        return self.request("PATCH", url, purpose=purpose, **kwargs)
+
+    async def apost(self, url: str, *, purpose: str = "general", **kwargs):
+        return await self.arequest("POST", url, purpose=purpose, **kwargs)
+
+    def _log_request(self, method: str, url: str, purpose: str, status_code: int, elapsed_ms: int) -> None:
+        parsed = urlparse(url)
+        logger.info(
+            "outbound_http "
+            f"purpose={purpose} method={method.upper()} "
+            f"host={parsed.hostname} path={parsed.path or '/'} "
+            f"status={status_code} elapsed_ms={elapsed_ms}"
+        )
+
+
+outbound_http = OutboundHttpClient()

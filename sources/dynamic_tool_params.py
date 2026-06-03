@@ -5,8 +5,9 @@ import time
 from typing import Any, Dict
 from urllib.parse import quote, urlsplit, urlunsplit
 
-import requests
 from bs4 import BeautifulSoup
+
+from sources.http_outbound import outbound_http
 
 from sources.logger import Logger
 
@@ -220,18 +221,16 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
     request_params["_t"] = str(int(time.time() * 1000))
 
     timeout = getattr(tool_info, "timeout", None) or 30
-    if method == "GET":
-        response = requests.get(url, params=request_params, headers=headers, timeout=timeout)
-    elif method == "POST":
-        response = requests.post(url, params=request_params, headers=headers, json=request_body, timeout=timeout)
-    elif method == "PUT":
-        response = requests.put(url, params=request_params, headers=headers, json=request_body, timeout=timeout)
-    elif method == "DELETE":
-        response = requests.delete(url, params=request_params, headers=headers, timeout=timeout)
-    elif method == "PATCH":
-        response = requests.patch(url, params=request_params, headers=headers, json=request_body, timeout=timeout)
-    else:
+    if method not in {"GET", "POST", "PUT", "DELETE", "PATCH"}:
         raise ValueError(f"Unsupported HTTP method: {method}")
+    request_kwargs = {
+        "params": request_params,
+        "headers": headers,
+        "timeout": timeout,
+    }
+    if method in {"POST", "PUT", "PATCH"}:
+        request_kwargs["json"] = request_body
+    response = outbound_http.request(method, url, purpose="backend_tool", **request_kwargs)
 
     if response.status_code != 200:
         result = f"Request failed, status code: {response.status_code}"

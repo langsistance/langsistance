@@ -5,6 +5,7 @@ import os
 if __name__ == "__main__": # if running as a script for individual testing
     sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from sources.http_outbound import outbound_http
 from sources.tools.tools import Tools
 
 class searxSearch(Tools):
@@ -32,7 +33,7 @@ class searxSearch(Tools):
         
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         try:
-            response = requests.get(link, headers=headers, timeout=5)
+            response = outbound_http.get(link, purpose="builtin_tool", headers=headers, timeout=5)
             status = response.status_code
             if status == 200:
                 content = response.text.lower()
@@ -79,7 +80,7 @@ class searxSearch(Tools):
         }
         data = f"q={query}&categories=general&language=auto&time_range=&safesearch=0&theme=simple".encode('utf-8')
         try:
-            response = requests.post(search_url, headers=headers, data=data, verify=False)
+            response = outbound_http.post(search_url, purpose="builtin_tool", headers=headers, data=data, verify=False)
             response.raise_for_status()
             html_content = response.text
             soup = BeautifulSoup(html_content, 'html.parser')
