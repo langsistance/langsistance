@@ -1,7 +1,7 @@
 import firebase_admin
 from firebase_admin import auth, credentials
 from fastapi import HTTPException
-from sources.knowledge.knowledge import get_redis_connection
+from sources.knowledge.knowledge import get_db_connection, get_redis_connection
 from datetime import datetime, timedelta, timezone
 from sources.logger import Logger
 import traceback
@@ -97,6 +97,7 @@ def get_user_by_id(user_id: str):
     Returns:
         dict: 用户数据，如果用户不存在则返回None
     """
+    conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
