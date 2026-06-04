@@ -10,6 +10,7 @@ import {
 } from '@/lib/messagePresentation'
 import { renderMarkdownToHtml } from '@/lib/markdownRender'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { orderDownloadArtifacts } from '@/lib/downloadArtifacts'
 
 interface Props {
   content: string
@@ -41,7 +42,7 @@ function artifactIcon(format: string) {
     <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z" />
       <polyline points="14 2 14 7 19 7" />
-      <text x="12" y="17" textAnchor="middle" fontSize="5.5" fontWeight="700" stroke="none" fill="currentColor">
+      <text x="12" y="17" textAnchor="middle" fontSize="5.8" fontWeight="700" stroke="none" fill="currentColor">
         {label}
       </text>
     </svg>
@@ -169,7 +170,8 @@ export default function MarkdownMessage({ content, artifacts = [], streaming, tr
     setTimeout(() => setDownloadedArtifactId(null), 2000)
   }
 
-  const completeArtifacts = artifacts.filter((artifact) => artifact.complete)
+  const orderedArtifacts = orderDownloadArtifacts(artifacts) as ChatArtifact[]
+  const showActions = !streaming && Boolean(content.trim() || orderedArtifacts.length)
 
   return (
     <div ref={messageContentRef} className={`chat-message assistant${showWaiting ? ' assistant-is-waiting' : ''}`}>
@@ -196,61 +198,67 @@ export default function MarkdownMessage({ content, artifacts = [], streaming, tr
           <span>{transientStatus}</span>
         </div>
       )}
-      {!streaming && content.trim() && (
+      {showActions && (
         <div className="message-action-buttons">
-          <button
-            className={`copy-button${copied ? ' copied' : ''}`}
-            onClick={handleCopy}
-            data-tooltip={t('chat.copy')}
-            data-copied-tooltip={t('chat.copied')}
-            aria-label={t('chat.copyContent')}
-          >
-            {copied ? (
-              <svg viewBox="0 0 24 24" fill="none" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-            ) : (
-              <svg viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-              </svg>
-            )}
-          </button>
-          <button
-            className={`download-button${downloaded ? ' downloaded' : ''}`}
-            onClick={handleDownload}
-            data-tooltip={t('chat.download')}
-            data-downloaded-tooltip={t('chat.downloaded')}
-            aria-label={t('chat.downloadContent')}
-          >
-            {downloaded ? (
-              <svg viewBox="0 0 24 24" fill="none" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-            ) : (
-              <svg viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                <polyline points="7 10 12 15 17 10" />
-                <line x1="12" y1="15" x2="12" y2="3" />
-              </svg>
-            )}
-          </button>
-        </div>
-      )}
-      {!streaming && completeArtifacts.length > 0 && (
-        <div className="message-artifact-buttons" aria-label={t('chat.downloadArtifacts')}>
-          {completeArtifacts.map((artifact) => (
+          {content.trim() && (
+            <button
+              className={`copy-button${copied ? ' copied' : ''}`}
+              onClick={handleCopy}
+              data-tooltip={t('chat.copy')}
+              data-copied-tooltip={t('chat.copied')}
+              aria-label={t('chat.copyContent')}
+            >
+              {copied ? (
+                <svg viewBox="0 0 24 24" fill="none" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                </svg>
+              )}
+            </button>
+          )}
+          {orderedArtifacts.map((artifact) => (
             <button
               key={artifact.artifactId}
-              className={`artifact-download-button ${artifact.format}${downloadedArtifactId === artifact.artifactId ? ' downloaded' : ''}`}
+              className={`download-button artifact-download-button ${artifact.format}${downloadedArtifactId === artifact.artifactId ? ' downloaded' : ''}`}
               onClick={() => handleArtifactDownload(artifact)}
               data-tooltip={artifactLabel(artifact, t)}
               data-downloaded-tooltip={t('chat.downloaded')}
               aria-label={artifactLabel(artifact, t)}
             >
-              {artifactIcon(artifact.format)}
+              {downloadedArtifactId === artifact.artifactId ? (
+                <svg viewBox="0 0 24 24" fill="none" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              ) : (
+                artifactIcon(artifact.format)
+              )}
             </button>
           ))}
+          {content.trim() && (
+            <button
+              className={`download-button${downloaded ? ' downloaded' : ''}`}
+              onClick={handleDownload}
+              data-tooltip={t('chat.download')}
+              data-downloaded-tooltip={t('chat.downloaded')}
+              aria-label={t('chat.downloadContent')}
+            >
+              {downloaded ? (
+                <svg viewBox="0 0 24 24" fill="none" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+              )}
+            </button>
+          )}
         </div>
       )}
     </div>
