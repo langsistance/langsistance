@@ -120,7 +120,6 @@ class SSECallbackHandler(AsyncCallbackHandler):
         # })
 
     async def on_agent_finish(self, finish, **kwargs):
-        await self.queue.put({
-            'type': 'end',
-            'content': ''
-        })
+        # api_routes.core sends the final end event after all post-agent work,
+        # including raw-list artifact generation, has finished.
+        return

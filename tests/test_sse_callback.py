@@ -80,6 +80,26 @@ class TestSSECallbackHandler(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(chunk["data"], "bmFtZQpBbHBoYQo=")
         self.assertEqual(end, {"type": "artifact_end", "artifact_id": "artifact-1"})
 
+    async def test_on_agent_finish_does_not_end_stream_before_post_agent_events(self):
+        callbacks_module = types.ModuleType("langchain_core.callbacks.base")
+
+        class AsyncCallbackHandler:
+            pass
+
+        callbacks_module.AsyncCallbackHandler = AsyncCallbackHandler
+        sys.modules.setdefault("langchain_core", types.ModuleType("langchain_core"))
+        sys.modules.setdefault("langchain_core.callbacks", types.ModuleType("langchain_core.callbacks"))
+        sys.modules["langchain_core.callbacks.base"] = callbacks_module
+
+        from sources.callback.sse_callback import SSECallbackHandler
+
+        queue = asyncio.Queue()
+        handler = SSECallbackHandler(queue)
+
+        await handler.on_agent_finish(finish=None)
+
+        self.assertTrue(queue.empty())
+
 
 if __name__ == "__main__":
     unittest.main()
