@@ -677,6 +677,101 @@ button { cursor: pointer; }
   opacity: 1;
 }
 
+.message-artifact-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.artifact-download-button {
+  position: relative;
+  width: 36px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--color-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.artifact-download-button:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(16, 163, 127, 0.18);
+}
+
+.artifact-download-button:active { transform: scale(0.96); }
+
+.artifact-download-button.downloaded {
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-hover) 100%);
+  border-color: var(--color-primary);
+  color: white;
+  box-shadow: 0 4px 16px rgba(16, 163, 127, 0.3);
+}
+
+.artifact-download-button svg {
+  width: 19px;
+  height: 19px;
+  stroke: currentColor;
+}
+
+.artifact-download-button::before {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: 50%;
+  transform: translateX(50%);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--color-text);
+  color: white;
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.2s ease;
+  z-index: 1000;
+}
+
+.artifact-download-button::after {
+  content: '';
+  position: absolute;
+  bottom: calc(100% + 4px);
+  right: 50%;
+  transform: translateX(50%);
+  border: 5px solid transparent;
+  border-top-color: var(--color-text);
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.2s ease;
+  z-index: 1000;
+}
+
+.artifact-download-button:hover::before,
+.artifact-download-button:hover::after {
+  opacity: 1;
+  transform: translateX(50%) translateY(-2px);
+}
+
+.artifact-download-button.downloaded::before {
+  content: attr(data-downloaded-tooltip);
+  background: var(--color-primary);
+  opacity: 1;
+}
+
+.artifact-download-button.downloaded::after {
+  border-top-color: var(--color-primary);
+  opacity: 1;
+}
+
 /* ── User message copy button ── */
 .chat-message.user::before {
   content: '';

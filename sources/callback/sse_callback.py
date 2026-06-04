@@ -1,5 +1,9 @@
 from langchain_core.callbacks.base import AsyncCallbackHandler
 import asyncio
+import base64
+
+
+ARTIFACT_CHUNK_BYTES = 32768
 
 
 class SSECallbackHandler(AsyncCallbackHandler):
@@ -28,6 +32,37 @@ class SSECallbackHandler(AsyncCallbackHandler):
         }
         event.update(kwargs)
         await self.queue.put(event)
+
+    async def on_artifacts(self, artifacts: list[dict]) -> None:
+        """Send in-memory downloadable artifacts as chunked SSE events."""
+        for artifact in artifacts:
+            content = artifact.get("content", b"")
+            if isinstance(content, str):
+                content = content.encode("utf-8")
+            metadata = {
+                key: value
+                for key, value in artifact.items()
+                if key != "content"
+            }
+            artifact_id = metadata.get("artifact_id")
+            if not artifact_id:
+                continue
+
+            await self.queue.put({
+                "type": "artifact_start",
+                **metadata,
+            })
+            for start in range(0, len(content), ARTIFACT_CHUNK_BYTES):
+                chunk = content[start:start + ARTIFACT_CHUNK_BYTES]
+                await self.queue.put({
+                    "type": "artifact_chunk",
+                    "artifact_id": artifact_id,
+                    "data": base64.b64encode(chunk).decode("ascii"),
+                })
+            await self.queue.put({
+                "type": "artifact_end",
+                "artifact_id": artifact_id,
+            })
 
     async def on_tool_start(
             self,

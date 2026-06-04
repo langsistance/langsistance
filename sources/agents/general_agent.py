@@ -22,6 +22,7 @@ from sources.dynamic_tool_params import (
     execute_backend_tool_request,
 )
 from sources.tool_result_filter import filter_tool_result_items
+from sources.result_export import build_result_artifacts
 from sources.workflow.workflow_executor import WorkflowExecutor, is_workflow_knowledge
 from sources.http_outbound import outbound_http
 
@@ -1116,6 +1117,7 @@ Begin your response now:
         if not self.enabled:
             return "general Agent is disabled."
         self._last_user_prompt = prompt
+        self._last_query_id = query_id
         self.knowledgeTool = await select_knowledge_tool_with_llm(
             user_id,
             prompt,
@@ -1147,6 +1149,7 @@ Begin your response now:
     async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler, push_filter=None):
         #self.knowledgeTool = get_knowledge_tool(user_id,  prompt)
         self._last_user_prompt = prompt
+        self._last_query_id = query_id
         self.knowledgeTool = await select_knowledge_tool_with_llm(
             user_id,
             prompt,
@@ -1386,6 +1389,17 @@ Begin your response now:
             )
             await self._stream_batch_with_retries(batch, system_prompt, callback_handler)
             await callback_handler.on_llm_new_token("\n\n")
+
+        on_artifacts = getattr(callback_handler, "on_artifacts", None)
+        if on_artifacts:
+            artifacts = build_result_artifacts(
+                pending,
+                query_id=getattr(self, "_last_query_id", None),
+                original_count=original_total,
+                filter_applied=filter_result.applied,
+            )
+            if artifacts:
+                await on_artifacts(artifacts)
 
 
     async def invoke_agent(self, agent, callback_handler):

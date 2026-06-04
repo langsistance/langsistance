@@ -10,12 +10,16 @@ class FakeCallbackHandler:
     def __init__(self):
         self.tokens = []
         self.statuses = []
+        self.artifacts = []
 
     async def on_llm_new_token(self, token):
         self.tokens.append(token)
 
     async def on_status(self, message, **kwargs):
         self.statuses.append({"message": message, **kwargs})
+
+    async def on_artifacts(self, artifacts):
+        self.artifacts.extend(artifacts)
 
 
 class FakeMemory:
@@ -544,6 +548,42 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(agent.llm.complete_json_calls), 1)
         self.assertEqual(len(agent.llm.stream_calls), 1)
         self.assertIn("Full Results (2 items)", "".join(callback_handler.tokens))
+
+    async def test_stream_raw_items_emits_csv_and_xlsx_artifacts_for_long_lists(self):
+        GeneralAgent = self._load_general_agent_class()
+
+        agent = GeneralAgent.__new__(GeneralAgent)
+        agent.llm = FakeLlm(stream_outputs=["formatted full results"])
+        agent.memory = FakeMemory()
+        agent.logger = FakeLogger()
+        agent._last_user_prompt = "List these companies."
+        agent._pending_raw_items = [
+            {"name": f"Company {index}", "city": "Tokyo", "metrics": {"rank": index}}
+            for index in range(1, 7)
+        ]
+        callback_handler = FakeCallbackHandler()
+
+        await agent.invoke_agent(agent=None, callback_handler=callback_handler)
+
+        streamed = "".join(callback_handler.tokens)
+        self.assertIn("Full Results (6 items)", streamed)
+        formats = {artifact["format"] for artifact in callback_handler.artifacts}
+        self.assertEqual(formats, {"csv", "xlsx"})
+        csv_artifact = next(
+            artifact for artifact in callback_handler.artifacts
+            if artifact["format"] == "csv"
+        )
+        self.assertEqual(csv_artifact["row_count"], 6)
+        csv_text = csv_artifact["content"].decode("utf-8-sig")
+        self.assertIn("name", csv_text)
+        self.assertIn("metrics.rank", csv_text)
+        self.assertIn("Company 1", csv_text)
+        xlsx_artifact = next(
+            artifact for artifact in callback_handler.artifacts
+            if artifact["format"] == "xlsx"
+        )
+        self.assertEqual(xlsx_artifact["row_count"], 6)
+        self.assertTrue(xlsx_artifact["content"].startswith(b"PK"))
 
     async def test_mid_sized_raw_item_uses_formatter_llm(self):
         GeneralAgent = self._load_general_agent_class()

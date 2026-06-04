@@ -12,16 +12,58 @@ import { renderMarkdownToHtml } from '@/lib/markdownRender'
 
 interface Props {
   content: string
+  artifacts?: ChatArtifact[]
   streaming: boolean
   transientStatus?: string
 }
 
+interface ChatArtifact {
+  artifactId: string
+  format: string
+  filename: string
+  mimeType: string
+  rowCount: number
+  columnCount: number
+  chunks: string[]
+  complete: boolean
+}
+
 const THROTTLE_MS = 1000
 
-export default function MarkdownMessage({ content, streaming, transientStatus = '' }: Props) {
+function artifactLabel(artifact: ChatArtifact, t: (key: string) => string) {
+  return artifact.format === 'csv' ? t('chat.downloadCsv') : t('chat.downloadExcel')
+}
+
+function artifactIcon(format: string) {
+  const label = format === 'csv' ? 'CSV' : 'XLS'
+  return (
+    <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z" />
+      <polyline points="14 2 14 7 19 7" />
+      <text x="12" y="17" textAnchor="middle" fontSize="5.5" fontWeight="700" stroke="none" fill="currentColor">
+        {label}
+      </text>
+    </svg>
+  )
+}
+
+function base64ChunksToBlob(chunks: string[], mimeType: string) {
+  const byteArrays = chunks.map((chunk) => {
+    const binary = window.atob(chunk)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i)
+    }
+    return bytes
+  })
+  return new Blob(byteArrays, { type: mimeType })
+}
+
+export default function MarkdownMessage({ content, artifacts = [], streaming, transientStatus = '' }: Props) {
   const { t } = useI18n()
   const [copied, setCopied] = useState(false)
   const [downloaded, setDownloaded] = useState(false)
+  const [downloadedArtifactId, setDownloadedArtifactId] = useState<string | null>(null)
   const [html, setHtml] = useState('')
 
   const lastRenderTimeRef = useRef(0)
@@ -113,6 +155,22 @@ export default function MarkdownMessage({ content, streaming, transientStatus = 
     setTimeout(() => setDownloaded(false), 2000)
   }
 
+  function handleArtifactDownload(artifact: ChatArtifact) {
+    const blob = base64ChunksToBlob(artifact.chunks || [], artifact.mimeType)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = artifact.filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    setDownloadedArtifactId(artifact.artifactId)
+    setTimeout(() => setDownloadedArtifactId(null), 2000)
+  }
+
+  const completeArtifacts = artifacts.filter((artifact) => artifact.complete)
+
   return (
     <div ref={messageContentRef} className={`chat-message assistant${showWaiting ? ' assistant-is-waiting' : ''}`}>
       {showWaiting && (
@@ -177,6 +235,22 @@ export default function MarkdownMessage({ content, streaming, transientStatus = 
               </svg>
             )}
           </button>
+        </div>
+      )}
+      {!streaming && completeArtifacts.length > 0 && (
+        <div className="message-artifact-buttons" aria-label={t('chat.downloadArtifacts')}>
+          {completeArtifacts.map((artifact) => (
+            <button
+              key={artifact.artifactId}
+              className={`artifact-download-button ${artifact.format}${downloadedArtifactId === artifact.artifactId ? ' downloaded' : ''}`}
+              onClick={() => handleArtifactDownload(artifact)}
+              data-tooltip={artifactLabel(artifact, t)}
+              data-downloaded-tooltip={t('chat.downloaded')}
+              aria-label={artifactLabel(artifact, t)}
+            >
+              {artifactIcon(artifact.format)}
+            </button>
+          ))}
         </div>
       )}
     </div>

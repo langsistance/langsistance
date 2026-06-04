@@ -5,7 +5,14 @@ import { queryStream } from '@/services/api'
 import { useI18n } from '@/lib/app-i18n'
 import MarkdownMessage from '@/components/app/MarkdownMessage'
 import { useChatSession } from '@/contexts/ChatContext'
-import { createChatId, createChatMessage, updateAssistantMessage } from '@/lib/chatSession'
+import {
+  addAssistantArtifactChunk,
+  addAssistantArtifactEnd,
+  addAssistantArtifactStart,
+  createChatId,
+  createChatMessage,
+  updateAssistantMessage,
+} from '@/lib/chatSession'
 
 function UserCopyButton({ content }: { content: string }) {
   const { t } = useI18n()
@@ -104,9 +111,33 @@ export default function Chat() {
             continue
           }
 
-          if (evt && typeof evt === 'object' && 'type' in evt && evt.type === 'status') {
-            setTransientStatus(String('message' in evt ? evt.message ?? '' : ''))
-            continue
+          if (evt && typeof evt === 'object') {
+            const event = evt as Record<string, unknown>
+            if (event.type === 'status') {
+              setTransientStatus(String(event.message ?? ''))
+              continue
+            }
+            if (event.type === 'artifact_start') {
+              setMessages((m) => addAssistantArtifactStart(m, assistantId, event))
+              continue
+            }
+            if (event.type === 'artifact_chunk') {
+              setMessages((m) => addAssistantArtifactChunk(
+                m,
+                assistantId,
+                String(event.artifact_id ?? event.artifactId ?? ''),
+                String(event.data ?? '')
+              ))
+              continue
+            }
+            if (event.type === 'artifact_end') {
+              setMessages((m) => addAssistantArtifactEnd(
+                m,
+                assistantId,
+                String(event.artifact_id ?? event.artifactId ?? '')
+              ))
+              continue
+            }
           }
           if (evt && typeof evt === 'object' && 'error' in evt && evt.error) {
             throw new Error(String(evt.error))
@@ -182,6 +213,7 @@ export default function Chat() {
               {msg.role === 'assistant' ? (
                 <MarkdownMessage
                   content={msg.content}
+                  artifacts={msg.artifacts || []}
                   streaming={streaming && streamingId === msg.id}
                   transientStatus={streaming && streamingId === msg.id ? transientStatus : ''}
                 />

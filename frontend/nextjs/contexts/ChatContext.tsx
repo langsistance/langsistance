@@ -2,10 +2,22 @@
 
 import { createContext, useContext, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 
+export interface ChatArtifact {
+  artifactId: string
+  format: string
+  filename: string
+  mimeType: string
+  rowCount: number
+  columnCount: number
+  chunks: string[]
+  complete: boolean
+}
+
 export interface ChatMessage {
   id: string
   role: string
   content: string
+  artifacts?: ChatArtifact[]
 }
 
 interface ChatContextValue {

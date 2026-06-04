@@ -401,6 +401,18 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                             last_flush_time = current_time
                             last_stream_time = current_time
 
+                        elif event['type'] in {'artifact_start', 'artifact_chunk', 'artifact_end'}:
+                            if token_buffer:
+                                combined = ''.join(token_buffer)
+                                token_json = json.dumps(combined)
+                                yield f"data:{token_json}\n\n"
+                                token_buffer.clear()
+                            artifact_json = json.dumps(event)
+                            yield f"data:{artifact_json}\n\n"
+                            current_time = asyncio.get_event_loop().time()
+                            last_flush_time = current_time
+                            last_stream_time = current_time
+
                         elif event['type'] == 'end':
                             # Flush remaining tokens before ending
                             if token_buffer:
