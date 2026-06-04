@@ -5,6 +5,7 @@ import { queryStream } from '@/services/api'
 import { useI18n } from '@/lib/app-i18n'
 import MarkdownMessage from '@/components/app/MarkdownMessage'
 import { useChatSession } from '@/contexts/ChatContext'
+import { copyTextToClipboard } from '@/lib/clipboard'
 import {
   addAssistantArtifactChunk,
   addAssistantArtifactEnd,
@@ -18,11 +19,10 @@ function UserCopyButton({ content }: { content: string }) {
   const { t } = useI18n()
   const [copied, setCopied] = useState(false)
   async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(content)
+    if (await copyTextToClipboard(content)) {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
-    } catch {}
+    }
   }
   return (
     <button

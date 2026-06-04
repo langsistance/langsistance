@@ -9,6 +9,7 @@ import {
   shouldShowAssistantWaiting,
 } from '@/lib/messagePresentation'
 import { renderMarkdownToHtml } from '@/lib/markdownRender'
+import { copyTextToClipboard } from '@/lib/clipboard'
 
 interface Props {
   content: string
@@ -133,11 +134,10 @@ export default function MarkdownMessage({ content, artifacts = [], streaming, tr
   }, [html])
 
   async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(content)
+    if (await copyTextToClipboard(content)) {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
-    } catch {}
+    }
   }
 
   function handleDownload() {
