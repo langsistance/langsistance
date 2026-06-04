@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { orderDownloadArtifacts } from './downloadArtifacts.js'
+import { artifactVisualLabel, orderDownloadArtifacts } from './downloadArtifacts.js'
 
 test('orderDownloadArtifacts puts Excel before CSV regardless of backend order', () => {
   const csv = { artifactId: 'csv-1', format: 'csv', complete: true }
@@ -32,4 +32,9 @@ test('orderDownloadArtifacts omits incomplete artifacts', () => {
     orderDownloadArtifacts([csv, xlsx]).map((artifact) => artifact.format),
     ['xlsx']
   )
+})
+
+test('artifactVisualLabel uses distinct visible labels for spreadsheet formats', () => {
+  assert.equal(artifactVisualLabel('xlsx'), 'XLSX')
+  assert.equal(artifactVisualLabel('csv'), 'CSV')
 })

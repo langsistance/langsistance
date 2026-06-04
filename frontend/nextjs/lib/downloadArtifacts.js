@@ -1,4 +1,12 @@
 const DOWNLOAD_FORMAT_ORDER = ['xlsx', 'csv']
+const VISUAL_LABELS = {
+  xlsx: 'XLSX',
+  csv: 'CSV',
+}
+
+export function artifactVisualLabel(format) {
+  return VISUAL_LABELS[format] ?? String(format || '').toUpperCase()
+}
 
 export function orderDownloadArtifacts(artifacts) {
   const completeArtifacts = artifacts.filter((artifact) => artifact?.complete)

@@ -10,7 +10,7 @@ import {
 } from '@/lib/messagePresentation'
 import { renderMarkdownToHtml } from '@/lib/markdownRender'
 import { copyTextToClipboard } from '@/lib/clipboard'
-import { orderDownloadArtifacts } from '@/lib/downloadArtifacts'
+import { artifactVisualLabel, orderDownloadArtifacts } from '@/lib/downloadArtifacts'
 
 interface Props {
   content: string
@@ -37,12 +37,29 @@ function artifactLabel(artifact: ChatArtifact, t: (key: string) => string) {
 }
 
 function artifactIcon(format: string) {
-  const label = format === 'csv' ? 'CSV' : 'XLS'
+  const label = artifactVisualLabel(format)
+  if (format === 'xlsx') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z" />
+        <polyline points="14 2 14 7 19 7" />
+        <rect className="artifact-icon-fill" x="7.2" y="8.9" width="9.6" height="6.5" rx="0.8" />
+        <path d="M7.2 11.1h9.6M10.4 8.9v6.5M13.6 8.9v6.5" />
+        <text className="artifact-icon-label" x="12" y="19.7" textAnchor="middle" fontSize="4.4" fontWeight="800">
+          {label}
+        </text>
+      </svg>
+    )
+  }
+
   return (
-    <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
       <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z" />
       <polyline points="14 2 14 7 19 7" />
-      <text x="12" y="17" textAnchor="middle" fontSize="5.8" fontWeight="700" stroke="none" fill="currentColor">
+      <path d="M7.4 9.4h5.8M7.4 12.2h7.8M7.4 15h3.2" />
+      <text className="artifact-icon-label artifact-icon-comma" x="13.2" y="16.2" fontSize="5.8" fontWeight="800">,</text>
+      <text className="artifact-icon-label artifact-icon-comma" x="15.4" y="16.2" fontSize="5.8" fontWeight="800">,</text>
+      <text className="artifact-icon-label" x="12" y="20" textAnchor="middle" fontSize="5" fontWeight="800">
         {label}
       </text>
     </svg>

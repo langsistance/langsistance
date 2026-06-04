@@ -507,6 +507,10 @@ button { cursor: pointer; }
 }
 
 /* ── Action buttons (copy / download) ── */
+.chat-message.assistant {
+  position: relative;
+}
+
 .chat-message.assistant img.image-loading,
 .chat-message.assistant img.image-retrying {
   opacity: 0.72;
@@ -526,19 +530,14 @@ button { cursor: pointer; }
   right: 12px;
   display: flex;
   gap: 8px;
-  opacity: 0;
-  pointer-events: none;
+  opacity: 1;
+  pointer-events: all;
   transition: opacity 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   z-index: 10;
 }
 
 .chat-message.assistant:has(.message-action-buttons) {
   padding-bottom: 52px;
-}
-
-.chat-message.assistant:hover .message-action-buttons {
-  opacity: 1;
-  pointer-events: all;
 }
 
 .copy-button,
@@ -603,12 +602,50 @@ button { cursor: pointer; }
   color: var(--color-text-secondary);
 }
 
+.artifact-download-button.xlsx {
+  color: #16803c;
+}
+
+.artifact-download-button.csv {
+  color: #2563eb;
+}
+
 .artifact-download-button:hover {
   color: var(--color-primary);
 }
 
+.artifact-download-button.xlsx:hover {
+  border-color: #16803c;
+  color: #16803c;
+  box-shadow: 0 4px 12px rgba(22, 128, 60, 0.22);
+}
+
+.artifact-download-button.csv:hover {
+  border-color: #2563eb;
+  color: #2563eb;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
+}
+
 .artifact-download-button.downloaded {
   color: white;
+}
+
+.artifact-download-button svg {
+  width: 20px;
+  height: 20px;
+  stroke: currentColor;
+}
+
+.artifact-download-button .artifact-icon-fill {
+  fill: currentColor;
+  opacity: 0.12;
+  stroke: none;
+}
+
+.artifact-download-button .artifact-icon-label {
+  fill: currentColor;
+  stroke: none;
+  letter-spacing: 0;
 }
 
 @keyframes checkmark {
