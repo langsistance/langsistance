@@ -536,8 +536,16 @@ button { cursor: pointer; }
   z-index: 10;
 }
 
+.chat-message.assistant .assistant-message-action-buttons {
+  top: auto !important;
+  bottom: 14px !important;
+  right: 14px;
+  opacity: 1 !important;
+  pointer-events: all !important;
+}
+
 .chat-message.assistant:has(.message-action-buttons) {
-  padding-bottom: 52px;
+  padding-bottom: 64px;
 }
 
 .copy-button,
@@ -555,6 +563,12 @@ button { cursor: pointer; }
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(255, 255, 255, 0.5);
   position: relative;
+}
+
+.assistant-message-action-buttons .copy-button,
+.assistant-message-action-buttons .download-button {
+  width: 44px;
+  height: 44px;
 }
 
 .copy-button:hover,
@@ -582,6 +596,12 @@ button { cursor: pointer; }
   height: 16px;
   stroke: var(--color-text-secondary);
   transition: all 0.2s ease;
+}
+
+.assistant-message-action-buttons .copy-button svg,
+.assistant-message-action-buttons .download-button svg {
+  width: 22px;
+  height: 22px;
 }
 
 .copy-button:hover svg,
@@ -634,6 +654,11 @@ button { cursor: pointer; }
   width: 20px;
   height: 20px;
   stroke: currentColor;
+}
+
+.assistant-message-action-buttons .artifact-download-button svg {
+  width: 34px;
+  height: 34px;
 }
 
 .artifact-download-button .artifact-icon-fill {

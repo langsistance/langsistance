@@ -43,9 +43,9 @@ function artifactIcon(format: string) {
       <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
         <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z" />
         <polyline points="14 2 14 7 19 7" />
-        <rect className="artifact-icon-fill" x="7.2" y="8.9" width="9.6" height="6.5" rx="0.8" />
-        <path d="M7.2 11.1h9.6M10.4 8.9v6.5M13.6 8.9v6.5" />
-        <text className="artifact-icon-label" x="12" y="19.7" textAnchor="middle" fontSize="4.4" fontWeight="800">
+        <rect className="artifact-icon-fill" x="7" y="8.4" width="10" height="6.3" rx="0.8" />
+        <path d="M7 10.5h10M10.3 8.4v6.3M13.7 8.4v6.3" />
+        <text className="artifact-icon-label" x="12" y="20" textAnchor="middle" fontSize="5.2" fontWeight="800">
           {label}
         </text>
       </svg>
@@ -56,10 +56,10 @@ function artifactIcon(format: string) {
     <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
       <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z" />
       <polyline points="14 2 14 7 19 7" />
-      <path d="M7.4 9.4h5.8M7.4 12.2h7.8M7.4 15h3.2" />
-      <text className="artifact-icon-label artifact-icon-comma" x="13.2" y="16.2" fontSize="5.8" fontWeight="800">,</text>
-      <text className="artifact-icon-label artifact-icon-comma" x="15.4" y="16.2" fontSize="5.8" fontWeight="800">,</text>
-      <text className="artifact-icon-label" x="12" y="20" textAnchor="middle" fontSize="5" fontWeight="800">
+      <path d="M7.4 9.1h6.2M7.4 11.8h7.8M7.4 14.5h3.2" />
+      <text className="artifact-icon-label artifact-icon-comma" x="13.2" y="15.8" fontSize="6.3" fontWeight="800">,</text>
+      <text className="artifact-icon-label artifact-icon-comma" x="15.4" y="15.8" fontSize="6.3" fontWeight="800">,</text>
+      <text className="artifact-icon-label" x="12" y="20" textAnchor="middle" fontSize="5.8" fontWeight="800">
         {label}
       </text>
     </svg>
@@ -216,7 +216,7 @@ export default function MarkdownMessage({ content, artifacts = [], streaming, tr
         </div>
       )}
       {showActions && (
-        <div className="message-action-buttons">
+        <div className="message-action-buttons assistant-message-action-buttons">
           {content.trim() && (
             <button
               className={`copy-button${copied ? ' copied' : ''}`}
