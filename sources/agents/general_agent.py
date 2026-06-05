@@ -43,6 +43,17 @@ _SENSITIVE_HEADER_RE = re.compile(
 _URL_IN_TEXT_RE = re.compile(r'https?://[^\s"\'<>\])}]+')
 MAX_BATCH_JSON_CHARS_FOR_LLM = 50000
 MAX_MARKDOWN_VALUE_CHARS = 500
+BATCH_FORMATTING_MODE_ENV = "GENERAL_AGENT_BATCH_FORMATTING_MODE"
+BATCH_FORMATTING_MODE_DIRECT_LLM = "direct_llm"
+BATCH_FORMATTING_MODE_EXISTING = "existing"
+
+
+def _get_batch_formatting_mode() -> str:
+    raw_mode = os.getenv(BATCH_FORMATTING_MODE_ENV, BATCH_FORMATTING_MODE_DIRECT_LLM)
+    mode = str(raw_mode).strip().lower().replace("-", "_")
+    if mode in {"existing", "legacy", "current", "size_aware", "sizeaware"}:
+        return BATCH_FORMATTING_MODE_EXISTING
+    return BATCH_FORMATTING_MODE_DIRECT_LLM
 
 
 def _collect_urls_from_value(value):
@@ -1315,6 +1326,17 @@ Begin your response now:
         system_prompt: str,
         callback_handler,
     ) -> None:
+        if _get_batch_formatting_mode() == BATCH_FORMATTING_MODE_DIRECT_LLM:
+            try:
+                await self._stream_formatter_batch(system_prompt, batch, callback_handler)
+            except Exception as exc:
+                self.logger.error(
+                    "direct batch formatter LLM failed; "
+                    f"streaming deterministic markdown fallback. error={exc}"
+                )
+                await self._stream_deterministic_batch(batch, callback_handler)
+            return
+
         batch_json = json.dumps(batch, ensure_ascii=False, indent=2, default=str)
         if len(batch_json) > MAX_BATCH_JSON_CHARS_FOR_LLM:
             self.logger.info(

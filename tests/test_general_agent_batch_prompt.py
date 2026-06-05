@@ -643,14 +643,47 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
         ]
         callback_handler = FakeCallbackHandler()
 
-        await agent.invoke_agent(agent=None, callback_handler=callback_handler)
+        with patch.dict(os.environ, {"GENERAL_AGENT_BATCH_FORMATTING_MODE": "existing"}):
+            await agent.invoke_agent(agent=None, callback_handler=callback_handler)
 
         streamed = "".join(callback_handler.tokens)
         self.assertEqual(len(agent.llm.stream_calls), 3)
         self.assertIn("formatted item 1", streamed)
         self.assertIn("formatted item 2", streamed)
 
-    async def test_oversized_single_item_is_split_by_top_level_fields(self):
+    async def test_oversized_single_item_uses_direct_llm_formatter_by_default(self):
+        GeneralAgent = self._load_general_agent_class()
+
+        agent = GeneralAgent.__new__(GeneralAgent)
+        agent.llm = FakeLlm(stream_outputs=["formatted oversized item"])
+        agent.memory = FakeMemory()
+        agent.logger = FakeLogger()
+        agent._last_user_prompt = "show patent details"
+        agent._pending_raw_items = [
+            {
+                "applicationMetaData": {
+                    "earliestPublicationNumber": "US20250014493A1",
+                    "largeValue": "x" * 30000,
+                },
+                "eventDataBag": [
+                    {
+                        "eventDescriptionText": "Recordation of Patent eGrant",
+                        "largeValue": "y" * 30000,
+                    }
+                ],
+            }
+        ]
+        callback_handler = FakeCallbackHandler()
+
+        await agent.invoke_agent(agent=None, callback_handler=callback_handler)
+
+        streamed = "".join(callback_handler.tokens)
+        self.assertEqual(len(agent.llm.stream_calls), 1)
+        self.assertIn("formatted oversized item", streamed)
+        self.assertIn('"applicationMetaData"', agent.llm.stream_calls[0]["user_content"])
+        self.assertIn('"eventDataBag"', agent.llm.stream_calls[0]["user_content"])
+
+    async def test_existing_batch_formatting_mode_splits_oversized_single_item(self):
         GeneralAgent = self._load_general_agent_class()
 
         agent = GeneralAgent.__new__(GeneralAgent)
@@ -674,7 +707,8 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
         ]
         callback_handler = FakeCallbackHandler()
 
-        await agent.invoke_agent(agent=None, callback_handler=callback_handler)
+        with patch.dict(os.environ, {"GENERAL_AGENT_BATCH_FORMATTING_MODE": "existing"}):
+            await agent.invoke_agent(agent=None, callback_handler=callback_handler)
 
         streamed = "".join(callback_handler.tokens)
         self.assertEqual(len(agent.llm.stream_calls), 2)
