@@ -33,6 +33,26 @@ export function buildImageRetryUrl(src, attempt, now = Date.now, options = {}) {
   }
 }
 
+function showImageFallbackLink(img, originalSrc) {
+  if (!img || !originalSrc || img.dataset?.imageFallbackAttached === 'true') return null
+
+  const doc = img.ownerDocument
+  const parent = img.parentNode
+  if (!doc?.createElement || !parent?.insertBefore) return null
+
+  const link = doc.createElement('a')
+  link.className = 'image-fallback-link'
+  link.href = originalSrc
+  link.textContent = originalSrc
+  link.target = '_blank'
+  link.rel = 'noopener noreferrer'
+
+  img.dataset.imageFallbackAttached = 'true'
+  img.style.display = 'none'
+  parent.insertBefore(link, img.nextSibling)
+  return link
+}
+
 export function attachImageRetryHandlers(root, options = {}) {
   if (!root?.querySelectorAll) return () => {}
 
@@ -43,6 +63,7 @@ export function attachImageRetryHandlers(root, options = {}) {
   const random = resolved.random || Math.random
   const timers = new Set()
   const cleanups = []
+  const fallbackLinks = new Set()
   const images = Array.from(root.querySelectorAll('img'))
 
   images.forEach((img) => {
@@ -69,6 +90,8 @@ export function attachImageRetryHandlers(root, options = {}) {
         img.classList?.remove('image-loading', 'image-retrying')
         img.classList?.add('image-load-failed')
         img.style.opacity = '1'
+        const fallbackLink = showImageFallbackLink(img, originalSrc)
+        if (fallbackLink) fallbackLinks.add(fallbackLink)
         resolved.onFinalError?.(img)
         return
       }
@@ -101,6 +124,10 @@ export function attachImageRetryHandlers(root, options = {}) {
   return () => {
     timers.forEach((timerId) => clearTimer(timerId))
     timers.clear()
+    fallbackLinks.forEach((link) => {
+      if (link.parentNode?.removeChild) link.parentNode.removeChild(link)
+    })
+    fallbackLinks.clear()
     cleanups.forEach((cleanup) => cleanup())
   }
 }

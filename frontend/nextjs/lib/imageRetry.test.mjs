@@ -6,11 +6,37 @@ import { attachImageRetryHandlers, buildImageRetryUrl, getImageRetryDelay } from
 function createImage(src) {
   const listeners = new Map()
   const classes = new Set()
+  const parentNode = {
+    insertedNodes: [],
+    insertBefore(node, referenceNode) {
+      this.insertedNodes.push({ node, referenceNode })
+      node.parentNode = this
+    },
+    removeChild(node) {
+      this.insertedNodes = this.insertedNodes.filter((entry) => entry.node !== node)
+      node.parentNode = null
+    },
+  }
 
   return {
     dataset: {},
     style: {},
     src,
+    parentNode,
+    nextSibling: null,
+    ownerDocument: {
+      createElement(tagName) {
+        return {
+          tagName: tagName.toUpperCase(),
+          className: '',
+          href: '',
+          textContent: '',
+          target: '',
+          rel: '',
+          parentNode: null,
+        }
+      },
+    },
     complete: false,
     naturalWidth: 0,
     getAttribute(name) {
@@ -98,6 +124,27 @@ test('retries failed images before marking them failed', () => {
 
   img.fire('error')
   assert.equal(img.classList.contains('image-load-failed'), true)
+})
+
+test('shows the original image link when retries are exhausted', () => {
+  const img = createImage('https://example.com/photo.jpg?size=large')
+
+  attachImageRetryHandlers(rootWithImages([img]), {
+    maxRetries: 0,
+  })
+
+  img.fire('error')
+
+  assert.equal(img.style.display, 'none')
+  assert.equal(img.parentNode.insertedNodes.length, 1)
+
+  const fallbackLink = img.parentNode.insertedNodes[0].node
+  assert.equal(fallbackLink.tagName, 'A')
+  assert.equal(fallbackLink.className, 'image-fallback-link')
+  assert.equal(fallbackLink.href, 'https://example.com/photo.jpg?size=large')
+  assert.equal(fallbackLink.textContent, 'https://example.com/photo.jpg?size=large')
+  assert.equal(fallbackLink.target, '_blank')
+  assert.equal(fallbackLink.rel, 'noopener noreferrer')
 })
 
 test('cleanup removes listeners and clears pending retry timers', () => {
