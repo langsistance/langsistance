@@ -1,5 +1,13 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import {
+  createContext,
+  createElement,
+  useState,
+  useEffect,
+  useCallback,
+  useContext,
+  useMemo,
+} from 'react'
 
 export type LangKey = 'en' | 'zh' | 'ja' | 'ko' | 'es' | 'fr' | 'de'
 
@@ -15,10 +23,22 @@ export const LANGUAGE_NAMES: Record<LangKey, string> = {
 
 const STORAGE_KEY = 'landing-language'
 
+interface LandingI18nContextValue {
+  lang: LangKey
+  setLanguage: (lang: LangKey) => void
+  t: (key: string) => string
+}
+
 export const LANDING_TRANSLATIONS: Record<LangKey, Record<string, string>> = {
   en: {
     'header.extension': 'Chrome Extension',
     'header.desktop': 'Desktop App Coming Soon',
+    'header.docs': 'Documentation',
+    'header.examples': 'Use Case Examples',
+    'header.signin': 'Sign In',
+    'header.workspace': 'My Workspace',
+    'examples.usptoChina.title': 'USPTO search for China-based users with CopiioAI',
+    'examples.usptoChina.summary': 'Query US patent information, documents, assignees, and keyword results by chat.',
     'hero.title1': 'Turn any API into a chat.',
     'hero.title2': 'No frontend required.',
     'hero.subtitle1': 'For developers: Build and share chat-based tools powered by your APIs.',
@@ -77,6 +97,12 @@ export const LANDING_TRANSLATIONS: Record<LangKey, Record<string, string>> = {
   zh: {
     'header.extension': 'Chrome 扩展',
     'header.desktop': '桌面应用即将推出',
+    'header.docs': '文档',
+    'header.examples': '使用场景示例',
+    'header.signin': '登录',
+    'header.workspace': '我的工作区',
+    'examples.usptoChina.title': '国内用户使用 CopiioAI 检索 USPTO',
+    'examples.usptoChina.summary': '用聊天方式查询美国专利信息、文档、申请人和关键词结果。',
     'hero.title1': '将任何 API 转换为对话。',
     'hero.title2': '无需前端开发。',
     'hero.subtitle1': '面向开发者：构建并分享由 API 驱动的聊天工具。',
@@ -135,6 +161,12 @@ export const LANDING_TRANSLATIONS: Record<LangKey, Record<string, string>> = {
   ja: {
     'header.extension': 'Chrome拡張機能',
     'header.desktop': 'デスクトップアプリ近日公開',
+    'header.docs': 'ドキュメント',
+    'header.examples': 'ユースケース例',
+    'header.signin': 'サインイン',
+    'header.workspace': 'マイワークスペース',
+    'examples.usptoChina.title': 'CopiioAIで中国国内ユーザー向けにUSPTOを検索',
+    'examples.usptoChina.summary': 'チャットで米国特許情報、文書、譲受人、キーワード結果を検索できます。',
     'hero.title1': '任意のAPIをチャットに変換。',
     'hero.title2': 'フロントエンド不要。',
     'hero.subtitle1': '開発者向け：APIを活用したチャットベースのツールを構築・共有。',
@@ -193,6 +225,12 @@ export const LANDING_TRANSLATIONS: Record<LangKey, Record<string, string>> = {
   ko: {
     'header.extension': 'Chrome 확장 프로그램',
     'header.desktop': '데스크톱 앱 출시 예정',
+    'header.docs': '문서',
+    'header.examples': '사용 사례 예시',
+    'header.signin': '로그인',
+    'header.workspace': '내 작업 공간',
+    'examples.usptoChina.title': 'CopiioAI로 중국 사용자용 USPTO 검색',
+    'examples.usptoChina.summary': '채팅으로 미국 특허 정보, 문서, 양수인, 키워드 결과를 조회합니다.',
     'hero.title1': '모든 API를 채팅으로 변환.',
     'hero.title2': '프론트엔드 불필요.',
     'hero.subtitle1': '개발자용: API 기반 채팅 도구를 구축하고 공유하세요.',
@@ -251,6 +289,12 @@ export const LANDING_TRANSLATIONS: Record<LangKey, Record<string, string>> = {
   es: {
     'header.extension': 'Extensión de Chrome',
     'header.desktop': 'Aplicación de escritorio próximamente',
+    'header.docs': 'Documentación',
+    'header.examples': 'Ejemplos de uso',
+    'header.signin': 'Iniciar sesión',
+    'header.workspace': 'Mi espacio de trabajo',
+    'examples.usptoChina.title': 'Búsqueda de USPTO para usuarios en China con CopiioAI',
+    'examples.usptoChina.summary': 'Consulta información de patentes de EE. UU., documentos, cesionarios y resultados por palabras clave mediante chat.',
     'hero.title1': 'Convierte cualquier API en un chat.',
     'hero.title2': 'No se requiere frontend.',
     'hero.subtitle1': 'Para desarrolladores: Crea y comparte herramientas de chat impulsadas por tus APIs.',
@@ -309,6 +353,12 @@ export const LANDING_TRANSLATIONS: Record<LangKey, Record<string, string>> = {
   fr: {
     'header.extension': 'Extension Chrome',
     'header.desktop': 'Application de bureau bientôt disponible',
+    'header.docs': 'Documentation',
+    'header.examples': "Exemples d'utilisation",
+    'header.signin': 'Se connecter',
+    'header.workspace': 'Mon espace de travail',
+    'examples.usptoChina.title': 'Recherche USPTO pour les utilisateurs en Chine avec CopiioAI',
+    'examples.usptoChina.summary': 'Recherchez par chat des informations de brevets américains, des documents, des cessionnaires et des résultats par mots-clés.',
     'hero.title1': "Transformez n'importe quelle API en chat.",
     'hero.title2': 'Aucun frontend requis.',
     'hero.subtitle1': 'Pour les développeurs : Créez et partagez des outils de chat alimentés par vos APIs.',
@@ -367,6 +417,12 @@ export const LANDING_TRANSLATIONS: Record<LangKey, Record<string, string>> = {
   de: {
     'header.extension': 'Chrome-Erweiterung',
     'header.desktop': 'Desktop-App kommt bald',
+    'header.docs': 'Dokumentation',
+    'header.examples': 'Anwendungsbeispiele',
+    'header.signin': 'Anmelden',
+    'header.workspace': 'Mein Arbeitsbereich',
+    'examples.usptoChina.title': 'USPTO-Suche für Nutzer in China mit CopiioAI',
+    'examples.usptoChina.summary': 'US-Patentinformationen, Dokumente, Anmelder und Keyword-Ergebnisse per Chat abfragen.',
     'hero.title1': 'Verwandle jede API in einen Chat.',
     'hero.title2': 'Kein Frontend erforderlich.',
     'hero.subtitle1': 'Für Entwickler: Erstelle und teile Chat-basierte Tools, die von deinen APIs angetrieben werden.',
@@ -424,8 +480,10 @@ export const LANDING_TRANSLATIONS: Record<LangKey, Record<string, string>> = {
   },
 }
 
-export function useLandingI18n() {
-  // Default 'en' for SSR safety; stored language applied after hydration via useEffect
+const LandingI18nContext = createContext<LandingI18nContextValue | null>(null)
+
+export function LandingI18nProvider({ children }: { children: React.ReactNode }) {
+  // Default 'en' for SSR safety; stored language applied after hydration via useEffect.
   const [lang, setLangState] = useState<LangKey>('en')
 
   useEffect(() => {
@@ -446,5 +504,16 @@ export function useLandingI18n() {
     return LANDING_TRANSLATIONS[lang]?.[key] ?? LANDING_TRANSLATIONS.en[key] ?? key
   }, [lang])
 
-  return { lang, setLanguage, t }
+  const value = useMemo(() => ({ lang, setLanguage, t }), [lang, setLanguage, t])
+
+  return createElement(LandingI18nContext.Provider, { value }, children)
+}
+
+export function useLandingI18n() {
+  const ctx = useContext(LandingI18nContext)
+  if (!ctx) {
+    throw new Error('useLandingI18n must be used within LandingI18nProvider')
+  }
+
+  return ctx
 }

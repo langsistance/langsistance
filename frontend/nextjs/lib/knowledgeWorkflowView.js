@@ -43,6 +43,22 @@ export function getWorkflowStepLabels(params, knowledgeNamesById = {}, lang = 'e
   ))
 }
 
+export function getKnowledgeNamesByIdFromExtraInfo(extraInfo) {
+  const dependencies = extraInfo?.workflow_dependencies
+  if (!Array.isArray(dependencies)) {
+    return {}
+  }
+
+  return dependencies.reduce((namesById, dependency) => {
+    const knowledgeId = Number(dependency?.knowledge_id)
+    const question = String(dependency?.question || '').trim()
+    if (Number.isFinite(knowledgeId) && knowledgeId > 0 && question) {
+      namesById[knowledgeId] = question
+    }
+    return namesById
+  }, {})
+}
+
 export function getWorkflowInstructionsForReadOnly(answer, stepCount) {
   return getWorkflowInstructionsEditorValue(answer, stepCount).trim()
 }

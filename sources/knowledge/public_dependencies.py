@@ -88,3 +88,38 @@ def promote_public_workflow_dependencies(
         (2, user_id, *ids_to_promote),
     )
     return ids_to_promote
+
+
+def fetch_workflow_dependency_questions(cursor, params: Any) -> list[dict[str, Any]]:
+    dependency_ids = extract_workflow_dependency_ids(params)
+    if not dependency_ids:
+        return []
+
+    placeholders = ",".join(["%s"] * len(dependency_ids))
+    cursor.execute(
+        f"""
+        SELECT id, question, `type`, params
+        FROM knowledge
+        WHERE id IN ({placeholders})
+          AND public = %s
+          AND status = 1
+        """,
+        (*dependency_ids, 2),
+    )
+    rows = cursor.fetchall() or []
+    rows_by_id = {
+        int(row["id"]): row
+        for row in rows
+        if infer_knowledge_type(row.get("type"), row.get("params")) == 1
+    }
+
+    dependencies: list[dict[str, Any]] = []
+    for knowledge_id in dependency_ids:
+        row = rows_by_id.get(knowledge_id)
+        question = str(row.get("question") or "").strip() if row else ""
+        if question:
+            dependencies.append({
+                "knowledge_id": knowledge_id,
+                "question": question,
+            })
+    return dependencies

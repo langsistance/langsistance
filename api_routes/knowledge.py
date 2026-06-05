@@ -20,7 +20,10 @@ from sources.knowledge.query_filters import (
 )
 from sources.knowledge.copying import KnowledgeCopyError, copy_knowledge_to_user
 from sources.knowledge.embedding_text import build_knowledge_embedding_text
-from sources.knowledge.public_dependencies import promote_public_workflow_dependencies
+from sources.knowledge.public_dependencies import (
+    fetch_workflow_dependency_questions,
+    promote_public_workflow_dependencies,
+)
 from sources.knowledge.type_utils import infer_knowledge_type
 from sources.logger import Logger
 from sources.user.passport import verify_firebase_token, get_user_by_id
@@ -839,6 +842,11 @@ async def query_public_knowledge(
                     knowledge_item.extra_info = {
                         "email": user_info['email']
                     }
+
+                workflow_dependencies = fetch_workflow_dependency_questions(cursor, knowledge_item.params)
+                if workflow_dependencies:
+                    knowledge_item.extra_info = knowledge_item.extra_info or {}
+                    knowledge_item.extra_info["workflow_dependencies"] = workflow_dependencies
 
                 # 处理时间字段
                 if row['create_time']:

@@ -63,6 +63,33 @@ class TestKnowledgePublicDependencies(unittest.TestCase):
         self.assertIn("UPDATE knowledge", update_sql)
         self.assertEqual(update_params, (2, "user-1", 101))
 
+    def test_fetches_public_normal_dependency_questions_in_workflow_order(self):
+        from sources.knowledge.public_dependencies import fetch_workflow_dependency_questions
+
+        params = json.dumps({
+            "type": "workflow",
+            "steps": [
+                {"knowledge_id": 101},
+                {"knowledge_id": "102"},
+            ],
+        })
+        cursor = FakeCursor([
+            {"id": 102, "question": "Download patent PDF"},
+            {"id": 101, "question": "Find patents by publication ID"},
+        ])
+
+        dependencies = fetch_workflow_dependency_questions(cursor, params)
+
+        self.assertEqual(dependencies, [
+            {"knowledge_id": 101, "question": "Find patents by publication ID"},
+            {"knowledge_id": 102, "question": "Download patent PDF"},
+        ])
+        select_sql, select_params = cursor.calls[0]
+        self.assertIn("SELECT id, question", select_sql)
+        self.assertIn("public = %s", select_sql)
+        self.assertIn("status = 1", select_sql)
+        self.assertEqual(select_params, (101, 102, 2))
+
     def test_skips_dependency_updates_when_workflow_is_private(self):
         from sources.knowledge.public_dependencies import promote_public_workflow_dependencies
 

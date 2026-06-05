@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  getKnowledgeNamesByIdFromExtraInfo,
   getWorkflowInstructionsForReadOnly,
   getWorkflowStepLabels,
   isWorkflowKnowledgeItem,
@@ -37,6 +38,23 @@ test('formats workflow step labels with fallback IDs', () => {
       'en'
     ),
     ['Find patents', 'Knowledge #102']
+  )
+})
+
+test('maps workflow dependency metadata to knowledge names by id', () => {
+  assert.deepEqual(
+    getKnowledgeNamesByIdFromExtraInfo({
+      workflow_dependencies: [
+        { knowledge_id: 101, question: 'Find patents by publication ID' },
+        { knowledge_id: '102', question: 'Download patent PDF' },
+        { knowledge_id: 103, question: '' },
+        { knowledge_id: 'bad', question: 'Ignored' },
+      ],
+    }),
+    {
+      101: 'Find patents by publication ID',
+      102: 'Download patent PDF',
+    }
   )
 })
 

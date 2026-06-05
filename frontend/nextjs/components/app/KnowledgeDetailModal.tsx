@@ -4,6 +4,7 @@ import type { ReactNode } from 'react'
 import { useI18n } from '@/lib/app-i18n'
 import { getKnowledgeTypeBadge } from '@/lib/knowledgeTypeBadge'
 import {
+  getKnowledgeNamesByIdFromExtraInfo,
   getWorkflowInstructionsForReadOnly,
   getWorkflowStepLabels,
   isWorkflowKnowledgeItem,
@@ -16,6 +17,19 @@ export interface KnowledgeDetailItem {
   description?: string
   type?: number | string
   params?: string
+  extra_info?: {
+    email?: string
+    from_user_email?: string
+    to_user_email?: string
+    status?: number
+    share_id?: number
+    share_create_time?: string
+    share_update_time?: string
+    workflow_dependencies?: Array<{
+      knowledge_id?: number | string
+      question?: string
+    }>
+  }
 }
 
 function CloseIcon() {
@@ -43,7 +57,12 @@ export default function KnowledgeDetailModal({
   const { t, lang } = useI18n()
   const isWorkflow = isWorkflowKnowledgeItem(item)
   const typeBadge = getKnowledgeTypeBadge(item.type, lang, item.params)
-  const stepLabels = getWorkflowStepLabels(item.params, knowledgeNamesById, lang) as string[]
+  const dependencyNamesById = getKnowledgeNamesByIdFromExtraInfo(item.extra_info)
+  const stepLabels = getWorkflowStepLabels(
+    item.params,
+    { ...dependencyNamesById, ...knowledgeNamesById },
+    lang
+  ) as string[]
   const instructions = getWorkflowInstructionsForReadOnly(item.answer, stepLabels.length) as string
 
   return (
