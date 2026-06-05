@@ -42,7 +42,9 @@ Return JSON only.
 Rules:
 - First identify the user's core goal: the main thing they are asking the tool or assistant to retrieve, search, list, summarize, or answer.
 - If the question has only a single core goal, treat that goal as the task itself, not a result filter. For example, "find patent documents for application 18893954" has no result filter; the application number is part of the core goal.
+- Do not treat the first or only constraint used to retrieve the core result set as a result filter, even when it names an item field, role, attribute, property, or value. For example, "Search for records with Acme Corp as the owner" has no result filter; owner=Acme Corp is the core retrieval constraint.
 - A possible result filter is usually a supplemental condition added on top of the core goal. It narrows which returned result items should be kept or removed after the core result set is obtained.
+- Only conditions beyond the core retrieval constraints can be filters. For example, in "Search for records with Acme Corp as the owner. I only want records whose owner type is organization rather than natural person", owner=Acme Corp is core retrieval and owner type is the supplemental result filter.
 - A supplemental condition can be stated as a second sentence or clause after the core goal. If it clearly restricts returned items by an attribute, category, entity type, status, date/range, source, language, location, or similar item property, treat it as a result filter.
 - Wording like "I only want results whose X is Y rather than Z" is a result filter when X/Y/Z describe returned item properties; for example, "whose entity type is an organization, not a natural person".
 - A result filter narrows which returned items should be kept or removed.

@@ -122,6 +122,34 @@ class TestToolResultFilter(unittest.IsolatedAsyncioTestCase):
         self.assertIn("single core goal", criteria_prompt)
         self.assertIn("not a result filter", criteria_prompt)
 
+    async def test_criteria_prompt_treats_single_retrieval_constraint_as_core_goal(self):
+        from sources.tool_result_filter import filter_tool_result_items
+
+        items = [{"name": "Alpha"}]
+        llm_calls = []
+
+        async def llm_json_call(system_prompt, user_content):
+            llm_calls.append({
+                "system_prompt": system_prompt,
+                "user_content": user_content,
+            })
+            return {
+                "has_filter_criteria": False,
+                "filter_criteria": "",
+            }
+
+        await filter_tool_result_items(
+            items,
+            "Search for records with Acme Corp as the owner.",
+            llm_json_call,
+        )
+
+        self.assertEqual(len(llm_calls), 1)
+        criteria_prompt = llm_calls[0]["system_prompt"]
+        self.assertIn("first or only constraint", criteria_prompt)
+        self.assertIn("used to retrieve the core result set", criteria_prompt)
+        self.assertIn("not a result filter", criteria_prompt)
+
     async def test_criteria_prompt_allows_supplemental_attribute_constraints_as_filters(self):
         from sources.tool_result_filter import filter_tool_result_items
 
