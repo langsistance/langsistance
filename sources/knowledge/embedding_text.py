@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 
 
 def _clean_part(value: Any) -> str:
@@ -7,8 +7,8 @@ def _clean_part(value: Any) -> str:
 
 def build_knowledge_embedding_text(
     question: str,
-    description: str | None = "",
-    answer: str | None = "",
+    description: Optional[str] = "",
+    answer: Optional[str] = "",
 ) -> str:
     parts = []
     question_text = _clean_part(question)

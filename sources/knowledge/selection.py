@@ -1,8 +1,8 @@
 import json
-from typing import Any, Awaitable, Callable, Iterable
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 
-KnowledgeToolCandidate = tuple[Any, Any | None]
+KnowledgeToolCandidate = Tuple[Any, Optional[Any]]
 CompleteJson = Callable[[str, str], Awaitable[Any]]
 
 MAX_ROUTING_TEXT_CHARS = 1200
@@ -34,7 +34,7 @@ def _knowledge_type_label(knowledge: Any) -> str:
     return "normal"
 
 
-def _candidate_similarity(knowledge: Any) -> float | None:
+def _candidate_similarity(knowledge: Any) -> Optional[float]:
     extra_info = getattr(knowledge, "extra_info", None)
     if isinstance(extra_info, dict) and extra_info.get("similarity") is not None:
         try:
@@ -44,7 +44,7 @@ def _candidate_similarity(knowledge: Any) -> float | None:
     return None
 
 
-def build_routing_candidate_payload(candidates: Iterable[KnowledgeToolCandidate]) -> list[dict[str, Any]]:
+def build_routing_candidate_payload(candidates: Iterable[KnowledgeToolCandidate]) -> List[Dict[str, Any]]:
     payload = []
     for knowledge, tool in candidates:
         item = {
@@ -105,8 +105,8 @@ def _parse_confidence(value: Any) -> float:
 
 
 def _candidate_by_knowledge_id(
-    candidates: list[KnowledgeToolCandidate],
-) -> dict[int, KnowledgeToolCandidate]:
+    candidates: List[KnowledgeToolCandidate],
+) -> Dict[int, KnowledgeToolCandidate]:
     indexed = {}
     for candidate in candidates:
         knowledge = candidate[0]
@@ -122,7 +122,7 @@ async def choose_knowledge_candidate(
     candidates: Iterable[KnowledgeToolCandidate],
     complete_json: CompleteJson,
     min_confidence: float = MIN_ROUTING_CONFIDENCE,
-) -> KnowledgeToolCandidate | None:
+) -> Optional[KnowledgeToolCandidate]:
     candidate_list = list(candidates)
     if not candidate_list:
         return None

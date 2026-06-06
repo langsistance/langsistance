@@ -1,10 +1,10 @@
 import json
-from typing import Any
+from typing import Any, Dict, List, Optional, Set
 
 from sources.knowledge.type_utils import infer_knowledge_type
 
 
-def _parse_workflow_params(params: Any) -> dict[str, Any] | None:
+def _parse_workflow_params(params: Any) -> Optional[Dict[str, Any]]:
     if isinstance(params, dict):
         return params
     if not isinstance(params, str) or not params.strip():
@@ -16,7 +16,7 @@ def _parse_workflow_params(params: Any) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def extract_workflow_dependency_ids(params: Any) -> list[int]:
+def extract_workflow_dependency_ids(params: Any) -> List[int]:
     workflow = _parse_workflow_params(params)
     if not workflow or workflow.get("type") != "workflow":
         return []
@@ -25,8 +25,8 @@ def extract_workflow_dependency_ids(params: Any) -> list[int]:
     if not isinstance(steps, list):
         return []
 
-    dependency_ids: list[int] = []
-    seen: set[int] = set()
+    dependency_ids: List[int] = []
+    seen: Set[int] = set()
     for step in steps:
         if not isinstance(step, dict):
             continue
@@ -44,10 +44,10 @@ def extract_workflow_dependency_ids(params: Any) -> list[int]:
 def promote_public_workflow_dependencies(
     cursor,
     user_id: str,
-    public: int | None,
-    knowledge_type: int | None,
+    public: Optional[int],
+    knowledge_type: Optional[int],
     params: Any,
-) -> list[int]:
+) -> List[int]:
     if public != 2 or infer_knowledge_type(knowledge_type, params) != 2:
         return []
 
@@ -90,7 +90,7 @@ def promote_public_workflow_dependencies(
     return ids_to_promote
 
 
-def fetch_workflow_dependency_questions(cursor, params: Any) -> list[dict[str, Any]]:
+def fetch_workflow_dependency_questions(cursor, params: Any) -> List[Dict[str, Any]]:
     dependency_ids = extract_workflow_dependency_ids(params)
     if not dependency_ids:
         return []
@@ -113,7 +113,7 @@ def fetch_workflow_dependency_questions(cursor, params: Any) -> list[dict[str, A
         if infer_knowledge_type(row.get("type"), row.get("params")) == 1
     }
 
-    dependencies: list[dict[str, Any]] = []
+    dependencies: List[Dict[str, Any]] = []
     for knowledge_id in dependency_ids:
         row = rows_by_id.get(knowledge_id)
         question = str(row.get("question") or "").strip() if row else ""

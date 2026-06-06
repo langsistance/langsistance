@@ -1,7 +1,7 @@
-from typing import Any, Iterable
+from typing import Any, Iterable, List, Optional, Tuple, Union
 
 
-def _normalize_push_filter(push_filter: int | str | None) -> int | None:
+def _normalize_push_filter(push_filter: Union[int, str, None]) -> Optional[int]:
     if push_filter is None:
         return None
     if isinstance(push_filter, bool):
@@ -9,7 +9,7 @@ def _normalize_push_filter(push_filter: int | str | None) -> int | None:
     return int(push_filter)
 
 
-def _normalize_ids(ids: Iterable[Any] | None) -> list[Any]:
+def _normalize_ids(ids: Optional[Iterable[Any]]) -> List[Any]:
     if ids is None:
         return []
     return list(ids)
@@ -21,7 +21,7 @@ def _id_from_row(row: Any) -> Any:
     return row[0]
 
 
-def fetch_push_tool_ids(cursor: Any, push_filter: int | str | None) -> list[Any] | None:
+def fetch_push_tool_ids(cursor: Any, push_filter: Union[int, str, None]) -> Optional[List[Any]]:
     normalized_push_filter = _normalize_push_filter(push_filter)
     if normalized_push_filter is None:
         return None
@@ -40,9 +40,9 @@ def fetch_push_tool_ids(cursor: Any, push_filter: int | str | None) -> list[Any]
 
 def fetch_push_knowledge_ids(
     cursor: Any,
-    push_filter: int | str | None,
-    push_tool_ids: Iterable[Any] | None = None,
-) -> list[Any] | None:
+    push_filter: Union[int, str, None],
+    push_tool_ids: Optional[Iterable[Any]] = None,
+) -> Optional[List[Any]]:
     normalized_push_filter = _normalize_push_filter(push_filter)
     if normalized_push_filter is None:
         return None
@@ -67,10 +67,10 @@ def fetch_push_knowledge_ids(
 
 
 def build_knowledge_push_filter_condition(
-    push_filter: int | str | None,
-    push_tool_ids: Iterable[Any] | None = None,
+    push_filter: Union[int, str, None],
+    push_tool_ids: Optional[Iterable[Any]] = None,
     knowledge_table: str = "knowledge",
-) -> tuple[str, list[Any]]:
+) -> Tuple[str, List[Any]]:
     normalized_push_filter = _normalize_push_filter(push_filter)
     if normalized_push_filter is None:
         return "", []
@@ -97,10 +97,10 @@ def build_knowledge_push_filter_condition(
 
 
 def build_share_push_filter_condition(
-    push_filter: int | str | None,
-    push_knowledge_ids: Iterable[Any] | None = None,
+    push_filter: Union[int, str, None],
+    push_knowledge_ids: Optional[Iterable[Any]] = None,
     share_table: str = "knowledge_share",
-) -> tuple[str, list[Any]]:
+) -> Tuple[str, List[Any]]:
     normalized_push_filter = _normalize_push_filter(push_filter)
     if normalized_push_filter is None:
         return "", []
