@@ -59,7 +59,7 @@ REDIS_CONFIG = {
 
 EMBEDDING_CONFIG = {
     "provider":"siliconflow",
-    "model": "BAAI/bge-large-zh-v1.5",
+    "model": "BAAI/bge-m3",
     "api_key":  "",
     "base_url":  "https://api.siliconflow.cn/v1",
 }
@@ -90,6 +90,7 @@ def get_redis_connection():
 # ============================================================================
 
 def build_embedding_text(question, description, answer):
+    """Build embedding text — same logic as project's embedding_text.py."""
     def clean(value):
         return " ".join(("" if value is None else str(value)).split())
     parts = []
@@ -101,14 +102,13 @@ def build_embedding_text(question, description, answer):
 
 
 def get_embedding(text):
+    """Call embedding API. BGE-M3 supports up to 8192 tokens, no truncation needed."""
     from openai import OpenAI
-
     cfg = EMBEDDING_CONFIG
     if cfg["provider"] == "openai":
         client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
     else:
         client = OpenAI(api_key=cfg["api_key"], base_url=cfg["base_url"])
-
     return client.embeddings.create(model=cfg["model"], input=text).data[0].embedding
 
 
