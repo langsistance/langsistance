@@ -32,6 +32,20 @@ logger = Logger("backend.log")
 router = APIRouter()
 
 
+def _get_model_name_from_config() -> str:
+    """Read the current LLM model name from config.ini, falling back to gpt-4o-mini."""
+    import os
+    import configparser
+    try:
+        config = configparser.ConfigParser()
+        config.read(os.path.join(os.path.dirname(__file__), '..', 'config.ini'))
+        if config.has_section("MAIN"):
+            return config.get("MAIN", "provider_model", fallback="gpt-4o-mini")
+    except Exception:
+        pass
+    return "gpt-4o-mini"
+
+
 def _store_copied_knowledge_embedding(
         knowledge_id: int,
         question: str,
@@ -127,7 +141,7 @@ async def create_knowledge_record(request: KnowledgeCreateRequest, http_request:
                 request.description,
                 request.answer,
                 request.public,
-                "gpt-4o-mini",
+                _get_model_name_from_config(),
                 request.toolId or 0,
                 request.params or "",
                 1,

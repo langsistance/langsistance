@@ -2,6 +2,7 @@ import os
 import json
 import uuid
 import asyncio
+import configparser
 from openai import OpenAI
 import numpy as np
 from typing import Dict, List, Optional, Tuple, Any
@@ -19,11 +20,62 @@ import redis
 
 from sources.utility import pretty_print
 
-# 设置 OpenAI API 密钥
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    # base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com")  # 设置基础 URL
-)
+# ============================================================================
+# Embedding client configuration
+# ============================================================================
+
+def _get_embedding_config():
+    """Read embedding provider/model from config.ini with env var overrides.
+
+    Priority: env vars > config.ini > defaults
+    """
+    provider = os.getenv("EMBEDDING_PROVIDER")
+    model = os.getenv("EMBEDDING_MODEL")
+    api_key = os.getenv("EMBEDDING_API_KEY")
+    base_url = os.getenv("EMBEDDING_BASE_URL")
+
+    if not provider:
+        try:
+            config = configparser.ConfigParser()
+            config.read(os.path.join(os.path.dirname(__file__), '..', '..', 'config.ini'))
+            if config.has_section("EMBEDDING"):
+                provider = provider or config.get("EMBEDDING", "provider", fallback="siliconflow")
+                model = model or config.get("EMBEDDING", "model", fallback="BAAI/bge-large-zh-v1.5")
+        except Exception:
+            pass
+
+    provider = provider or "siliconflow"
+    model = model or "BAAI/bge-large-zh-v1.5"
+
+    provider_configs = {
+        "openai": {
+            "api_key": api_key or os.getenv("OPENAI_API_KEY"),
+            "base_url": base_url or None,
+            "model": model,
+        },
+        "siliconflow": {
+            "api_key": api_key or os.getenv("SILICONFLOW_API_KEY"),
+            "base_url": base_url or "https://api.siliconflow.cn/v1",
+            "model": model,
+        },
+    }
+
+    cfg = provider_configs.get(provider, provider_configs["siliconflow"])
+    return cfg
+
+
+_embedding_cfg = None
+
+
+def _get_embedding_client():
+    """Return (OpenAI client, model_name) configured for the embedding provider."""
+    global _embedding_cfg
+    if _embedding_cfg is None:
+        _embedding_cfg = _get_embedding_config()
+    kwargs = {"api_key": _embedding_cfg["api_key"]}
+    if _embedding_cfg["base_url"] is not None:
+        kwargs["base_url"] = _embedding_cfg["base_url"]
+    return OpenAI(**kwargs), _embedding_cfg["model"]
 
 # 存储用户知识库 {user_id: [{"id": str, "question": str, "answer": str, "embedding": list, "params": dict}]}
 user_knowledge_bases: Dict[str, List[Dict]] = {}
@@ -76,10 +128,15 @@ class ToolItem(BaseModel):
 
 
 def get_embedding(text: str) -> List[float]:
-    """使用 OpenAI 获取文本的嵌入向量"""
+    """获取文本的嵌入向量，使用配置的 embedding provider。
+
+    支持 SiliconFlow (BAAI/bge) 和 OpenAI (text-embedding-3) 等
+    OpenAI-compatible 的 embedding 服务。
+    """
     try:
-        response = client.embeddings.create(
-            model="text-embedding-3-small",
+        embedding_client, embedding_model = _get_embedding_client()
+        response = embedding_client.embeddings.create(
+            model=embedding_model,
             input=text
         )
         return response.data[0].embedding
@@ -167,7 +224,7 @@ def search_knowledge_base(user_id: str, query_embedding: List[float], user_vecto
 
 
 def generate_answer_with_context(question: str, context: List[Dict]) -> str:
-    """使用 OpenAI 生成基于上下文的答案"""
+    """使用配置的 LLM provider 生成基于上下文的答案"""
     if not context:
         return "抱歉，我在您的知识库中没有找到相关信息。"
 
@@ -186,8 +243,19 @@ def generate_answer_with_context(question: str, context: List[Dict]) -> str:
     """
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+        # Use the shared embedding client for chat completion since it's OpenAI-compatible
+        embedding_client, _ = _get_embedding_client()
+        # For chat, use a configurable model — prefer the MAIN provider model from config.ini
+        chat_model = os.getenv("EMBEDDING_CHAT_MODEL", "gpt-3.5-turbo")
+        try:
+            config = configparser.ConfigParser()
+            config.read(os.path.join(os.path.dirname(__file__), '..', '..', 'config.ini'))
+            if config.has_section("MAIN"):
+                chat_model = config.get("MAIN", "provider_model", fallback=chat_model)
+        except Exception:
+            pass
+        response = embedding_client.chat.completions.create(
+            model=chat_model,
             messages=[
                 {"role": "system", "content": "你是一个有帮助的助手，基于提供的上下文信息回答问题。"},
                 {"role": "user", "content": prompt}

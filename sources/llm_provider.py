@@ -85,7 +85,84 @@ class Provider:
             pretty_print(f"API key {api_key_var} not found in .env file. Please add it", color="warning")
             exit(1)
         return api_key
-    
+
+    def _get_langchain_llm(self, streaming=True, callback_handler=None):
+        """Return a ChatOpenAI instance configured for the current provider.
+
+        Supports openai, deepseek, and any OpenAI-compatible API by setting the
+        correct base_url and api_key per provider.
+        """
+        provider_configs = {
+            "openai": {
+                "api_key": self.api_key or os.getenv("OPENAI_API_KEY"),
+                "base_url": None,  # Use langchain-openai default
+            },
+            "deepseek": {
+                "api_key": self.api_key or os.getenv("DEEPSEEK_API_KEY"),
+                "base_url": "https://api.deepseek.com",
+            },
+            "together": {
+                "api_key": self.api_key or os.getenv("TOGETHER_API_KEY"),
+                "base_url": "https://api.together.xyz/v1",
+            },
+            "openrouter": {
+                "api_key": self.api_key or os.getenv("OPENROUTER_API_KEY"),
+                "base_url": "https://openrouter.ai/api/v1",
+            },
+            "google": {
+                "api_key": self.api_key or os.getenv("GOOGLE_API_KEY"),
+                "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+            },
+        }
+        cfg = provider_configs.get(self.provider_name, provider_configs["openai"])
+
+        kwargs = {
+            "model": self.model,
+            "api_key": cfg["api_key"],
+            "temperature": 0,
+            "streaming": streaming,
+        }
+        if cfg["base_url"] is not None:
+            kwargs["base_url"] = cfg["base_url"]
+        if callback_handler:
+            kwargs["callbacks"] = [callback_handler]
+
+        return ChatOpenAI(**kwargs)
+
+    def _get_raw_openai_client(self):
+        """Return a raw openai.OpenAI client configured for the current provider.
+
+        Used by methods that call the OpenAI SDK directly (e.g. deepseek_fn, together_fn).
+        """
+        provider_configs = {
+            "openai": {
+                "api_key": self.api_key or os.getenv("OPENAI_API_KEY"),
+                "base_url": None,
+            },
+            "deepseek": {
+                "api_key": self.api_key or os.getenv("DEEPSEEK_API_KEY"),
+                "base_url": "https://api.deepseek.com",
+            },
+            "together": {
+                "api_key": self.api_key or os.getenv("TOGETHER_API_KEY"),
+                "base_url": "https://api.together.xyz/v1",
+            },
+            "openrouter": {
+                "api_key": self.api_key or os.getenv("OPENROUTER_API_KEY"),
+                "base_url": "https://openrouter.ai/api/v1",
+            },
+            "google": {
+                "api_key": self.api_key or os.getenv("GOOGLE_API_KEY"),
+                "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+            },
+        }
+        cfg = provider_configs.get(self.provider_name, provider_configs["openai"])
+
+        kwargs = {"api_key": cfg["api_key"]}
+        if cfg["base_url"] is not None:
+            kwargs["base_url"] = cfg["base_url"]
+        return OpenAI(**kwargs)
+
     def get_internal_url(self):
         load_dotenv()
         url = os.getenv("DOCKER_INTERNAL_URL")
@@ -237,26 +314,12 @@ class Provider:
 
     def openai_fn(self, tools, history, verbose=False, callback_handler=None):
         """
-        Use openai to generate text.
+        Use openai to generate text. Supports tool-based agent orchestration via LangChain.
         """
         self.logger.info(f"tools:{tools}")
         self.logger.info(f"history:{history}")
-        llm = ChatOpenAI(
-            model=self.model,
-            api_key=self.api_key,
-            temperature=0,
-            callbacks=[callback_handler] if callback_handler else None
-        )
+        llm = self._get_langchain_llm(streaming=True, callback_handler=callback_handler)
 
-        # 定义一个提示模板，通常包含系统消息、历史消息、用户输入和Agent的临时思考区域
-        # prompt = ChatPromptTemplate.from_messages([
-        #     SystemMessage(content=history[1]["content"]),  # 这里使用SystemMessage，内容不会被模板解析
-            # MessagesPlaceholder 用于保留和注入对话历史（variable_name 需与调用时传入的键一致）
-            # MessagesPlaceholder(variable_name="chat_history"),
-            # HumanMessage 表示用户当前的输入（variable_name 需与调用时传入的键一致）
-        #     ("human", "{input}"),
-        #     MessagesPlaceholder("agent_scratchpad"),  # 用于存放Agent思考过程和工具调用的位置
-        # ])
         try:
 
             agent = create_agent(llm, tools, system_prompt=history[1]["content"])
@@ -351,16 +414,36 @@ class Provider:
         except Exception as e:
             raise Exception(f"Together AI API error: {str(e)}") from e
 
-    def deepseek_fn(self, tools, history, verbose=False):
+    def deepseek_fn(self, tools, history, verbose=False, callback_handler=None):
         """
-        Use deepseek api to generate text.
+        Use deepseek api to generate text. Supports tool-based agent orchestration
+        via LangChain when tools are provided, or simple chat completion otherwise.
         """
-        client = OpenAI(api_key=self.api_key, base_url="https://api.deepseek.com")
         if self.is_local:
             raise Exception("Deepseek (API) is not available for local use. Change config.ini")
+
+        # If tools are provided, use the LangChain agent path (same as openai_fn)
+        if tools:
+            self.logger.info(f"DeepSeek agent mode - tools:{tools}")
+            llm = self._get_langchain_llm(streaming=True, callback_handler=callback_handler)
+            try:
+                agent = create_agent(llm, tools, system_prompt=history[1]["content"])
+                response = agent.invoke({"messages": [{"role": "user", "content": history[0]["content"]}]})
+                self.logger.info(f"DeepSeek agent response:{response}")
+                if response is None:
+                    raise Exception("DeepSeek agent response is empty.")
+                thought = response["messages"][-1].content
+                if verbose:
+                    print(thought)
+                return thought
+            except Exception as e:
+                raise Exception(f"DeepSeek agent error: {str(e)}") from e
+
+        # Simple chat completion (no tools)
+        client = self._get_raw_openai_client()
         try:
             response = client.chat.completions.create(
-                model="deepseek-chat",
+                model=self.model,
                 messages=history,
                 stream=False
             )
@@ -487,26 +570,22 @@ class Provider:
 
     def openai_create(self, tools, history, callback_handler=None, verbose=False):
         """
-        Use openai to generate text.
+        Create a LangChain agent with the current provider.
+        Works with openai, deepseek, and any OpenAI-compatible API via _get_langchain_llm.
         """
         self.logger.info(f"create agent tools:{tools}")
         self.logger.info(f"create agent history:{history}")
-        llm = ChatOpenAI(
-            model=self.model,
-            api_key=self.api_key,
-            temperature=0,
-            streaming=True,
-            callbacks=[callback_handler] if callback_handler else None
-        )
+        llm = self._get_langchain_llm(streaming=True, callback_handler=callback_handler)
 
         try:
             return create_agent(llm, tools, system_prompt=history[1]["content"])
         except Exception as e:
-            raise Exception(f"OpenAI API error: {str(e)}") from e
+            raise Exception(f"{self.provider_name} agent creation error: {str(e)}") from e
 
     async def openai_invoke(self, agent, history, callback_handler=None):
         """
-        Use openai to generate text.
+        Invoke a LangChain agent. Works with any provider since the agent was
+        created with the correct ChatOpenAI config from openai_create().
         """
         self.logger.info(f"invoke agent history:{history}")
         try:
@@ -515,13 +594,11 @@ class Provider:
             raise e
 
     async def stream_simple(self, system_prompt: str, user_content: str, callback_handler=None):
-        """Stream a single chat completion directly, bypassing the agent framework."""
-        llm = ChatOpenAI(
-            model=self.model,
-            api_key=self.api_key,
-            temperature=0,
-            streaming=True,
-        )
+        """Stream a single chat completion directly, bypassing the agent framework.
+
+        Uses _get_langchain_llm so it works with openai, deepseek, and any
+        OpenAI-compatible provider."""
+        llm = self._get_langchain_llm(streaming=True)
         messages = [
             ("system", system_prompt),
             ("human", user_content),
@@ -531,13 +608,11 @@ class Provider:
                 await callback_handler.on_llm_new_token(chunk.content)
 
     async def complete_json(self, system_prompt: str, user_content: str):
-        """Run a non-streaming chat completion and parse a JSON object response."""
-        llm = ChatOpenAI(
-            model=self.model,
-            api_key=self.api_key,
-            temperature=0,
-            streaming=False,
-        )
+        """Run a non-streaming chat completion and parse a JSON object response.
+
+        Uses _get_langchain_llm so it works with openai, deepseek, and any
+        OpenAI-compatible provider."""
+        llm = self._get_langchain_llm(streaming=False)
         messages = [
             ("system", system_prompt),
             ("human", user_content),
