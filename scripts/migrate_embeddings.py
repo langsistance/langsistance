@@ -2,14 +2,12 @@
 """
 Re-compute embeddings for all active knowledge records and write to Redis.
 
+Standalone script — no project imports, reads config from .env file.
+
 Usage:
     cd langsistance
-    python scripts/migrate_embeddings.py              # migrate all status=1 records
-    python scripts/migrate_embeddings.py --dry-run    # preview without writing
-    python scripts/migrate_embeddings.py --batch 50   # batch size (default 20)
-
-Before running, make sure config.ini [EMBEDDING] is set to your new provider
-(e.g. siliconflow) and the corresponding API key is in .env.
+    python3 scripts/migrate_embeddings.py --dry-run    # preview first
+    python3 scripts/migrate_embeddings.py               # migrate all
 """
 
 import os
@@ -17,123 +15,168 @@ import sys
 import argparse
 import time
 
-# Ensure langsistance root is on sys.path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# ============================================================================
+# Load .env file from project root
+# ============================================================================
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)  # langsistance/
 
-from sources.knowledge.knowledge import get_embedding, get_db_connection, get_redis_connection
-from sources.knowledge.embedding_text import build_knowledge_embedding_text
-from sources.logger import Logger
+def load_env():
+    """Load .env from project root into os.environ."""
+    env_path = os.path.join(PROJECT_ROOT, ".env")
+    if not os.path.exists(env_path):
+        print(f"ERROR: .env not found at {env_path}")
+        sys.exit(1)
+    with open(env_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key = key.strip()
+            val = val.strip().strip("'").strip('"')
+            if key and val and key not in os.environ:
+                os.environ[key] = val
 
-logger = Logger("embedding_migration.log")
+load_env()
 
+# ============================================================================
+# Config — edit here if .env doesn't work
+# ============================================================================
+MYSQL_CONFIG = {
+    "host":   "172.31.17.139",
+    "port": 3306,
+    "user": "langsistance_user",
+    "password": "",
+    "database": "langsistance_db",
+    "charset":  "utf8mb4",
+}
+
+REDIS_CONFIG = {
+    "host": "172.31.17.139",
+    "port": 6379,
+}
+
+EMBEDDING_CONFIG = {
+    "provider":"siliconflow",
+    "model": "BAAI/bge-large-zh-v1.5",
+    "api_key":  "",
+    "base_url":  "https://api.siliconflow.cn/v1",
+}
+
+# ============================================================================
+# Database & Redis helpers
+# ============================================================================
+
+def get_db_connection():
+    import pymysql
+    import pymysql.cursors
+    return pymysql.connect(cursorclass=pymysql.cursors.DictCursor, **MYSQL_CONFIG)
+
+
+def get_redis_connection():
+    import redis
+    return redis.Redis(
+        host=REDIS_CONFIG["host"],
+        port=REDIS_CONFIG["port"],
+        decode_responses=True,
+        socket_connect_timeout=10,
+        socket_timeout=10,
+    )
+
+
+# ============================================================================
+# Embedding helpers
+# ============================================================================
+
+def build_embedding_text(question, description, answer):
+    def clean(value):
+        return " ".join(("" if value is None else str(value)).split())
+    parts = []
+    for label, val in [("Question", question), ("Routing hint", description), ("Knowledge content", answer)]:
+        c = clean(val)
+        if c:
+            parts.append(f"{label}:\n{c}")
+    return "\n\n".join(parts)
+
+
+def get_embedding(text):
+    from openai import OpenAI
+
+    cfg = EMBEDDING_CONFIG
+    if cfg["provider"] == "openai":
+        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+    else:
+        client = OpenAI(api_key=cfg["api_key"], base_url=cfg["base_url"])
+
+    return client.embeddings.create(model=cfg["model"], input=text).data[0].embedding
+
+
+# ============================================================================
+# Migration
+# ============================================================================
 
 def fetch_knowledge_records(status=1):
-    """Fetch all knowledge records with the given status from MySQL."""
-    connection = get_db_connection()
+    conn = get_db_connection()
     try:
-        with connection.cursor() as cursor:
-            sql = """
-                SELECT id, question, description, answer
-                FROM knowledge
-                WHERE status = %s
-                ORDER BY id
-            """
-            cursor.execute(sql, (status,))
-            rows = cursor.fetchall()
-            logger.info(f"Fetched {len(rows)} knowledge records with status={status}")
-            return rows
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, question, description, answer FROM knowledge WHERE status = %s ORDER BY id",
+                (status,),
+            )
+            return cur.fetchall()
     finally:
-        connection.close()
+        conn.close()
 
 
-def migrate_embeddings(dry_run=False, batch_size=20):
-    """
-    Re-compute embeddings for all active knowledge records.
-
-    Args:
-        dry_run: If True, only preview — don't write to Redis.
-        batch_size: Number of records to process between progress reports.
-    """
+def migrate(dry_run=False, batch_size=20):
     records = fetch_knowledge_records(status=1)
     total = len(records)
 
     if total == 0:
-        print("No active knowledge records found. Nothing to migrate.")
+        print("No active knowledge records found.")
         return
 
     print(f"Found {total} active knowledge records.")
     if dry_run:
-        print("DRY RUN — will not write to Redis.\n")
+        print("DRY RUN — will NOT write to Redis.\n")
     else:
-        print(f"Starting migration with batch size {batch_size}...\n")
+        print(f"Starting migration...\n")
 
-    redis_conn = None
-    if not dry_run:
-        redis_conn = get_redis_connection()
-
-    success_count = 0
-    error_count = 0
-    start_time = time.time()
+    redis_conn = None if dry_run else get_redis_connection()
+    ok, errors, t0 = 0, 0, time.time()
 
     for i, row in enumerate(records, 1):
-        knowledge_id = row["id"]
-        question = row["question"] or ""
-        description = row["description"] or ""
-        answer = row["answer"] or ""
-
+        kid = row["id"]
         try:
-            # Build embedding text the same way as knowledge.py
-            embedding_text = build_knowledge_embedding_text(question, description, answer)
-            embedding = get_embedding(embedding_text)
-
+            text = build_embedding_text(row["question"], row.get("description"), row.get("answer"))
+            vec = get_embedding(text)
             if not dry_run:
-                redis_key = f"knowledge_embedding_{knowledge_id}"
-                redis_conn.set(redis_key, str(embedding))
-                logger.info(f"Stored embedding for knowledge_id={knowledge_id}")
-
-            success_count += 1
-
+                redis_conn.set(f"knowledge_embedding_{kid}", str(vec))
+            ok += 1
         except Exception as e:
-            error_count += 1
-            logger.error(f"Failed knowledge_id={knowledge_id}: {str(e)}")
-            print(f"  [ERROR] id={knowledge_id}: {str(e)}")
+            errors += 1
+            print(f"  [ERROR] id={kid}: {e}")
             continue
 
-        # Progress report
         if i % batch_size == 0 or i == total:
-            elapsed = time.time() - start_time
-            rate = i / elapsed if elapsed > 0 else 0
-            status = "DRY RUN" if dry_run else "Migrated"
-            print(
-                f"  [{status}] {i}/{total} ({100*i//total}%) | "
-                f"OK: {success_count} | Errors: {error_count} | "
-                f"{rate:.1f} rec/s"
-            )
+            elapsed = time.time() - t0
+            label = "DRY RUN" if dry_run else "Migrated"
+            rate = f"{i / elapsed:.1f} rec/s" if elapsed > 0 else ""
+            print(f"  [{label}] {i}/{total} ({100 * i // total}%) | OK: {ok} | Errors: {errors} | {rate}")
 
-    elapsed = time.time() - start_time
-    print(f"\n{'='*60}")
+    elapsed = time.time() - t0
+    print(f"\n{'=' * 60}")
     if dry_run:
         print(f"DRY RUN complete — {total} records would be migrated.")
     else:
-        print(
-            f"Migration complete: {success_count} succeeded, {error_count} failed "
-            f"in {elapsed:.1f}s ({total/elapsed:.1f} rec/s avg)"
-        )
-    print(f"{'='*60}")
+        print(f"Done: {ok} ok, {errors} failed in {elapsed:.1f}s ({total / elapsed:.1f} rec/s)")
+    print(f"{'=' * 60}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Re-compute knowledge embeddings with the current embedding provider"
-    )
-    parser.add_argument(
-        "--dry-run", action="store_true",
-        help="Preview only — do not write to Redis"
-    )
-    parser.add_argument(
-        "--batch", type=int, default=20,
-        help="Batch size for progress reporting (default: 20)"
-    )
+    parser = argparse.ArgumentParser(description="Re-compute knowledge embeddings")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--batch", type=int, default=20)
     args = parser.parse_args()
-
-    migrate_embeddings(dry_run=args.dry_run, batch_size=args.batch)
+    migrate(dry_run=args.dry_run, batch_size=args.batch)
