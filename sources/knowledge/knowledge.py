@@ -270,11 +270,11 @@ def generate_answer_with_context(question: str, context: List[Dict]) -> str:
 def get_db_connection():
     """创建并返回数据库连接"""
     db_config = {
-        'host': os.getenv('MYSQL_HOST', 'langsistance_db'),
+        'host': os.getenv('MYSQL_HOST', 'copiioai_db'),
         'port' : int(os.getenv('MYSQL_PORT', 3306)),
         'user': os.getenv('MYSQL_USER', 'langsistance_user'),
         'password': os.getenv('MYSQL_PASSWORD', ''),
-        'database': os.getenv('MYSQL_DATABASE', 'langsistance_db'),
+        'database': os.getenv('MYSQL_DATABASE', 'copiioai_db'),
         'charset': 'utf8mb4',
         'cursorclass': pymysql.cursors.DictCursor
     }

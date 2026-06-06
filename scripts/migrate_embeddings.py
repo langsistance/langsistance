@@ -48,7 +48,7 @@ MYSQL_CONFIG = {
     "port": 3306,
     "user": "langsistance_user",
     "password": "",
-    "database": "langsistance_db",
+    "database": "copiioai_db",
     "charset":  "utf8mb4",
 }
 

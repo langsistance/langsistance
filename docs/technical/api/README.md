@@ -330,7 +330,7 @@ MYSQL_HOST=localhost
 MYSQL_PORT=3306
 MYSQL_USER=root
 MYSQL_PASSWORD=password
-MYSQL_DATABASE=langsistance_db
+MYSQL_DATABASE=copiioai_db
 
 # Redis 配置
 REDIS_URL=redis://localhost:6379/0

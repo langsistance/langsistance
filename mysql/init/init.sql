@@ -1,8 +1,8 @@
 -- 创建额外的数据库
-CREATE DATABASE IF NOT EXISTS langsistance_db;
+CREATE DATABASE IF NOT EXISTS copiioai_db;
 
 -- 创建知识表
-USE langsistance_db;
+USE copiioai_db;
 CREATE TABLE  knowledge (
     id BIGINT UNSIGNED AUTO_INCREMENT,
     user_id BIGINT UNSIGNED NOT NULL,
