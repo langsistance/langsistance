@@ -27,6 +27,10 @@ def _parse_json_object_response(value):
         raise ValueError(f"JSON response must be dict or str, got {type(value).__name__}")
 
     text = value.strip()
+    # Strip <think>...</think> blocks (reasoning models: MiniMax, DeepSeek, Qwen)
+    if "<think>" in text and "</think>" in text:
+        end_idx = text.rfind("</think>") + len("</think>")
+        text = text[end_idx:].strip()
     if text.startswith("```"):
         lines = text.splitlines()
         if lines and lines[0].strip().startswith("```"):
