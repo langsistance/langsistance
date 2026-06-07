@@ -59,12 +59,13 @@ class Provider:
             "dsk_deepseek": self.dsk_deepseek,
             "openrouter": self.openrouter_fn,
             "qwen": self.qwen_fn,
+            "minimax": self.minimax_fn,
             "test": self.test_fn
         }
         self.logger = Logger("provider.log")
         self.api_key = None
         self.internal_url, self.in_docker = self.get_internal_url()
-        self.unsafe_providers = ["openai", "deepseek", "dsk_deepseek", "together", "google", "openrouter", "qwen"]
+        self.unsafe_providers = ["openai", "deepseek", "dsk_deepseek", "together", "google", "openrouter", "qwen", "minimax"]
         #if self.provider_name not in self.available_providers:
            #raise ValueError(f"Unknown provider: {provider_name}")
         self.logger.info(f"provider_name:{self.provider_name}")
@@ -118,6 +119,10 @@ class Provider:
                 "api_key": self.api_key or os.getenv("QWEN_API_KEY"),
                 "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
             },
+            "minimax": {
+                "api_key": self.api_key or os.getenv("MINIMAX_API_KEY"),
+                "base_url": "https://api.minimax.chat/v1",
+            },
         }
         cfg = provider_configs.get(self.provider_name, provider_configs["openai"])
 
@@ -163,6 +168,10 @@ class Provider:
             "qwen": {
                 "api_key": self.api_key or os.getenv("QWEN_API_KEY"),
                 "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+            },
+            "minimax": {
+                "api_key": self.api_key or os.getenv("MINIMAX_API_KEY"),
+                "base_url": "https://api.minimax.chat/v1",
             },
         }
         cfg = provider_configs.get(self.provider_name, provider_configs["openai"])
@@ -502,6 +511,46 @@ class Provider:
             return thought
         except Exception as e:
             raise Exception(f"Qwen API error: {str(e)}") from e
+
+    def minimax_fn(self, tools, history, verbose=False, callback_handler=None):
+        """
+        Use MiniMax API to generate text. Supports tool-based agent orchestration
+        via LangChain when tools are provided, or simple chat completion otherwise.
+        """
+        if self.is_local:
+            raise Exception("MiniMax API is not available for local use. Change config.ini")
+
+        # If tools are provided, use the LangChain agent path
+        if tools:
+            self.logger.info(f"MiniMax agent mode - tools:{tools}")
+            llm = self._get_langchain_llm(streaming=True, callback_handler=callback_handler)
+            try:
+                agent = create_agent(llm, tools, system_prompt=history[1]["content"])
+                response = agent.invoke({"messages": [{"role": "user", "content": history[0]["content"]}]})
+                self.logger.info(f"MiniMax agent response:{response}")
+                if response is None:
+                    raise Exception("MiniMax agent response is empty.")
+                thought = response["messages"][-1].content
+                if verbose:
+                    print(thought)
+                return thought
+            except Exception as e:
+                raise Exception(f"MiniMax agent error: {str(e)}") from e
+
+        # Simple chat completion (no tools)
+        client = self._get_raw_openai_client()
+        try:
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=history,
+                stream=False
+            )
+            thought = response.choices[0].message.content
+            if verbose:
+                print(thought)
+            return thought
+        except Exception as e:
+            raise Exception(f"MiniMax API error: {str(e)}") from e
 
     def lm_studio_fn(self, tools, history, verbose=False):
         """
