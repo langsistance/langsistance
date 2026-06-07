@@ -100,7 +100,7 @@ class Provider:
             },
             "deepseek": {
                 "api_key": self.api_key or os.getenv("DEEPSEEK_API_KEY"),
-                "base_url": "https://api.deepseek.com",
+                "base_url": "https://api.deepseek.com/v1",
             },
             "together": {
                 "api_key": self.api_key or os.getenv("TOGETHER_API_KEY"),
@@ -116,7 +116,7 @@ class Provider:
             },
             "qwen": {
                 "api_key": self.api_key or os.getenv("QWEN_API_KEY"),
-                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
             },
         }
         cfg = provider_configs.get(self.provider_name, provider_configs["openai"])
@@ -146,7 +146,7 @@ class Provider:
             },
             "deepseek": {
                 "api_key": self.api_key or os.getenv("DEEPSEEK_API_KEY"),
-                "base_url": "https://api.deepseek.com",
+                "base_url": "https://api.deepseek.com/v1",
             },
             "together": {
                 "api_key": self.api_key or os.getenv("TOGETHER_API_KEY"),
@@ -162,7 +162,7 @@ class Provider:
             },
             "qwen": {
                 "api_key": self.api_key or os.getenv("QWEN_API_KEY"),
-                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
             },
         }
         cfg = provider_configs.get(self.provider_name, provider_configs["openai"])
