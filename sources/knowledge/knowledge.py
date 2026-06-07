@@ -272,7 +272,7 @@ def get_db_connection():
     db_config = {
         'host': os.getenv('MYSQL_HOST', 'copiioai_db'),
         'port' : int(os.getenv('MYSQL_PORT', 3306)),
-        'user': os.getenv('MYSQL_USER', 'langsistance_user'),
+        'user': os.getenv('MYSQL_USER', 'copiioai_user'),
         'password': os.getenv('MYSQL_PASSWORD', ''),
         'database': os.getenv('MYSQL_DATABASE', 'copiioai_db'),
         'charset': 'utf8mb4',

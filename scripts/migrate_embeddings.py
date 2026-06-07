@@ -46,7 +46,7 @@ load_env()
 MYSQL_CONFIG = {
     "host":   "172.31.17.139",
     "port": 3306,
-    "user": "langsistance_user",
+    "user": "copiioai_user",
     "password": "",
     "database": "copiioai_db",
     "charset":  "utf8mb4",
