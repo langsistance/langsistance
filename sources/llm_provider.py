@@ -58,12 +58,13 @@ class Provider:
             "together": self.together_fn,
             "dsk_deepseek": self.dsk_deepseek,
             "openrouter": self.openrouter_fn,
+            "qwen": self.qwen_fn,
             "test": self.test_fn
         }
         self.logger = Logger("provider.log")
         self.api_key = None
         self.internal_url, self.in_docker = self.get_internal_url()
-        self.unsafe_providers = ["openai", "deepseek", "dsk_deepseek", "together", "google", "openrouter"]
+        self.unsafe_providers = ["openai", "deepseek", "dsk_deepseek", "together", "google", "openrouter", "qwen"]
         #if self.provider_name not in self.available_providers:
            #raise ValueError(f"Unknown provider: {provider_name}")
         self.logger.info(f"provider_name:{self.provider_name}")
@@ -113,6 +114,10 @@ class Provider:
                 "api_key": self.api_key or os.getenv("GOOGLE_API_KEY"),
                 "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
             },
+            "qwen": {
+                "api_key": self.api_key or os.getenv("QWEN_API_KEY"),
+                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            },
         }
         cfg = provider_configs.get(self.provider_name, provider_configs["openai"])
 
@@ -154,6 +159,10 @@ class Provider:
             "google": {
                 "api_key": self.api_key or os.getenv("GOOGLE_API_KEY"),
                 "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+            },
+            "qwen": {
+                "api_key": self.api_key or os.getenv("QWEN_API_KEY"),
+                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
             },
         }
         cfg = provider_configs.get(self.provider_name, provider_configs["openai"])
@@ -453,6 +462,46 @@ class Provider:
             return thought
         except Exception as e:
             raise Exception(f"Deepseek API error: {str(e)}") from e
+
+    def qwen_fn(self, tools, history, verbose=False, callback_handler=None):
+        """
+        Use Qwen (DashScope) API to generate text. Supports tool-based agent orchestration
+        via LangChain when tools are provided, or simple chat completion otherwise.
+        """
+        if self.is_local:
+            raise Exception("Qwen (DashScope API) is not available for local use. Change config.ini")
+
+        # If tools are provided, use the LangChain agent path (same as openai_fn)
+        if tools:
+            self.logger.info(f"Qwen agent mode - tools:{tools}")
+            llm = self._get_langchain_llm(streaming=True, callback_handler=callback_handler)
+            try:
+                agent = create_agent(llm, tools, system_prompt=history[1]["content"])
+                response = agent.invoke({"messages": [{"role": "user", "content": history[0]["content"]}]})
+                self.logger.info(f"Qwen agent response:{response}")
+                if response is None:
+                    raise Exception("Qwen agent response is empty.")
+                thought = response["messages"][-1].content
+                if verbose:
+                    print(thought)
+                return thought
+            except Exception as e:
+                raise Exception(f"Qwen agent error: {str(e)}") from e
+
+        # Simple chat completion (no tools)
+        client = self._get_raw_openai_client()
+        try:
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=history,
+                stream=False
+            )
+            thought = response.choices[0].message.content
+            if verbose:
+                print(thought)
+            return thought
+        except Exception as e:
+            raise Exception(f"Qwen API error: {str(e)}") from e
 
     def lm_studio_fn(self, tools, history, verbose=False):
         """
