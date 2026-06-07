@@ -121,7 +121,7 @@ class Provider:
             },
             "minimax": {
                 "api_key": self.api_key or os.getenv("MINIMAX_API_KEY"),
-                "base_url": "https://api.minimax.chat/v1",
+                "base_url": "https://api.minimax.io/v1",
             },
         }
         cfg = provider_configs.get(self.provider_name, provider_configs["openai"])
@@ -171,7 +171,7 @@ class Provider:
             },
             "minimax": {
                 "api_key": self.api_key or os.getenv("MINIMAX_API_KEY"),
-                "base_url": "https://api.minimax.chat/v1",
+                "base_url": "https://api.minimax.io/v1",
             },
         }
         cfg = provider_configs.get(self.provider_name, provider_configs["openai"])
