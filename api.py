@@ -99,7 +99,7 @@ def initialize_system():
     return interaction, config
 
 # Initialize FastAPI app
-api = FastAPI(title="AgenticSeek API", version="0.1.0")
+api = FastAPI(title="CopiioAI API", version="0.1.0")
 
 # Initialize Celery
 celery_app = Celery("tasks", broker="redis://localhost:6379/0", backend="redis://localhost:6379/0")
