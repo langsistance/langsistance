@@ -11,7 +11,7 @@ from celery import Celery
 from dotenv import load_dotenv
 
 # Import route modules
-from api_routes import knowledge, tools, system, core, auth, uspto
+from api_routes import knowledge, tools, system, core, auth, uspto, feedback
 from api_routes.models import *
 
 # Import existing components
@@ -173,6 +173,8 @@ system_router = system.register_system_routes(logger, interaction, query_resp_hi
 api.include_router(system_router, tags=["system"])
 core_router = core.register_core_routes(logger, interaction, query_resp_history, config, is_generating, think_wrapper, create_agent)
 api.include_router(core_router, tags=["core"])
+feedback_router = feedback.register_feedback_routes(logger, config)
+api.include_router(feedback_router, tags=["feedback"])
 # Note: query router is not included as it contained conflicting endpoints and is now empty
 
 if __name__ == "__main__":

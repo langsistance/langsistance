@@ -170,3 +170,42 @@ class UrlRequest(BaseModel):
     url请求模型
     """
     url: str  # "json" 或 "yaml"
+
+
+# ── Feedback & Messages Models ──────────────────────────────────────────────
+
+class FeedbackSubmitRequest(BaseModel):
+    """用户提交反馈的请求体"""
+    content: str
+
+
+class FeedbackSubmitResponse(BaseModel):
+    success: bool
+    message: str
+    feedback_id: Optional[int] = None
+
+
+class MessageItem(BaseModel):
+    id: int
+    title: str
+    content: str
+    is_read: bool
+    create_time: str
+    feedback_id: Optional[int] = None
+
+
+class MessagesResponse(BaseModel):
+    success: bool
+    data: List[MessageItem]
+    total: int
+    unread_count: int
+
+
+class UnreadCountResponse(BaseModel):
+    success: bool
+    unread_count: int
+
+
+class MarkReadResponse(BaseModel):
+    success: bool
+    message: str
