@@ -10,7 +10,8 @@ Endpoints:
   POST /messages/read_all  — mark all messages as read
 """
 
-from fastapi import APIRouter, Request
+import os
+from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
 
 from api_routes.models import (
@@ -20,10 +21,12 @@ from api_routes.models import (
     MessagesResponse,
     UnreadCountResponse,
     MarkReadResponse,
+    AdminSendMessageRequest,
+    AdminSendMessageResponse,
 )
 from sources.user.passport import verify_firebase_token
 from sources.knowledge.knowledge import get_db_connection
-from sources.feedback_email import send_feedback_notification
+from sources.feedback_email import send_feedback_notification, send_reply_notification
 from sources.logger import Logger
 
 logger = Logger("feedback.log")
@@ -274,6 +277,84 @@ def register_feedback_routes(app_logger, config_ref):
             return JSONResponse(
                 status_code=500,
                 content={"success": False, "message": "Failed to mark all as read"},
+            )
+        finally:
+            if conn:
+                conn.close()
+
+    # ── POST /admin/send_message ──────────────────────────────────────────
+
+    @router.post("/admin/send_message")
+    async def admin_send_message(request: AdminSendMessageRequest, http_request: Request):
+        """Admin sends a message to a user. Writes to messages table and emails the user."""
+        # Admin API key check
+        admin_key = os.getenv("ADMIN_API_KEY", "")
+        if not admin_key:
+            raise HTTPException(status_code=500, detail="ADMIN_API_KEY not configured on server")
+        auth_header = http_request.headers.get("Authorization", "")
+        if auth_header != f"Bearer {admin_key}":
+            raise HTTPException(status_code=403, detail="Forbidden: invalid admin key")
+
+        conn = None
+        try:
+            conn = get_db_connection()
+            with conn.cursor() as cursor:
+                # 1. Look up user email
+                cursor.execute(
+                    "SELECT email FROM users WHERE user_id = %s",
+                    (request.user_id,),
+                )
+                user_row = cursor.fetchone()
+                user_email = user_row["email"] if user_row else None
+
+                # 2. Insert message
+                insert_sql = (
+                    "INSERT INTO messages (user_id, feedback_id, title, content) "
+                    "VALUES (%s, %s, %s, %s)"
+                )
+                cursor.execute(
+                    insert_sql,
+                    (request.user_id, request.feedback_id, request.title, request.content),
+                )
+                message_id = cursor.lastrowid
+
+                # 3. Update feedback status to 已回复 (3) if feedback_id is given
+                if request.feedback_id:
+                    cursor.execute(
+                        "UPDATE feedback SET status = 3 WHERE id = %s",
+                        (request.feedback_id,),
+                    )
+
+                conn.commit()
+
+            logger.info(
+                f"Admin sent message: id={message_id} user_id={request.user_id}"
+            )
+
+            # 4. Send email to user
+            email_sent = False
+            if user_email:
+                email_sent = send_reply_notification(
+                    user_email=user_email,
+                    message_title=request.title,
+                    message_content=request.content,
+                )
+
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "success": True,
+                    "message": f"Message sent. Email {'sent' if email_sent else 'not sent (no email or SMTP error)'}.",
+                    "message_id": message_id,
+                    "email_sent": email_sent,
+                },
+            )
+
+        except Exception as e:
+            logger.error(f"Error sending admin message: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "message": str(e)},
             )
         finally:
             if conn:

@@ -68,11 +68,16 @@ Feedback Content:
 
 ──────────────────────────────────────
 
-You can reply to this user by inserting a message into the `messages` table:
-  INSERT INTO messages (user_id, feedback_id, title, content)
-  VALUES ({user_id}, {feedback_id}, 'Your Title', 'Your reply content...');
+To reply to this user, call the admin API:
+  POST /admin/send_message
+  {{
+    "user_id": {user_id},
+    "feedback_id": {feedback_id},
+    "title": "Your reply title",
+    "content": "Your reply content..."
+  }}
 
-Or use the management API at /messages.
+This will save the message AND email the user automatically.
 
 —
 CopiioAI Feedback System

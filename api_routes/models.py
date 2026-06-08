@@ -209,3 +209,18 @@ class UnreadCountResponse(BaseModel):
 class MarkReadResponse(BaseModel):
     success: bool
     message: str
+
+
+class AdminSendMessageRequest(BaseModel):
+    """管理员给用户发消息的请求体"""
+    user_id: int
+    title: str
+    content: str
+    feedback_id: Optional[int] = None
+
+
+class AdminSendMessageResponse(BaseModel):
+    success: bool
+    message: str
+    message_id: Optional[int] = None
+    email_sent: bool = False
