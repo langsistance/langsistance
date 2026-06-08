@@ -67,6 +67,16 @@ export const queryKnowledgeShares = (params: Record<string, string | number>): A
 export const getUserSharedKnowledge = (params: Record<string, string | number>): ApiResult => get('/get_user_shared_knowledge', withWebKnowledgePushFilter(params))
 export const cancelKnowledgeShare = (body: unknown): ApiResult => post('/cancel_knowledge_share', body)
 
+// ── Feedback & Messages ─────────────────────────────────────────────────
+
+export const submitFeedback = (content: string): ApiResult => post('/submit_feedback', { content })
+export const getMessages = (): ApiResult => get('/messages')
+export const getUnreadCount = (): ApiResult => get('/messages/unread_count')
+export const markMessageRead = (messageId: number): ApiResult => post(`/messages/${messageId}/read`, {})
+export const markAllMessagesRead = (): ApiResult => post('/messages/read_all', {})
+
+// ── Chat Stream ─────────────────────────────────────────────────────────
+
 export async function queryStream(query: string, queryId: string, abortSignal: AbortSignal): Promise<ReadableStream<Uint8Array>> {
   const headers = await authHeaders()
   const res = await fetch(`${BASE_URL}/query_stream`, {

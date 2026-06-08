@@ -6,6 +6,8 @@ import { usePathname, useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { useI18n } from '@/lib/app-i18n'
 import LanguageToggleButton from '@/components/app/LanguageToggleButton'
+import MessageBell from '@/components/app/MessageBell'
+import FeedbackFAB from '@/components/app/FeedbackFAB'
 
 const NAV_ITEMS = [
   {
@@ -49,6 +51,16 @@ const NAV_ITEMS = [
         <circle cx="9" cy="7" r="4" />
         <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
         <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+      </svg>
+    ),
+  },
+  {
+    to: '/app/messages',
+    key: 'messages.title',
+    icon: (
+      <svg className="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+        <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
       </svg>
     ),
   },
@@ -117,6 +129,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
         <div className="header-right">
+          <MessageBell />
           <LanguageToggleButton />
           <div className="user-menu" ref={menuRef}>
             <button className="user-avatar" onClick={() => setMenuOpen(v => !v)}>
@@ -168,6 +181,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           {children}
         </main>
       </div>
+      <FeedbackFAB />
     </>
   )
 }
