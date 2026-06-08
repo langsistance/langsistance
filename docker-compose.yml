@@ -40,4 +40,5 @@ services:
   
 networks:
   copiioai-net:
-    driver: bridge
+    external: true
+    name: copiioai-net
