@@ -448,5 +448,33 @@ export default {
     cancelShareSuccess: 'Sharing cancellation successful',
     cancelShareFailed: 'Canceling sharing failed',
     certificationTest: 'It has been detected that the request may require authentication information. Please ensure you are logged in in your browser',
-  }
+  },
+
+  // Feedback
+  feedback: {
+    title: 'Feedback',
+    thanksTitle: '🙏 Thank you for using CopiioAI!',
+    thanksDesc: 'We listen carefully to every user\'s feedback. Your opinion matters to us.',
+    thanksPrompt: 'Tell us your thoughts, suggestions, or issues you encountered:',
+    placeholder: 'Please enter your feedback...',
+    submit: 'Submit Feedback',
+    submitting: 'Submitting...',
+    submitted: 'Submitted ✓',
+    submitSuccess: 'Thank you for your feedback! We take every suggestion seriously.',
+    submitFailed: 'Submission failed, please try again later',
+    contentRequired: 'Please enter your feedback',
+  },
+
+  // Messages
+  messages: {
+    title: 'Notifications',
+    description: 'View messages and replies from the CopiioAI team',
+    empty: 'No messages yet',
+    emptyHint: 'When you receive a reply, it will appear here',
+    unread: 'Unread',
+    markAllRead: 'Mark All Read',
+    markAllReadSuccess: 'All messages marked as read',
+    loading: 'Loading...',
+    bellTitle: 'Notifications',
+  },
 };

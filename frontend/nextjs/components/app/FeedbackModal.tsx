@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { submitFeedback } from '@/services/api'
+import { useI18n } from '@/lib/app-i18n'
 
 interface FeedbackModalProps {
   open: boolean
@@ -9,6 +10,7 @@ interface FeedbackModalProps {
 }
 
 export default function FeedbackModal({ open, onClose }: FeedbackModalProps) {
+  const { t } = useI18n()
   const [content, setContent] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [status, setStatus] = useState<'idle' | 'success' | 'error'>('idle')
@@ -41,6 +43,7 @@ export default function FeedbackModal({ open, onClose }: FeedbackModalProps) {
       const result = await submitFeedback(trimmed)
       if (result?.success) {
         setStatus('success')
+        showToast(t('feedback.submitSuccess'))
         setTimeout(onClose, 1500)
       } else {
         setStatus('error')
@@ -52,6 +55,17 @@ export default function FeedbackModal({ open, onClose }: FeedbackModalProps) {
     }
   }
 
+  function showToast(message: string) {
+    const toast = document.createElement('div')
+    toast.className = 'global-toast success show'
+    toast.textContent = message
+    document.body.appendChild(toast)
+    setTimeout(() => {
+      toast.classList.remove('show')
+      setTimeout(() => toast.remove(), 300)
+    }, 2500)
+  }
+
   if (!open) return null
 
   return (
@@ -59,7 +73,7 @@ export default function FeedbackModal({ open, onClose }: FeedbackModalProps) {
       <div className="feedback-modal-overlay" onClick={onClose} />
       <div className="feedback-modal-content">
         <div className="feedback-modal-header">
-          <h2>💬 用户反馈</h2>
+          <h2>💬 {t('feedback.title')}</h2>
           <button className="feedback-modal-close" onClick={onClose}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <line x1="18" y1="6" x2="6" y2="18"/>
@@ -69,34 +83,38 @@ export default function FeedbackModal({ open, onClose }: FeedbackModalProps) {
         </div>
         <div className="feedback-modal-body">
           <div className="feedback-thanks">
-            <p>🙏 感谢您使用 CopiioAI！</p>
-            <p>我们认真聆听每一位用户的反馈，您的意见对我们至关重要。</p>
-            <p>请告诉我们您的想法、建议或遇到的问题：</p>
+            <p>{t('feedback.thanksTitle')}</p>
+            <p>{t('feedback.thanksDesc')}</p>
+            <p>{t('feedback.thanksPrompt')}</p>
           </div>
           <textarea
             ref={textareaRef}
             className="feedback-textarea"
             value={content}
             onChange={(e) => setContent(e.target.value)}
-            placeholder="请输入您的反馈..."
+            placeholder={t('feedback.placeholder')}
             rows={5}
             maxLength={2000}
           />
           <div className="feedback-modal-footer">
             <span className="feedback-char-count">{content.length}/2000</span>
             <div className="feedback-modal-actions">
-              <button className="btn btn-secondary" onClick={onClose}>取消</button>
+              <button className="btn btn-secondary" onClick={onClose}>{t('common.cancel')}</button>
               <button
                 className="btn btn-primary"
                 onClick={handleSubmit}
                 disabled={!content.trim() || submitting}
               >
-                {submitting ? '提交中...' : status === 'success' ? '已提交 ✓' : '提交反馈'}
+                {submitting
+                  ? t('feedback.submitting')
+                  : status === 'success'
+                    ? t('feedback.submitted')
+                    : t('feedback.submit')}
               </button>
             </div>
           </div>
           {status === 'error' && (
-            <p style={{ color: '#EF4444', fontSize: 13, marginTop: 8 }}>提交失败，请稍后重试</p>
+            <p style={{ color: '#EF4444', fontSize: 13, marginTop: 8 }}>{t('feedback.submitFailed')}</p>
           )}
         </div>
       </div>

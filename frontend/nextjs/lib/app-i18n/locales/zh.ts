@@ -448,5 +448,33 @@ export default {
     cancelShareSuccess: '取消分享成功',
     cancelShareFailed: '取消分享失败',
     certificationTest: '检测到请求可能需要认证信息，请确保已在浏览器中登录',
-  }
+  },
+
+  // 用户反馈
+  feedback: {
+    title: '用户反馈',
+    thanksTitle: '🙏 感谢您使用 CopiioAI！',
+    thanksDesc: '我们认真聆听每一位用户的反馈，您的意见对我们至关重要。',
+    thanksPrompt: '请告诉我们您的想法、建议或遇到的问题：',
+    placeholder: '请输入您的反馈...',
+    submit: '提交反馈',
+    submitting: '提交中...',
+    submitted: '已提交 ✓',
+    submitSuccess: '感谢您的反馈！我们会认真对待每一条建议。',
+    submitFailed: '提交失败，请稍后重试',
+    contentRequired: '请输入反馈内容',
+  },
+
+  // 消息通知
+  messages: {
+    title: '消息通知',
+    description: '查看来自 CopiioAI 团队的消息和回复',
+    empty: '暂无消息',
+    emptyHint: '当有新的回复时，会在这里显示',
+    unread: '未读',
+    markAllRead: '全部已读',
+    markAllReadSuccess: '所有消息已标记为已读',
+    loading: '加载中...',
+    bellTitle: '消息通知',
+  },
 };
