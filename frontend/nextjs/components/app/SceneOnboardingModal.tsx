@@ -2,10 +2,8 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useI18n } from '@/lib/app-i18n'
-import { getUserSceneStatus, updateUserScenes } from '@/services/api'
+import { getUserSceneStatus, updateUserScenes, markOnboarded } from '@/services/api'
 import SceneCard from '@/components/app/SceneCard'
-
-const STORAGE_KEY = 'has_seen_onboarding'
 
 export default function SceneOnboardingModal() {
   const { t, lang } = useI18n()
@@ -16,14 +14,18 @@ export default function SceneOnboardingModal() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    // 已经完成过 onboarding（之前点过"开始使用"或"先不选"），不再弹出
-    if (localStorage.getItem(STORAGE_KEY)) return
 
-    // 首次访问：立即显示弹窗，默认勾选专利检索
+    // 立即显示弹窗，默认勾选专利检索
     setVisible(true)
 
     getUserSceneStatus()
       .then((res) => {
+        // 服务端标记已 onboarded → 用户之前完成过流程，自动关闭
+        if (res.onboarded) {
+          setVisible(false)
+          return
+        }
+
         const list = res.scenes || []
         setScenes(list)
         if (list.length > 0) {
@@ -64,16 +66,16 @@ export default function SceneOnboardingModal() {
     const ids = Array.from(subscribedIds)
     try {
       await updateUserScenes(ids)
+      await markOnboarded()
     } catch {}
-    localStorage.setItem(STORAGE_KEY, '1')
     setVisible(false)
   }
 
   async function handleSkip() {
     try {
       await updateUserScenes([])
+      await markOnboarded()
     } catch {}
-    localStorage.setItem(STORAGE_KEY, '1')
     setVisible(false)
   }
 

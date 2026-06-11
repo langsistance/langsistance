@@ -127,6 +127,14 @@ async def get_user_scenes(http_request: Request):
             )
             subscribed_ids = {row["scene_id"] for row in cursor.fetchall()}
 
+            # 查用户是否已完成 onboarding
+            cursor.execute(
+                "SELECT onboarded FROM users WHERE user_id = %s",
+                (user_id,),
+            )
+            user_row = cursor.fetchone()
+            onboarded = bool(user_row and user_row.get("onboarded"))
+
             # 查所有场景
             cursor.execute("""
                 SELECT s.id, s.name, s.description,
@@ -154,6 +162,7 @@ async def get_user_scenes(http_request: Request):
                     "success": True,
                     "message": "ok",
                     "scenes": [s.dict() for s in scenes],
+                    "onboarded": onboarded,
                 },
             )
     except Exception as e:
@@ -197,6 +206,40 @@ async def update_user_scenes(http_request: Request, body: UserScenesUpdateReques
             )
     except Exception as e:
         logger.error(f"Error updating user scenes: {str(e)}")
+        if connection:
+            connection.rollback()
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "message": str(e)},
+        )
+    finally:
+        if connection:
+            connection.close()
+
+
+@router.post("/user/onboarded")
+async def mark_onboarded(http_request: Request):
+    """标记用户已完成首次场景选择流程。"""
+    auth_header = http_request.headers.get("Authorization")
+    user = verify_firebase_token(auth_header)
+    user_id = user["uid"]
+
+    connection = None
+    try:
+        connection = get_db_connection()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE users SET onboarded = 1 WHERE user_id = %s",
+                (user_id,),
+            )
+            connection.commit()
+            logger.info(f"User {user_id} marked as onboarded")
+            return JSONResponse(
+                status_code=200,
+                content={"success": True, "message": "ok"},
+            )
+    except Exception as e:
+        logger.error(f"Error marking onboarded: {str(e)}")
         if connection:
             connection.rollback()
         return JSONResponse(

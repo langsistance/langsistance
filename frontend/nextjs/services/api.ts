@@ -76,6 +76,7 @@ export const getUserScenes = (): ApiResult => get('/user/scenes')
 export const getUserSceneStatus = (): ApiResult => get('/user/scenes/status')
 export const updateUserScenes = (sceneIds: number[]): ApiResult =>
   post('/user/scenes', { scene_ids: sceneIds })
+export const markOnboarded = (): ApiResult => post('/user/onboarded', {})
 
 // ── Feedback & Messages ─────────────────────────────────────────────────
 

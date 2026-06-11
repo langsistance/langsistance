@@ -265,6 +265,7 @@ class UserSceneStatusResponse(BaseModel):
     success: bool
     message: str
     scenes: List[UserSceneStatusItem]
+    onboarded: bool = False
 
 
 class UserScenesUpdateRequest(BaseModel):

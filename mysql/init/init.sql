@@ -49,6 +49,7 @@ CREATE TABLE users (
     oauth_provider VARCHAR(255),
     oauth_provider_id VARCHAR(255),
     is_active TINYINT UNSIGNED DEFAULT TRUE,
+    onboarded TINYINT UNSIGNED DEFAULT 0,
     create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -91,7 +92,8 @@ ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS scene_id BIGINT UNSIGNED DEFAULT 
 ALTER TABLE knowledge ADD INDEX IF NOT EXISTS idx_scene_id (scene_id);
 
 -- 初始场景：专利检索
-INSERT INTO scenes (name, description) VALUES ('专利检索', '专利检索相关能力，包含专利查询、分析、申请等');
+INSERT INTO scenes (name, description) VALUES ('美国专利检索', 'USPTO专利检索相关能力，包含专利查询、文档下载等');
+ALTER TABLE users ADD COLUMN onboarded TINYINT UNSIGNED DEFAULT 0;
 
 -- 存量用户默认订阅专利检索场景（部署时执行）
 -- INSERT IGNORE INTO user_scenes (user_id, scene_id) SELECT user_id, 1 FROM users;
