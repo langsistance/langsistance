@@ -306,6 +306,7 @@ def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
     Returns:
         List[KnowledgeItem]: 用户的知识记录列表
     """
+    print(f"[DEBUG] get_user_knowledge called with user_id={user_id}", flush=True)
     try:
         connection = get_db_connection()
 
