@@ -353,7 +353,7 @@ def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
                 )
 
                 # 4. 合并结果（用户知识在前，场景知识在后），按 id 去重
-                all_rows = own_rows + scene_rows
+                all_rows = list(own_rows) + list(scene_rows)
                 seen = set()
                 unique_rows = []
                 for row in all_rows:
