@@ -296,7 +296,9 @@ def get_redis_connection():
 
 def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
     """
-    根据用户ID从数据库查询有效的知识记录，包括用户拥有的知识和被授权的知识
+    根据用户ID从数据库查询有效的知识记录，包括：
+    1. 用户自己创建的知识
+    2. 用户已订阅场景下的公开知识
 
     Args:
         user_id (str): 用户ID
@@ -309,21 +311,50 @@ def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
 
         try:
             with connection.cursor() as cursor:
-                # 查询用户自己的知识记录 (status=1表示有效)
-                user_knowledge_sql = """
-                    SELECT id, user_id, question, description, answer, public, model_name, tool_id, params, `type`, create_time, update_time
+                # 1. 查询用户自己的知识记录 (status=1表示有效)
+                cursor.execute("""
+                    SELECT id, user_id, question, description, answer, public,
+                           model_name, tool_id, params, `type`, create_time, update_time
                     FROM knowledge
-                    WHERE status = %s
-                       AND user_id = %s
+                    WHERE status = %s AND user_id = %s
                     ORDER BY update_time DESC
-                """
+                """, (1, user_id))
+                own_rows = cursor.fetchall()
 
-                cursor.execute(user_knowledge_sql, (1, user_id))
-                user_knowledge_results = cursor.fetchall()
+                # 2. 查询用户订阅的场景 ID 列表
+                cursor.execute(
+                    "SELECT scene_id FROM user_scenes WHERE user_id = %s",
+                    (user_id,)
+                )
+                scene_ids = [row["scene_id"] for row in cursor.fetchall()]
 
-                # 将查询结果转换为KnowledgeItem对象列表
+                # 3. 如果有订阅的场景，查询场景下的公开知识
+                scene_rows = []
+                if scene_ids:
+                    placeholders = ",".join(["%s"] * len(scene_ids))
+                    cursor.execute(f"""
+                        SELECT id, user_id, question, description, answer, public,
+                               model_name, tool_id, params, `type`, create_time, update_time
+                        FROM knowledge
+                        WHERE status = 1
+                          AND scene_id IN ({placeholders})
+                          AND public = 2
+                        ORDER BY update_time DESC
+                    """, scene_ids)
+                    scene_rows = cursor.fetchall()
+
+                # 4. 合并结果（用户知识在前，场景知识在后），按 id 去重
+                all_rows = own_rows + scene_rows
+                seen = set()
+                unique_rows = []
+                for row in all_rows:
+                    if row["id"] not in seen:
+                        seen.add(row["id"])
+                        unique_rows.append(row)
+
+                # 5. 转换为 KnowledgeItem
                 knowledge_items = []
-                for row in user_knowledge_results:
+                for row in unique_rows:
                     knowledge_item = KnowledgeItem(
                         id=row['id'],
                         user_id=str(row['user_id']),

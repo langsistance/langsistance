@@ -7,6 +7,8 @@ import {
   updateKnowledge,
   deleteKnowledge,
   queryTools,
+  getUserSceneStatus,
+  updateUserScenes,
 } from '@/services/api'
 import { useI18n } from '@/lib/app-i18n'
 import { filterKnowledgeBaseTools } from '@/lib/toolFilters'
@@ -17,6 +19,7 @@ import {
   getWorkflowInstructionsForSave,
 } from '@/lib/knowledgeWorkflowAnswer'
 import Pagination from '@/components/app/Pagination'
+import SceneCard from '@/components/app/SceneCard'
 
 interface KnowledgeItem {
   id?: number
@@ -336,6 +339,27 @@ export default function Knowledge() {
       .catch(() => {})
   }, [])
 
+  // 场景订阅状态
+  const [scenes, setScenes] = useState<any[]>([])
+  useEffect(() => {
+    getUserSceneStatus()
+      .then((res) => setScenes(res.scenes || []))
+      .catch(() => {})
+  }, [])
+
+  const handleSceneToggle = useCallback(async (sceneId: number, checked: boolean) => {
+    const newIds = scenes
+      .map((s) => s.id)
+      .filter((id) => id !== sceneId)
+    if (checked) newIds.push(sceneId)
+    try {
+      await updateUserScenes(newIds)
+      setScenes((prev) =>
+        prev.map((s) => (s.id === sceneId ? { ...s, subscribed: checked } : s))
+      )
+    } catch {}
+  }, [scenes])
+
   async function handleSave(form: KnowledgeItem) {
     if (form.id) {
       await updateKnowledge({
@@ -390,6 +414,18 @@ export default function Knowledge() {
           </button>
         </div>
       </div>
+
+      {scenes.length > 0 && (
+        <div className="scene-section">
+          {scenes.map((scene) => (
+            <SceneCard
+              key={scene.id}
+              scene={scene}
+              onToggle={handleSceneToggle}
+            />
+          ))}
+        </div>
+      )}
 
       <div className="page-content">
         <div className="knowledge-search">

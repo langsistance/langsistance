@@ -72,6 +72,15 @@ def ensure_local_user_record(
             (user_id, firebase_uid, email),
         )
         conn.commit()
+        # 新用户自动订阅默认场景（专利检索 scene_id=1）
+        try:
+            cursor.execute(
+                "INSERT IGNORE INTO user_scenes (user_id, scene_id) VALUES (%s, %s)",
+                (user_id, 1),
+            )
+            conn.commit()
+        except Exception:
+            pass  # 非致命：订阅失败不阻塞注册流程
         _cache_user_id(redis_client, firebase_uid, user_id, cache_ttl_seconds)
         return user_id
     finally:

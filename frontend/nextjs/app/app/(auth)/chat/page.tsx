@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { queryStream } from '@/services/api'
+import { queryStream, getUserSceneStatus, getSceneKnowledge } from '@/services/api'
 import { useI18n } from '@/lib/app-i18n'
 import MarkdownMessage from '@/components/app/MarkdownMessage'
 import { useChatSession } from '@/contexts/ChatContext'
@@ -62,6 +62,31 @@ export default function Chat() {
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const [transientStatus, setTransientStatus] = useState('')
+  const [sceneHints, setSceneHints] = useState<string[]>([])
+  const [sceneHintVisible, setSceneHintVisible] = useState(true)
+
+  useEffect(() => {
+    getUserSceneStatus()
+      .then(async (res) => {
+        const subscribed = (res.scenes || []).filter((s: any) => s.subscribed)
+        const hints: string[] = []
+        for (const scene of subscribed) {
+          try {
+            const kr = await getSceneKnowledge(scene.id)
+            const items = kr.knowledge || []
+            items.slice(0, 3).forEach((item: any) => {
+              hints.push(item.description || item.question)
+            })
+          } catch {}
+        }
+        setSceneHints(hints)
+      })
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (messages.length > 0) setSceneHintVisible(false)
+  }, [messages])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -205,6 +230,32 @@ export default function Chat() {
               <div className="empty-state">
                 <h3>{t('chat.welcome.greeting')}</h3>
                 <p>{t('chat.welcome.prompt')}</p>
+                {sceneHints.length > 0 && sceneHintVisible && (
+                  <div className="scene-hint">
+                    <div
+                      className="scene-hint-header"
+                      onClick={() => setSceneHintVisible(false)}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      <span>{t('chat.sceneHint')}</span>
+                      <span style={{ fontSize: 12, opacity: 0.6 }}>✕</span>
+                    </div>
+                    <ul className="scene-hint-list">
+                      {sceneHints.map((hint, i) => (
+                        <li key={i} className="scene-hint-item">{hint}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {sceneHints.length > 0 && !sceneHintVisible && (
+                  <div
+                    className="scene-hint-collapsed"
+                    onClick={() => setSceneHintVisible(true)}
+                    style={{ cursor: 'pointer', marginTop: 12, fontSize: 13, color: 'var(--text-secondary)' }}
+                  >
+                    {t('knowledge.scene')}: {t('knowledge.sceneEnabled')}
+                  </div>
+                )}
               </div>
             </div>
           )}

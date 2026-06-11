@@ -139,7 +139,8 @@ export default {
     toolQueryFailed: '❌ Tool query failed: {error}\n\nTrying other methods...',
     directQueryFailed: 'Direct query failed',
     toolDataObtained: '📊 Tool data obtained, analyzing...',
-    localToolExecutionFailed: 'Local tool execution failed: {error}'
+    localToolExecutionFailed: 'Local tool execution failed: {error}',
+    sceneHint: 'Available Capabilities'
   },
 
   // Knowledge management
@@ -160,7 +161,13 @@ export default {
     deleted: 'Knowledge deleted successfully',
     noMatchKnowledge: 'No matching knowledge found',
     noKnowledge: 'Currently, there is no knowledge content available. Click "Add Knowledge" to start creating',
-    noCommunity: 'Currently, there is no community knowledge content available'
+    noCommunity: 'Currently, there is no community knowledge content available',
+    scene: 'Scene',
+    sceneEnabled: 'Enabled',
+    sceneDisabled: 'Disabled',
+    sceneViewAll: 'View All',
+    sceneCollapse: 'Collapse',
+    sceneExampleQuestions: 'Try asking:'
   },
 
   // Tools management

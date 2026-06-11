@@ -66,3 +66,32 @@ CREATE TABLE knowledge_share (
 	update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 	KEY idx_to_user_email (to_user_email)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 场景定义表
+CREATE TABLE IF NOT EXISTS scenes (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(64) NOT NULL,
+    description VARCHAR(256) DEFAULT '',
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+    update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 用户场景订阅表
+CREATE TABLE IF NOT EXISTS user_scenes (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT UNSIGNED NOT NULL,
+    scene_id BIGINT UNSIGNED NOT NULL,
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_user_scene (user_id, scene_id),
+    KEY idx_user_id (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- knowledge 表增加场景标签字段
+ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS scene_id BIGINT UNSIGNED DEFAULT NULL;
+ALTER TABLE knowledge ADD INDEX IF NOT EXISTS idx_scene_id (scene_id);
+
+-- 初始场景：专利检索
+INSERT INTO scenes (name, description) VALUES ('专利检索', '专利检索相关能力，包含专利查询、分析、申请等');
+
+-- 存量用户默认订阅专利检索场景（部署时执行）
+-- INSERT IGNORE INTO user_scenes (user_id, scene_id) SELECT user_id, 1 FROM users;

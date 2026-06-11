@@ -139,7 +139,8 @@ export default {
     toolQueryFailed: '❌ 工具查询失败：{error}\n\n正在尝试其他方式...',
     directQueryFailed: '直接查询失败',
     toolDataObtained: '📊 已获取工具数据，正在分析...',
-    localToolExecutionFailed: '本地工具执行失败: {error}'
+    localToolExecutionFailed: '本地工具执行失败: {error}',
+    sceneHint: '已启用的能力'
   },
 
   // 知识管理
@@ -148,7 +149,7 @@ export default {
     description: '管理 API 文档和使用说明，帮助 AI 更好地理解如何调用 API',
     question: '问题',
     answer: '答案',
-    create: '创建知识库',
+    create: '创建知识',
     edit: '编辑知识库',
     delete: '删除知识库',
     search: '搜索知识库....',
@@ -160,7 +161,13 @@ export default {
     deleted: '知识库删除成功',
     noMatchKnowledge: '未找到匹配的知识',
     noKnowledge: '暂无知识内容，点击"添加知识"开始创建',
-    noCommunity: '暂无社区知识内容'
+    noCommunity: '暂无社区知识内容',
+    scene: '场景包',
+    sceneEnabled: '已启用',
+    sceneDisabled: '未启用',
+    sceneViewAll: '查看全部',
+    sceneCollapse: '收起',
+    sceneExampleQuestions: '你可以这样提问：'
   },
 
   // 工具管理

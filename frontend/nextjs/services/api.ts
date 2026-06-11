@@ -67,6 +67,16 @@ export const queryKnowledgeShares = (params: Record<string, string | number>): A
 export const getUserSharedKnowledge = (params: Record<string, string | number>): ApiResult => get('/get_user_shared_knowledge', withWebKnowledgePushFilter(params))
 export const cancelKnowledgeShare = (body: unknown): ApiResult => post('/cancel_knowledge_share', body)
 
+// ── Scene API ────────────────────────────────────────────────────────────
+
+export const getAvailableScenes = (): ApiResult => get('/scenes/available')
+export const getSceneKnowledge = (sceneId: number): ApiResult =>
+  get(`/scenes/${sceneId}/knowledge`)
+export const getUserScenes = (): ApiResult => get('/user/scenes')
+export const getUserSceneStatus = (): ApiResult => get('/user/scenes/status')
+export const updateUserScenes = (sceneIds: number[]): ApiResult =>
+  post('/user/scenes', { scene_ids: sceneIds })
+
 // ── Feedback & Messages ─────────────────────────────────────────────────
 
 export const submitFeedback = (content: string): ApiResult => post('/submit_feedback', { content })

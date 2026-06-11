@@ -224,3 +224,48 @@ class AdminSendMessageResponse(BaseModel):
     message: str
     message_id: Optional[int] = None
     email_sent: bool = False
+
+
+# ── Scene Models ─────────────────────────────────────────────────────────────
+
+class SceneItem(BaseModel):
+    id: int
+    name: str
+    description: str
+    knowledge_count: int = 0
+
+
+class SceneKnowledgeItem(BaseModel):
+    id: int
+    question: str
+    description: str
+
+
+class UserSceneStatusItem(BaseModel):
+    id: int
+    name: str
+    description: str
+    subscribed: bool
+    knowledge_count: int = 0
+
+
+class SceneListResponse(BaseModel):
+    success: bool
+    message: str
+    scenes: List[SceneItem]
+
+
+class SceneKnowledgeResponse(BaseModel):
+    success: bool
+    message: str
+    knowledge: List[SceneKnowledgeItem]
+
+
+class UserSceneStatusResponse(BaseModel):
+    success: bool
+    message: str
+    scenes: List[UserSceneStatusItem]
+
+
+class UserScenesUpdateRequest(BaseModel):
+    scene_ids: List[int]
