@@ -16,8 +16,10 @@ export default function SceneOnboardingModal() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return
+    // 已经完成过 onboarding（之前点过"开始使用"或"先不选"），不再弹出
+    if (localStorage.getItem(STORAGE_KEY)) return
 
-    // 立即显示弹窗，默认勾选专利检索
+    // 首次访问：立即显示弹窗，默认勾选专利检索
     setVisible(true)
 
     getUserSceneStatus()
@@ -33,11 +35,6 @@ export default function SceneOnboardingModal() {
               hasAnySubscribed = true
             }
           })
-          // 如果用户已经订阅了场景（之前完成过 onboarding），自动关闭
-          if (hasAnySubscribed && localStorage.getItem(STORAGE_KEY)) {
-            setVisible(false)
-            return
-          }
           // 如果没有任何订阅，默认全选
           if (!hasAnySubscribed) {
             list.forEach((s: any) => ids.add(s.id))
