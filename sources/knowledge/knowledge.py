@@ -320,6 +320,10 @@ def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
                     ORDER BY update_time DESC
                 """, (1, user_id))
                 own_rows = cursor.fetchall()
+                logger.info(
+                    "get_user_knowledge step1 (own): user_id=%s, found=%d",
+                    user_id, len(own_rows),
+                )
 
                 # 2. 查询用户订阅的场景 ID 列表
                 cursor.execute(
@@ -327,8 +331,12 @@ def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
                     (user_id,)
                 )
                 scene_ids = [row["scene_id"] for row in cursor.fetchall()]
+                logger.info(
+                    "get_user_knowledge step2 (scene_ids): user_id=%s, scene_ids=%s",
+                    user_id, scene_ids,
+                )
 
-                # 3. 如果有订阅的场景，查询场景下的公开知识
+                # 3. 如果有订阅的场景，查询场景下的知识
                 scene_rows = []
                 if scene_ids:
                     placeholders = ",".join(["%s"] * len(scene_ids))
@@ -338,10 +346,13 @@ def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
                         FROM knowledge
                         WHERE status = 1
                           AND scene_id IN ({placeholders})
-                          AND public = 2
                         ORDER BY update_time DESC
                     """, scene_ids)
                     scene_rows = cursor.fetchall()
+                logger.info(
+                    "get_user_knowledge step3 (scene_rows): user_id=%s, found=%d",
+                    user_id, len(scene_rows),
+                )
 
                 # 4. 合并结果（用户知识在前，场景知识在后），按 id 去重
                 all_rows = own_rows + scene_rows
