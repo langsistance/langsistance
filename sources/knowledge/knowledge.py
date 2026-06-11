@@ -363,22 +363,32 @@ def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
 
                 # 5. 转换为 KnowledgeItem
                 knowledge_items = []
-                for row in unique_rows:
-                    knowledge_item = KnowledgeItem(
-                        id=row['id'],
-                        user_id=str(row['user_id']),
-                        question=row['question'],
-                        description=row['description'] or "",
-                        answer=row['answer'],
-                        public=row['public'] or False,
-                        model_name=row['model_name'] or "",
-                        tool_id=row['tool_id'] or 0,
-                        params=row['params'] or "",
-                        type=infer_knowledge_type(row.get('type'), row.get('params')),
-                        create_time=row['create_time'].isoformat() if row['create_time'] else None,
-                        update_time=row['update_time'].isoformat() if row['update_time'] else None
-                    )
-                    knowledge_items.append(knowledge_item)
+                for idx, row in enumerate(unique_rows):
+                    try:
+                        knowledge_item = KnowledgeItem(
+                            id=row['id'],
+                            user_id=str(row['user_id']),
+                            question=row['question'],
+                            description=row['description'] or "",
+                            answer=row['answer'],
+                            public=row['public'] or False,
+                            model_name=row['model_name'] or "",
+                            tool_id=row['tool_id'] or 0,
+                            params=row['params'] or "",
+                            type=infer_knowledge_type(row.get('type'), row.get('params')),
+                            create_time=row['create_time'].isoformat()
+                                if row.get('create_time') and hasattr(row['create_time'], 'isoformat')
+                                else str(row['create_time']) if row.get('create_time') else None,
+                            update_time=row['update_time'].isoformat()
+                                if row.get('update_time') and hasattr(row['update_time'], 'isoformat')
+                                else str(row['update_time']) if row.get('update_time') else None,
+                        )
+                        knowledge_items.append(knowledge_item)
+                    except Exception as row_err:
+                        logger.error(
+                            f"get_user_knowledge step5 ROW ERROR idx={idx}: {str(row_err)}"
+                        )
+                        raise
 
                 logger.info(
                     f"get_user_knowledge step4 (return): user_id={user_id}, total={len(knowledge_items)}"
