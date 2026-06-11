@@ -15,14 +15,11 @@ export default function SceneOnboardingModal() {
   useEffect(() => {
     if (typeof window === 'undefined') return
 
-    // 立即显示弹窗，默认勾选专利检索
-    setVisible(true)
-
     getUserSceneStatus()
       .then((res) => {
-        // 服务端标记已 onboarded → 用户之前完成过流程，自动关闭
+        // 已 onboarded → 不显示弹窗，无闪烁
         if (res.onboarded) {
-          setVisible(false)
+          setLoading(false)
           return
         }
 
@@ -37,17 +34,19 @@ export default function SceneOnboardingModal() {
               hasAnySubscribed = true
             }
           })
-          // 如果没有任何订阅，默认全选
           if (!hasAnySubscribed) {
             list.forEach((s: any) => ids.add(s.id))
           }
           setSubscribedIds(ids)
         }
+        setVisible(true)
+        setLoading(false)
       })
       .catch(() => {
-        // API 失败时保持默认勾选，用户仍可操作
+        // API 失败时也显示弹窗，让用户至少能操作
+        setVisible(true)
+        setLoading(false)
       })
-      .finally(() => setLoading(false))
   }, [])
 
   const handleToggle = useCallback((sceneId: number, checked: boolean) => {

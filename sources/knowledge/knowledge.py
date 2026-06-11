@@ -306,7 +306,6 @@ def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
     Returns:
         List[KnowledgeItem]: 用户的知识记录列表
     """
-    print(f"[DEBUG] get_user_knowledge called with user_id={user_id}", flush=True)
     try:
         connection = get_db_connection()
 
@@ -321,9 +320,6 @@ def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
                     ORDER BY update_time DESC
                 """, (1, user_id))
                 own_rows = cursor.fetchall()
-                logger.info(
-                    f"get_user_knowledge step1 (own): user_id={user_id}, found={len(own_rows)}"
-                )
 
                 # 2. 查询用户订阅的场景 ID 列表
                 cursor.execute(
@@ -331,9 +327,6 @@ def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
                     (user_id,)
                 )
                 scene_ids = [row["scene_id"] for row in cursor.fetchall()]
-                logger.info(
-                    f"get_user_knowledge step2 (scene_ids): user_id={user_id}, scene_ids={scene_ids}"
-                )
 
                 # 3. 如果有订阅的场景，查询场景下的知识
                 scene_rows = []
@@ -348,9 +341,6 @@ def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
                         ORDER BY update_time DESC
                     """, scene_ids)
                     scene_rows = cursor.fetchall()
-                logger.info(
-                    f"get_user_knowledge step3 (scene_rows): user_id={user_id}, found={len(scene_rows)}"
-                )
 
                 # 4. 合并结果（用户知识在前，场景知识在后），按 id 去重
                 all_rows = list(own_rows) + list(scene_rows)
@@ -363,36 +353,27 @@ def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
 
                 # 5. 转换为 KnowledgeItem
                 knowledge_items = []
-                for idx, row in enumerate(unique_rows):
-                    try:
-                        knowledge_item = KnowledgeItem(
-                            id=row['id'],
-                            user_id=str(row['user_id']),
-                            question=row['question'],
-                            description=row['description'] or "",
-                            answer=row['answer'],
-                            public=row['public'] or False,
-                            model_name=row['model_name'] or "",
-                            tool_id=row['tool_id'] or 0,
-                            params=row['params'] or "",
-                            type=infer_knowledge_type(row.get('type'), row.get('params')),
-                            create_time=row['create_time'].isoformat()
-                                if row.get('create_time') and hasattr(row['create_time'], 'isoformat')
-                                else str(row['create_time']) if row.get('create_time') else None,
-                            update_time=row['update_time'].isoformat()
-                                if row.get('update_time') and hasattr(row['update_time'], 'isoformat')
-                                else str(row['update_time']) if row.get('update_time') else None,
-                        )
-                        knowledge_items.append(knowledge_item)
-                    except Exception as row_err:
-                        logger.error(
-                            f"get_user_knowledge step5 ROW ERROR idx={idx}: {str(row_err)}"
-                        )
-                        raise
+                for row in unique_rows:
+                    knowledge_item = KnowledgeItem(
+                        id=row['id'],
+                        user_id=str(row['user_id']),
+                        question=row['question'],
+                        description=row['description'] or "",
+                        answer=row['answer'],
+                        public=row['public'] or False,
+                        model_name=row['model_name'] or "",
+                        tool_id=row['tool_id'] or 0,
+                        params=row['params'] or "",
+                        type=infer_knowledge_type(row.get('type'), row.get('params')),
+                        create_time=row['create_time'].isoformat()
+                            if row.get('create_time') and hasattr(row['create_time'], 'isoformat')
+                            else str(row['create_time']) if row.get('create_time') else None,
+                        update_time=row['update_time'].isoformat()
+                            if row.get('update_time') and hasattr(row['update_time'], 'isoformat')
+                            else str(row['update_time']) if row.get('update_time') else None,
+                    )
+                    knowledge_items.append(knowledge_item)
 
-                logger.info(
-                    f"get_user_knowledge step4 (return): user_id={user_id}, total={len(knowledge_items)}"
-                )
                 return knowledge_items
         finally:
             connection.close()
