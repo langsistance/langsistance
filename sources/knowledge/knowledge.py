@@ -380,11 +380,17 @@ def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
                     )
                     knowledge_items.append(knowledge_item)
 
+                logger.info(
+                    f"get_user_knowledge step4 (return): user_id={user_id}, total={len(knowledge_items)}"
+                )
                 return knowledge_items
         finally:
             connection.close()
 
     except Exception as e:
+        logger.error(
+            f"get_user_knowledge EXCEPTION: user_id={user_id}, error={str(e)}"
+        )
         pretty_print(f"Error querying user knowledge: {str(e)}", color="error")
         return []
 
