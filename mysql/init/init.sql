@@ -88,8 +88,8 @@ CREATE TABLE IF NOT EXISTS user_scenes (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- knowledge 表增加场景标签字段
-ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS scene_id BIGINT UNSIGNED DEFAULT NULL;
-ALTER TABLE knowledge ADD INDEX IF NOT EXISTS idx_scene_id (scene_id);
+ALTER TABLE knowledge ADD COLUMN  scene_id BIGINT UNSIGNED DEFAULT NULL;
+ALTER TABLE knowledge ADD INDEX  idx_scene_id (scene_id);
 
 -- 初始场景：专利检索
 INSERT INTO scenes (name, description) VALUES ('美国专利检索', 'USPTO专利检索相关能力，包含专利查询、文档下载等');

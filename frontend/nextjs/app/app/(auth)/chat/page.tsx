@@ -62,7 +62,6 @@ export default function Chat() {
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const [transientStatus, setTransientStatus] = useState('')
-  const [sceneHintVisible, setSceneHintVisible] = useState(true)
   const [enabledScenes, setEnabledScenes] = useState<any[]>([])
   const [sceneExamples, setSceneExamples] = useState<{icon: string, name: string, desc: string}[]>([])
 
@@ -89,10 +88,6 @@ export default function Chat() {
       })
       .catch(() => {})
   }, [])
-
-  useEffect(() => {
-    if (messages.length > 0) setSceneHintVisible(false)
-  }, [messages])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -236,39 +231,33 @@ export default function Chat() {
               <div className="empty-state">
                 <h3>{t('chat.welcome.greeting')}</h3>
                 <p>{t('chat.welcome.prompt')}</p>
-                {enabledScenes.length > 0 && sceneHintVisible && (
-                  <div className="scene-hint">
-                    <div className="scene-hint-header" onClick={() => setSceneHintVisible(false)}>
-                      <span className="scene-hint-title">
-                        ⚡ {t('chat.sceneHint')}
-                      </span>
-                      <span className="scene-hint-close">✕</span>
-                    </div>
-                    <div className="scene-hint-scenes">
-                      {enabledScenes.map((scene, i) => (
-                        <span key={i} className="scene-hint-scene-tag">
-                          📦 {scene.name}
-                        </span>
-                      ))}
-                    </div>
-                    {sceneExamples.length > 0 && (
-                      <ul className="scene-hint-list">
-                        {sceneExamples.map((ex, i) => (
-                          <li key={i} className="scene-hint-item">
-                            <span className="scene-hint-item-icon">{ex.icon}</span>
-                            <span>{ex.desc}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                )}
-                {enabledScenes.length > 0 && !sceneHintVisible && (
-                  <div className="scene-hint-collapsed" onClick={() => setSceneHintVisible(true)}>
-                    ⚡ {t('chat.sceneHint')}: {enabledScenes.map(s => `📦 ${s.name}`).join('、')}
-                  </div>
-                )}
               </div>
+            </div>
+          )}
+          {enabledScenes.length > 0 && (
+            <div className="scene-hint scene-hint-persistent">
+              <div className="scene-hint-header">
+                <span className="scene-hint-title">
+                  ⚡ {t('chat.sceneHint')}
+                </span>
+              </div>
+              <div className="scene-hint-scenes">
+                {enabledScenes.map((scene, i) => (
+                  <span key={i} className="scene-hint-scene-tag">
+                    📦 {scene.name}
+                  </span>
+                ))}
+              </div>
+              {sceneExamples.length > 0 && (
+                <ul className="scene-hint-list">
+                  {sceneExamples.map((ex, i) => (
+                    <li key={i} className="scene-hint-item">
+                      <span className="scene-hint-item-icon">{ex.icon}</span>
+                      <span>{ex.desc}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
           {messages.map((msg) => (

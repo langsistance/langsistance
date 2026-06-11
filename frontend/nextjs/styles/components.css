@@ -730,26 +730,31 @@ input[type="checkbox"] {
 
 /* Scene Hint (Chat) */
 .scene-hint {
-  margin-top: var(--spacing-lg);
-  padding: var(--spacing-lg);
+  margin: 0 auto var(--spacing-md);
+  padding: 12px 16px;
+  max-width: 740px;
+  width: 100%;
   background: var(--bg-white);
   border: 1px solid var(--divider);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   text-align: left;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+
+.scene-hint-persistent {
+  margin-top: 0;
+  box-shadow: none;
 }
 
 .scene-hint-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  cursor: pointer;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
   user-select: none;
 }
 
 .scene-hint-title {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -768,17 +773,17 @@ input[type="checkbox"] {
 .scene-hint-scenes {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 12px;
+  gap: 6px;
+  margin-bottom: 8px;
 }
 
 .scene-hint-scene-tag {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 13px;
-  padding: 3px 10px;
-  border-radius: 14px;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 12px;
   background: #e8f5e9;
   color: #2e7d32;
   font-weight: 500;
@@ -790,17 +795,17 @@ input[type="checkbox"] {
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
 }
 
 .scene-hint-item {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  font-size: 14px;
+  gap: 6px;
+  font-size: 13px;
   color: var(--text-secondary);
-  padding: 6px 0;
-  border-bottom: 1px solid #f5f5f5;
+  padding: 4px 0;
+  border-bottom: 1px solid #f8f8f8;
   line-height: 1.5;
 }
 
@@ -810,17 +815,6 @@ input[type="checkbox"] {
 
 .scene-hint-item-icon {
   flex-shrink: 0;
-  font-size: 14px;
+  font-size: 13px;
   margin-top: 1px;
-}
-
-.scene-hint-collapsed {
-  cursor: pointer;
-  margin-top: 12px;
-  font-size: 14px;
-  color: var(--text-secondary);
-  padding: 8px 12px;
-  background: var(--bg-main);
-  border-radius: var(--radius-md);
-  display: inline-block;
 }
