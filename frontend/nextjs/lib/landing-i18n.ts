@@ -484,7 +484,7 @@ const LandingI18nContext = createContext<LandingI18nContextValue | null>(null)
 
 export function LandingI18nProvider({ children }: { children: React.ReactNode }) {
   // Default 'en' for SSR safety; stored language applied after hydration via useEffect.
-  const [lang, setLangState] = useState<LangKey>('en')
+  const [lang, setLangState] = useState<LangKey>('zh')
 
   useEffect(() => {
     try {
