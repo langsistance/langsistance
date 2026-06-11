@@ -63,26 +63,28 @@ export default function Chat() {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const [transientStatus, setTransientStatus] = useState('')
   const [sceneHintVisible, setSceneHintVisible] = useState(true)
-  const [enabledSceneNames, setEnabledSceneNames] = useState<string[]>([])
-  const [sceneExamples, setSceneExamples] = useState<string[]>([])
+  const [enabledScenes, setEnabledScenes] = useState<any[]>([])
+  const [sceneExamples, setSceneExamples] = useState<{icon: string, name: string, desc: string}[]>([])
 
   useEffect(() => {
     getUserSceneStatus()
       .then(async (res) => {
         const subscribed = (res.scenes || []).filter((s: any) => s.subscribed)
-        const names: string[] = []
-        const examples: string[] = []
+        setEnabledScenes(subscribed)
+        const examples: {icon: string, name: string, desc: string}[] = []
         for (const scene of subscribed) {
-          names.push(scene.name)
           try {
             const kr = await getSceneKnowledge(scene.id)
             const items = kr.knowledge || []
-            items.slice(0, 3).forEach((item: any) => {
-              examples.push(item.description || item.question)
+            items.forEach((item: any) => {
+              examples.push({
+                icon: '📄',
+                name: scene.name,
+                desc: item.description || item.question,
+              })
             })
           } catch {}
         }
-        setEnabledSceneNames(names)
         setSceneExamples(examples)
       })
       .catch(() => {})
@@ -234,32 +236,36 @@ export default function Chat() {
               <div className="empty-state">
                 <h3>{t('chat.welcome.greeting')}</h3>
                 <p>{t('chat.welcome.prompt')}</p>
-                {enabledSceneNames.length > 0 && sceneHintVisible && (
+                {enabledScenes.length > 0 && sceneHintVisible && (
                   <div className="scene-hint">
-                    <div
-                      className="scene-hint-header"
-                      onClick={() => setSceneHintVisible(false)}
-                    >
-                      <span>
-                        {t('chat.sceneHint')}: {enabledSceneNames.join('、')}
+                    <div className="scene-hint-header" onClick={() => setSceneHintVisible(false)}>
+                      <span className="scene-hint-title">
+                        ⚡ {t('chat.sceneHint')}
                       </span>
-                      <span style={{ fontSize: 12, opacity: 0.5 }}>✕</span>
+                      <span className="scene-hint-close">✕</span>
+                    </div>
+                    <div className="scene-hint-scenes">
+                      {enabledScenes.map((scene, i) => (
+                        <span key={i} className="scene-hint-scene-tag">
+                          📦 {scene.name}
+                        </span>
+                      ))}
                     </div>
                     {sceneExamples.length > 0 && (
                       <ul className="scene-hint-list">
-                        {sceneExamples.map((example, i) => (
-                          <li key={i} className="scene-hint-item">{example}</li>
+                        {sceneExamples.map((ex, i) => (
+                          <li key={i} className="scene-hint-item">
+                            <span className="scene-hint-item-icon">{ex.icon}</span>
+                            <span>{ex.desc}</span>
+                          </li>
                         ))}
                       </ul>
                     )}
                   </div>
                 )}
-                {enabledSceneNames.length > 0 && !sceneHintVisible && (
-                  <div
-                    className="scene-hint-collapsed"
-                    onClick={() => setSceneHintVisible(true)}
-                  >
-                    {t('chat.sceneHint')}: {enabledSceneNames.join('、')}
+                {enabledScenes.length > 0 && !sceneHintVisible && (
+                  <div className="scene-hint-collapsed" onClick={() => setSceneHintVisible(true)}>
+                    ⚡ {t('chat.sceneHint')}: {enabledScenes.map(s => `📦 ${s.name}`).join('、')}
                   </div>
                 )}
               </div>

@@ -16,9 +16,8 @@ export default function SceneOnboardingModal() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    if (localStorage.getItem(STORAGE_KEY)) return
 
-    // 立即显示弹窗，默认勾选专利检索场景
+    // 立即显示弹窗，默认勾选专利检索
     setVisible(true)
 
     getUserSceneStatus()
@@ -27,14 +26,27 @@ export default function SceneOnboardingModal() {
         setScenes(list)
         if (list.length > 0) {
           const ids = new Set<number>()
+          let hasAnySubscribed = false
           list.forEach((s: any) => {
-            if (s.subscribed || list.length === 1) ids.add(s.id)
+            if (s.subscribed) {
+              ids.add(s.id)
+              hasAnySubscribed = true
+            }
           })
+          // 如果用户已经订阅了场景（之前完成过 onboarding），自动关闭
+          if (hasAnySubscribed && localStorage.getItem(STORAGE_KEY)) {
+            setVisible(false)
+            return
+          }
+          // 如果没有任何订阅，默认全选
+          if (!hasAnySubscribed) {
+            list.forEach((s: any) => ids.add(s.id))
+          }
           setSubscribedIds(ids)
         }
       })
       .catch(() => {
-        // API 失败时仍保持默认勾选状态
+        // API 失败时保持默认勾选，用户仍可操作
       })
       .finally(() => setLoading(false))
   }, [])
