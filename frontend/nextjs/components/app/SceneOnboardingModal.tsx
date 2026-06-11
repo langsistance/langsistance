@@ -11,28 +11,31 @@ export default function SceneOnboardingModal() {
   const { t, lang } = useI18n()
   const [visible, setVisible] = useState(false)
   const [scenes, setScenes] = useState<any[]>([])
-  const [subscribedIds, setSubscribedIds] = useState<Set<number>>(new Set())
+  const [subscribedIds, setSubscribedIds] = useState<Set<number>>(new Set([1]))
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    // 检查是否首次访问
     if (typeof window === 'undefined') return
     if (localStorage.getItem(STORAGE_KEY)) return
+
+    // 立即显示弹窗，默认勾选专利检索场景
+    setVisible(true)
 
     getUserSceneStatus()
       .then((res) => {
         const list = res.scenes || []
         setScenes(list)
-        // 默认勾选所有场景（目前只有专利检索一个）
-        const ids = new Set<number>()
-        list.forEach((s: any) => {
-          // 默认勾选：如果用户已订阅则保持，未订阅的新用户也默认勾选
-          if (s.subscribed || list.length === 1) ids.add(s.id)
-        })
-        setSubscribedIds(ids)
-        setVisible(true)
+        if (list.length > 0) {
+          const ids = new Set<number>()
+          list.forEach((s: any) => {
+            if (s.subscribed || list.length === 1) ids.add(s.id)
+          })
+          setSubscribedIds(ids)
+        }
       })
-      .catch(() => {})
+      .catch(() => {
+        // API 失败时仍保持默认勾选状态
+      })
       .finally(() => setLoading(false))
   }, [])
 
@@ -65,7 +68,7 @@ export default function SceneOnboardingModal() {
     setVisible(false)
   }
 
-  if (!visible || loading) return null
+  if (!visible) return null
 
   return (
     <div className="modal">
@@ -80,6 +83,26 @@ export default function SceneOnboardingModal() {
               ? 'Choose your scenario to get started quickly:'
               : '选择你的使用场景，快速上手：'}
           </p>
+          {loading && scenes.length === 0 && (
+            <div className="scene-card">
+              <div className="scene-card-header">
+                <div className="scene-card-info">
+                  <span className="scene-card-icon">📦</span>
+                  <div>
+                    <div className="scene-card-name">专利检索</div>
+                    <div className="scene-card-desc">{t('common.loading')}</div>
+                  </div>
+                </div>
+                <div className="scene-card-actions">
+                  <div className="scene-toggle active">
+                    <div className="scene-toggle-track" />
+                    <div className="scene-toggle-thumb" />
+                  </div>
+                  <span className="scene-toggle-label">{t('knowledge.sceneEnabled')}</span>
+                </div>
+              </div>
+            </div>
+          )}
           {scenes.map((scene) => (
             <SceneCard
               key={scene.id}

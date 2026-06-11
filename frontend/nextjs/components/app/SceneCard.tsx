@@ -54,17 +54,19 @@ export default function SceneCard({ scene, onToggle }: SceneCardProps) {
           </div>
         </div>
         <div className="scene-card-actions">
-          <span className={`scene-card-badge ${scene.subscribed ? 'enabled' : 'disabled'}`}>
+          <div
+            className={`scene-toggle${scene.subscribed ? ' active' : ''}`}
+            onClick={() => onToggle(scene.id, !scene.subscribed)}
+            title={scene.subscribed
+              ? (lang === 'en' ? 'Click to disable' : '点击取消启用')
+              : (lang === 'en' ? 'Click to enable' : '点击启用')}
+          >
+            <div className="scene-toggle-track" />
+            <div className="scene-toggle-thumb" />
+          </div>
+          <span className="scene-toggle-label">
             {scene.subscribed ? t('knowledge.sceneEnabled') : t('knowledge.sceneDisabled')}
           </span>
-          <button
-            className={`btn btn-sm ${scene.subscribed ? 'btn-outline' : 'btn-primary'}`}
-            onClick={() => onToggle(scene.id, !scene.subscribed)}
-          >
-            {scene.subscribed
-              ? (lang === 'en' ? 'Disable' : '取消启用')
-              : (lang === 'en' ? 'Enable' : '启用')}
-          </button>
         </div>
       </div>
 
