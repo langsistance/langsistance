@@ -110,8 +110,9 @@ async def get_scene_knowledge(scene_id: int):
 
 
 @router.get("/user/scenes", response_model=UserSceneStatusResponse)
+@router.get("/user/scenes/status", response_model=UserSceneStatusResponse)
 async def get_user_scenes(http_request: Request):
-    """获取当前用户订阅的场景 ID 列表。"""
+    """获取当前用户订阅的场景及订阅状态。"""
     auth_header = http_request.headers.get("Authorization")
     user = verify_firebase_token(auth_header)
     user_id = user["uid"]
