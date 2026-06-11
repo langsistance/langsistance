@@ -1332,9 +1332,9 @@ Begin your response now:
             except Exception as exc:
                 self.logger.error(
                     "direct batch formatter LLM failed; "
-                    f"streaming deterministic markdown fallback. error={exc}"
+                    f"retrying by item. error={exc}"
                 )
-                await self._stream_deterministic_batch(batch, callback_handler)
+                await self._stream_items_individually(batch, system_prompt, callback_handler)
             return
 
         batch_json = json.dumps(batch, ensure_ascii=False, indent=2, default=str)
