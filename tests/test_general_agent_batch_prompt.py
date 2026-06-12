@@ -43,6 +43,9 @@ class FakeLogger:
     def error(self, message):
         pass
 
+    def warning(self, message):
+        pass
+
 
 class FakeWorkflowResult:
     def __init__(self, final_data, raw_items=None, workflow_question="", workflow_instructions=""):
@@ -615,6 +618,7 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
         self.assertIn("formatted patent output", streamed)
 
     async def test_formatter_error_retries_single_item_contexts_before_fallback(self):
+        """When a batch fails the LLM, individual items are retried one by one."""
         GeneralAgent = self._load_general_agent_class()
 
         agent = GeneralAgent.__new__(GeneralAgent)
@@ -643,19 +647,20 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
         ]
         callback_handler = FakeCallbackHandler()
 
-        with patch.dict(os.environ, {"GENERAL_AGENT_BATCH_FORMATTING_MODE": "existing"}):
-            await agent.invoke_agent(agent=None, callback_handler=callback_handler)
+        await agent.invoke_agent(agent=None, callback_handler=callback_handler)
 
         streamed = "".join(callback_handler.tokens)
+        # 1 batch call (fails) + 2 individual item calls = 3 total.
         self.assertEqual(len(agent.llm.stream_calls), 3)
         self.assertIn("formatted item 1", streamed)
         self.assertIn("formatted item 2", streamed)
 
-    async def test_oversized_single_item_uses_direct_llm_formatter_by_default(self):
+    async def test_oversized_single_item_gets_pruned_before_llm(self):
+        """Oversized arrays are dropped; oversized nested strings are truncated."""
         GeneralAgent = self._load_general_agent_class()
 
         agent = GeneralAgent.__new__(GeneralAgent)
-        agent.llm = FakeLlm(stream_outputs=["formatted oversized item"])
+        agent.llm = FakeLlm(stream_outputs=["formatted pruned item"])
         agent.memory = FakeMemory()
         agent.logger = FakeLogger()
         agent._last_user_prompt = "show patent details"
@@ -679,12 +684,16 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
 
         streamed = "".join(callback_handler.tokens)
         self.assertEqual(len(agent.llm.stream_calls), 1)
-        self.assertIn("formatted oversized item", streamed)
-        self.assertIn('"applicationMetaData"', agent.llm.stream_calls[0]["user_content"])
-        self.assertIn('"eventDataBag"', agent.llm.stream_calls[0]["user_content"])
+        self.assertIn("formatted pruned item", streamed)
+        user_content = agent.llm.stream_calls[0]["user_content"]
+        # Nested dict is recursed into (not dropped); oversized string truncated.
+        self.assertIn('"applicationMetaData"', user_content)
+        self.assertIn("[truncated", user_content)
+        # Oversized array (eventDataBag) is dropped entirely.
+        self.assertNotIn("eventDataBag", user_content)
 
     async def test_existing_batch_formatting_mode_prunes_oversized_values_instead_of_splitting(self):
-        """Oversized values should be pruned proactively, so the item fits in one LLM call."""
+        """Oversized arrays are dropped; oversized strings are truncated; item fits in one LLM call."""
         GeneralAgent = self._load_general_agent_class()
 
         agent = GeneralAgent.__new__(GeneralAgent)
@@ -708,20 +717,26 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
         ]
         callback_handler = FakeCallbackHandler()
 
-        with patch.dict(os.environ, {"GENERAL_AGENT_BATCH_FORMATTING_MODE": "existing"}):
-            await agent.invoke_agent(agent=None, callback_handler=callback_handler)
+        await agent.invoke_agent(agent=None, callback_handler=callback_handler)
 
         streamed = "".join(callback_handler.tokens)
-        # Long values are pruned before reaching the LLM — single call is enough.
+        # Pruned item fits in a single LLM call.
         self.assertEqual(len(agent.llm.stream_calls), 1)
         self.assertIn("formatted compact item", streamed)
-        # The oversized values must NOT appear in the LLM input.
         user_content = agent.llm.stream_calls[0]["user_content"]
-        self.assertNotIn("x" * 100, user_content)
-        self.assertNotIn("y" * 100, user_content)
-        # Non-oversized metadata should still be present.
+
+        # The oversized array (eventDataBag) is dropped entirely.
+        self.assertNotIn("eventDataBag", user_content)
+        self.assertNotIn("Recordation of Patent eGrant", user_content)
+
+        # The oversized string inside the nested dict is truncated.
+        self.assertIn("[truncated 20000 chars]", user_content)
+        # Truncation leaves 10000 chars — a 15000-char run must NOT appear.
+        self.assertNotIn("x" * 15000, user_content)
+
+        # Non-oversized metadata is preserved.
         self.assertIn("US20250014493A1", user_content)
-        self.assertIn("Recordation of Patent eGrant", user_content)
+        self.assertIn("applicationMetaData", user_content)
 
     async def test_template_prompt_requires_preserving_original_api_key_params(self):
         GeneralAgent = self._load_general_agent_class()
