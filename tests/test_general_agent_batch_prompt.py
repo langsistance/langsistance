@@ -683,11 +683,12 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"applicationMetaData"', agent.llm.stream_calls[0]["user_content"])
         self.assertIn('"eventDataBag"', agent.llm.stream_calls[0]["user_content"])
 
-    async def test_existing_batch_formatting_mode_splits_oversized_single_item(self):
+    async def test_existing_batch_formatting_mode_prunes_oversized_values_instead_of_splitting(self):
+        """Oversized values should be pruned proactively, so the item fits in one LLM call."""
         GeneralAgent = self._load_general_agent_class()
 
         agent = GeneralAgent.__new__(GeneralAgent)
-        agent.llm = FakeLlm(stream_outputs=["formatted field chunk 1", "formatted field chunk 2"])
+        agent.llm = FakeLlm(stream_outputs=["formatted compact item"])
         agent.memory = FakeMemory()
         agent.logger = FakeLogger()
         agent._last_user_prompt = "show patent details"
@@ -711,9 +712,16 @@ class TestGeneralAgentBatchPrompt(unittest.IsolatedAsyncioTestCase):
             await agent.invoke_agent(agent=None, callback_handler=callback_handler)
 
         streamed = "".join(callback_handler.tokens)
-        self.assertEqual(len(agent.llm.stream_calls), 2)
-        self.assertIn("formatted field chunk 1", streamed)
-        self.assertIn("formatted field chunk 2", streamed)
+        # Long values are pruned before reaching the LLM — single call is enough.
+        self.assertEqual(len(agent.llm.stream_calls), 1)
+        self.assertIn("formatted compact item", streamed)
+        # The oversized values must NOT appear in the LLM input.
+        user_content = agent.llm.stream_calls[0]["user_content"]
+        self.assertNotIn("x" * 100, user_content)
+        self.assertNotIn("y" * 100, user_content)
+        # Non-oversized metadata should still be present.
+        self.assertIn("US20250014493A1", user_content)
+        self.assertIn("Recordation of Patent eGrant", user_content)
 
     async def test_template_prompt_requires_preserving_original_api_key_params(self):
         GeneralAgent = self._load_general_agent_class()

@@ -43,6 +43,7 @@ _SENSITIVE_HEADER_RE = re.compile(
 _URL_IN_TEXT_RE = re.compile(r'https?://[^\s"\'<>\])}]+')
 MAX_BATCH_JSON_CHARS_FOR_LLM = 50000
 MAX_MARKDOWN_VALUE_CHARS = 500
+MAX_VALUE_CHARS_FOR_LLM = int(os.getenv("GENERAL_AGENT_MAX_VALUE_CHARS", "5000"))
 BATCH_FORMATTING_MODE_ENV = "GENERAL_AGENT_BATCH_FORMATTING_MODE"
 BATCH_FORMATTING_MODE_DIRECT_LLM = "direct_llm"
 BATCH_FORMATTING_MODE_EXISTING = "existing"
@@ -67,6 +68,33 @@ def _collect_urls_from_value(value):
     elif isinstance(value, str):
         urls.extend(match.rstrip(".,;") for match in _URL_IN_TEXT_RE.findall(value))
     return urls
+
+
+def _prune_long_values(obj, max_chars=MAX_VALUE_CHARS_FOR_LLM):
+    """Recursively remove keys whose string values exceed max_chars.
+
+    For each dict key: if its scalar value (after recursion) is a string longer
+    than max_chars, the key is dropped entirely.  Nested dicts / lists are
+    recursed into so that deeply nested long strings are also removed.
+
+    Returns the pruned object (a new dict / list — the input is never mutated).
+    """
+    if isinstance(obj, dict):
+        result: dict[str, Any] = {}
+        for key, value in obj.items():
+            if isinstance(value, str):
+                if len(value) > max_chars:
+                    continue  # drop this key
+                result[key] = value
+            elif isinstance(value, (dict, list)):
+                pruned = _prune_long_values(value, max_chars)
+                result[key] = pruned
+            else:
+                result[key] = value
+        return result
+    if isinstance(obj, list):
+        return [_prune_long_values(item, max_chars) for item in obj]
+    return obj
 
 
 def _format_markdown_value(value) -> str:
@@ -1278,11 +1306,34 @@ Begin your response now:
             chunk_batch = [chunk]
             chunk_json = json.dumps(chunk_batch, ensure_ascii=False, indent=2, default=str)
             if len(chunk_json) > MAX_BATCH_JSON_CHARS_FOR_LLM:
-                self.logger.info(
-                    "single item field chunk too large for formatter LLM; "
-                    f"streaming deterministic markdown. chunk={chunk_index}, chars={len(chunk_json)}"
+                # Before falling back to deterministic markdown, try pruning
+                # long values from the chunk.
+                pruned_chunk = _prune_long_values(chunk)
+                pruned_batch = [pruned_chunk]
+                pruned_json = json.dumps(pruned_batch, ensure_ascii=False, indent=2, default=str)
+                if len(pruned_json) <= MAX_BATCH_JSON_CHARS_FOR_LLM:
+                    self.logger.info(
+                        "single item field chunk pruned to fit formatter LLM; "
+                        f"chunk={chunk_index}, "
+                        f"chars_before={len(chunk_json)}, chars_after={len(pruned_json)}"
+                    )
+                    try:
+                        await self._stream_formatter_batch(system_prompt, pruned_batch, callback_handler)
+                    except Exception as exc:
+                        self.logger.error(
+                            "formatter LLM failed for pruned chunk; "
+                            f"streaming deterministic markdown fallback. chunk={chunk_index}, error={exc}"
+                        )
+                        await self._stream_deterministic_batch(pruned_batch, callback_handler)
+                    continue
+
+                self.logger.warning(
+                    "single item field chunk still too large after pruning; "
+                    f"streaming deterministic markdown as last resort. "
+                    f"chunk={chunk_index}, chars={len(chunk_json)}, "
+                    f"pruned_chars={len(pruned_json)}"
                 )
-                await self._stream_deterministic_batch(chunk_batch, callback_handler)
+                await self._stream_deterministic_batch(pruned_batch, callback_handler)
                 continue
 
             try:
@@ -1290,9 +1341,10 @@ Begin your response now:
             except Exception as exc:
                 self.logger.error(
                     "formatter LLM failed for item field chunk; "
-                    f"streaming deterministic markdown fallback. chunk={chunk_index}, error={exc}"
+                    f"retrying with pruned chunk. chunk={chunk_index}, error={exc}"
                 )
-                await self._stream_deterministic_batch(chunk_batch, callback_handler)
+                pruned_chunk = _prune_long_values(chunk)
+                await self._stream_deterministic_batch([pruned_chunk], callback_handler)
 
     async def _stream_items_individually(
         self,
@@ -1381,6 +1433,21 @@ Begin your response now:
             status_callback=emit_filter_status,
         )
         pending = filter_result.items
+        # Prune excessively long values from each item before sending to the LLM.
+        # This prevents the JSON→markdown degradation fallback by ensuring no
+        # single field value dominates the batch payload.
+        pending_before_prune = sum(
+            len(json.dumps(item, ensure_ascii=False, default=str)) for item in pending
+        )
+        pending = [_prune_long_values(item) for item in pending]
+        pending_after_prune = sum(
+            len(json.dumps(item, ensure_ascii=False, default=str)) for item in pending
+        )
+        if pending_before_prune != pending_after_prune:
+            self.logger.info(
+                "tool_result pruned long values before batch formatting; "
+                f"chars_before={pending_before_prune}, chars_after={pending_after_prune}"
+            )
         total = len(pending)
         heading = (
             f"## Filtered Results ({filter_result.filtered_count} of {filter_result.original_count} items)"
