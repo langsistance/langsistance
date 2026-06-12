@@ -1,22 +1,16 @@
 'use client'
 
-import { useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import '@/styles/app.css'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { ChatProvider } from '@/contexts/ChatContext'
 import { I18nProvider } from '@/lib/app-i18n'
 import AppLayout from '@/components/app/AppLayout'
 import SceneOnboardingModal from '@/components/app/SceneOnboardingModal'
+import LoginForm from '@/components/app/LoginForm'
+import Chat from '@/app/app/(auth)/chat/page'
 
-function AuthGuard({ children }: { children: React.ReactNode }) {
+function HomePageContent() {
   const { user } = useAuth()
-  const router = useRouter()
-
-  useEffect(() => {
-    if (user === null) {
-      router.replace('/')
-    }
-  }, [user, router])
 
   if (user === undefined) {
     return (
@@ -28,18 +22,23 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   }
 
   if (user === null) {
-    return null
+    return <LoginForm />
   }
 
-  return <AppLayout><SceneOnboardingModal />{children}</AppLayout>
+  return (
+    <AppLayout>
+      <SceneOnboardingModal />
+      <Chat />
+    </AppLayout>
+  )
 }
 
-export default function AuthLayout({ children }: { children: React.ReactNode }) {
+export default function HomePage() {
   return (
     <AuthProvider>
       <I18nProvider>
         <ChatProvider>
-          <AuthGuard>{children}</AuthGuard>
+          <HomePageContent />
         </ChatProvider>
       </I18nProvider>
     </AuthProvider>
