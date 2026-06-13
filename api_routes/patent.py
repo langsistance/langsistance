@@ -64,7 +64,12 @@ async def patent_callback(request: Request):
         400: 请求体缺失必要字段
         500: Redis 存储失败
     """
-    logger.info("Patent callback received")
+    # 调试日志：完整打印回调 body
+    try:
+        raw_body = await request.body()
+        logger.info(f"Patent callback body: {raw_body.decode('utf-8', errors='replace')}")
+    except Exception:
+        pass
 
     try:
         body = await request.json()
@@ -74,8 +79,6 @@ async def patent_callback(request: Request):
             status_code=400,
             content={"success": False, "message": "Invalid JSON body"},
         )
-
-    logger.info(f"Patent callback body keys: {list(body.keys()) if body else 'None'}")
 
     access_token = body.get("access_token")
     refresh_token = body.get("refresh_token")
