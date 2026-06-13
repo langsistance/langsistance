@@ -270,3 +270,43 @@ class UserSceneStatusResponse(BaseModel):
 
 class UserScenesUpdateRequest(BaseModel):
     scene_ids: List[int]
+
+
+# ── Patent (DI Platform) Models ─────────────────────────────────────────────
+
+class PatentTokenCallback(BaseModel):
+    """DI开放平台回调推送的 token 数据"""
+    access_token: str
+    refresh_token: str
+    token_type: Optional[str] = "Bearer"
+    expires_in: Optional[int] = None  # access_token 有效期（秒），默认7天
+    scope: Optional[str] = None
+    open_id: Optional[str] = None
+    uid: Optional[str] = None
+    # 额外透传字段，兼容 DI 平台可能附加的参数
+    extra: Optional[dict] = None
+
+    class Config:
+        extra = "allow"  # 允许额外字段，避免回调参数变更导致解析失败
+
+
+class PatentTokenResponse(BaseModel):
+    """获取当前 token 状态的响应"""
+    success: bool
+    message: str
+    access_token: Optional[str] = None
+    expires_at: Optional[str] = None  # ISO 格式过期时间
+    has_refresh_token: bool = False
+
+
+class PatentRefreshRequest(BaseModel):
+    """手动触发 refresh_token 刷新"""
+    refresh_token: Optional[str] = None  # 可选，不传则使用存储的 refresh_token
+
+
+class PatentRefreshResponse(BaseModel):
+    """刷新 token 的响应"""
+    success: bool
+    message: str
+    access_token: Optional[str] = None
+    expires_in: Optional[int] = None
