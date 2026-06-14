@@ -45,6 +45,7 @@ MAX_BATCH_JSON_CHARS_FOR_LLM = 50000
 MAX_MARKDOWN_VALUE_CHARS = 500
 MAX_ITEM_CHARS_FOR_LLM = int(os.getenv("GENERAL_AGENT_MAX_ITEM_CHARS", "15000"))
 MAX_VALUE_CHARS_THRESHOLD = int(os.getenv("GENERAL_AGENT_MAX_VALUE_CHARS", "10000"))
+SMALL_LIST_THRESHOLD = int(os.getenv("GENERAL_AGENT_SMALL_LIST_THRESHOLD", "3"))
 
 
 def _json_len(obj) -> int:
@@ -712,13 +713,19 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
                         raw_items = None
 
                     if raw_items:
-                        self._pending_raw_items = raw_items
-                        result_str = (
-                            f"The query returned {len(raw_items)} items. "
-                            f"Please write a brief 2–3 sentence summary of what was found. "
-                            f"The complete list will be analyzed and displayed item by item automatically — "
-                            f"do NOT enumerate the items yourself."
-                        )
+                        list_count = len(raw_items)
+                        if list_count <= SMALL_LIST_THRESHOLD:
+                            # 小列表：修剪后直接嵌入 prompt，不走 Phase 2 批量 formatter
+                            pruned = [_prune_item_for_llm(item) for item in raw_items]
+                            result_str = json.dumps(pruned, ensure_ascii=False, indent=2)
+                        else:
+                            self._pending_raw_items = raw_items
+                            result_str = (
+                                f"The query returned {list_count} items. "
+                                f"Please write a brief 2–3 sentence summary of what was found. "
+                                f"The complete list will be analyzed and displayed item by item automatically — "
+                                f"do NOT enumerate the items yourself."
+                            )
                     else:
                         result_str = json.dumps(result_data, ensure_ascii=False, indent=2)
                 except json.JSONDecodeError:
@@ -863,13 +870,19 @@ Begin your response now:
                             raw_items = None
 
                         if raw_items:
-                            self._pending_raw_items = raw_items
-                            result_str = (
-                                f"The query returned {len(raw_items)} items. "
-                                f"Please write a brief 2–3 sentence summary of what was found. "
-                                f"The complete list will be analyzed and displayed item by item automatically — "
-                                f"do NOT enumerate the items yourself."
-                            )
+                            list_count = len(raw_items)
+                            if list_count <= SMALL_LIST_THRESHOLD:
+                                # 小列表：修剪后直接嵌入 prompt，不走 Phase 2 批量 formatter
+                                pruned = [_prune_item_for_llm(item) for item in raw_items]
+                                result_str = json.dumps(pruned, ensure_ascii=False, indent=2)
+                            else:
+                                self._pending_raw_items = raw_items
+                                result_str = (
+                                    f"The query returned {list_count} items. "
+                                    f"Please write a brief 2–3 sentence summary of what was found. "
+                                    f"The complete list will be analyzed and displayed item by item automatically — "
+                                    f"do NOT enumerate the items yourself."
+                                )
                         else:
                             result_str = json.dumps(result_data, ensure_ascii=False, indent=2)
                     except json.JSONDecodeError:
@@ -988,6 +1001,11 @@ Begin your response now:
                         raw_items = tool_result.get("raw_items")
                         if raw_items:
                             list_count = len(raw_items)
+                            if list_count <= SMALL_LIST_THRESHOLD:
+                                # 小列表：修剪后直接返回完整数据给主 LLM，
+                                # 不设 _pending_raw_items，不走 Phase 2 批量 formatter
+                                pruned = [_prune_item_for_llm(item) for item in raw_items]
+                                return json.dumps(pruned, ensure_ascii=False, indent=2)
                             self._pending_raw_items = raw_items
                             return (
                                 f"The query returned {list_count} items. "
