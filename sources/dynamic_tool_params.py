@@ -15,6 +15,7 @@ from sources.logger import Logger
 USPTO_DOWNLOAD_API_PREFIX = "https://api.uspto.gov/api/v1/download/applications"
 USPTO_DOWNLOAD_PROXY_PATH = "/uspto/download"
 DEFAULT_COPIIOAI_API_BASE_URL = "https://api.copiioai.com"
+ZLDJS_API_HOST = "open.zldsj.com"
 _URL_RE = re.compile(r'https?://[^\s"\'<>\])}]+')
 logger = Logger("dynamic_tool_params.log")
 
@@ -196,6 +197,33 @@ def _extract_raw_items(result_data: Any) -> list | None:
     return None
 
 
+def _is_zldjs_api_url(url: str) -> bool:
+    """Check if the URL targets the open.zldsj.com (DI patent platform) domain."""
+    hostname = urlsplit(url).hostname
+    return bool(hostname and hostname.lower().rstrip(".") == ZLDJS_API_HOST)
+
+
+def _inject_zldjs_auth_params(request_params: dict) -> None:
+    """Inject client_id, access_token, and scope into query params for open.zldsj.com API requests.
+
+    - client_id   : read from PATENT_CLIENT_ID env var (set in .env)
+    - access_token: read from Redis via patent/callback stored token;
+                    auto-refreshes if expired or within 1 hour of expiry
+    - scope       : fixed value "read_cn"
+    """
+    from sources.patent_token import ensure_valid_access_token
+
+    client_id = os.getenv("PATENT_CLIENT_ID", "")
+    if client_id:
+        request_params["client_id"] = client_id
+
+    access_token = ensure_valid_access_token()
+    if access_token:
+        request_params["access_token"] = access_token
+
+    request_params["scope"] = "read_cn"
+
+
 def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | None) -> Dict[str, Any]:
     """Execute a push=2 backend tool and return parsed data plus list metadata."""
     params_data = _coerce_json_object(tool_info.params, "tool_info.params")
@@ -219,6 +247,10 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
     if not isinstance(request_params, dict):
         raise ValueError("LLM tool params query must be a JSON object")
     request_params["_t"] = str(int(time.time() * 1000))
+
+    # Inject DI patent platform auth params for open.zldsj.com requests
+    if _is_zldjs_api_url(url):
+        _inject_zldjs_auth_params(request_params)
 
     timeout = getattr(tool_info, "timeout", None) or 30
     if method not in {"GET", "POST", "PUT", "DELETE", "PATCH"}:

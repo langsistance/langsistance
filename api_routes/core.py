@@ -118,13 +118,12 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
 
     @router.post("/query")
     async def process_query(request: QueryRequest, http_request: Request):
-        app_logger.info(f"Processing query: {request.query}")
-        app_logger.info("Processing start begin")
-
         auth_header = http_request.headers.get("Authorization")
         user = verify_firebase_token(auth_header)
 
         user_id = user['uid']
+
+        app_logger.info(f"[user={user_id}] Processing query: {request.query}")
 
         allowed = check_and_increase_usage(user_id)
         if not allowed:
@@ -305,8 +304,6 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
 
     @router.post("/query_stream")
     async def process_query_stream(request: QueryRequest, http_request: Request):
-        app_logger.info(f"Processing query_stream: {request.query}")
-
         # Optimize: Use cached token validation
         auth_header = http_request.headers.get("Authorization")
         try:
@@ -316,6 +313,8 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
             return JSONResponse(status_code=401, content={"error": "Invalid token"})
 
         user_id = user['uid']
+
+        app_logger.info(f"[user={user_id}] Processing query_stream: {request.query}")
 
         # Optimize: Make usage check async
         allowed = await check_usage_async(user_id)

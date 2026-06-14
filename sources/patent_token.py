@@ -33,6 +33,10 @@ logger = Logger("patent_token.log")
 
 ACCESS_TOKEN_TTL = 7 * 24 * 3600    # 7 天
 REFRESH_TOKEN_TTL = 30 * 24 * 3600  # 30 天
+ACCESS_TOKEN_REFRESH_BUFFER = 3600  # 提前 1 小时刷新
+
+import threading
+_patent_refresh_lock = threading.Lock()
 
 REDIS_KEY_ACCESS = "patent:access_token"
 REDIS_KEY_REFRESH = "patent:refresh_token"
@@ -221,6 +225,88 @@ def get_refresh_token() -> Optional[str]:
         return None
     finally:
         r.close()
+
+
+def ensure_valid_access_token() -> Optional[str]:
+    """
+    获取有效的 access_token，如果过期或接近过期则自动刷新。
+
+    刷新流程：
+    1. 检查当前 access_token 是否有效（预留 1 小时缓冲）
+    2. 如过期/接近过期，使用 refresh_token 调用 DI 平台刷新接口
+    3. 刷新成功后，将新 token 覆盖写入 Redis
+    4. 返回有效的 access_token
+
+    线程安全：使用锁防止并发刷新。
+
+    Returns
+    -------
+    str or None
+        有效的 access_token；如果没有任何 token 且无法刷新则返回 None
+    """
+    store = load_tokens()
+
+    # 没有任何 token
+    if store is None:
+        logger.info("No patent tokens available in Redis")
+        return None
+
+    # access_token 仍在有效期内（含缓冲），直接返回
+    if store.access_ttl_seconds > ACCESS_TOKEN_REFRESH_BUFFER:
+        return store.access_token
+
+    # 需要刷新
+    logger.info(
+        f"Patent access_token expired or near expiry "
+        f"(ttl={store.access_ttl_seconds:.0f}s), triggering refresh..."
+    )
+
+    if store.is_refresh_expired:
+        logger.warning("Patent refresh_token also expired, cannot refresh")
+        # 返回旧 token，让调用方自行处理
+        return store.access_token if not store.is_access_expired else None
+
+    # 使用锁防止并发刷新
+    with _patent_refresh_lock:
+        # 双重检查：获取锁后再次确认 token 状态
+        # （可能在等待锁期间已被其他线程刷新）
+        store_after_lock = load_tokens()
+        if store_after_lock is not None and store_after_lock.access_ttl_seconds > ACCESS_TOKEN_REFRESH_BUFFER:
+            logger.info("Patent token already refreshed by another thread")
+            return store_after_lock.access_token
+
+        result = call_di_refresh_api(store.refresh_token)
+
+        if result is None:
+            logger.error("Patent token refresh API call failed")
+            # 返回旧 access_token（可能已过期，但别无选择）
+            return store.access_token
+
+        # 刷新响应中包含新 token，直接存储
+        if "access_token" in result:
+            new_access = result.get("access_token")
+            new_refresh = result.get("refresh_token", store.refresh_token)
+            expires_in = result.get("expires_in", ACCESS_TOKEN_TTL)
+
+            try:
+                stored = store_tokens(
+                    access_token=new_access,
+                    refresh_token=new_refresh,
+                    expires_in=expires_in,
+                )
+                logger.info(
+                    f"Patent tokens refreshed successfully, "
+                    f"new access_token expires in {expires_in}s"
+                )
+                return stored.access_token
+            except Exception as exc:
+                logger.error(f"Failed to store refreshed tokens: {exc}")
+                # 存储失败但拿到了新 token，仍然返回
+                return new_access
+
+        # 响应中不包含 token（走 callback 路径）
+        logger.info("Patent refresh triggered (callback path), using existing token")
+        return store.access_token
 
 
 def clear_tokens() -> bool:
