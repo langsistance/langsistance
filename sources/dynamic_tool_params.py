@@ -262,7 +262,30 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
     }
     if method in {"POST", "PUT", "PATCH"}:
         request_kwargs["json"] = request_body
+
+    # 对 open.zldsj.com 请求打印完整请求信息
+    if _is_zldjs_api_url(url):
+        logger.info(
+            f"[ZLDJS REQUEST] {method} {url}\n"
+            f"  params: {json.dumps(request_params, ensure_ascii=False)}\n"
+            f"  headers: {json.dumps(headers, ensure_ascii=False)}\n"
+            f"  body: {json.dumps(request_body, ensure_ascii=False) if request_body else 'None'}"
+        )
+
     response = outbound_http.request(method, url, purpose="backend_tool", **request_kwargs)
+
+    # 对 open.zldsj.com 请求打印完整返回值
+    if _is_zldjs_api_url(url):
+        resp_body = ""
+        try:
+            resp_body = response.text[:10000] if response.text else "(empty)"
+        except Exception:
+            resp_body = "(unable to decode response body)"
+        logger.info(
+            f"[ZLDJS RESPONSE] status={response.status_code}\n"
+            f"  headers: {json.dumps(dict(response.headers), ensure_ascii=False)}\n"
+            f"  body: {resp_body}"
+        )
 
     if response.status_code != 200:
         result = f"Request failed, status code: {response.status_code}"
