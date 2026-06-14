@@ -1388,30 +1388,43 @@ Begin your response now:
             )
             _replace_uspto_download_urls_for_batch(pruned)
 
-            small_list_prompt = (
-                "You are a precise data presenter. Your ONLY job is to faithfully "
-                "reproduce ALL data from the input items as clean Markdown.\n\n"
-                "CRITICAL RULES — follow without exception:\n"
-                "1. Output EVERY field from EVERY item — do NOT skip, omit, "
-                "abbreviate, or summarize any field or value.\n"
-                "2. If a field value is long, reproduce it IN FULL — do not truncate.\n"
-                "3. Use **bold** for field names. Number each item.\n"
-                "4. Every URL is mandatory: copy every URL exactly and verbatim.\n"
-                "5. Image URLs MUST be displayed as ![alt](URL) for inline rendering.\n"
-                "6. Do NOT add preamble, summary, or conclusion — output only the "
-                "formatted items.\n"
-                "7. Output ALL items. Do not skip any item."
-            )
-
+            url_checklist = self._build_url_checklist(pruned)
             batch_json = json.dumps(pruned, ensure_ascii=False, indent=2, default=str)
+
             if len(batch_json) <= MAX_BATCH_JSON_CHARS_FOR_LLM:
+                # 专用 system prompt：忠实再现，不分析不概括
+                faithful_system_prompt = (
+                    "You are a data transcriber. Your ONLY task is to reproduce "
+                    "the input data faithfully as Markdown. You are NOT an analyst, "
+                    "NOT a summarizer, NOT a curator.\n\n"
+                    "IRON RULES — no exceptions:\n"
+                    "1. Output EVERY key-value pair from EVERY item. "
+                    "If it's in the input, it MUST be in your output.\n"
+                    "2. Do NOT decide which fields are 'important'. ALL fields are important.\n"
+                    "3. Do NOT group, merge, restructure, or tabularize the data. "
+                    "Output each item as a flat key-value list.\n"
+                    "4. Every URL must be copied EXACTLY and VERBATIM.\n"
+                    "5. Image URLs MUST use ![alt](URL) syntax for inline display.\n"
+                    "6. No preamble, no summary, no conclusion — just the data.\n"
+                    "7. Number each item clearly (Item 1, Item 2, ...)."
+                )
+                # 用户消息也强调 "reproduce faithfully"，不用 "analyze"
+                faithful_user_content = (
+                    f"Reproduce ALL of the following {len(pruned)} items FAITHFULLY. "
+                    f"Output every single field for every single item. "
+                    f"Do not analyze, filter, curate, or summarize.\n\n"
+                    f"{url_checklist}"
+                    f"{batch_json}"
+                )
                 try:
-                    await self._stream_formatter_batch(
-                        small_list_prompt, pruned, callback_handler,
+                    await self.llm.stream_simple(
+                        system_prompt=faithful_system_prompt,
+                        user_content=faithful_user_content,
+                        callback_handler=callback_handler,
                     )
                 except Exception as exc:
                     self.logger.warning(
-                        "small-list faithful formatter failed; "
+                        "small-list faithful transcriber failed; "
                         f"falling back to deterministic markdown. error={exc}"
                     )
                     await self._stream_deterministic_batch(pruned, callback_handler)
