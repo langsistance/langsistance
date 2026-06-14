@@ -720,6 +720,16 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
                             f"The complete list will be analyzed and displayed item by item automatically — "
                             f"do NOT enumerate the items yourself."
                         )
+                    elif isinstance(result_data, dict):
+                        # dict 包装为单元素列表，走 Phase 2 忠实输出
+                        pruned = _prune_item_for_llm(result_data)
+                        self._pending_raw_items = [pruned]
+                        result_str = (
+                            "The query returned structured data. "
+                            "Please write a brief 1-2 sentence summary of what was found. "
+                            "The complete data will be displayed automatically - "
+                            "do NOT enumerate the fields yourself."
+                        )
                     else:
                         result_str = json.dumps(result_data, ensure_ascii=False, indent=2)
                 except json.JSONDecodeError:
@@ -871,6 +881,16 @@ Begin your response now:
                                 f"The complete list will be analyzed and displayed item by item automatically — "
                                 f"do NOT enumerate the items yourself."
                             )
+                        elif isinstance(result_data, dict):
+                            # dict 包装为单元素列表，走 Phase 2 忠实输出
+                            pruned = _prune_item_for_llm(result_data)
+                            self._pending_raw_items = [pruned]
+                            result_str = (
+                                "The query returned structured data. "
+                                "Please write a brief 1-2 sentence summary of what was found. "
+                                "The complete data will be displayed automatically - "
+                                "do NOT enumerate the fields yourself."
+                            )
                         else:
                             result_str = json.dumps(result_data, ensure_ascii=False, indent=2)
                     except json.JSONDecodeError:
@@ -997,7 +1017,17 @@ Begin your response now:
                                 f"do NOT enumerate the items yourself."
                             )
                         data = tool_result.get("data")
-                        if isinstance(data, (dict, list)):
+                        if isinstance(data, dict):
+                            # dict 包装为单元素列表，走 Phase 2 忠实输出
+                            pruned = _prune_item_for_llm(data)
+                            self._pending_raw_items = [pruned]
+                            return (
+                                "The query returned structured data. "
+                                "Please write a brief 1-2 sentence summary of what was found. "
+                                "The complete data will be displayed automatically - "
+                                "do NOT enumerate the fields yourself."
+                            )
+                        if isinstance(data, list):
                             return json.dumps(data, ensure_ascii=False, indent=2)
                         return data
                         # 从tool_info中获取URL
