@@ -713,19 +713,13 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
                         raw_items = None
 
                     if raw_items:
-                        list_count = len(raw_items)
-                        if list_count <= SMALL_LIST_THRESHOLD:
-                            # 小列表：修剪后直接嵌入 prompt，不走 Phase 2 批量 formatter
-                            pruned = [_prune_item_for_llm(item) for item in raw_items]
-                            result_str = json.dumps(pruned, ensure_ascii=False, indent=2)
-                        else:
-                            self._pending_raw_items = raw_items
-                            result_str = (
-                                f"The query returned {list_count} items. "
-                                f"Please write a brief 2–3 sentence summary of what was found. "
-                                f"The complete list will be analyzed and displayed item by item automatically — "
-                                f"do NOT enumerate the items yourself."
-                            )
+                        self._pending_raw_items = raw_items
+                        result_str = (
+                            f"The query returned {len(raw_items)} items. "
+                            f"Please write a brief 2–3 sentence summary of what was found. "
+                            f"The complete list will be analyzed and displayed item by item automatically — "
+                            f"do NOT enumerate the items yourself."
+                        )
                     else:
                         result_str = json.dumps(result_data, ensure_ascii=False, indent=2)
                 except json.JSONDecodeError:
@@ -870,19 +864,13 @@ Begin your response now:
                             raw_items = None
 
                         if raw_items:
-                            list_count = len(raw_items)
-                            if list_count <= SMALL_LIST_THRESHOLD:
-                                # 小列表：修剪后直接嵌入 prompt，不走 Phase 2 批量 formatter
-                                pruned = [_prune_item_for_llm(item) for item in raw_items]
-                                result_str = json.dumps(pruned, ensure_ascii=False, indent=2)
-                            else:
-                                self._pending_raw_items = raw_items
-                                result_str = (
-                                    f"The query returned {list_count} items. "
-                                    f"Please write a brief 2–3 sentence summary of what was found. "
-                                    f"The complete list will be analyzed and displayed item by item automatically — "
-                                    f"do NOT enumerate the items yourself."
-                                )
+                            self._pending_raw_items = raw_items
+                            result_str = (
+                                f"The query returned {len(raw_items)} items. "
+                                f"Please write a brief 2–3 sentence summary of what was found. "
+                                f"The complete list will be analyzed and displayed item by item automatically — "
+                                f"do NOT enumerate the items yourself."
+                            )
                         else:
                             result_str = json.dumps(result_data, ensure_ascii=False, indent=2)
                     except json.JSONDecodeError:
@@ -1001,11 +989,6 @@ Begin your response now:
                         raw_items = tool_result.get("raw_items")
                         if raw_items:
                             list_count = len(raw_items)
-                            if list_count <= SMALL_LIST_THRESHOLD:
-                                # 小列表：修剪后直接返回完整数据给主 LLM，
-                                # 不设 _pending_raw_items，不走 Phase 2 批量 formatter
-                                pruned = [_prune_item_for_llm(item) for item in raw_items]
-                                return json.dumps(pruned, ensure_ascii=False, indent=2)
                             self._pending_raw_items = raw_items
                             return (
                                 f"The query returned {list_count} items. "
@@ -1390,6 +1373,69 @@ Begin your response now:
                 if key != "message"
             }
             await on_status(message, **metadata)
+
+        # ── 小列表快速路径：跳过过滤，专用 prompt 一次性忠实输出 ──
+        if original_total <= SMALL_LIST_THRESHOLD:
+            self.logger.info(
+                f"small list ({original_total} items), "
+                f"using faithful single-call reproduction path"
+            )
+            pruned = [_prune_item_for_llm(item) for item in raw_items]
+            items_for_export = list(raw_items)
+            heading = f"## Results ({original_total} items)"
+            await callback_handler.on_llm_new_token(
+                f"\n\n---\n\n{heading}\n\n"
+            )
+            _replace_uspto_download_urls_for_batch(pruned)
+
+            small_list_prompt = (
+                "You are a precise data presenter. Your ONLY job is to faithfully "
+                "reproduce ALL data from the input items as clean Markdown.\n\n"
+                "CRITICAL RULES — follow without exception:\n"
+                "1. Output EVERY field from EVERY item — do NOT skip, omit, "
+                "abbreviate, or summarize any field or value.\n"
+                "2. If a field value is long, reproduce it IN FULL — do not truncate.\n"
+                "3. Use **bold** for field names. Number each item.\n"
+                "4. Every URL is mandatory: copy every URL exactly and verbatim.\n"
+                "5. Image URLs MUST be displayed as ![alt](URL) for inline rendering.\n"
+                "6. Do NOT add preamble, summary, or conclusion — output only the "
+                "formatted items.\n"
+                "7. Output ALL items. Do not skip any item."
+            )
+
+            batch_json = json.dumps(pruned, ensure_ascii=False, indent=2, default=str)
+            if len(batch_json) <= MAX_BATCH_JSON_CHARS_FOR_LLM:
+                try:
+                    await self._stream_formatter_batch(
+                        small_list_prompt, pruned, callback_handler,
+                    )
+                except Exception as exc:
+                    self.logger.warning(
+                        "small-list faithful formatter failed; "
+                        f"falling back to deterministic markdown. error={exc}"
+                    )
+                    await self._stream_deterministic_batch(pruned, callback_handler)
+            else:
+                self.logger.info(
+                    "small-list pruned JSON too large for single LLM call "
+                    f"({len(batch_json)} chars), using deterministic markdown"
+                )
+                await self._stream_deterministic_batch(pruned, callback_handler)
+
+            await callback_handler.on_llm_new_token("\n\n")
+
+            on_artifacts = getattr(callback_handler, "on_artifacts", None)
+            if on_artifacts:
+                artifacts = build_result_artifacts(
+                    items_for_export,
+                    query_id=getattr(self, "_last_query_id", None),
+                    original_count=original_total,
+                    filter_applied=False,
+                )
+                if artifacts:
+                    await on_artifacts(artifacts)
+            return
+        # ── 大列表：走原有的过滤 + 批量格式化路径 ──
 
         filter_result = await filter_tool_result_items(
             raw_items,
