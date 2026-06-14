@@ -1377,7 +1377,7 @@ Begin your response now:
         # ── 小列表快速路径：跳过过滤，专用 prompt 一次性忠实输出 ──
         if original_total <= SMALL_LIST_THRESHOLD:
             self.logger.info(
-                f"small list ({original_total} items), "
+                f"[SMALL-LIST] ({original_total} items), "
                 f"using faithful single-call reproduction path"
             )
             pruned = [_prune_item_for_llm(item) for item in raw_items]
@@ -1392,27 +1392,29 @@ Begin your response now:
             batch_json = json.dumps(pruned, ensure_ascii=False, indent=2, default=str)
 
             if len(batch_json) <= MAX_BATCH_JSON_CHARS_FOR_LLM:
-                # 专用 system prompt：忠实再现，不分析不概括
-                faithful_system_prompt = (
-                    "You are a data transcriber. Your ONLY task is to reproduce "
-                    "the input data faithfully as Markdown. You are NOT an analyst, "
-                    "NOT a summarizer, NOT a curator.\n\n"
-                    "IRON RULES — no exceptions:\n"
-                    "1. Output EVERY key-value pair from EVERY item. "
-                    "If it's in the input, it MUST be in your output.\n"
-                    "2. Do NOT decide which fields are 'important'. ALL fields are important.\n"
-                    "3. Do NOT group, merge, restructure, or tabularize the data. "
-                    "Output each item as a flat key-value list.\n"
-                    "4. Every URL must be copied EXACTLY and VERBATIM.\n"
-                    "5. Image URLs MUST use ![alt](URL) syntax for inline display.\n"
-                    "6. No preamble, no summary, no conclusion — just the data.\n"
-                    "7. Number each item clearly (Item 1, Item 2, ...)."
+                # 从第一条 item 提取所有字段名，生成强制输出模板
+                first_keys = list(pruned[0].keys()) if pruned else []
+                field_checklist = "\n".join(
+                    f"- {k}" for k in first_keys
                 )
-                # 用户消息也强调 "reproduce faithfully"，不用 "analyze"
+
+                faithful_system_prompt = (
+                    "You are a data transcriber. Reproduce the input data faithfully.\n\n"
+                    "CRITICAL RULES:\n"
+                    "1. For each item, output EVERY field listed in the required-fields "
+                    "checklist below. You MUST include all of them.\n"
+                    "2. Do NOT add, remove, reorder, or rename any field.\n"
+                    "3. Do NOT create tables. Output as flat key-value lists.\n"
+                    "4. Copy all URLs exactly and verbatim.\n"
+                    "5. Image URLs use ![alt](URL) syntax.\n"
+                    "6. No preamble, no summary, no conclusion — just the data."
+                )
                 faithful_user_content = (
-                    f"Reproduce ALL of the following {len(pruned)} items FAITHFULLY. "
-                    f"Output every single field for every single item. "
-                    f"Do not analyze, filter, curate, or summarize.\n\n"
+                    f"REQUIRED FIELDS — you MUST output EVERY one of these {len(first_keys)} fields "
+                    f"for each of the {len(pruned)} items:\n\n"
+                    f"{field_checklist}\n\n"
+                    f"ANY FIELD MISSING FROM YOUR OUTPUT IS AN ERROR.\n\n"
+                    f"Now fill in values from this data:\n\n"
                     f"{url_checklist}"
                     f"{batch_json}"
                 )
