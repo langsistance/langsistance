@@ -410,20 +410,30 @@ def call_di_refresh_api(refresh_token: str) -> Optional[dict]:
         logger.error("PATENT_CLIENT_ID or PATENT_CLIENT_SECRET not configured")
         return None
 
+    import base64
+
     payload = json.dumps({
         "grant_type": "refresh_token",
-        "client_id": cfg["client_id"],
-        "client_secret": cfg["client_secret"],
         "refresh_token": refresh_token,
     }).encode("utf-8")
+
+    credentials = base64.b64encode(
+        f"{cfg['client_id']}:{cfg['client_secret']}".encode("utf-8")
+    ).decode("utf-8")
 
     req = urllib.request.Request(
         cfg["refresh_url"],
         data=payload,
         headers={
             "Content-Type": "application/json",
+            "Authorization": f"Basic {credentials}",
         },
         method="POST",
+    )
+
+    logger.info(
+        f"DI refresh API request: url={cfg['refresh_url']} "
+        f"client_id={cfg['client_id']}"
     )
 
     try:
@@ -432,7 +442,15 @@ def call_di_refresh_api(refresh_token: str) -> Optional[dict]:
             logger.info(f"DI refresh API response: {json.dumps(body, ensure_ascii=False)}")
             return body
     except urllib.error.HTTPError as exc:
-        logger.error(f"DI refresh API HTTP error: {exc.code} {exc.reason}")
+        resp_body = ""
+        try:
+            resp_body = exc.read().decode("utf-8", errors="replace")[:500]
+        except Exception:
+            pass
+        logger.error(
+            f"DI refresh API HTTP error: {exc.code} {exc.reason} "
+            f"body={resp_body}"
+        )
         return None
     except Exception as exc:
         logger.error(f"DI refresh API call failed: {exc}")
