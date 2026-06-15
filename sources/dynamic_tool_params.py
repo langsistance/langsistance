@@ -309,7 +309,17 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
     except json.JSONDecodeError:
         result_data = response.text if response.text else None
 
+    # ZLDJS patent API wraps records in {"context": {"records": [...]}}
+    # _extract_raw_items only scans one level deep, so handle this explicitly.
+    raw_items = _extract_raw_items(result_data)
+    if raw_items is None and _is_zldjs_api_url(url) and isinstance(result_data, dict):
+        context = result_data.get("context")
+        if isinstance(context, dict):
+            records = context.get("records")
+            if isinstance(records, list) and records:
+                raw_items = records
+
     return {
         "data": result_data,
-        "raw_items": _extract_raw_items(result_data),
+        "raw_items": raw_items,
     }
