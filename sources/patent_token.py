@@ -414,6 +414,8 @@ def call_di_refresh_api(refresh_token: str) -> Optional[dict]:
 
     payload = json.dumps({
         "grant_type": "refresh_token",
+        "client_id": cfg["client_id"],
+        "client_secret": cfg["client_secret"],
         "refresh_token": refresh_token,
     }).encode("utf-8")
 
