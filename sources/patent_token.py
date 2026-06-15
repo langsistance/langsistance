@@ -412,7 +412,7 @@ def call_di_refresh_api(refresh_token: str) -> Optional[dict]:
 
     import base64
 
-    payload = json.dumps({
+    payload = urllib.parse.urlencode({
         "grant_type": "refresh_token",
         "client_id": cfg["client_id"],
         "client_secret": cfg["client_secret"],
@@ -427,7 +427,7 @@ def call_di_refresh_api(refresh_token: str) -> Optional[dict]:
         cfg["refresh_url"],
         data=payload,
         headers={
-            "Content-Type": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
             "Authorization": f"Basic {credentials}",
         },
         method="POST",
