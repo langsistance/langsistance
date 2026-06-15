@@ -126,8 +126,8 @@ def store_tokens(
     try:
         r.setex(REDIS_KEY_ACCESS, expires_in, access_token)
         r.setex(REDIS_KEY_REFRESH, REFRESH_TOKEN_TTL, refresh_token)
-        r.setex(REDIS_KEY_ACCESS_EXPIRES, expires_in, str(access_expires_at))
-        r.setex(REDIS_KEY_REFRESH_EXPIRES, REFRESH_TOKEN_TTL, str(refresh_expires_at))
+        r.setex(REDIS_KEY_ACCESS_EXPIRES, expires_in, str(int(access_expires_at)))
+        r.setex(REDIS_KEY_REFRESH_EXPIRES, REFRESH_TOKEN_TTL, str(int(refresh_expires_at)))
 
         if open_id:
             r.setex("patent:open_id", REFRESH_TOKEN_TTL, open_id)
