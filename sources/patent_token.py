@@ -410,7 +410,7 @@ def call_di_refresh_api(refresh_token: str) -> Optional[dict]:
         logger.error("PATENT_CLIENT_ID or PATENT_CLIENT_SECRET not configured")
         return None
 
-    params = urllib.parse.urlencode({
+    payload = json.dumps({
         "grant_type": "refresh_token",
         "client_id": cfg["client_id"],
         "client_secret": cfg["client_secret"],
@@ -419,9 +419,9 @@ def call_di_refresh_api(refresh_token: str) -> Optional[dict]:
 
     req = urllib.request.Request(
         cfg["refresh_url"],
-        data=params,
+        data=payload,
         headers={
-            "Content-Type": "application/x-www-form-urlencoded",
+            "Content-Type": "application/json",
         },
         method="POST",
     )
