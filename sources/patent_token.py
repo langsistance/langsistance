@@ -435,7 +435,8 @@ def call_di_refresh_api(refresh_token: str) -> Optional[dict]:
 
     logger.info(
         f"DI refresh API request: url={cfg['refresh_url']} "
-        f"client_id={cfg['client_id']}"
+        f"client_id={cfg['client_id']} "
+        f"payload={payload.decode('utf-8')}"
     )
 
     try:
