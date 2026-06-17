@@ -107,6 +107,25 @@ class WorkflowExecutor:
                 workflow_instructions=workflow_instructions,
             )
             logger.info(f"workflow step {index} params: {params}")
+
+            # LLM signals that previous step(s) did not provide the data this
+            # step needs — terminate early with the human-readable message.
+            if params.get("_terminate"):
+                logger.info(
+                    f"workflow step {index} LLM requested early termination: "
+                    f"{params.get('message', '')}"
+                )
+                final_data = params.get("message", "未查询到相关数据，无法继续后续步骤。")
+                step_result = WorkflowStepResult(
+                    step_id=str(step.get("id") or f"step_{index}"),
+                    knowledge=knowledge,
+                    tool=tool,
+                    params={},
+                    data=final_data,
+                )
+                step_results.append(step_result)
+                break
+
             tool_result = self.tool_executor(tool, params)
             logger.info(f"workflow step {index}")
             final_data = tool_result.get("data")
@@ -152,7 +171,11 @@ class WorkflowExecutor:
             "Use only the user request, the current knowledge instructions, and previous step results. "
             "If the original tool params contain api-key, api_key, apikey, x-api-key, "
             "or another API key field, preserve that key and its value exactly in the generated params. "
-            "If a needed value is present in previous results, extract it exactly. Do not invent values."
+            "If a needed value is present in previous results, extract it exactly. Do not invent values. "
+            "CRITICAL: If previous step results are empty or do NOT contain the data required "
+            'to fill the current tool parameters, do NOT invent missing values — instead return '
+            '{"_terminate": true, "message": "a user-friendly Chinese sentence explaining that '
+            'no matching data was found and the workflow cannot continue"}.'
         )
         user_content = json.dumps({
             "workflow": {
