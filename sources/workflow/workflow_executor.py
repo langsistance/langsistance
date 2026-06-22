@@ -26,6 +26,7 @@ class WorkflowResult:
     steps: List[WorkflowStepResult]
     workflow_question: str = ""
     workflow_instructions: str = ""
+    output_mode: str = "last"  # "last" | "all"
 
 
 def is_workflow_knowledge(knowledge_item: KnowledgeItem | None) -> bool:
@@ -74,6 +75,9 @@ class WorkflowExecutor:
         workflow_knowledge: KnowledgeItem | None = None,
     ) -> WorkflowResult:
         spec = parse_workflow_spec(workflow_spec)
+        output_mode = spec.get("output_mode", "last")
+        if output_mode not in ("last", "all"):
+            output_mode = "last"
         previous_results: List[Dict[str, Any]] = []
         step_results: List[WorkflowStepResult] = []
         raw_items = None
@@ -153,6 +157,7 @@ class WorkflowExecutor:
             steps=step_results,
             workflow_question=workflow_question,
             workflow_instructions=workflow_instructions,
+            output_mode=output_mode,
         )
 
     async def _generate_tool_params(

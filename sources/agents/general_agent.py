@@ -1284,14 +1284,26 @@ Begin your response now:
             "Do not call tools, search externally, or invent missing data. "
             "Return a concise, well-formatted Markdown answer."
         )
-        user_content = json.dumps({
+        payload = {
             "user_request": getattr(self, "_last_user_prompt", ""),
             "workflow": {
                 "question": getattr(workflow_result, "workflow_question", ""),
                 "instructions": getattr(workflow_result, "workflow_instructions", ""),
             },
             "workflow_result": workflow_result.final_data,
-        }, ensure_ascii=False, indent=2)
+        }
+        output_mode = getattr(workflow_result, "output_mode", "last")
+        if output_mode == "all":
+            payload["all_steps"] = [
+                {
+                    "index": i,
+                    "knowledge_question": s.knowledge.question,
+                    "tool": s.tool.title,
+                    "result": s.data,
+                }
+                for i, s in enumerate(workflow_result.steps, 1)
+            ]
+        user_content = json.dumps(payload, ensure_ascii=False, indent=2)
         await self.llm.stream_simple(
             system_prompt=system_prompt,
             user_content=user_content,

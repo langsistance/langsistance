@@ -69,7 +69,16 @@ function KnowledgeModal({ item, tools, knowledgeOptions, onClose, onSave, onDele
     }
     return []
   })()
+  const initialOutputMode = (() => {
+    try {
+      const parsed = item?.params ? JSON.parse(item.params) : null
+      return parsed?.output_mode === 'all' ? 'all' : 'last'
+    } catch {
+      return 'last'
+    }
+  })()
   const [stepIds, setStepIds] = useState<string[]>(initialStepIds.length ? initialStepIds : ['', ''])
+  const [outputMode, setOutputMode] = useState<'last' | 'all'>(initialOutputMode)
   const isWorkflow = Number(form.type || 1) === 2
   const workflowInstructionsValue = isWorkflow
     ? getWorkflowInstructionsEditorValue(form.answer, stepIds.filter(Boolean).length || stepIds.length)
@@ -104,6 +113,7 @@ function KnowledgeModal({ item, tools, knowledgeOptions, onClose, onSave, onDele
           type: 'workflow',
           version: 1,
           mode: 'context_chain',
+          output_mode: outputMode,
           steps: selectedSteps.map((knowledgeId, index) => ({
             id: `step_${index + 1}`,
             knowledge_id: Number(knowledgeId),
@@ -228,6 +238,16 @@ function KnowledgeModal({ item, tools, knowledgeOptions, onClose, onSave, onDele
                       {lang === 'en' ? 'Add Step' : '添加步骤'}
                     </button>
                   </div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginTop: 12 }}>
+                    <input
+                      type="checkbox"
+                      checked={outputMode === 'all'}
+                      onChange={(e) => setOutputMode(e.target.checked ? 'all' : 'last')}
+                    />
+                    {lang === 'en'
+                      ? 'Output results from all steps (default: last step only)'
+                      : '输出所有步骤的执行结果（默认仅输出最后一步）'}
+                  </label>
                 </div>
               ) : (
                 <div className="form-group">
