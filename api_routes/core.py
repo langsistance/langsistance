@@ -336,18 +336,27 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
             queue = asyncio.Queue()
             handler = SSECallbackHandler(queue)
 
-            try:
-                openai_agent = await general_agent.create_agent(
-                    user_id, request.query, request.query_id,
-                    request.tool_data, handler,
-                    push_filter=request.push_filter
-                )
-            except Exception as e:
-                app_logger.error(f"Failed to create agent: {str(e)}")
-                yield f"data:{json.dumps({'error': 'Failed to create agent'})}\n\n"
-                return
+            # Run the entire agent pipeline (create + invoke) in a background
+            # task so the queue reading loop can yield status events to the
+            # client as soon as they arrive, rather than buffering them until
+            # create_agent completes.
+            async def run_pipeline():
+                openai_agent = None
+                try:
+                    openai_agent = await general_agent.create_agent(
+                        user_id, request.query, request.query_id,
+                        request.tool_data, handler,
+                        push_filter=request.push_filter
+                    )
+                except Exception as e:
+                    app_logger.error(f"Failed to create agent: {str(e)}")
+                    await queue.put({'type': 'error', 'message': f'Failed to create agent: {str(e)}'})
+                    await queue.put({'type': 'end'})
+                    return
+                finally:
+                    if openai_agent is None:
+                        handler.queue.put_nowait({'type': 'done'})
 
-            async def run_agent():
                 try:
                     await general_agent.invoke_agent(openai_agent, handler)
                     await queue.put({'type': 'end', 'content': '[DONE]'})
@@ -358,7 +367,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                 finally:
                     handler.queue.put_nowait({'type': 'done'})
 
-            task = asyncio.create_task(run_agent())
+            task = asyncio.create_task(run_pipeline())
 
             # Optimize: Batch tokens to reduce serialization overhead
             token_buffer = []
