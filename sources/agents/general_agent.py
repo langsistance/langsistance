@@ -1278,31 +1278,57 @@ Begin your response now:
 
 
     async def _stream_workflow_final_result(self, workflow_result, callback_handler):
-        system_prompt = (
-            "You are a self-contained assistant answering from a completed composed-knowledge workflow result. "
-            "Use only the user request and workflow result provided here. "
-            "Do not call tools, search externally, or invent missing data. "
-            "Return a concise, well-formatted Markdown answer."
-        )
-        payload = {
-            "user_request": getattr(self, "_last_user_prompt", ""),
-            "workflow": {
-                "question": getattr(workflow_result, "workflow_question", ""),
-                "instructions": getattr(workflow_result, "workflow_instructions", ""),
-            },
-            "workflow_result": workflow_result.final_data,
-        }
         output_mode = getattr(workflow_result, "output_mode", "last")
+        workflow_question = getattr(workflow_result, "workflow_question", "")
+        workflow_instructions = getattr(workflow_result, "workflow_instructions", "")
+
         if output_mode == "all":
-            payload["all_steps"] = [
-                {
-                    "index": i,
-                    "knowledge_question": s.knowledge.question,
-                    "tool": s.tool.title,
-                    "result": s.data,
-                }
-                for i, s in enumerate(workflow_result.steps, 1)
-            ]
+            system_prompt = (
+                "You are a professional data presenter serving non-technical readers. "
+                "Below are results from multiple data queries about the same topic. "
+                "Synthesize ALL results into a single coherent, complete report.\n\n"
+                "CRITICAL RULES:\n"
+                "1. Do NOT structure your answer by data source or query step. "
+                "Present the information as one unified document — the reader must not "
+                "be able to tell which piece of data came from which query.\n"
+                "2. Merge duplicate information across sources — if the same fact appears "
+                "in multiple results, present it once.\n"
+                "3. ALL meaningful data must be preserved — do NOT summarize, abbreviate, "
+                "or skip any field with a real value. This is the most important rule.\n"
+                "4. Group related information logically: titles and abstracts together, "
+                "dates together, people and organizations together, legal/classification "
+                "together, documents and references together.\n"
+                "5. Filter noise: skip API wrapper fields (errorCode, errorDesc, page, "
+                "page_row, total, sort_column), empty values, '0'/'否' placeholder values, "
+                "and internal system IDs (pid).\n"
+                "6. Present as a reader-friendly document with clear section headings. "
+                "Use comparison tables when comparing multiple records with shared fields.\n"
+                "7. Do NOT add any meta-commentary such as 'based on the query results' or "
+                "'here is the synthesized report' — just output the content directly."
+            )
+            payload = {
+                "user_request": getattr(self, "_last_user_prompt", ""),
+                "workflow_question": workflow_question,
+                "workflow_instructions": workflow_instructions,
+                "combined_results": [s.data for s in workflow_result.steps],
+            }
+        else:
+            system_prompt = (
+                "You are a self-contained assistant answering from a completed "
+                "composed-knowledge workflow result. "
+                "Use only the user request and workflow result provided here. "
+                "Do not call tools, search externally, or invent missing data. "
+                "Return a concise, well-formatted Markdown answer."
+            )
+            payload = {
+                "user_request": getattr(self, "_last_user_prompt", ""),
+                "workflow": {
+                    "question": workflow_question,
+                    "instructions": workflow_instructions,
+                },
+                "workflow_result": workflow_result.final_data,
+            }
+
         user_content = json.dumps(payload, ensure_ascii=False, indent=2)
         await self.llm.stream_simple(
             system_prompt=system_prompt,
