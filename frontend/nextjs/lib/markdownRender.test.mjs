@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { isImageUrl, renderMarkdownToHtml } from './markdownRender.js'
+// looksLikeBareUrl is not exported — test via renderMarkdownToHtml behaviour
 
 test('detects image URLs even when they include query strings', () => {
   assert.equal(isImageUrl('https://example.com/photo.jpg?size=large'), true)
@@ -38,6 +39,59 @@ test('keeps non-image markdown links as links', () => {
   assert.match(html, /<a\b/)
   assert.match(html, /href="https:\/\/example\.com\/file\.pdf"/)
   assert.doesNotMatch(html, /<img\b/)
+})
+
+test('renders bare-domain URL inside backtick codespan as clickable link', () => {
+  // Simulates the user's actual output:
+  // **文件路径**：`pt.cnipr.com/static/.../CN2021113253961A.PDF`
+  const html = renderMarkdownToHtml(
+    '**文件路径**：`pt.cnipr.com/static/a8ba192e794358b0997c244c81602bab/78FF4A/D82913/1463451601/1782098787/1200/pi11/PAT/151/35/CN2021113253961A_20210813/CN2021113253961A.PDF`'
+  )
+
+  assert.match(html, /<a\b/)
+  assert.match(html, /href="https:\/\/pt\.cnipr\.com/)
+  assert.match(html, /target="_blank"/)
+  assert.match(html, /rel="noopener\s+noreferrer"/)
+  assert.doesNotMatch(html, /<code>/)
+})
+
+test('adds target=_blank and rel=noopener noreferrer to markdown links', () => {
+  const html = renderMarkdownToHtml('[Patent](https://pt.cnipr.com/static/file.PDF)')
+
+  assert.match(html, /<a\b/)
+  assert.match(html, /href="https:\/\/pt\.cnipr\.com\/static\/file\.PDF"/)
+  assert.match(html, /target="_blank"/)
+  assert.match(html, /rel="noopener\s+noreferrer"/)
+})
+
+test('keeps regular inline code as code when it is not a URL', () => {
+  const html = renderMarkdownToHtml('Use `const x = 1` here and `npm install foo`')
+
+  assert.match(html, /<code>const x = 1<\/code>/)
+  assert.match(html, /<code>npm install foo<\/code>/)
+  assert.doesNotMatch(html, /<a\b/)
+})
+
+test('keeps codespan that looks like a domain but has no path as code', () => {
+  // "foo.bar" has a TLD but no path — not link-worthy
+  const html = renderMarkdownToHtml('the domain `foo.bar` is not a link')
+  assert.doesNotMatch(html, /<a\b/)
+  assert.match(html, /<code>foo\.bar<\/code>/)
+})
+
+test('renders bare URL with existing https:// as clickable link with protocol preserved', () => {
+  const html = renderMarkdownToHtml('`https://example.com/path/to/file.pdf`')
+
+  assert.match(html, /<a\b/)
+  assert.match(html, /href="https:\/\/example\.com\/path\/to\/file\.pdf"/)
+  assert.doesNotMatch(html, /<code>/)
+})
+
+test('renders bare URL without protocol by adding https://', () => {
+  const html = renderMarkdownToHtml('`cdn.example.com/files/report.pdf`')
+
+  assert.match(html, /<a\b/)
+  assert.match(html, /href="https:\/\/cdn\.example\.com\/files\/report\.pdf"/)
 })
 
 test('renders plain image URL fields as inline images', () => {

@@ -7,6 +7,12 @@ const EXTENSIONLESS_IMAGE_PATHS = [
   { host: 'i.scdn.co', pathPrefix: '/image/' },
 ]
 
+// Matches bare domain-path strings that look like URLs but are missing the
+// protocol prefix — e.g. "pt.cnipr.com/static/.../file.PDF".  Requires a
+// TLD of 2+ letters **and** a path segment so short domain-only tokens like
+// "foo.bar" are not captured.
+const BARE_URL_RE = /^(?:https?:\/\/)?[a-zA-Z0-9][-a-zA-Z0-9]*(?:\.[a-zA-Z0-9][-a-zA-Z0-9]*)*\.[a-zA-Z]{2,}\/[^\s<>[\]()]+$/i
+
 let configured = false
 
 function escapeAttribute(value) {
@@ -15,6 +21,13 @@ function escapeAttribute(value) {
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
+}
+
+function looksLikeBareUrl(text) {
+  if (typeof text !== 'string') return false
+  const trimmed = text.trim()
+  if (!trimmed) return false
+  return BARE_URL_RE.test(trimmed)
 }
 
 export function isImageUrl(value) {
@@ -55,7 +68,18 @@ function configureMarked() {
           return `<img src="${escapeAttribute(token.href)}" alt="${escapeAttribute(altText)}">`
         }
         const title = token.title ? ` title="${escapeAttribute(token.title)}"` : ''
-        return `<a href="${escapeAttribute(token.href)}"${title}>${escapeAttribute(token.text)}</a>`
+        return `<a href="${escapeAttribute(token.href)}"${title} target="_blank" rel="noopener noreferrer">${escapeAttribute(token.text)}</a>`
+      },
+      codespan(token) {
+        const text = token.text || ''
+        // When inline-code content is a bare URL (e.g.
+        // `pt.cnipr.com/static/.../file.PDF`) render it as a clickable
+        // link so users don't have to copy-paste it.
+        if (looksLikeBareUrl(text)) {
+          const href = /^https?:\/\//i.test(text) ? text : `https://${text}`
+          return `<a href="${escapeAttribute(href)}" target="_blank" rel="noopener noreferrer">${escapeAttribute(text)}</a>`
+        }
+        return `<code>${escapeAttribute(text)}</code>`
       },
     },
   })
