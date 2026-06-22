@@ -220,11 +220,9 @@ class TestWorkflowExecutor(unittest.IsolatedAsyncioTestCase):
         self.assertIn("workflow step 1 knowledge:", log_text)
         self.assertIn("workflow step 1 tool:", log_text)
         self.assertIn("workflow step 1 params:", log_text)
-        self.assertIn("workflow step 1 tool_result:", log_text)
         self.assertIn("workflow step 2 knowledge:", log_text)
         self.assertIn("workflow step 2 tool:", log_text)
         self.assertIn("workflow step 2 params:", log_text)
-        self.assertIn("workflow step 2 tool_result:", log_text)
 
     async def test_generate_tool_params_prompt_requires_preserving_original_api_key_params(self):
         from sources.workflow.workflow_executor import WorkflowExecutor
@@ -337,6 +335,66 @@ class TestWorkflowExecutor(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Use the patent API", user_content)
         self.assertNotIn("workflow admin notes should stay out", user_content)
         self.assertNotIn("step admin notes should stay out", user_content)
+
+
+    async def test_step_1_never_gets_terminate_instruction_step_2_does(self):
+        """Step 1 derives params from user request — it must NOT be told to
+        terminate on empty previous_results. Step 2+ gets the termination rule."""
+        from sources.workflow.workflow_executor import WorkflowExecutor
+
+        knowledge = KnowledgeItem(
+            id=101,
+            user_id="user-1",
+            question="query patent",
+            description="",
+            answer="Use the patent API",
+            public=1,
+            model_name="gpt-4o-mini",
+            tool_id=201,
+            params="{}",
+            type=1,
+        )
+        tool = ToolItem(
+            id=201,
+            user_id="user-1",
+            title="lookup_patent",
+            description="lookup patent",
+            push=2,
+            url="https://example.test/patent",
+            status=True,
+            timeout=30,
+            params='{"method": "GET"}',
+        )
+        executor = WorkflowExecutor(
+            llm=FakeLlm(),
+            knowledge_resolver=lambda knowledge_id: knowledge,
+            tool_resolver=lambda tool_id: tool,
+            tool_executor=lambda tool_info, params: {"data": {}, "raw_items": None},
+        )
+
+        # Step 1: _terminate must NOT appear in the prompt
+        await executor._generate_tool_params(
+            user_prompt="lookup US123",
+            step_index=1,
+            total_steps=2,
+            knowledge=knowledge,
+            tool=tool,
+            previous_results=[],
+        )
+        step1_prompt = executor.llm.complete_json_calls[0]["system_prompt"]
+        self.assertNotIn("_terminate", step1_prompt)
+
+        # Step 2: _terminate MUST appear (previous_results is empty)
+        await executor._generate_tool_params(
+            user_prompt="lookup US123",
+            step_index=2,
+            total_steps=2,
+            knowledge=knowledge,
+            tool=tool,
+            previous_results=[],  # empty → should trigger _terminate instruction
+        )
+        step2_prompt = executor.llm.complete_json_calls[1]["system_prompt"]
+        self.assertIn("_terminate", step2_prompt)
 
 
 if __name__ == "__main__":

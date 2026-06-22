@@ -116,6 +116,7 @@ class WorkflowExecutor:
                     f"{params.get('message', '')}"
                 )
                 final_data = params.get("message", "未查询到相关数据，无法继续后续步骤。")
+                raw_items = None  # no tool was executed at this step
                 step_result = WorkflowStepResult(
                     step_id=str(step.get("id") or f"step_{index}"),
                     knowledge=knowledge,
@@ -165,19 +166,34 @@ class WorkflowExecutor:
         workflow_question: str = "",
         workflow_instructions: str = "",
     ) -> Dict[str, Any]:
+        # Step 1 always executes: derive params from the user request and
+        # knowledge/tool template. Only subsequent steps may terminate early
+        # when prior results don't contain the data they need.
+        if step_index == 1:
+            termination_rule = ""
+        else:
+            termination_rule = (
+                "CRITICAL: If previous step results are empty or do NOT contain the data required "
+                "to fill the current tool parameters, do NOT invent missing values — instead return "
+                '{"_terminate": true, "message": "a user-friendly Chinese sentence explaining that '
+                'no matching data was found and the workflow cannot continue"}. '
+            )
         system_prompt = (
             "You generate JSON parameters for one backend API tool in a composed knowledge workflow. "
             "Return only a JSON object. The object may contain path, query, and body. "
-            "Use only the user request, the current knowledge instructions, and previous step results. "
+            "Use the user request and the current knowledge instructions to fill parameters. "
+            + (
+                "Also use previous step results when available. "
+                "If a needed value is present in previous results, extract it exactly. "
+                if step_index > 1 else
+                ""
+            ) +
             "If the original tool params contain api-key, api_key, apikey, x-api-key, "
             "or another API key field, preserve that key and its value exactly in the generated params. "
-            "If a needed value is present in previous results, extract it exactly. Do not invent values. "
-            "CRITICAL: If previous step results are empty or do NOT contain the data required "
-            'to fill the current tool parameters, do NOT invent missing values — instead return '
-            '{"_terminate": true, "message": "a user-friendly Chinese sentence explaining that '
-            'no matching data was found and the workflow cannot continue"}.'
+            "Do not invent values. "
+            + termination_rule
         )
-        user_content = json.dumps({
+        payload = {
             "workflow": {
                 "question": workflow_question,
                 "instructions": workflow_instructions,
@@ -196,8 +212,10 @@ class WorkflowExecutor:
                 "description": tool.description,
                 "params_template": tool.params,
             },
-            "previous_results": previous_results,
-        }, ensure_ascii=False, indent=2)
+        }
+        if previous_results:
+            payload["previous_results"] = previous_results
+        user_content = json.dumps(payload, ensure_ascii=False, indent=2)
         params = await self.llm.complete_json(system_prompt, user_content)
         if not isinstance(params, dict):
             raise ValueError("workflow generated tool params must be a JSON object")
