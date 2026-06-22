@@ -732,7 +732,7 @@ input[type="checkbox"] {
 .scene-hint {
   margin: 0 auto var(--spacing-md);
   padding: 12px 16px;
-  max-width: 740px;
+  max-width: var(--chat-max-width, 900px);
   width: 100%;
   background: var(--bg-white);
   border: 1px solid var(--divider);

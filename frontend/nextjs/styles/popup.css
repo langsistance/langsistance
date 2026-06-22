@@ -43,6 +43,7 @@ ol, ul {
   /* Layout */
   --topbar-height: 56px;
   --sidebar-width: 240px;
+  --chat-max-width: 900px;
 }
 
 * {
@@ -313,7 +314,7 @@ body {
 }
 
 .chat-message-wrapper {
-  max-width: 900px;
+  max-width: var(--chat-max-width);
   margin: 0 auto var(--spacing-4);
   animation: fadeIn 0.3s ease-out;
 }
