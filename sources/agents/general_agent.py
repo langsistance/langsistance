@@ -1582,8 +1582,11 @@ Begin your response now:
             workflow_result = getattr(self, "_workflow_result", None)
             if workflow_result is not None:
                 self._workflow_result = None
+                output_mode = getattr(workflow_result, "output_mode", "last")
                 raw_items = getattr(workflow_result, "raw_items", None)
-                if raw_items:
+                if output_mode == "all":
+                    await self._stream_workflow_final_result(workflow_result, callback_handler)
+                elif raw_items:
                     await self._stream_raw_items(raw_items, callback_handler)
                 else:
                     await self._stream_workflow_final_result(workflow_result, callback_handler)
