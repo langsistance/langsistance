@@ -96,6 +96,7 @@ export default function Chat() {
     const container = chatContainerRef.current
     if (!container) return
     function handleScroll() {
+      if (!container) return
       const threshold = 80 // px from bottom considered "near bottom"
       isNearBottomRef.current =
         container.scrollHeight - container.scrollTop - container.clientHeight <= threshold
