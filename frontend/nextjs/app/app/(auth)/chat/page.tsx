@@ -60,7 +60,9 @@ export default function Chat() {
     abortRef,
   } = useChatSession()
   const bottomRef = useRef<HTMLDivElement | null>(null)
+  const chatContainerRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const isNearBottomRef = useRef(true)
   const [transientStatus, setTransientStatus] = useState('')
   const [enabledScenes, setEnabledScenes] = useState<any[]>([])
   const [sceneExamples, setSceneExamples] = useState<{icon: string, name: string, desc: string}[]>([])
@@ -89,9 +91,26 @@ export default function Chat() {
       .catch(() => {})
   }, [])
 
+  // Track whether the user is scrolled near the bottom of the chat.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    const container = chatContainerRef.current
+    if (!container) return
+    function handleScroll() {
+      const threshold = 80 // px from bottom considered "near bottom"
+      isNearBottomRef.current =
+        container.scrollHeight - container.scrollTop - container.clientHeight <= threshold
+    }
+    container.addEventListener('scroll', handleScroll, { passive: true })
+    return () => container.removeEventListener('scroll', handleScroll)
+  }, [])
+
+  // Auto-scroll to bottom when messages change, but only if the user is
+  // already near the bottom. Use instant scroll during streaming to avoid
+  // overlapping smooth animations that cause jitter.
+  useEffect(() => {
+    if (!isNearBottomRef.current) return
+    bottomRef.current?.scrollIntoView({ behavior: streaming ? 'instant' : 'smooth' })
+  }, [messages, streaming])
 
   async function send() {
     const text = input.trim()
@@ -225,7 +244,7 @@ export default function Chat() {
   return (
     <div className="page active">
       <div className="chat-container">
-        <div className="chat-messages">
+        <div className="chat-messages" ref={chatContainerRef}>
           {messages.length === 0 && (
             <div className="chat-message-wrapper">
               <div className="empty-state">
