@@ -313,7 +313,7 @@ body {
 }
 
 .chat-message-wrapper {
-  max-width: 720px;
+  max-width: 900px;
   margin: 0 auto var(--spacing-4);
   animation: fadeIn 0.3s ease-out;
 }
@@ -367,6 +367,7 @@ body {
   border: 1px solid var(--color-border);
   border-bottom-left-radius: 4px;
   transition: all 0.2s ease;
+  max-width: 100%;
   /* Removed padding-right - buttons will float over content without taking space */
 }
 
