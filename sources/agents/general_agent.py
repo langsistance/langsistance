@@ -158,6 +158,36 @@ class DynamicBackendToolFunction(BaseModel):
     )
 
 
+async def _emit_status(callback_handler, message: str):
+    """Send a transient status through the callback handler if supported."""
+    if callback_handler is None:
+        return
+    on_status = getattr(callback_handler, "on_status", None)
+    if on_status is None:
+        return
+    try:
+        await on_status(message)
+    except Exception:
+        pass
+
+
+def _status_callback_for(callback_handler):
+    """Create an async status callback suitable for workflow executors."""
+    if callback_handler is None:
+        return None
+    on_status = getattr(callback_handler, "on_status", None)
+    if on_status is None:
+        return None
+
+    async def emit(message: str):
+        try:
+            await on_status(message)
+        except Exception:
+            pass
+
+    return emit
+
+
 class GeneralAgent(Agent):
 
     def __init__(self, name, prompt_path, provider, verbose=False):
@@ -1244,6 +1274,8 @@ Begin your response now:
         #self.knowledgeTool = get_knowledge_tool(user_id,  prompt)
         self._last_user_prompt = prompt
         self._last_query_id = query_id
+        if callback_handler:
+            await _emit_status(callback_handler, "正在分析您的问题...")
         self.knowledgeTool = await select_knowledge_tool_with_llm(
             user_id,
             prompt,
@@ -1256,7 +1288,11 @@ Begin your response now:
                 await callback_handler.on_llm_new_token(
                     f"已匹配组合知识：{knowledge_item.question}\n\n"
                 )
-            workflow_result = await WorkflowExecutor(self.llm).execute(
+                await _emit_status(callback_handler, "正在执行组合知识流程...")
+            workflow_result = await WorkflowExecutor(
+                self.llm,
+                status_callback=_status_callback_for(callback_handler),
+            ).execute(
                 workflow_spec=knowledge_item.params,
                 user_prompt=prompt,
                 workflow_knowledge=knowledge_item,
@@ -1608,6 +1644,7 @@ Begin your response now:
             workflow_result = getattr(self, "_workflow_result", None)
             if workflow_result is not None:
                 self._workflow_result = None
+                await _emit_status(callback_handler, "正在整理结果...")
                 output_mode = getattr(workflow_result, "output_mode", "last")
                 raw_items = getattr(workflow_result, "raw_items", None)
                 if output_mode == "all":

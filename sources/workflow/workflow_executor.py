@@ -1,6 +1,6 @@
 import json
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List
+from typing import Any, Awaitable, Callable, Dict, List
 
 from sources.dynamic_tool_params import execute_backend_tool_request
 from sources.knowledge.knowledge import KnowledgeItem, ToolItem, get_knowledge_by_id, get_tool_by_id
@@ -62,11 +62,13 @@ class WorkflowExecutor:
         knowledge_resolver: Callable[[int], KnowledgeItem | None] = get_knowledge_by_id,
         tool_resolver: Callable[[int], ToolItem | None] = get_tool_by_id,
         tool_executor: Callable[[ToolItem, Dict[str, Any]], Dict[str, Any]] = execute_backend_tool_request,
+        status_callback: Callable[[str], Awaitable[None]] | None = None,
     ):
         self.llm = llm
         self.knowledge_resolver = knowledge_resolver
         self.tool_resolver = tool_resolver
         self.tool_executor = tool_executor
+        self.status_callback = status_callback
 
     async def execute(
         self,
@@ -85,6 +87,8 @@ class WorkflowExecutor:
         workflow_question = getattr(workflow_knowledge, "question", "") if workflow_knowledge else ""
         workflow_instructions = getattr(workflow_knowledge, "answer", "") if workflow_knowledge else ""
 
+        total_steps = len(spec["steps"])
+
         for index, step in enumerate(spec["steps"], start=1):
             knowledge = self.knowledge_resolver(int(step["knowledge_id"]))
             if not knowledge:
@@ -100,10 +104,15 @@ class WorkflowExecutor:
                 raise ValueError("workflow context_chain only supports backend tools with push=2")
             logger.info(f"workflow step {index} tool: {tool}")
 
+            if self.status_callback:
+                await self.status_callback(
+                    f"正在{knowledge.question}（第{index}/{total_steps}步）"
+                )
+
             params = await self._generate_tool_params(
                 user_prompt=user_prompt,
                 step_index=index,
-                total_steps=len(spec["steps"]),
+                total_steps=total_steps,
                 knowledge=knowledge,
                 tool=tool,
                 previous_results=previous_results,
