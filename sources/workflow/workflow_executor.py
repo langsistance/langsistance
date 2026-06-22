@@ -185,7 +185,7 @@ class WorkflowExecutor:
             )
         system_prompt = (
             "You generate JSON parameters for one backend API tool in a composed knowledge workflow. "
-            "Return only a JSON object. The object may contain path, query, and body. "
+            "Return only a JSON object containing ONLY the fields that need to be filled: query and/or body. "
             "Use the user request and the current knowledge instructions to fill parameters. "
             + (
                 "Also use previous step results when available. "
@@ -193,6 +193,10 @@ class WorkflowExecutor:
                 if step_index > 1 else
                 ""
             ) +
+            "IMPORTANT: Only include 'path' when the API endpoint requires a dynamic, "
+            "variable path segment (e.g., /resource/{id}). Do NOT set path to the fixed "
+            "API path from the tool's description or URL — the tool already knows its own URL. "
+            "Do NOT include method, Content-Type, or header unless they differ from the template. "
             "If the original tool params contain api-key, api_key, apikey, x-api-key, "
             "or another API key field, preserve that key and its value exactly in the generated params. "
             "Do not invent values. "
