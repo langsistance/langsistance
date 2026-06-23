@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""Session CRUD API routes.
+
+Endpoints:
+  POST   /session/{session_id}        — create a new session
+  GET    /session/{session_id}         — get a session with messages + long_task_ids
+  GET    /sessions?user_id=UID         — list user sessions
+  POST   /session/{session_id}/message — append a message
+  DELETE /session/{session_id}         — archive (status=2)
+"""
+
+import uuid
+import json
+from fastapi import APIRouter, Query, HTTPException
+from pydantic import BaseModel
+from sources.knowledge.knowledge import get_db_connection
+
+
+class CreateSessionRequest(BaseModel):
+    user_id: int
+    scene_id: int | None = None
+    messages: list = []
+    title: str = ""
+
+
+class AppendMessageRequest(BaseModel):
+    role: str
+    content: str
+    patent_data: list | None = None
+    timestamp: str | None = None
+
+
+def register_session_routes(logger, config):
+    """Register session CRUD routes with dependency injection."""
+    router = APIRouter()
+
+    @router.post("/session")
+    async def create_session(req: CreateSessionRequest):
+        session_id = f"sess_{uuid.uuid4().hex[:12]}"
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO conversations
+                       (session_id, user_id, scene_id, title, messages)
+                       VALUES (%s, %s, %s, %s, %s)""",
+                    (session_id, req.user_id, req.scene_id, req.title,
+                     json.dumps(req.messages, ensure_ascii=False)))
+                conn.commit()
+            logger.info(f"Session created: {session_id} user_id={req.user_id}")
+            return {"success": True, "session_id": session_id}
+        finally:
+            conn.close()
+
+    @router.get("/session/{session_id}")
+    async def get_session(session_id: str):
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT id, session_id, user_id, scene_id, title,
+                              messages, long_task_ids, status,
+                              create_time, update_time
+                       FROM conversations
+                       WHERE session_id = %s AND status != 2""",
+                    (session_id,))
+                row = cur.fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Session not found")
+            row['messages'] = json.loads(row['messages']) if isinstance(row['messages'], str) else row['messages']
+            row['create_time'] = row['create_time'].isoformat() if row['create_time'] else None
+            row['update_time'] = row['update_time'].isoformat() if row['update_time'] else None
+            return {"success": True, "session": row}
+        finally:
+            conn.close()
+
+    @router.get("/sessions")
+    async def list_sessions(user_id: int = Query(...)):
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT session_id, title, status,
+                              long_task_ids, create_time, update_time
+                       FROM conversations
+                       WHERE user_id = %s AND status != 2
+                       ORDER BY update_time DESC""",
+                    (user_id,))
+                rows = cur.fetchall()
+            for r in rows:
+                r['create_time'] = r['create_time'].isoformat() if r['create_time'] else None
+                r['update_time'] = r['update_time'].isoformat() if r['update_time'] else None
+            return {"success": True, "sessions": rows}
+        finally:
+            conn.close()
+
+    @router.post("/session/{session_id}/message")
+    async def append_message(session_id: str, req: AppendMessageRequest):
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT messages FROM conversations WHERE session_id = %s",
+                    (session_id,))
+                row = cur.fetchone()
+                if row is None:
+                    raise HTTPException(status_code=404, detail="Session not found")
+
+                messages = json.loads(row['messages']) if isinstance(row['messages'], str) else row['messages']
+                new_msg = {"role": req.role, "content": req.content}
+                if req.patent_data:
+                    new_msg["patent_data"] = req.patent_data
+                if req.timestamp:
+                    new_msg["timestamp"] = req.timestamp
+                messages.append(new_msg)
+
+                cur.execute(
+                    "UPDATE conversations SET messages = %s WHERE session_id = %s",
+                    (json.dumps(messages, ensure_ascii=False), session_id))
+                conn.commit()
+            logger.info(f"Message appended to session: {session_id}")
+            return {"success": True}
+        finally:
+            conn.close()
+
+    @router.delete("/session/{session_id}")
+    async def archive_session(session_id: str):
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE conversations SET status = 2 WHERE session_id = %s",
+                    (session_id,))
+                if cur.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Session not found")
+                conn.commit()
+            logger.info(f"Session archived: {session_id}")
+            return {"success": True}
+        finally:
+            conn.close()
+
+    return router
