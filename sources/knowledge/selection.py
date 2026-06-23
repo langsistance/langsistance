@@ -82,19 +82,30 @@ def build_routing_candidate_payload(candidates: Iterable[KnowledgeToolCandidate]
     return payload
 
 
-def build_routing_user_content(user_request: str, candidates: Iterable[KnowledgeToolCandidate]) -> str:
-    return json.dumps(
-        {
-            "user_request": user_request,
-            "selection_policy": {
-                "routing_hint": "Use only for matching applicable scenarios.",
-                "execution": "Do not execute or inject routing_hint into the user request workflow.",
-            },
-            "candidates": build_routing_candidate_payload(candidates),
+def build_routing_user_content(
+    user_request: str,
+    candidates: Iterable[KnowledgeToolCandidate],
+    conversation_history: list | None = None,
+) -> str:
+    payload: dict[str, Any] = {
+        "user_request": user_request,
+        "selection_policy": {
+            "routing_hint": "Use only for matching applicable scenarios.",
+            "execution": "Do not execute or inject routing_hint into the user request workflow.",
         },
-        ensure_ascii=False,
-        indent=2,
-    )
+        "candidates": build_routing_candidate_payload(candidates),
+    }
+
+    if conversation_history:
+        history_lines = []
+        for msg in conversation_history[-6:]:  # last 3 exchanges max
+            role = msg.get("role", "unknown")
+            content = str(msg.get("content", ""))[:200]  # truncate long content
+            history_lines.append(f"{role}: {content}")
+        if history_lines:
+            payload["conversation_history"] = "\n".join(history_lines)
+
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 def _parse_confidence(value: Any) -> float:
@@ -122,6 +133,7 @@ async def choose_knowledge_candidate(
     candidates: Iterable[KnowledgeToolCandidate],
     complete_json: CompleteJson,
     min_confidence: float = MIN_ROUTING_CONFIDENCE,
+    conversation_history: list | None = None,
 ) -> Optional[KnowledgeToolCandidate]:
     candidate_list = list(candidates)
     if not candidate_list:
@@ -130,7 +142,10 @@ async def choose_knowledge_candidate(
     try:
         response = await complete_json(
             ROUTING_SYSTEM_PROMPT,
-            build_routing_user_content(user_request, candidate_list),
+            build_routing_user_content(
+                user_request, candidate_list,
+                conversation_history=conversation_history,
+            ),
         )
     except Exception:
         return candidate_list[0]
