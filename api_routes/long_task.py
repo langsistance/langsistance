@@ -6,10 +6,11 @@ Endpoints:
   GET /long_task/{task_id}/report?format=pdf|docx
 """
 
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Request
 from fastapi.responses import Response
 from sources.long_task.status_manager import get_task_status
 from sources.long_task.storage import create_storage
+from sources.user.passport import verify_firebase_token
 
 
 def register_long_task_routes(logger, config):
@@ -25,14 +26,16 @@ def register_long_task_routes(logger, config):
         }
 
     @router.get("/long_task/{task_id}/status")
-    async def task_status(task_id: str):
+    async def task_status(task_id: str, http_request: Request):
         """Poll the current status of a long-running task."""
+        auth_header = http_request.headers.get("Authorization")
+        verify_firebase_token(auth_header)  # Auth gate — any valid user
         logger.info(f"Status poll for task: {task_id}")
         status = get_task_status(task_id)
         return {"success": True, **status}
 
     @router.get("/long_task/{task_id}/report")
-    async def download_report(task_id: str, format: str = Query(..., pattern="^(pdf|docx)$")):
+    async def download_report(task_id: str, format: str = Query(..., pattern="^(pdf|docx)$"), http_request: Request = None):
         """Download a completed report file for a task."""
         logger.info(f"Report download for task: {task_id}, format: {format}")
         storage = create_storage(_get_storage_config())
