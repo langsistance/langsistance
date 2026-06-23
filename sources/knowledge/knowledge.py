@@ -499,7 +499,8 @@ async def select_knowledge_tool_with_llm(
         complete_json,
         top_k: int = 8,
         similarity_threshold: float = 0,
-        push_filter: Optional[int] = None
+        push_filter: Optional[int] = None,
+        conversation_history: Optional[list] = None,
 ) -> Tuple[Optional[KnowledgeItem], Optional[ToolItem]]:
     """Select a knowledge/tool pair using vector recall plus LLM intent routing."""
     candidates = await asyncio.to_thread(
@@ -510,7 +511,10 @@ async def select_knowledge_tool_with_llm(
         similarity_threshold,
         push_filter,
     )
-    selected = await choose_knowledge_candidate(question, candidates, complete_json)
+    selected = await choose_knowledge_candidate(
+        question, candidates, complete_json,
+        conversation_history=conversation_history,
+    )
     if selected:
         return selected
     return None, None
