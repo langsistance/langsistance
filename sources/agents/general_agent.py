@@ -1665,18 +1665,6 @@ Begin your response now:
 
     async def invoke_agent(self, agent, callback_handler):
         try:
-            # Handle long task intent marker
-            if isinstance(agent, dict) and agent.get('intent') == 'long_task':
-                # The actual Celery submission happens in api_routes/core.py run_pipeline
-                # after create_agent returns. Here we just push the notification.
-                await _emit_status(callback_handler,
-                    "批量专利分析任务已创建，可通过 task_id 查询进度")
-                # Queue a special SSE event type
-                await callback_handler.queue.put({
-                    'type': 'long_task_intent',
-                    'knowledge': agent.get('knowledge'),
-                })
-                return
             workflow_result = getattr(self, "_workflow_result", None)
             if workflow_result is not None:
                 self._workflow_result = None

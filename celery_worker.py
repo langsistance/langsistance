@@ -44,8 +44,8 @@ def execute_patent_analysis(self, task_id: str, params: dict):
     model_family = ltc['provider_family']
     max_patents = ltc['max_patents']
 
-    # ---- Input dedup + truncation ----
-    patent_ids = list(dict.fromkeys(params.get('patent_ids', [])))
+    # ---- Input dedup + truncation (deterministic ordering) ----
+    patent_ids = sorted(set(params.get('patent_ids', [])))
     patent_ids = patent_ids[:max_patents]
     total = len(patent_ids)
 
@@ -62,32 +62,56 @@ def execute_patent_analysis(self, task_id: str, params: dict):
                                 server_address='', is_local=False)
 
     try:
-        # ---- Run the 4-phase pipeline inside asyncio.run() ----
-        result = asyncio.run(_run_pipeline(
-            task_id=task_id,
-            params=params,
-            patent_ids=patent_ids,
-            total=total,
-            flash_provider=flash_provider,
-            pro_provider=pro_provider,
-            update_task_status=update_task_status,
-            set_task_completed=set_task_completed,
-            set_task_failed=set_task_failed,
-            save_checkpoint=save_checkpoint,
-            load_checkpoint=load_checkpoint,
-            generate_table_columns=generate_table_columns,
-            download_patent_document=download_patent_document,
-            analyze_single_patent=analyze_single_patent,
-            generate_patent_summary=generate_patent_summary,
-            build_failed_row=build_failed_row,
-            generate_report_outline=generate_report_outline,
-            generate_report_section=generate_report_section,
-            create_storage=create_storage,
-        ))
-        return result
+        # ---- Run the 4-phase pipeline using event-loop-safe pattern ----
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(_run_pipeline(
+                task_id=task_id,
+                params=params,
+                patent_ids=patent_ids,
+                total=total,
+                flash_provider=flash_provider,
+                pro_provider=pro_provider,
+                update_task_status=update_task_status,
+                set_task_completed=set_task_completed,
+                set_task_failed=set_task_failed,
+                save_checkpoint=save_checkpoint,
+                load_checkpoint=load_checkpoint,
+                generate_table_columns=generate_table_columns,
+                download_patent_document=download_patent_document,
+                analyze_single_patent=analyze_single_patent,
+                generate_patent_summary=generate_patent_summary,
+                build_failed_row=build_failed_row,
+                generate_report_outline=generate_report_outline,
+                generate_report_section=generate_report_section,
+                create_storage=create_storage,
+            ))
+            return result
+        finally:
+            loop.close()
     except Exception as e:
         set_task_failed(task_id, str(e))
         raise self.retry(exc=e)
+
+
+def _update_mysql_progress(task_id: str, current_phase: str, progress: int) -> None:
+    """Update the long_tasks MySQL row with current progress."""
+    try:
+        from sources.knowledge.knowledge import get_db_connection
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE long_tasks
+                       SET status = 'running', current_phase = %s, progress = %s
+                       WHERE task_id = %s""",
+                    (current_phase, progress, task_id))
+                conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass  # Non-fatal: MySQL update failure should not break the pipeline
 
 
 async def _run_pipeline(
@@ -133,20 +157,22 @@ async def _run_pipeline(
     update_task_status(task_id, 'generating_columns', 5,
                        f'分析维度：{" | ".join(columns[1:4])}...',
                        table_columns=columns)
+    # Update MySQL long_tasks table after phase 1
+    _update_mysql_progress(task_id, 'generating_columns', 5)
 
     # ==== Phase 2: Per-patent download -> analyze -> summarize ====
     for i, patent_id in enumerate(pending):
         patent_source = params.get('patent_source', 'cnipa')
         try:
             update_task_status(task_id, 'analyzing',
-                               progress_pct(i, len(table_rows), total),
+                               progress_pct(i, total),
                                f'正在下载专利文件（{len(table_rows)+1}/{total}）...',
                                table_rows=table_rows)
 
             patent_text = await download_patent_document(patent_id, patent_source)
 
             update_task_status(task_id, 'analyzing',
-                               progress_pct(i, len(table_rows), total),
+                               progress_pct(i, total),
                                f'正在分析（{len(table_rows)+1}/{total}）：{patent_id}',
                                table_rows=table_rows)
 
@@ -173,9 +199,11 @@ async def _run_pipeline(
         })
 
         update_task_status(task_id, 'analyzing',
-                           progress_pct(i + 1, 0, total),
+                           progress_pct(i + 1, total),
                            f'已完成 {len(table_rows)}/{total} 个专利分析',
                            table_rows=table_rows)
+    # Update MySQL long_tasks table after phase 2
+    _update_mysql_progress(task_id, 'analyzing', 75)
 
     # ==== Phase 3: Generate report (Pro, dynamic) ====
     update_task_status(task_id, 'generating_report', 80,
@@ -201,6 +229,7 @@ async def _run_pipeline(
     report_text = f"# {outline.get('title', '专利分析报告')}\n\n" + "\n\n".join(report_parts)
     update_task_status(task_id, 'generating_report', 90,
                        '报告撰写完成', result_summary=report_text)
+    _update_mysql_progress(task_id, 'generating_report', 90)
 
     # ==== Phase 4: Export files ====
     storage_cfg = {
@@ -210,63 +239,74 @@ async def _run_pipeline(
     storage = create_storage(storage_cfg)
 
     update_task_status(task_id, 'exporting', 92, '正在生成 PDF 文件...')
-    pdf_bytes = export_pdf(report_text, table_rows, columns)
+    pdf_bytes = await export_pdf_async(report_text, table_rows, columns)
     await storage.put(task_id, 'report.pdf', pdf_bytes)
 
     update_task_status(task_id, 'exporting', 96, '正在生成 Word 文件...')
-    docx_bytes = export_docx(report_text, table_rows, columns)
+    docx_bytes = await export_docx_async(report_text, table_rows, columns)
     await storage.put(task_id, 'report.docx', docx_bytes)
 
     report_files = [
         {'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes)},
         {'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes)},
     ]
+    _update_mysql_progress(task_id, 'exporting', 100)
     set_task_completed(task_id, report_files)
     return {'status': 'completed', 'task_id': task_id}
 
 
-def progress_pct(completed: int, offset: int, total: int) -> int:
+def progress_pct(completed: int, total: int) -> int:
     """Map completed/total to progress percentage in [5, 75]."""
     if total == 0:
         return 5
     return 5 + min(70, int(completed / total * 70))
 
 
-def export_pdf(report_text: str, table_rows: list, columns: list) -> bytes:
-    """Export report as PDF using weasyprint."""
+async def export_pdf_async(report_text: str, table_rows: list, columns: list) -> bytes:
+    """Export report as PDF using weasyprint, run in executor."""
+    import asyncio
     import weasyprint
-    html = _build_report_html(report_text, table_rows, columns)
-    return weasyprint.HTML(string=html).write_pdf()
+
+    def _sync_export():
+        html = _build_report_html(report_text, table_rows, columns)
+        return weasyprint.HTML(string=html).write_pdf()
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _sync_export)
 
 
-def export_docx(report_text: str, table_rows: list, columns: list) -> bytes:
-    """Export report as DOCX using python-docx."""
+async def export_docx_async(report_text: str, table_rows: list, columns: list) -> bytes:
+    """Export report as DOCX using python-docx, run in executor."""
+    import asyncio
     import io
     from docx import Document
-    doc = Document()
-    # Title
-    for line in report_text.split('\n'):
-        if line.startswith('# '):
-            doc.add_heading(line[2:], level=1)
-        elif line.startswith('## '):
-            doc.add_heading(line[3:], level=2)
-        elif line.strip():
-            doc.add_paragraph(line.strip())
 
-    # Table
-    if table_rows and columns:
-        table = doc.add_table(rows=1, cols=len(columns))
-        table.style = 'Table Grid'
-        for i, col in enumerate(columns):
-            table.rows[0].cells[i].text = col
-        for row_data in table_rows:
-            row = table.add_row()
+    def _sync_export():
+        doc = Document()
+        for line in report_text.split('\n'):
+            if line.startswith('# '):
+                doc.add_heading(line[2:], level=1)
+            elif line.startswith('## '):
+                doc.add_heading(line[3:], level=2)
+            elif line.strip():
+                doc.add_paragraph(line.strip())
+
+        if table_rows and columns:
+            table = doc.add_table(rows=1, cols=len(columns))
+            table.style = 'Table Grid'
             for i, col in enumerate(columns):
-                row.cells[i].text = str(row_data.get(col, ''))
+                table.rows[0].cells[i].text = col
+            for row_data in table_rows:
+                row = table.add_row()
+                for i, col in enumerate(columns):
+                    row.cells[i].text = str(row_data.get(col, ''))
 
-    buf = io.BytesIO()
-    doc.save(buf)
-    return buf.getvalue()
+        buf = io.BytesIO()
+        doc.save(buf)
+        return buf.getvalue()
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _sync_export)
 
 
 def _build_report_html(report_text: str, table_rows: list, columns: list) -> str:
