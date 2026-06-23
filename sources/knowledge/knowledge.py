@@ -216,7 +216,7 @@ def search_knowledge_base(user_id: str, query_embedding: List[float], user_vecto
                 "similarity": float(similarity)
             }
             results.append(result_item)
-            logger.info(f"item:{result_item}")
+
     logger.info(f"results: {results}")
     # 按相似度排序并返回前top_k个结果
     results.sort(key=lambda x: x["similarity"], reverse=True)
@@ -285,7 +285,7 @@ def get_redis_connection():
     # 优先从环境变量获取 Redis 配置
     redis_host = os.getenv('REDIS_HOST')
     redis_port = int(os.getenv('REDIS_PORT'))
-    logger.info(f"redis_host: {redis_host}, redis_port: {redis_port}")
+
     try:
         return redis.Redis(host=redis_host, port=redis_port, decode_responses=True, socket_connect_timeout=10, socket_timeout=10)
     except Exception as e:
@@ -570,12 +570,12 @@ def _get_knowledge_tool_legacy(user_id: str, question: str, top_k: int = 3,
             knowledge_id = knowledge.id
             redis_key = f"knowledge_embedding_{knowledge_id}"
             embedding_str = redis_conn.get(redis_key)
-            logger.info(f"embedding key is {redis_key}")
+
             if embedding_str:
                 # 将字符串转换回embedding列表
                 embedding = eval(embedding_str)  # 注意：在生产环境中应使用更安全的方法如json.loads
                 knowledge_embeddings[knowledge_id] = embedding
-                logger.info(f"Retrieved embedding for knowledge ID: {knowledge_id}")
+
             else:
                 logger.warning(f"No embedding found in Redis for knowledge ID: {knowledge_id}")
 
