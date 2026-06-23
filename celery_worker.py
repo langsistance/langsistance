@@ -1,5 +1,6 @@
 """Celery worker entry point for long-running patent analysis tasks."""
 
+import asyncio
 import os
 from celery import Celery
 
@@ -23,27 +24,266 @@ app.conf.update(
 
 @app.task(bind=True, max_retries=3, default_retry_delay=30)
 def execute_patent_analysis(self, task_id: str, params: dict):
-    """Batch patent analysis -- skeleton, filled in Task 13."""
-    from sources.long_task.status_manager import update_task_status, set_task_completed
+    """Batch patent analysis -- 4-phase serial pipeline with checkpointing."""
+    from sources.long_task.status_manager import (
+        update_task_status, set_task_completed, set_task_failed,
+        save_checkpoint, load_checkpoint,
+    )
     from sources.long_task.config import get_long_task_config
+    from sources.long_task.patent_analyzer import (
+        generate_table_columns, download_patent_document,
+        analyze_single_patent, generate_patent_summary, build_failed_row,
+    )
+    from sources.long_task.report_generator import (
+        generate_report_outline, generate_report_section,
+    )
+    from sources.long_task.storage import create_storage
+    from sources.llm_provider import Provider
 
     ltc = get_long_task_config()
+    model_family = ltc['provider_family']
     max_patents = ltc['max_patents']
-    patent_ids = list(dict.fromkeys(params.get('patent_ids', [])))[:max_patents]
+
+    # ---- Input dedup + truncation ----
+    patent_ids = list(dict.fromkeys(params.get('patent_ids', [])))
+    patent_ids = patent_ids[:max_patents]
+    total = len(patent_ids)
+
+    # ---- Provider setup ----
+    if model_family == 'minimax':
+        flash_provider = Provider(provider_name='minimax', model='minimax-2.7-highspeed',
+                                  server_address='', is_local=False)
+        pro_provider = Provider(provider_name='minimax', model='minimax-2.7-highspeed',
+                                server_address='', is_local=False)
+    else:
+        flash_provider = Provider(provider_name='deepseek', model='deepseek-chat',
+                                  server_address='', is_local=False)
+        pro_provider = Provider(provider_name='deepseek', model='deepseek-reasoner',
+                                server_address='', is_local=False)
 
     try:
-        update_task_status(
-            task_id,
-            'generating_columns',
-            0,
-            f'正在启动分析任务（最多 {max_patents} 个专利）...',
-        )
-        # Placeholder: real logic in Task 13
-        update_task_status(task_id, 'generating_columns', 5, '分析框架已生成')
-        set_task_completed(task_id, [])
-        return {'status': 'completed', 'task_id': task_id}
+        # ---- Run the 4-phase pipeline inside asyncio.run() ----
+        result = asyncio.run(_run_pipeline(
+            task_id=task_id,
+            params=params,
+            patent_ids=patent_ids,
+            total=total,
+            flash_provider=flash_provider,
+            pro_provider=pro_provider,
+            update_task_status=update_task_status,
+            set_task_completed=set_task_completed,
+            set_task_failed=set_task_failed,
+            save_checkpoint=save_checkpoint,
+            load_checkpoint=load_checkpoint,
+            generate_table_columns=generate_table_columns,
+            download_patent_document=download_patent_document,
+            analyze_single_patent=analyze_single_patent,
+            generate_patent_summary=generate_patent_summary,
+            build_failed_row=build_failed_row,
+            generate_report_outline=generate_report_outline,
+            generate_report_section=generate_report_section,
+            create_storage=create_storage,
+        ))
+        return result
     except Exception as e:
-        from sources.long_task.status_manager import set_task_failed
-
         set_task_failed(task_id, str(e))
         raise self.retry(exc=e)
+
+
+async def _run_pipeline(
+    task_id: str,
+    params: dict,
+    patent_ids: list,
+    total: int,
+    flash_provider,
+    pro_provider,
+    update_task_status,
+    set_task_completed,
+    set_task_failed,
+    save_checkpoint,
+    load_checkpoint,
+    generate_table_columns,
+    download_patent_document,
+    analyze_single_patent,
+    generate_patent_summary,
+    build_failed_row,
+    generate_report_outline,
+    generate_report_section,
+    create_storage,
+) -> dict:
+    """Internal async pipeline orchestrator."""
+
+    # ---- Crash recovery: load checkpoint ----
+    checkpoint = load_checkpoint(task_id)
+    if checkpoint and checkpoint.get('pending'):
+        table_rows = checkpoint.get('completed_rows', [])
+        pending = checkpoint['pending']
+    else:
+        table_rows = []
+        pending = patent_ids
+
+    # ==== Phase 1: Generate columns (Flash) ====
+    update_task_status(task_id, 'generating_columns', 0,
+                       f'正在生成分析框架（{total} 个专利）...')
+    columns = await generate_table_columns(
+        query=params['query'],
+        patent_count=total,
+        provider=flash_provider,
+    )
+    update_task_status(task_id, 'generating_columns', 5,
+                       f'分析维度：{" | ".join(columns[1:4])}...',
+                       table_columns=columns)
+
+    # ==== Phase 2: Per-patent download -> analyze -> summarize ====
+    for i, patent_id in enumerate(pending):
+        patent_source = params.get('patent_source', 'cnipa')
+        try:
+            update_task_status(task_id, 'analyzing',
+                               progress_pct(i, len(table_rows), total),
+                               f'正在下载专利文件（{len(table_rows)+1}/{total}）...',
+                               table_rows=table_rows)
+
+            patent_text = await download_patent_document(patent_id, patent_source)
+
+            update_task_status(task_id, 'analyzing',
+                               progress_pct(i, len(table_rows), total),
+                               f'正在分析（{len(table_rows)+1}/{total}）：{patent_id}',
+                               table_rows=table_rows)
+
+            row = await analyze_single_patent(
+                patent_id=patent_id, patent_text=patent_text,
+                columns=columns, query=params['query'],
+                provider=pro_provider, timeout=60,
+            )
+            row['_summary'] = await generate_patent_summary(
+                patent_id=patent_id, row=row, query=params['query'],
+                provider=pro_provider,
+            )
+
+        except Exception as e:
+            row = build_failed_row(patent_id, str(e))
+
+        table_rows.append(row)
+        save_checkpoint(task_id, {
+            'completed': [r['patent_id'] for r in table_rows if not r.get('_failed')],
+            'current': patent_id,
+            'pending': pending[i+1:],
+            'completed_rows': table_rows,
+            'failed': [r['patent_id'] for r in table_rows if r.get('_failed')],
+        })
+
+        update_task_status(task_id, 'analyzing',
+                           progress_pct(i + 1, 0, total),
+                           f'已完成 {len(table_rows)}/{total} 个专利分析',
+                           table_rows=table_rows)
+
+    # ==== Phase 3: Generate report (Pro, dynamic) ====
+    update_task_status(task_id, 'generating_report', 80,
+                       '正在规划报告结构...')
+    outline = await generate_report_outline(
+        query=params['query'], columns=columns,
+        table_rows=table_rows, provider=pro_provider,
+    )
+
+    report_parts = []
+    sections = outline.get('sections', [{'heading': '分析结果', 'description': ''}])
+    for idx, section in enumerate(sections):
+        sec_pct = 80 + int((idx + 1) / len(sections) * 10)
+        update_task_status(task_id, 'generating_report', sec_pct,
+                           f'正在撰写：{section["heading"]}')
+        text = await generate_report_section(
+            section=section, query=params['query'],
+            columns=columns, table_rows=table_rows,
+            provider=pro_provider,
+        )
+        report_parts.append(f"## {section['heading']}\n\n{text}")
+
+    report_text = f"# {outline.get('title', '专利分析报告')}\n\n" + "\n\n".join(report_parts)
+    update_task_status(task_id, 'generating_report', 90,
+                       '报告撰写完成', result_summary=report_text)
+
+    # ==== Phase 4: Export files ====
+    storage_cfg = {
+        'report_storage_backend': 'local',
+        'report_storage_local_dir': '/opt/workspace/reports',
+    }
+    storage = create_storage(storage_cfg)
+
+    update_task_status(task_id, 'exporting', 92, '正在生成 PDF 文件...')
+    pdf_bytes = export_pdf(report_text, table_rows, columns)
+    await storage.put(task_id, 'report.pdf', pdf_bytes)
+
+    update_task_status(task_id, 'exporting', 96, '正在生成 Word 文件...')
+    docx_bytes = export_docx(report_text, table_rows, columns)
+    await storage.put(task_id, 'report.docx', docx_bytes)
+
+    report_files = [
+        {'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes)},
+        {'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes)},
+    ]
+    set_task_completed(task_id, report_files)
+    return {'status': 'completed', 'task_id': task_id}
+
+
+def progress_pct(completed: int, offset: int, total: int) -> int:
+    """Map completed/total to progress percentage in [5, 75]."""
+    if total == 0:
+        return 5
+    return 5 + min(70, int(completed / total * 70))
+
+
+def export_pdf(report_text: str, table_rows: list, columns: list) -> bytes:
+    """Export report as PDF using weasyprint."""
+    import weasyprint
+    html = _build_report_html(report_text, table_rows, columns)
+    return weasyprint.HTML(string=html).write_pdf()
+
+
+def export_docx(report_text: str, table_rows: list, columns: list) -> bytes:
+    """Export report as DOCX using python-docx."""
+    import io
+    from docx import Document
+    doc = Document()
+    # Title
+    for line in report_text.split('\n'):
+        if line.startswith('# '):
+            doc.add_heading(line[2:], level=1)
+        elif line.startswith('## '):
+            doc.add_heading(line[3:], level=2)
+        elif line.strip():
+            doc.add_paragraph(line.strip())
+
+    # Table
+    if table_rows and columns:
+        table = doc.add_table(rows=1, cols=len(columns))
+        table.style = 'Table Grid'
+        for i, col in enumerate(columns):
+            table.rows[0].cells[i].text = col
+        for row_data in table_rows:
+            row = table.add_row()
+            for i, col in enumerate(columns):
+                row.cells[i].text = str(row_data.get(col, ''))
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def _build_report_html(report_text: str, table_rows: list, columns: list) -> str:
+    """Build HTML for PDF export."""
+    import html as html_mod
+    rows_html = ""
+    if table_rows and columns:
+        header = "<tr>" + "".join(f"<th>{html_mod.escape(str(c))}</th>" for c in columns) + "</tr>"
+        body = ""
+        for r in table_rows:
+            body += "<tr>" + "".join(f"<td>{html_mod.escape(str(r.get(c, '')))}</td>" for c in columns) + "</tr>"
+        rows_html = f"<table>{header}{body}</table>"
+
+    text_html = report_text.replace('\n', '<br>')
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>body{{font-family:sans-serif;max-width:900px;margin:0 auto;padding:20px;}}
+table{{border-collapse:collapse;width:100%;}}
+th,td{{border:1px solid #ddd;padding:8px;font-size:12px;text-align:left;}}
+th{{background:#f5f5f5;}}</style></head>
+<body>{text_html}{rows_html}</body></html>"""
