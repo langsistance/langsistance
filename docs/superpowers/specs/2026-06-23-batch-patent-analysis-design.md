@@ -451,43 +451,123 @@ app.conf.update(
 # celery -A celery_worker worker --pool=solo --concurrency=1 --loglevel=info
 ```
 
-### 6.2 任务编排（全流程串行）
+### 6.2 防遗漏、防重复机制
+
+```
+三个层面保证：
+
+┌─ 层面 1: 输入去重 ───────────────────────────────────┐
+│  params['patent_ids']                                 │
+│  → sorted(set(patent_ids))   // 去重 + 排序（确定性）    │
+│  → [:max_patents]            // 按配置截断              │
+│  保证：同一个专利不会分析两次，顺序固定                    │
+└──────────────────────────────────────────────────────┘
+                        │
+                        ▼
+┌─ 层面 2: 逐专利状态跟踪（Redis checkpoint）────────────┐
+│  每分析完一个专利，写入 checkpoint：                    │
+│                                                       │
+│  lt:{task_id}:checkpoint  →  {                        │
+│    "completed": ["CN...001", "CN...003"],  // 已完成  │
+│    "current":   "CN...005",                // 正在处理 │
+│    "pending":   ["CN...007", ...],         // 待处理   │
+│    "failed":    []                         // 失败的   │
+│  }                                                    │
+│                                                       │
+│  保证：任何时候 Worker 崩溃，重启后知道哪些已完成         │
+└──────────────────────────────────────────────────────┘
+                        │
+                        ▼
+┌─ 层面 3: Worker 崩溃恢复（idempotent 续算）──────────┐
+│  Worker 重启 → 检查 lt:{task_id}:checkpoint          │
+│                                                       │
+│  如果 checkpoint 存在 + task 未完成:                    │
+│    pending = checkpoint.pending   // 跳过已完成的      │
+│    table_rows = checkpoint.completed_rows              │
+│    从 pending[0] 继续，不重复分析已完成的专利            │
+│                                                       │
+│  保证：崩溃不会导致重头再来，已分析的专利不会浪费          │
+└──────────────────────────────────────────────────────┘
+```
+
+**Redis checkpoint 写入时机（Worker 内）：**
+```
+每个专利分析完成后，立即写入 checkpoint：
+  1. 将当前 patent_id 从 pending 移到 completed
+  2. 将新行追加到 checkpoint.completed_rows
+  3. 批量写入 Redis（原子操作）
+
+单专利超时（60s）：
+  1. 标记该专利为 failed（不阻塞后续专利）
+  2. failed 的专利在表格中标注"分析失败"
+  3. 继续处理下一个
+```
+
+### 6.3 任务编排（全流程串行）
 
 ```python
 @app.task(bind=True, max_retries=3, default_retry_delay=30)
 def execute_patent_analysis(self, task_id: str, params: dict):
-    """批量专利分析长任务 — 全流程串行"""
+    """批量专利分析长任务 — 全流程串行，支持断点续算"""
     try:
+        # === 输入去重 + 排序 + 截断 ===
+        patent_ids = sorted(set(params['patent_ids']))
+        max_patents = get_max_patents_from_config()
+        patent_ids = patent_ids[:max_patents]
+
+        # === 检查是否有 checkpoint（崩溃恢复）===
+        checkpoint = load_checkpoint(task_id)
+        if checkpoint and checkpoint['pending']:
+            # 恢复：从上次中断处继续
+            table_rows = checkpoint.get('completed_rows', [])
+            pending = checkpoint['pending']
+        else:
+            table_rows = []
+            pending = patent_ids
+
         # === Phase 1: 生成表格列定义 ===
         update_status(task_id, 'generating_columns', 0,
                      '正在生成分析框架...')
         columns = generate_table_columns(
             query=params['query'],
-            patent_count=len(params['patent_ids']),
+            patent_count=len(patent_ids),
             model=get_flash_model(params['model_family'])
         )
         update_columns(task_id, columns)
         update_progress(task_id, 5)
 
-        # === Phase 2: 串行逐专利分析 ===
-        max_patents = get_max_patents_from_config()
-        patents = params['patent_ids'][:max_patents]  # 超出截断
-        table_rows = []
-        for i, patent_id in enumerate(patents):
-            row = analyze_single_patent(
-                patent_id=patent_id,
-                columns=columns,
-                query=params['query'],
-                model=get_pro_model(params['model_family'])
-            )
-            table_rows.append(row)
-            table_rows_sorted = table_rows.copy()  # 保持顺序
+        # === Phase 2: 串行逐专利分析（支持断点续算）===
+        for i, patent_id in enumerate(pending):
+            try:
+                row = analyze_single_patent(
+                    patent_id=patent_id,
+                    columns=columns,
+                    query=params['query'],
+                    model=get_pro_model(params['model_family']),
+                    timeout=60  # 单专利超时
+                )
+            except PatentAnalysisTimeout:
+                row = build_failed_row(patent_id, "超时")
+            except Exception as e:
+                row = build_failed_row(patent_id, str(e))
 
-            # 进度: 5% ~ 75%，按专利数量均分
-            progress = 5 + int((i + 1) / len(patents) * 70)
+            table_rows.append(row)
+
+            # 立即写入 checkpoint（每个专利完成后）
+            save_checkpoint(task_id, {
+                'completed': [r['patent_id'] for r in table_rows],
+                'current': patent_id,
+                'pending': pending[i+1:],
+                'completed_rows': table_rows,
+                'failed': [r['patent_id'] for r in table_rows if r.get('_failed')]
+            })
+
+            # 进度: 占总任务 5% ~ 75%，按实际专利总数均分
+            total = len(patent_ids)
+            progress = 5 + int((i + 1 + len(patent_ids) - len(pending)) / total * 70)
             update_status(task_id, 'analyzing', progress,
-                         f'正在分析第 {i+1}/{len(patents)} 个专利（{patent_id}）',
-                         table_rows=table_rows_sorted)
+                         f'正在分析第 {len(table_rows)}/{total} 个专利（{patent_id}）',
+                         table_rows=table_rows)
             write_message_to_session(params['session_id'], ...)
 
         # === Phase 3: 动态生成报告（Pro）===
@@ -557,6 +637,7 @@ def execute_patent_analysis(self, task_id: str, params: dict):
 lt:{task_id}:status       → JSON {status, phase, step, progress, phases, ...}
 lt:{task_id}:table_cols   → JSON ["列1", "列2", ...]
 lt:{task_id}:table_rows   → JSON [{...}, {...}, ...]
+lt:{task_id}:checkpoint   → JSON {completed[], current, pending[], completed_rows, failed[]}
 ```
 
 **TTL 策略：** Redis 数据设 24 小时 TTL。MySQL 为 source of truth。
@@ -1038,3 +1119,6 @@ Phase 3（需要时）: Worker 拆到国内服务器
 | 12 | max_patents 在 config.ini 中配置 | 修改重启即生效，不需要改代码 |
 | 13 | 报告持久化 + 存储抽象层 | MVP 用本地文件系统，通过 `ReportStorage` 接口隔离；未来加一行配置切 S3，上层代码不动 |
 | 14 | 报告可反复下载 | task_id 持久有效，关页重开、换设备都能下载 |
+| 15 | 输入去重 + 排序 | `sorted(set(patent_ids))`，同一专利不分析两次，顺序确定 |
+| 16 | Redis checkpoint 断点续算 | 每个专利完成后立即写 checkpoint；Worker 崩溃后从 pending 继续，已完成的不重复 |
+| 17 | 单专利超时不阻塞 | 超时 60s 标记 failed，表格显示"分析失败"，继续下一个 |
