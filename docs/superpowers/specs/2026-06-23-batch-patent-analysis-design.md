@@ -215,9 +215,14 @@ type=3 的 knowledge 记录示例：
   "params": {
     "type": "long_task",
     "agent": "patent_analysis",
-    "max_patents": 20,
     "output_formats": ["pdf", "docx"]
   }
+}
+```
+
+> `max_patents` 不在 knowledge 里硬编码，而是从 `config.ini` 的 `[LONG_TASK]` 段读取。修改配置后重启 Worker 生效。
+
+```
 }
 ```
 
@@ -374,7 +379,7 @@ GET /long_task/{task_id}/status
 }
 ```
 
-### 5.3 获取报告文件
+### 5.3 获取报告文件（持久化，可反复下载）
 
 ```
 GET /long_task/{task_id}/report?format=pdf
@@ -383,13 +388,38 @@ GET /long_task/{task_id}/report?format=docx
 
 **Response:** 文件下载（`Content-Disposition: attachment`）
 
+**持久化保证：**
+- 报告文件存储在服务端文件系统 `/opt/workspace/reports/{task_id}/`
+- 任务完成后文件永久保留，不设过期
+- 用户关闭网页、换设备、清缓存后，只要知道 `task_id`（从 session 历史中可以查到），就能重新下载
+- `GET /session/{session_id}` 返回的 session 数据中包含关联的 `long_task_ids`，前端可据此构造下载链接
+
+**报告文件存储路径结构：**
+```
+/opt/workspace/reports/
+├── lt_20260623_a1b2c3d4/
+│   ├── report.pdf
+│   ├── report.docx
+│   └── metadata.json
+├── lt_20260624_e5f6g7h8/
+│   ├── report.pdf
+│   └── report.docx
+└── ...
+```
+
 ### 5.4 Session 相关 API
 
 ```
-GET /session/{session_id}              → 获取 session 详情和对话历史
-GET /sessions?user_id={uid}            → 获取用户所有 session 列表
-POST /session/{session_id}/message    → 追加消息到 session（短任务对话时）
-DELETE /session/{session_id}           → 归档 session
+GET /session/{session_id}
+        → 获取 session 详情和对话历史
+        → 返回中包含 long_task_ids，前端据此构造下载链接
+GET /sessions?user_id={uid}
+        → 获取用户所有 session 列表
+        → 每个 session 摘要包含 long_task_ids 和对应报告是否可下载
+POST /session/{session_id}/message
+        → 追加消息到 session（短任务对话时调用）
+DELETE /session/{session_id}
+        → 归档 session（不删除报告文件）
 ```
 
 ---
@@ -411,6 +441,11 @@ app.conf.update(
     task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,  # concurrency=1 时只预取一个
 )
+
+# Worker 启动时从 config.ini 读取：
+#   [LONG_TASK] provider_family → 决定用哪套 Provider
+#   [LONG_TASK] max_patents     → 单次分析最大专利数
+# 修改后重启 Worker 生效
 
 # 启动命令:
 # celery -A celery_worker worker --pool=solo --concurrency=1 --loglevel=info
@@ -435,7 +470,8 @@ def execute_patent_analysis(self, task_id: str, params: dict):
         update_progress(task_id, 5)
 
         # === Phase 2: 串行逐专利分析 ===
-        patents = params['patent_ids']
+        max_patents = get_max_patents_from_config()
+        patents = params['patent_ids'][:max_patents]  # 超出截断
         table_rows = []
         for i, patent_id in enumerate(patents):
             row = analyze_single_patent(
@@ -581,6 +617,7 @@ Worker 启动时根据 `config.ini` 配置创建 Provider 实例：
 # config.ini
 [LONG_TASK]
 provider_family = deepseek        # deepseek | minimax
+max_patents = 20                  # 单次分析最大专利数，超出截断
 ```
 
 ```
@@ -656,7 +693,7 @@ Step 3b: 按大纲逐节撰写（Pro）
 | PDF | `weasyprint` 或 `wkhtmltopdf` | HTML 模板 → PDF |
 | Word | `python-docx` | 程序化构建，表格 + 段落 |
 
-报告文件存储在本机文件系统 `/opt/workspace/reports/{task_id}/`，前端通过下载 API 获取。
+报告文件存储在本机文件系统 `/opt/workspace/reports/{task_id}/`，不设过期时间。前端每次通过 `GET /long_task/{task_id}/report` 下载，无论用户是否关闭过网页、是否换了设备，只要有 `task_id` 就能反复下载。
 
 ---
 
@@ -884,3 +921,5 @@ Phase 3（需要时）: Worker 拆到国内服务器
 | 9 | 动态列定义：表格列由 Flash 根据用户问题生成 | 灵活适配不同分析问题 |
 | 10 | 动态报告结构：大纲由 Pro 根据用户问题 + 表格内容生成 | 不同问题 → 不同报告结构，不是固定模板 |
 | 11 | 2C2G 单机 MVP | 先验证流程，数据驱动扩容 |
+| 12 | max_patents 在 config.ini 中配置 | 修改重启即生效，不需要改代码 |
+| 13 | 报告文件持久化，永久可下载 | 存在服务端文件系统，不设过期；关页重开、换设备都能通过 task_id 反复下载 |
