@@ -57,3 +57,5 @@ openai
 sniffio
 ordered_set
 pypinyin
+python-docx>=1.1,<2.0
+weasyprint>=62,<63
