@@ -21,7 +21,7 @@ router = APIRouter()
 # Agent pool for reusing agent instances
 _agent_pool = {}
 _agent_pool_lock = asyncio.Lock()
-AGENT_POOL_MAX_SIZE = 10
+AGENT_POOL_MAX_SIZE = 3  # reduced from 10 for 2C2G memory budget
 AGENT_POOL_MAX_IDLE_TIME = 300  # 5 minutes
 
 # Token cache with TTL
