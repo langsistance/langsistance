@@ -11,7 +11,7 @@ from celery import Celery
 from dotenv import load_dotenv
 
 # Import route modules
-from api_routes import knowledge, tools, system, core, auth, uspto, feedback, scenes, patent, session
+from api_routes import knowledge, tools, system, core, auth, uspto, feedback, scenes, patent, session, long_task as long_task_routes
 from api_routes.models import *
 
 # Import existing components
@@ -179,6 +179,8 @@ api.include_router(scenes.router, tags=["scenes"])
 api.include_router(patent.router, tags=["patent"])
 session_router = session.register_session_routes(logger, config)
 api.include_router(session_router, tags=["session"])
+lt_router = long_task_routes.register_long_task_routes(logger, config)
+api.include_router(lt_router, tags=["long_task"])
 # Note: query router is not included as it contained conflicting endpoints and is now empty
 
 if __name__ == "__main__":
