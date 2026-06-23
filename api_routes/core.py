@@ -357,6 +357,70 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                     if openai_agent is None:
                         handler.queue.put_nowait({'type': 'done'})
 
+                # Long task handling: create_agent returned a long_task intent marker
+                if isinstance(openai_agent, dict) and openai_agent.get('intent') == 'long_task':
+                    import json
+                    from sources.knowledge.knowledge import get_db_connection
+
+                    task_id = f"lt_{uuid.uuid4().hex[:12]}"
+                    session_id = f"sess_{uuid.uuid4().hex[:12]}"
+
+                    # Extract patent_ids from conversation history
+                    patent_ids = []
+                    conv_history = getattr(request, 'conversation_history', None) or []
+                    for msg in conv_history:
+                        if msg.get('role') == 'assistant' and msg.get('patent_data'):
+                            for p in msg['patent_data']:
+                                if isinstance(p, dict) and 'patent_id' in p:
+                                    patent_ids.append(p['patent_id'])
+
+                    # Write to MySQL: session + long_task record
+                    conn = get_db_connection()
+                    try:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """INSERT INTO conversations (session_id, user_id, title, messages)
+                                   VALUES (%s, %s, %s, %s)""",
+                                (session_id, user_id, f"专利分析 - {request.query[:50]}",
+                                 json.dumps(conv_history, ensure_ascii=False)))
+                            cur.execute(
+                                """INSERT INTO long_tasks
+                                   (task_id, session_id, user_id, task_type, input_params, status)
+                                   VALUES (%s, %s, %s, %s, %s, %s)""",
+                                (task_id, session_id, user_id, 'patent_analysis',
+                                 json.dumps({
+                                     'query': request.query,
+                                     'patent_ids': patent_ids,
+                                     'patent_source': 'cnipa',
+                                 }, ensure_ascii=False),
+                                 'pending'))
+                            conn.commit()
+                    finally:
+                        conn.close()
+
+                    # Submit to Celery
+                    from celery_worker import execute_patent_analysis
+                    execute_patent_analysis.delay(task_id=task_id, params={
+                        'query': request.query,
+                        'patent_ids': patent_ids,
+                        'patent_source': 'cnipa',
+                        'session_id': session_id,
+                    })
+
+                    # Push SSE events
+                    await queue.put({
+                        'type': 'status',
+                        'message': '批量专利分析任务已提交',
+                        'transient': False,
+                    })
+                    await queue.put({
+                        'type': 'long_task_created',
+                        'task_id': task_id,
+                        'session_id': session_id,
+                    })
+                    await queue.put({'type': 'end'})
+                    return
+
                 try:
                     await general_agent.invoke_agent(openai_agent, handler)
                     await queue.put({'type': 'end', 'content': '[DONE]'})
@@ -420,6 +484,21 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                             current_time = asyncio.get_event_loop().time()
                             last_flush_time = current_time
                             last_stream_time = current_time
+
+                        elif event['type'] == 'long_task_created':
+                            if token_buffer:
+                                combined = ''.join(token_buffer)
+                                token_json = json.dumps(combined)
+                                yield f"data:{token_json}\n\n"
+                                token_buffer.clear()
+                            yield f"data:{json.dumps({'type': 'long_task_created', 'task_id': event.get('task_id'), 'session_id': event.get('session_id')})}\n\n"
+                            current_time = asyncio.get_event_loop().time()
+                            last_flush_time = current_time
+                            last_stream_time = current_time
+
+                        elif event['type'] == 'long_task_intent':
+                            # Intermediate event from invoke_agent — process if needed
+                            continue
 
                         elif event['type'] == 'end':
                             # Flush remaining tokens before ending
