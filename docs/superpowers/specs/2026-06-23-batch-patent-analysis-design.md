@@ -686,14 +686,81 @@ Step 3b: 按大纲逐节撰写（Pro）
 | "评估侵权风险" | 概览 → 我的产品特征 → 逐专利风险对照 → 风险等级总览 → 规避建议 |
 | "做一份完整分析报告" | 概览 → 技术分布 → 申请人分析 → 创新趋势 → 技术空白 → 核心专利 → 建议 |
 
-### 9.2 导出方案
+### 9.2 报告存储（可替换后端）
+
+报告文件不直接写本地文件系统，而是通过一个**存储抽象层**写入。MVP 默认用本地文件系统，未来切对象存储只需改配置。
+
+```python
+# sources/long_task/storage.py — 存储抽象
+
+class ReportStorage(ABC):
+    """报告文件存储抽象接口"""
+    @abstractmethod
+    async def put(self, task_id: str, filename: str, content: bytes) -> str:
+        """存储文件，返回访问路径"""
+        ...
+
+    @abstractmethod
+    async def get(self, task_id: str, filename: str) -> bytes:
+        """读取文件内容"""
+        ...
+
+    @abstractmethod
+    async def delete(self, task_id: str) -> None:
+        """删除某个任务的全部报告"""
+        ...
+
+
+class LocalReportStorage(ReportStorage):
+    """MVP：本地文件系统"""
+    def __init__(self, base_dir: str = "/opt/workspace/reports"):
+        self.base_dir = base_dir
+
+    async def put(self, task_id, filename, content):
+        path = os.path.join(self.base_dir, task_id, filename)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        async with aiofiles.open(path, 'wb') as f:
+            await f.write(content)
+        return path
+
+    async def get(self, task_id, filename):
+        path = os.path.join(self.base_dir, task_id, filename)
+        async with aiofiles.open(path, 'rb') as f:
+            return await f.read()
+
+    ...
+
+class S3ReportStorage(ReportStorage):
+    """未来扩展：S3 兼容对象存储（MinIO / AWS S3 / 阿里云 OSS）"""
+    ...
+```
+
+**配置切换：**
+```ini
+# config.ini
+[STORAGE]
+backend = local                    # local | s3
+local_base_dir = /opt/workspace/reports
+# s3_endpoint = https://s3.example.com
+# s3_bucket = copiioai-reports
+# s3_access_key = ...
+```
+
+Worker 导出文件时调用 `storage.put(task_id, filename, content)`，API 下载时调用 `storage.get(task_id, filename)`。上层代码不感知底层存储。
+
+| 存储后端 | 场景 |
+|---------|------|
+| `local` | MVP 单机，当前 2C2G |
+| `s3` | 分布式 / 多副本 / Worker 和 API 不在同一台机器时 |
+
+### 9.3 导出方案
 
 | 格式 | 工具 | 方式 |
 |------|------|------|
 | PDF | `weasyprint` 或 `wkhtmltopdf` | HTML 模板 → PDF |
 | Word | `python-docx` | 程序化构建，表格 + 段落 |
 
-报告文件存储在本机文件系统 `/opt/workspace/reports/{task_id}/`，不设过期时间。前端每次通过 `GET /long_task/{task_id}/report` 下载，无论用户是否关闭过网页、是否换了设备，只要有 `task_id` 就能反复下载。
+导出完成后通过 `storage.put()` 写入，后续下载走 `storage.get()`。
 
 ---
 
@@ -855,6 +922,7 @@ Phase 3（需要时）: Worker 拆到国内服务器
 | `sources/long_task/__init__.py` | 长任务模块 |
 | `sources/long_task/patent_analyzer.py` | 专利分析核心逻辑 |
 | `sources/long_task/report_generator.py` | 报告生成（Word/PDF） |
+| `sources/long_task/storage.py` | 报告存储抽象（本地 / S3） |
 | `sources/long_task/status_manager.py` | Redis 状态管理 |
 | `mysql/init/add_conversations.sql` | conversations 表 DDL |
 | `mysql/init/add_long_tasks.sql` | long_tasks 表 DDL |
@@ -922,4 +990,5 @@ Phase 3（需要时）: Worker 拆到国内服务器
 | 10 | 动态报告结构：大纲由 Pro 根据用户问题 + 表格内容生成 | 不同问题 → 不同报告结构，不是固定模板 |
 | 11 | 2C2G 单机 MVP | 先验证流程，数据驱动扩容 |
 | 12 | max_patents 在 config.ini 中配置 | 修改重启即生效，不需要改代码 |
-| 13 | 报告文件持久化，永久可下载 | 存在服务端文件系统，不设过期；关页重开、换设备都能通过 task_id 反复下载 |
+| 13 | 报告持久化 + 存储抽象层 | MVP 用本地文件系统，通过 `ReportStorage` 接口隔离；未来加一行配置切 S3，上层代码不动 |
+| 14 | 报告可反复下载 | task_id 持久有效，关页重开、换设备都能下载 |
