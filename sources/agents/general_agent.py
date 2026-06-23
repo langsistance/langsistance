@@ -48,6 +48,23 @@ MAX_VALUE_CHARS_THRESHOLD = int(os.getenv("GENERAL_AGENT_MAX_VALUE_CHARS", "1000
 SMALL_LIST_THRESHOLD = int(os.getenv("GENERAL_AGENT_SMALL_LIST_THRESHOLD", "3"))
 
 
+def _is_long_task_knowledge(knowledge_item) -> bool:
+    """Check if knowledge item represents a long task (type=3)."""
+    if knowledge_item is None:
+        return False
+    k_type = knowledge_item.get('type', 1) if isinstance(knowledge_item, dict) else getattr(knowledge_item, 'type', 1)
+    return int(k_type) == 3
+
+
+def _build_long_task_intent(knowledge_item, tool_info) -> dict:
+    """Build a long task intent marker returned by create_agent."""
+    return {
+        'intent': 'long_task',
+        'knowledge': knowledge_item,
+        'tool_info': tool_info,
+    }
+
+
 def _json_len(obj) -> int:
     """Return the byte length of *obj* serialised as compact JSON."""
     return len(json.dumps(obj, ensure_ascii=False, default=str))
@@ -1283,6 +1300,13 @@ Begin your response now:
             push_filter=push_filter,
         )
         knowledge_item, tool_info = self.knowledgeTool
+        # Long task detection: type=3 knowledge triggers async Celery pipeline
+        if _is_long_task_knowledge(knowledge_item):
+            if callback_handler:
+                await _emit_status(callback_handler, "正在启动批量专利分析任务...")
+            # Return special marker — caller (run_pipeline) handles submission
+            self._long_task_intent = _build_long_task_intent(knowledge_item, tool_info)
+            return self._long_task_intent
         if is_workflow_knowledge(knowledge_item):
             if callback_handler:
                 await callback_handler.on_llm_new_token(
@@ -1641,6 +1665,18 @@ Begin your response now:
 
     async def invoke_agent(self, agent, callback_handler):
         try:
+            # Handle long task intent marker
+            if isinstance(agent, dict) and agent.get('intent') == 'long_task':
+                # The actual Celery submission happens in api_routes/core.py run_pipeline
+                # after create_agent returns. Here we just push the notification.
+                await _emit_status(callback_handler,
+                    "批量专利分析任务已创建，可通过 task_id 查询进度")
+                # Queue a special SSE event type
+                await callback_handler.queue.put({
+                    'type': 'long_task_intent',
+                    'knowledge': agent.get('knowledge'),
+                })
+                return
             workflow_result = getattr(self, "_workflow_result", None)
             if workflow_result is not None:
                 self._workflow_result = None
