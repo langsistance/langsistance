@@ -147,35 +147,37 @@ async def _run_pipeline(
         pending = patent_ids
 
     scene_id = params.get('scene_id')
-    scene_candidates = None  # lazy-loaded for tool-based download
+    # Load scene knowledge+tools once for use across all phases
+    scene_candidates = None
+    if scene_id:
+        from sources.long_task.scene_tools import get_scene_knowledge_tools
+        scene_candidates = get_scene_knowledge_tools(scene_id)
+    id_url_map = {}          # patent_id → document_url from search results
 
     # ==== Phase 0: Search patents via scene tools (if no patent_ids provided) ====
-    if not patent_ids and scene_id:
+    if not patent_ids and scene_candidates:
         from sources.long_task.scene_tools import (
-            get_scene_knowledge_tools,
             select_tool,
             execute_tool,
             extract_patent_ids,
+            extract_patent_id_url_map,
         )
         update_task_status(task_id, 'searching_patents', 0,
-                           '正在读取场景检索工具...')
-        scene_candidates = get_scene_knowledge_tools(scene_id)
-        if scene_candidates:
-            update_task_status(task_id, 'searching_patents', 1,
-                               f'已发现 {len(scene_candidates)} 个场景工具，正在选择检索方案...')
-            selected = await select_tool(
-                'search patents', params['query'],
-                scene_candidates, flash_provider,
+                           f'已发现 {len(scene_candidates)} 个场景工具，正在选择检索方案...')
+        selected = await select_tool(
+            'search patents', params['query'],
+            scene_candidates, flash_provider,
+        )
+        if selected:
+            update_task_status(task_id, 'searching_patents', 2,
+                               f'正在检索专利：{selected.get("reason", "")}')
+            result = await execute_tool(selected['tool'], selected['params'])
+            raw_items = result.get('raw_items', []) or []
+            patent_ids = extract_patent_ids(raw_items)
+            id_url_map = extract_patent_id_url_map(raw_items)
+            params['patent_source'] = _infer_source_from_tool(
+                selected['tool'], params.get('patent_source', 'cnipa'),
             )
-            if selected:
-                update_task_status(task_id, 'searching_patents', 2,
-                                   f'正在检索专利：{selected.get("reason", "")}')
-                result = await execute_tool(selected['tool'], selected['params'])
-                raw_items = result.get('raw_items', []) or []
-                patent_ids = extract_patent_ids(raw_items)
-                params['patent_source'] = _infer_source_from_tool(
-                    selected['tool'], params.get('patent_source', 'cnipa'),
-                )
         if patent_ids:
             total = len(patent_ids)
             pending = patent_ids
@@ -216,6 +218,7 @@ async def _run_pipeline(
                 scene_candidates=scene_candidates,
                 flash_provider=flash_provider,
                 download_patent_document=download_patent_document,
+                id_url_map=id_url_map,
             )
 
             update_task_status(task_id, 'analyzing',
@@ -318,21 +321,27 @@ async def _download_patent_via_scene_or_fallback(
     scene_candidates: list | None,
     flash_provider,
     download_patent_document,
+    id_url_map: dict | None = None,
 ) -> str:
     """Download patent text via scene tool or fall back to hardcoded download.
 
-    Lazy-loads scene candidates if this is the first call.
+    Phase 0 search results include a document URL — if available, the
+    download tool fetches it directly.  Otherwise the Flash LLM selects
+    a scene download tool by patent_id.  Falls back to the hardcoded
+    download_patent_document() as last resort.
     """
-    scene_id = params.get('scene_id')
-    if scene_id and scene_candidates is None:
-        from sources.long_task.scene_tools import get_scene_knowledge_tools
-        scene_candidates = get_scene_knowledge_tools(scene_id)
+    doc_url = (id_url_map or {}).get(patent_id, '')
 
     if scene_candidates:
         from sources.long_task.scene_tools import select_tool, execute_tool
+
+        context = f'patent_id={patent_id}'
+        if doc_url:
+            context += f', document_url={doc_url}'
+
         selected = await select_tool(
             'download patent document',
-            f'patent_id={patent_id}',
+            context,
             scene_candidates,
             flash_provider,
         )

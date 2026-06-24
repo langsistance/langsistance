@@ -191,6 +191,42 @@ def extract_patent_ids(items: List[Dict[str, Any]]) -> List[str]:
     Tries these fields in order: patent_id, patentNumber,
     applicationNumberText, application_number, 申请号.
     """
+    return list(_extract_patent_id_url_map(items).keys())
+
+
+def extract_patent_id_url_map(
+    items: List[Dict[str, Any]],
+) -> Dict[str, str]:
+    """Extract patent_id → document_url mapping from search results.
+
+    Probes common URL field names found in CNIPA and USPTO responses.
+    """
+    id_url_map: Dict[str, str] = {}
+    for item in (items or []):
+        if not isinstance(item, dict):
+            continue
+        pid = (
+            item.get("patent_id")
+            or item.get("patentNumber")
+            or item.get("applicationNumberText")
+            or item.get("application_number")
+            or item.get("申请号")
+        )
+        if not pid:
+            continue
+        pid = str(pid)
+        if pid in id_url_map:
+            continue
+        url = (
+            item.get("document_url")
+            or item.get("fulltext_url")
+            or item.get("download_url")
+            or item.get("url")
+            or item.get("说明书URL")
+        )
+        id_url_map[pid] = url or ""
+    return id_url_map
+    """
     seen = set()
     ids = []
     for item in (items or []):
