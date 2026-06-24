@@ -1,5 +1,42 @@
+"""Abstract interface for report file storage."""
+
+import configparser
 import os
 from abc import ABC, abstractmethod
+
+
+def get_storage_config(config_path: str = "config.ini") -> dict:
+    """Read [STORAGE] section from config file, with env-var overrides.
+
+    Returns a dict suitable for ``create_storage()``.
+    """
+    cfg = configparser.ConfigParser()
+    cfg.read(config_path)
+
+    return {
+        "report_storage_backend": cfg.get("STORAGE", "backend",
+                                           fallback="local"),
+        "report_storage_local_dir": cfg.get("STORAGE", "local_base_dir",
+                                             fallback="/opt/workspace/reports"),
+        "report_storage_cos_bucket": os.getenv(
+            "COS_REPORT_BUCKET",
+            cfg.get("STORAGE", "cos_bucket", fallback=""),
+        ),
+        "report_storage_cos_region": os.getenv(
+            "COS_REGION",
+            cfg.get("STORAGE", "cos_region", fallback="ap-hongkong"),
+        ),
+        "report_storage_cos_secret_id": os.getenv(
+            "COS_SECRET_ID",
+            cfg.get("STORAGE", "cos_secret_id", fallback=""),
+        ),
+        "report_storage_cos_secret_key": os.getenv(
+            "COS_SECRET_KEY",
+            cfg.get("STORAGE", "cos_secret_key", fallback=""),
+        ),
+        "report_storage_cos_prefix": cfg.get("STORAGE", "cos_prefix",
+                                              fallback="reports"),
+    }
 
 
 class ReportStorage(ABC):
@@ -58,4 +95,13 @@ def create_storage(config: dict) -> ReportStorage:
     if backend == 'local':
         base_dir = config.get('report_storage_local_dir', '/opt/workspace/reports')
         return LocalReportStorage(base_dir=base_dir)
+    if backend == 'cos':
+        from sources.long_task.cos_storage import COSReportStorage
+        return COSReportStorage(
+            bucket=config['report_storage_cos_bucket'],
+            region=config.get('report_storage_cos_region', 'ap-hongkong'),
+            secret_id=config['report_storage_cos_secret_id'],
+            secret_key=config['report_storage_cos_secret_key'],
+            prefix=config.get('report_storage_cos_prefix', 'reports'),
+        )
     raise ValueError(f"Unknown storage backend: {backend}")

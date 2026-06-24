@@ -232,10 +232,8 @@ async def _run_pipeline(
     _update_mysql_progress(task_id, 'generating_report', 90)
 
     # ==== Phase 4: Export files ====
-    storage_cfg = {
-        'report_storage_backend': 'local',
-        'report_storage_local_dir': '/opt/workspace/reports',
-    }
+    from sources.long_task.storage import get_storage_config
+    storage_cfg = get_storage_config()
     storage = create_storage(storage_cfg)
 
     update_task_status(task_id, 'exporting', 92, '正在生成 PDF 文件...')
