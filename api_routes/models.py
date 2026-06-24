@@ -15,6 +15,7 @@ class KnowledgeCreateRequest(BaseModel):
     modelName: Optional[str] = None
     description: Optional[str] = None
     type: Optional[int] = 1
+    scene_id: Optional[int] = None
 
 class KnowledgeCreateResponse(BaseModel):
     success: bool

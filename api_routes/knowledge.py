@@ -91,11 +91,11 @@ async def create_knowledge_record(request: KnowledgeCreateRequest, http_request:
         errors.append("params must be no more than 5000 characters")
 
     knowledge_type = request.type or 1
-    if knowledge_type not in (1, 2):
-        errors.append("type must be 1 or 2")
+    if knowledge_type not in (1, 2, 3):
+        errors.append("type must be 1, 2, or 3")
 
     if knowledge_type == 1 and not request.toolId:
-        errors.append("toolId is required")
+        errors.append("toolId is required for type=1 knowledge")
 
     if errors:
         logger.error(f"Validation errors: {errors}")
@@ -132,8 +132,8 @@ async def create_knowledge_record(request: KnowledgeCreateRequest, http_request:
             # 插入数据
             sql = """
                   INSERT INTO knowledge
-                  (user_id, question, description, answer, public, model_name, tool_id, params, status, embedding_id, `type`)
-                  VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                  (user_id, question, description, answer, public, model_name, tool_id, params, status, embedding_id, `type`, scene_id)
+                  VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                   """
             cursor.execute(sql, (
                 user_id,
@@ -146,7 +146,8 @@ async def create_knowledge_record(request: KnowledgeCreateRequest, http_request:
                 request.params or "",
                 1,
                 0,
-                knowledge_type
+                knowledge_type,
+                request.scene_id,
             ))
             record_id = cursor.lastrowid
             promoted_dependency_ids = promote_public_workflow_dependencies(

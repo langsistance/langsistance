@@ -377,21 +377,27 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                     # Cast user_id to int for BIGINT columns (Redis may return bytes)
                     local_user_id = int(user_id)
 
+                    # Bind to scene from the matched type=3 knowledge item
+                    matched_knowledge = openai_agent.get('knowledge', {})
+                    scene_id = getattr(matched_knowledge, 'scene_id', None) if matched_knowledge else None
+
                     # Write to MySQL: session + long_task record
                     conn = get_db_connection()
                     try:
                         with conn.cursor() as cur:
                             cur.execute(
-                                """INSERT INTO conversations (session_id, user_id, title, messages, long_task_ids)
-                                   VALUES (%s, %s, %s, %s, %s)""",
-                                (session_id, local_user_id, f"专利分析 - {request.query[:50]}",
+                                """INSERT INTO conversations (session_id, user_id, scene_id, title, messages, long_task_ids)
+                                   VALUES (%s, %s, %s, %s, %s, %s)""",
+                                (session_id, local_user_id, scene_id,
+                                 f"专利分析 - {request.query[:50]}",
                                  json.dumps(conv_history, ensure_ascii=False),
                                  json.dumps([task_id])))
                             cur.execute(
                                 """INSERT INTO long_tasks
-                                   (task_id, session_id, user_id, task_type, input_params, status)
-                                   VALUES (%s, %s, %s, %s, %s, %s)""",
-                                (task_id, session_id, local_user_id, 'patent_analysis',
+                                   (task_id, session_id, user_id, scene_id, task_type, input_params, status)
+                                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                                (task_id, session_id, local_user_id, scene_id,
+                                 'patent_analysis',
                                  json.dumps({
                                      'query': request.query,
                                      'patent_ids': patent_ids,

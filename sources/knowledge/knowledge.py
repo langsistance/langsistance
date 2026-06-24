@@ -111,6 +111,7 @@ class KnowledgeItem(BaseModel):
     update_time: Optional[str] = None
     extra_info: Optional[Dict[str, Any]] = None
     type: int = 1
+    scene_id: Optional[int] = None
 
 
 class ToolItem(BaseModel):
@@ -314,7 +315,8 @@ def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
                 # 1. 查询用户自己的知识记录 (status=1表示有效)
                 cursor.execute("""
                     SELECT id, user_id, question, description, answer, public,
-                           model_name, tool_id, params, `type`, create_time, update_time
+                           model_name, tool_id, params, `type`, scene_id,
+                           create_time, update_time
                     FROM knowledge
                     WHERE status = %s AND user_id = %s
                     ORDER BY update_time DESC
@@ -334,7 +336,8 @@ def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
                     placeholders = ",".join(["%s"] * len(scene_ids))
                     cursor.execute(f"""
                         SELECT id, user_id, question, description, answer, public,
-                               model_name, tool_id, params, `type`, create_time, update_time
+                               model_name, tool_id, params, `type`, scene_id,
+                               create_time, update_time
                         FROM knowledge
                         WHERE status = 1
                           AND scene_id IN ({placeholders})
@@ -365,6 +368,7 @@ def get_user_knowledge(user_id: str) -> List[KnowledgeItem]:
                         tool_id=row['tool_id'] or 0,
                         params=row['params'] or "",
                         type=infer_knowledge_type(row.get('type'), row.get('params')),
+                        scene_id=row.get('scene_id'),
                         create_time=row['create_time'].isoformat()
                             if row.get('create_time') and hasattr(row['create_time'], 'isoformat')
                             else str(row['create_time']) if row.get('create_time') else None,
@@ -398,6 +402,7 @@ def _knowledge_item_from_search_result(search_result: Dict[str, Any]) -> Knowled
         tool_id=search_result['tool_id'] or 0,
         params=search_result['params'] or "",
         type=infer_knowledge_type(search_result.get('type'), search_result.get('params')),
+        scene_id=search_result.get('scene_id'),
     )
     knowledge_item.extra_info = {"similarity": search_result.get("similarity", 0)}
     return knowledge_item
