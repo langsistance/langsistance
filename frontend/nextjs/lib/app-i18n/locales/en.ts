@@ -140,7 +140,9 @@ export default {
     directQueryFailed: 'Direct query failed',
     toolDataObtained: '📊 Tool data obtained, analyzing...',
     localToolExecutionFailed: 'Local tool execution failed: {error}',
-    sceneHint: 'Available Capabilities'
+    sceneHint: 'Available Capabilities',
+    sceneSmartQA: 'Smart Q&A',
+    sceneDeepResearch: 'Deep Research'
   },
 
   // Knowledge management

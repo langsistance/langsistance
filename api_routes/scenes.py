@@ -74,10 +74,10 @@ async def get_scene_knowledge(scene_id: int):
         connection = get_db_connection()
         with connection.cursor() as cursor:
             cursor.execute("""
-                SELECT id, question, description
+                SELECT id, question, description, type
                 FROM knowledge
                 WHERE scene_id = %s AND status = 1
-                ORDER BY update_time DESC
+                ORDER BY type ASC, update_time DESC
             """, (scene_id,))
             rows = cursor.fetchall()
 
@@ -86,6 +86,7 @@ async def get_scene_knowledge(scene_id: int):
                     id=row["id"],
                     question=row["question"],
                     description=row["description"] or "",
+                    type=row.get("type", 1),
                 )
                 for row in rows
             ]

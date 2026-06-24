@@ -731,25 +731,25 @@ input[type="checkbox"] {
 /* Scene Hint (Chat) */
 .scene-hint {
   margin: 0 auto var(--spacing-md);
-  padding: 12px 16px;
+  padding: 16px 20px;
   max-width: var(--chat-max-width, 900px);
   width: 100%;
   background: var(--bg-white);
   border: 1px solid var(--divider);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg, 16px);
   text-align: left;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
 .scene-hint-persistent {
   margin-top: 0;
-  box-shadow: none;
 }
 
 .scene-hint-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
   user-select: none;
 }
 
@@ -774,19 +774,20 @@ input[type="checkbox"] {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .scene-hint-scene-tag {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 12px;
-  background: #e8f5e9;
-  color: #2e7d32;
+  padding: 4px 12px;
+  border-radius: 20px;
+  background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+  color: #065f46;
   font-weight: 500;
+  border: 1px solid rgba(16, 185, 129, 0.18);
 }
 
 .scene-hint-list {
@@ -817,4 +818,63 @@ input[type="checkbox"] {
   flex-shrink: 0;
   font-size: 13px;
   margin-top: 1px;
+}
+
+/* Scene Hint Groups */
+.scene-hint-group {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm, 8px);
+  background: var(--bg-subtle, #f8f9fb);
+  border: 1px solid transparent;
+}
+
+.scene-hint-group-smart {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.04) 0%, rgba(139, 92, 246, 0.03) 100%);
+  border-color: rgba(59, 130, 246, 0.12);
+}
+
+.scene-hint-group-deep {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.05) 0%, rgba(239, 68, 68, 0.03) 100%);
+  border-color: rgba(245, 158, 11, 0.15);
+}
+
+.scene-hint-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed var(--divider, #e5e7eb);
+}
+
+.scene-hint-group-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.scene-hint-group-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.scene-hint-group-smart .scene-hint-group-label {
+  color: #3b82f6;
+}
+
+.scene-hint-group-deep .scene-hint-group-label {
+  color: #f59e0b;
+}
+
+.scene-hint-group .scene-hint-list {
+  gap: 1px;
+}
+
+.scene-hint-group .scene-hint-item {
+  font-size: 13px;
+  padding: 3px 0;
+  border-bottom: none;
 }

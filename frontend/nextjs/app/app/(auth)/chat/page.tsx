@@ -65,28 +65,36 @@ export default function Chat() {
   const isNearBottomRef = useRef(true)
   const [transientStatus, setTransientStatus] = useState('')
   const [enabledScenes, setEnabledScenes] = useState<any[]>([])
-  const [sceneExamples, setSceneExamples] = useState<{icon: string, name: string, desc: string}[]>([])
+  const [sceneSmartQA, setSceneSmartQA] = useState<{icon: string, name: string, desc: string}[]>([])
+  const [sceneDeepResearch, setSceneDeepResearch] = useState<{icon: string, name: string, desc: string}[]>([])
 
   useEffect(() => {
     getUserSceneStatus()
       .then(async (res) => {
         const subscribed = (res.scenes || []).filter((s: any) => s.subscribed)
         setEnabledScenes(subscribed)
-        const examples: {icon: string, name: string, desc: string}[] = []
+        const smartQA: {icon: string, name: string, desc: string}[] = []
+        const deepResearch: {icon: string, name: string, desc: string}[] = []
         for (const scene of subscribed) {
           try {
             const kr = await getSceneKnowledge(scene.id)
             const items = kr.knowledge || []
             items.forEach((item: any) => {
-              examples.push({
-                icon: '📄',
+              const example = {
+                icon: item.type === 3 ? '🔬' : '💡',
                 name: scene.name,
                 desc: item.description || item.question,
-              })
+              }
+              if (item.type === 3) {
+                deepResearch.push(example)
+              } else {
+                smartQA.push(example)
+              }
             })
           } catch {}
         }
-        setSceneExamples(examples)
+        setSceneSmartQA(smartQA)
+        setSceneDeepResearch(deepResearch)
       })
       .catch(() => {})
   }, [])
@@ -268,15 +276,39 @@ export default function Chat() {
                   </span>
                 ))}
               </div>
-              {sceneExamples.length > 0 && (
-                <ul className="scene-hint-list">
-                  {sceneExamples.map((ex, i) => (
-                    <li key={i} className="scene-hint-item">
-                      <span className="scene-hint-item-icon">{ex.icon}</span>
-                      <span>{ex.desc}</span>
-                    </li>
-                  ))}
-                </ul>
+
+              {sceneSmartQA.length > 0 && (
+                <div className="scene-hint-group scene-hint-group-smart">
+                  <div className="scene-hint-group-header">
+                    <span className="scene-hint-group-icon">💡</span>
+                    <span className="scene-hint-group-label">{t('chat.sceneSmartQA')}</span>
+                  </div>
+                  <ul className="scene-hint-list">
+                    {sceneSmartQA.map((ex, i) => (
+                      <li key={i} className="scene-hint-item">
+                        <span className="scene-hint-item-icon">{ex.icon}</span>
+                        <span>{ex.desc}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {sceneDeepResearch.length > 0 && (
+                <div className="scene-hint-group scene-hint-group-deep">
+                  <div className="scene-hint-group-header">
+                    <span className="scene-hint-group-icon">🔬</span>
+                    <span className="scene-hint-group-label">{t('chat.sceneDeepResearch')}</span>
+                  </div>
+                  <ul className="scene-hint-list">
+                    {sceneDeepResearch.map((ex, i) => (
+                      <li key={i} className="scene-hint-item">
+                        <span className="scene-hint-item-icon">{ex.icon}</span>
+                        <span>{ex.desc}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               )}
             </div>
           )}

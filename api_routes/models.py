@@ -240,6 +240,7 @@ class SceneKnowledgeItem(BaseModel):
     id: int
     question: str
     description: str
+    type: int = 1
 
 
 class UserSceneStatusItem(BaseModel):

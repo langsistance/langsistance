@@ -140,7 +140,9 @@ export default {
     directQueryFailed: '直接查询失败',
     toolDataObtained: '📊 已获取工具数据，正在分析...',
     localToolExecutionFailed: '本地工具执行失败: {error}',
-    sceneHint: '已启用的能力'
+    sceneHint: '已启用的能力',
+    sceneSmartQA: '智慧问答',
+    sceneDeepResearch: '深度研究'
   },
 
   // 知识管理
