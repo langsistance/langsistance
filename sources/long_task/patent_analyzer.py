@@ -35,10 +35,11 @@ async def download_patent_document(patent_id: str, source: str = 'cnipa') -> str
     from sources.patent_token import ensure_valid_access_token
     import httpx
 
-    token_data = ensure_valid_access_token()
-    access_token = token_data.access_token
+    access_token = ensure_valid_access_token()
 
     if source == 'cnipa':
+        if not access_token:
+            raise RuntimeError("No patent access token available — check DI platform OAuth config")
         url = f"https://open.zldsj.com/api/patent/{patent_id}/fulltext"
         params = {'access_token': access_token}
         async with httpx.AsyncClient(timeout=30) as client:
@@ -50,9 +51,11 @@ async def download_patent_document(patent_id: str, source: str = 'cnipa') -> str
                 return data['data']['description']
             return str(data)
     else:
-        # USPTO path — use existing download proxy
-        from sources.uspto_download import download_uspto_patent
-        return await download_uspto_patent(patent_id)
+        # USPTO path — not implemented yet; scene tools should handle this
+        raise NotImplementedError(
+            "USPTO patent download is not yet implemented in the fallback path. "
+            "Configure a USPTO download knowledge+tool in the scene instead."
+        )
 
 
 async def analyze_single_patent(

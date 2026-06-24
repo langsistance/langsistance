@@ -415,6 +415,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         'patent_ids': patent_ids,
                         'patent_source': 'cnipa',
                         'session_id': session_id,
+                        'scene_id': scene_id,
                     })
 
                     # Push SSE events

@@ -146,8 +146,49 @@ async def _run_pipeline(
         table_rows = []
         pending = patent_ids
 
+    scene_id = params.get('scene_id')
+    scene_candidates = None  # lazy-loaded for tool-based download
+
+    # ==== Phase 0: Search patents via scene tools (if no patent_ids provided) ====
+    if not patent_ids and scene_id:
+        from sources.long_task.scene_tools import (
+            get_scene_knowledge_tools,
+            select_tool,
+            execute_tool,
+            extract_patent_ids,
+        )
+        update_task_status(task_id, 'searching_patents', 0,
+                           '正在读取场景检索工具...')
+        scene_candidates = get_scene_knowledge_tools(scene_id)
+        if scene_candidates:
+            update_task_status(task_id, 'searching_patents', 1,
+                               f'已发现 {len(scene_candidates)} 个场景工具，正在选择检索方案...')
+            selected = await select_tool(
+                'search patents', params['query'],
+                scene_candidates, flash_provider,
+            )
+            if selected:
+                update_task_status(task_id, 'searching_patents', 2,
+                                   f'正在检索专利：{selected.get("reason", "")}')
+                result = await execute_tool(selected['tool'], selected['params'])
+                raw_items = result.get('raw_items', []) or []
+                patent_ids = extract_patent_ids(raw_items)
+                params['patent_source'] = _infer_source_from_tool(
+                    selected['tool'], params.get('patent_source', 'cnipa'),
+                )
+        if patent_ids:
+            total = len(patent_ids)
+            pending = patent_ids
+            update_task_status(task_id, 'searching_patents', 5,
+                               f'检索到 {len(patent_ids)} 个专利，开始分析',
+                               patent_ids=patent_ids)
+        else:
+            set_task_failed(task_id, '未找到匹配的专利')
+            return {'status': 'failed', 'task_id': task_id,
+                    'error': 'No patents found matching the search criteria'}
+
     # ==== Phase 1: Generate columns (Flash) ====
-    update_task_status(task_id, 'generating_columns', 0,
+    update_task_status(task_id, 'generating_columns', 5,
                        f'正在生成分析框架（{total} 个专利）...')
     columns = await generate_table_columns(
         query=params['query'],
@@ -162,14 +203,20 @@ async def _run_pipeline(
 
     # ==== Phase 2: Per-patent download -> analyze -> summarize ====
     for i, patent_id in enumerate(pending):
-        patent_source = params.get('patent_source', 'cnipa')
         try:
             update_task_status(task_id, 'analyzing',
                                progress_pct(i, total),
                                f'正在下载专利文件（{len(table_rows)+1}/{total}）...',
                                table_rows=table_rows)
 
-            patent_text = await download_patent_document(patent_id, patent_source)
+            # Try scene tool download first, fall back to hardcoded download
+            patent_text = await _download_patent_via_scene_or_fallback(
+                patent_id=patent_id,
+                params=params,
+                scene_candidates=scene_candidates,
+                flash_provider=flash_provider,
+                download_patent_document=download_patent_document,
+            )
 
             update_task_status(task_id, 'analyzing',
                                progress_pct(i, total),
@@ -251,6 +298,54 @@ async def _run_pipeline(
     _update_mysql_progress(task_id, 'exporting', 100)
     set_task_completed(task_id, report_files)
     return {'status': 'completed', 'task_id': task_id}
+
+
+# ── Phase 0 helpers ─────────────────────────────────────────────────────────
+
+def _infer_source_from_tool(tool_info, default: str = 'cnipa') -> str:
+    """Infer patent source (cnipa/uspto) from a tool's URL."""
+    url = getattr(tool_info, 'url', '') or ''
+    if 'uspto' in url.lower():
+        return 'uspto'
+    if 'zldsj' in url.lower():
+        return 'cnipa'
+    return default
+
+
+async def _download_patent_via_scene_or_fallback(
+    patent_id: str,
+    params: dict,
+    scene_candidates: list | None,
+    flash_provider,
+    download_patent_document,
+) -> str:
+    """Download patent text via scene tool or fall back to hardcoded download.
+
+    Lazy-loads scene candidates if this is the first call.
+    """
+    scene_id = params.get('scene_id')
+    if scene_id and scene_candidates is None:
+        from sources.long_task.scene_tools import get_scene_knowledge_tools
+        scene_candidates = get_scene_knowledge_tools(scene_id)
+
+    if scene_candidates:
+        from sources.long_task.scene_tools import select_tool, execute_tool
+        selected = await select_tool(
+            'download patent document',
+            f'patent_id={patent_id}',
+            scene_candidates,
+            flash_provider,
+        )
+        if selected:
+            result = await execute_tool(selected['tool'], selected['params'])
+            from sources.long_task.scene_tools import extract_document_text
+            text = extract_document_text(result)
+            if text:
+                return text
+
+    # Fallback: existing hardcoded download
+    patent_source = params.get('patent_source', 'cnipa')
+    return await download_patent_document(patent_id, patent_source)
 
 
 def progress_pct(completed: int, total: int) -> int:
