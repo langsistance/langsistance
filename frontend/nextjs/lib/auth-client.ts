@@ -18,16 +18,10 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'https://api.copiioai.com'
 const PASSWORD_PEPPER =
   process.env.NEXT_PUBLIC_PASSWORD_PEPPER || 'copiioai-default-pepper-key-2024'
 
-/** 安全获取 SubtleCrypto — 处理 http 环境或旧浏览器缺少 crypto.subtle 的情况 */
-function getSubtle(): SubtleCrypto {
-  if (typeof globalThis !== 'undefined' && globalThis.crypto?.subtle) {
-    return globalThis.crypto.subtle
-  }
-  throw new Error(
-    'Web Crypto API (crypto.subtle) is not available. ' +
-    'This usually happens when the page is loaded over HTTP instead of HTTPS. ' +
-    'Please access the app via https:// or localhost.',
-  )
+// ── helpers ─────────────────────────────────────────────────────────────────
+
+function hasSubtle(): boolean {
+  return typeof globalThis !== 'undefined' && !!globalThis.crypto?.subtle
 }
 
 function getRandomBytes(len: number): Uint8Array {
@@ -41,49 +35,101 @@ function getRandomBytes(len: number): Uint8Array {
   return arr
 }
 
-/**
- * 用 AES-GCM + PBKDF2 加密密码，返回 salt+iv+ciphertext 的 base64 串。
- * 盐值和 IV 均为随机生成，同一密码每次加密结果不同。
- */
-async function encryptPassword(password: string): Promise<string> {
-  const subtle = getSubtle()
-  const enc = new TextEncoder()
-  // Force plain Uint8Array for Web Crypto API compatibility
-  const salt = new Uint8Array(getRandomBytes(16).buffer.slice(0))
-  const iv = new Uint8Array(getRandomBytes(12).buffer.slice(0))
-
-  const keyMaterial = await subtle.importKey(
-    'raw',
-    enc.encode(PASSWORD_PEPPER),
-    'PBKDF2',
-    false,
-    ['deriveKey'],
-  )
-  const key = await subtle.deriveKey(
-    { name: 'PBKDF2', salt: salt as BufferSource, iterations: 100_000, hash: 'SHA-256' },
-    keyMaterial,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt'],
-  )
-
-  const ciphertext = await subtle.encrypt(
-    { name: 'AES-GCM', iv: iv as BufferSource },
-    key,
-    enc.encode(password),
-  )
-
-  // concat salt(16) + iv(12) + ciphertext → base64
-  const buf = new Uint8Array(16 + 12 + ciphertext.byteLength)
-  buf.set(salt, 0)
-  buf.set(iv, 16)
-  buf.set(new Uint8Array(ciphertext), 28)
-
+function bytesToBase64(buf: Uint8Array): string {
   let binary = ''
   for (let i = 0; i < buf.byteLength; i++) {
     binary += String.fromCharCode(buf[i])
   }
   return btoa(binary)
+}
+
+/** djb2 string hash — 32-bit, deterministic, no crypto API needed */
+function hashString(s: string): number {
+  let hash = 5381
+  for (let i = 0; i < s.length; i++) {
+    hash = ((hash << 5) + hash + s.charCodeAt(i)) & 0xffffffff
+  }
+  return hash >>> 0
+}
+
+// ── AES-GCM path (needs crypto.subtle / secure context) ─────────────────────
+
+/**
+ * 用 AES-GCM + PBKDF2 加密密码，返回 "a:" + base64(salt+iv+ciphertext)。
+ */
+async function encryptPasswordAes(password: string): Promise<string> {
+  const subtle = globalThis.crypto.subtle!
+  const enc = new TextEncoder()
+  const salt = new Uint8Array(getRandomBytes(16).buffer.slice(0))
+  const iv = new Uint8Array(getRandomBytes(12).buffer.slice(0))
+
+  const keyMaterial = await subtle.importKey(
+    'raw', enc.encode(PASSWORD_PEPPER),
+    'PBKDF2', false, ['deriveKey'],
+  )
+  const key = await subtle.deriveKey(
+    { name: 'PBKDF2', salt: salt as BufferSource, iterations: 100_000, hash: 'SHA-256' },
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false, ['encrypt'],
+  )
+  const ciphertext = await subtle.encrypt(
+    { name: 'AES-GCM', iv: iv as BufferSource },
+    key, enc.encode(password),
+  )
+
+  const buf = new Uint8Array(16 + 12 + ciphertext.byteLength)
+  buf.set(salt, 0)
+  buf.set(iv, 16)
+  buf.set(new Uint8Array(ciphertext), 28)
+  return 'a:' + bytesToBase64(buf)
+}
+
+// ── XOR fallback (no crypto API required) ───────────────────────────────────
+
+/**
+ * 纯 JS XOR 混淆 —— 不依赖任何浏览器 API。
+ * 用 pepper + salt 产生 keystream 后与密码异或。
+ * 返回 "x:" + base64(salt + xor_result)。
+ *
+ * 安全性远不如 AES-GCM，但足以防止密码明文出现在 Network 面板中。
+ */
+function encryptPasswordXor(password: string): string {
+  const enc = new TextEncoder()
+  const salt = getRandomBytes(16)
+  const plainBytes = enc.encode(password)
+
+  // seed from pepper + base64(salt)
+  let seed = hashString(PASSWORD_PEPPER + ':' + bytesToBase64(salt))
+
+  // PRNG — LCG with shuffled upper bits per output byte
+  function nextByte(): number {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff
+    // mix: rotate right 7 then xor with next 8 bits
+    return ((seed >>> 7) ^ (seed & 0xff)) & 0xff
+  }
+
+  const cipher = new Uint8Array(plainBytes.length)
+  for (let i = 0; i < plainBytes.length; i++) {
+    cipher[i] = plainBytes[i] ^ nextByte()
+  }
+
+  const buf = new Uint8Array(16 + cipher.length)
+  buf.set(salt, 0)
+  buf.set(cipher, 16)
+  return 'x:' + bytesToBase64(buf)
+}
+
+// ── public API ─────────────────────────────────────────────────────────────
+
+/**
+ * 加密密码。
+ * - HTTPS / localhost → AES-GCM 加密（"a:" 前缀）
+ * - HTTP 等其他环境 → XOR 混淆（"x:" 前缀）
+ */
+async function encryptPassword(password: string): Promise<string> {
+  if (hasSubtle()) return encryptPasswordAes(password)
+  return encryptPasswordXor(password)
 }
 
 export interface AuthUser {
