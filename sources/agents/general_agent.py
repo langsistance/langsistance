@@ -1309,10 +1309,21 @@ Begin your response now:
             conversation_history=conv_history,
         )
         knowledge_item, tool_info = self.knowledgeTool
+        self.logger.info(
+            f"Knowledge selected: id={getattr(knowledge_item, 'id', None)}, "
+            f"type={getattr(knowledge_item, 'type', None) if knowledge_item else None}"
+        )
         # Long task detection: type=3 knowledge triggers async Celery pipeline
         if _is_long_task_knowledge(knowledge_item):
+            self.logger.info("Long task detected — returning long_task intent")
             if callback_handler:
-                await _emit_status(callback_handler, "正在启动批量专利分析任务...")
+                try:
+                    await asyncio.wait_for(
+                        _emit_status(callback_handler, "正在启动批量专利分析任务..."),
+                        timeout=5.0,
+                    )
+                except Exception:
+                    pass
             # Return special marker — caller (run_pipeline) handles submission
             self._long_task_intent = _build_long_task_intent(knowledge_item, tool_info)
             return self._long_task_intent
