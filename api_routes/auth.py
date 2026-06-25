@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException
 from firebase_admin import auth as fb_admin_auth
 from pydantic import BaseModel, EmailStr
 
+from sources.crypto_utils import decrypt_password
 from sources.http_outbound import outbound_http
 from sources.logger import Logger
 from sources.user.local_user import ensure_local_user_record
@@ -38,7 +39,7 @@ def _api_key() -> str:
 
 class EmailPasswordRequest(BaseModel):
     email: EmailStr
-    password: str
+    encryptedPassword: str
 
 
 class RefreshRequest(BaseModel):
@@ -78,9 +79,10 @@ async def _firebase_post(url: str, payload: dict) -> dict:
 @router.post("/auth/signup")
 async def auth_signup(body: EmailPasswordRequest):
     logger.info(f"/auth/signup attempt: {body.email}")
+    password = decrypt_password(body.encryptedPassword)
     data = await _firebase_post(
         f"{IDENTITY_TOOLKIT}:signUp",
-        {"email": body.email, "password": body.password, "returnSecureToken": True},
+        {"email": body.email, "password": password, "returnSecureToken": True},
     )
     uid = data["localId"]
 
@@ -95,7 +97,7 @@ async def auth_signup(body: EmailPasswordRequest):
     # 标记 verified 后，重新签一个 idToken 让新 claims 生效
     fresh = await _firebase_post(
         f"{IDENTITY_TOOLKIT}:signInWithPassword",
-        {"email": body.email, "password": body.password, "returnSecureToken": True},
+        {"email": body.email, "password": password, "returnSecureToken": True},
     )
     ensure_local_user_record(
         uid,
@@ -116,9 +118,10 @@ async def auth_signup(body: EmailPasswordRequest):
 @router.post("/auth/login")
 async def auth_login(body: EmailPasswordRequest):
     logger.info(f"/auth/login attempt: {body.email}")
+    password = decrypt_password(body.encryptedPassword)
     data = await _firebase_post(
         f"{IDENTITY_TOOLKIT}:signInWithPassword",
-        {"email": body.email, "password": body.password, "returnSecureToken": True},
+        {"email": body.email, "password": password, "returnSecureToken": True},
     )
     logger.info(f"/auth/login ok: {body.email} -> {data.get('localId')}")
     return {
