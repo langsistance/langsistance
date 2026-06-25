@@ -18,32 +18,57 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'https://api.copiioai.com'
 const PASSWORD_PEPPER =
   process.env.NEXT_PUBLIC_PASSWORD_PEPPER || 'copiioai-default-pepper-key-2024'
 
+/** 安全获取 SubtleCrypto — 处理 http 环境或旧浏览器缺少 crypto.subtle 的情况 */
+function getSubtle(): SubtleCrypto {
+  if (typeof globalThis !== 'undefined' && globalThis.crypto?.subtle) {
+    return globalThis.crypto.subtle
+  }
+  throw new Error(
+    'Web Crypto API (crypto.subtle) is not available. ' +
+    'This usually happens when the page is loaded over HTTP instead of HTTPS. ' +
+    'Please access the app via https:// or localhost.',
+  )
+}
+
+function getRandomBytes(len: number): Uint8Array {
+  if (typeof globalThis !== 'undefined' && globalThis.crypto?.getRandomValues) {
+    return globalThis.crypto.getRandomValues(new Uint8Array(len)) as Uint8Array
+  }
+  const arr = new Uint8Array(len)
+  for (let i = 0; i < len; i++) {
+    arr[i] = Math.floor(Math.random() * 256)
+  }
+  return arr
+}
+
 /**
  * 用 AES-GCM + PBKDF2 加密密码，返回 salt+iv+ciphertext 的 base64 串。
  * 盐值和 IV 均为随机生成，同一密码每次加密结果不同。
  */
 async function encryptPassword(password: string): Promise<string> {
+  const subtle = getSubtle()
   const enc = new TextEncoder()
-  const salt = crypto.getRandomValues(new Uint8Array(16))
-  const iv = crypto.getRandomValues(new Uint8Array(12))
+  // Force plain Uint8Array for Web Crypto API compatibility
+  const salt = new Uint8Array(getRandomBytes(16).buffer.slice(0))
+  const iv = new Uint8Array(getRandomBytes(12).buffer.slice(0))
 
-  const keyMaterial = await crypto.subtle.importKey(
+  const keyMaterial = await subtle.importKey(
     'raw',
     enc.encode(PASSWORD_PEPPER),
     'PBKDF2',
     false,
     ['deriveKey'],
   )
-  const key = await crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt, iterations: 100_000, hash: 'SHA-256' },
+  const key = await subtle.deriveKey(
+    { name: 'PBKDF2', salt: salt as BufferSource, iterations: 100_000, hash: 'SHA-256' },
     keyMaterial,
     { name: 'AES-GCM', length: 256 },
     false,
     ['encrypt'],
   )
 
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
+  const ciphertext = await subtle.encrypt(
+    { name: 'AES-GCM', iv: iv as BufferSource },
     key,
     enc.encode(password),
   )
