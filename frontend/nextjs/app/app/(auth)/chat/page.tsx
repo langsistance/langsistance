@@ -271,10 +271,7 @@ export default function Chat() {
               {sceneExamples.length > 0 && (
                 <ul className="scene-hint-list">
                   {sceneExamples.map((ex, i) => (
-                    <li key={i} className="scene-hint-item">
-                      <span className="scene-hint-item-icon">{ex.icon}</span>
-                      <span>{ex.desc}</span>
-                    </li>
+                    <li key={i} className="scene-hint-item">{ex.desc}</li>
                   ))}
                 </ul>
               )}
