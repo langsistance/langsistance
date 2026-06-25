@@ -65,23 +65,22 @@ export default function Chat() {
   const isNearBottomRef = useRef(true)
   const [transientStatus, setTransientStatus] = useState('')
   const [enabledScenes, setEnabledScenes] = useState<any[]>([])
-  const [sceneSmartQA, setSceneSmartQA] = useState<{icon: string, name: string, desc: string}[]>([])
-  const [sceneDeepResearch, setSceneDeepResearch] = useState<{icon: string, name: string, desc: string}[]>([])
+  const [sceneSmartQA, setSceneSmartQA] = useState<{name: string, desc: string}[]>([])
+  const [sceneDeepResearch, setSceneDeepResearch] = useState<{name: string, desc: string}[]>([])
 
   useEffect(() => {
     getUserSceneStatus()
       .then(async (res) => {
         const subscribed = (res.scenes || []).filter((s: any) => s.subscribed)
         setEnabledScenes(subscribed)
-        const smartQA: {icon: string, name: string, desc: string}[] = []
-        const deepResearch: {icon: string, name: string, desc: string}[] = []
+        const smartQA: {name: string, desc: string}[] = []
+        const deepResearch: {name: string, desc: string}[] = []
         for (const scene of subscribed) {
           try {
             const kr = await getSceneKnowledge(scene.id)
             const items = kr.knowledge || []
             items.forEach((item: any) => {
               const example = {
-                icon: item.type === 3 ? '🔬' : '💡',
                 name: scene.name,
                 desc: item.description || item.question,
               }
@@ -286,8 +285,7 @@ export default function Chat() {
                   <ul className="scene-hint-list">
                     {sceneSmartQA.map((ex, i) => (
                       <li key={i} className="scene-hint-item">
-                        <span className="scene-hint-item-icon">{ex.icon}</span>
-                        <span>{ex.desc}</span>
+                        {ex.desc}
                       </li>
                     ))}
                   </ul>
@@ -303,8 +301,7 @@ export default function Chat() {
                   <ul className="scene-hint-list">
                     {sceneDeepResearch.map((ex, i) => (
                       <li key={i} className="scene-hint-item">
-                        <span className="scene-hint-item-icon">{ex.icon}</span>
-                        <span>{ex.desc}</span>
+                        {ex.desc}
                       </li>
                     ))}
                   </ul>
