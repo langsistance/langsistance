@@ -15,11 +15,11 @@ services:
       - SEARXNG_BASE_URL=${SEARXNG_BASE_URL:-http://searxng:8080}
       - REDIS_HOST=${REDIS_HOST}
       - REDIS_PORT=${REDIS_PORT}
-      - MYSQL_HOST=${MYSQL_HOST}          # AWS RDS host
-      - MYSQL_PORT=${MYSQL_PORT:-3306}    # AWS RDS port
-      - MYSQL_USER=${MYSQL_USER}          # AWS RDS user
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD}  # AWS RDS password
-      - MYSQL_DATABASE=${MYSQL_DATABASE}  # AWS RDS database
+      - MYSQL_HOST=${MYSQL_HOST}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
       - WORK_DIR=/opt/workspace
       - BACKEND_PORT=${BACKEND_PORT}
       - DOCKER_INTERNAL_URL=http://host.docker.internal
@@ -37,7 +37,30 @@ services:
       - copiioai-net
     extra_hosts:
       - "host.docker.internal:host-gateway"
-  
+
+  celery:
+    container_name: celery
+    profiles: ["celery", "full"]
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    volumes:
+      - ./:/app
+    command: celery -A celery_worker worker --loglevel=info --concurrency=1
+    environment:
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - MYSQL_HOST=${MYSQL_HOST}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    networks:
+      - copiioai-net
+
 networks:
   copiioai-net:
     external: true
