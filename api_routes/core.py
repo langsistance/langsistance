@@ -359,78 +359,84 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
 
                 # Long task handling: create_agent returned a long_task intent marker
                 if isinstance(openai_agent, dict) and openai_agent.get('intent') == 'long_task':
-                    import json
-                    from sources.knowledge.knowledge import get_db_connection
-
-                    task_id = f"lt_{uuid.uuid4().hex[:12]}"
-                    session_id = f"sess_{uuid.uuid4().hex[:12]}"
-
-                    # Extract patent_ids from conversation history
-                    patent_ids = []
-                    conv_history = getattr(request, 'conversation_history', None) or []
-                    for msg in conv_history:
-                        if msg.get('role') == 'assistant' and msg.get('patent_data'):
-                            for p in msg['patent_data']:
-                                if isinstance(p, dict) and 'patent_id' in p:
-                                    patent_ids.append(p['patent_id'])
-
-                    # Cast user_id to int for BIGINT columns (Redis may return bytes)
-                    local_user_id = int(user_id)
-
-                    # Bind to scene from the matched type=3 knowledge item
-                    matched_knowledge = openai_agent.get('knowledge', {})
-                    scene_id = getattr(matched_knowledge, 'scene_id', None) if matched_knowledge else None
-
-                    # Write to MySQL: session + long_task record
-                    conn = get_db_connection()
                     try:
-                        with conn.cursor() as cur:
-                            cur.execute(
-                                """INSERT INTO conversations (session_id, user_id, scene_id, title, messages, long_task_ids)
-                                   VALUES (%s, %s, %s, %s, %s, %s)""",
-                                (session_id, local_user_id, scene_id,
-                                 f"专利分析 - {request.query[:50]}",
-                                 json.dumps(conv_history, ensure_ascii=False),
-                                 json.dumps([task_id])))
-                            cur.execute(
-                                """INSERT INTO long_tasks
-                                   (task_id, session_id, user_id, scene_id, task_type, input_params, status)
-                                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-                                (task_id, session_id, local_user_id, scene_id,
-                                 'patent_analysis',
-                                 json.dumps({
-                                     'query': request.query,
-                                     'patent_ids': patent_ids,
-                                     'patent_source': 'cnipa',
-                                 }, ensure_ascii=False),
-                                 'pending'))
-                            conn.commit()
-                    finally:
-                        conn.close()
+                        import json
+                        from sources.knowledge.knowledge import get_db_connection
 
-                    # Submit to Celery
-                    from celery_worker import execute_patent_analysis
-                    execute_patent_analysis.delay(task_id=task_id, params={
-                        'query': request.query,
-                        'patent_ids': patent_ids,
-                        'patent_source': 'cnipa',
-                        'session_id': session_id,
-                        'scene_id': scene_id,
-                    })
+                        task_id = f"lt_{uuid.uuid4().hex[:12]}"
+                        session_id = f"sess_{uuid.uuid4().hex[:12]}"
 
-                    # Push SSE events
-                    await queue.put({
-                        'type': 'status',
-                        'message': '批量专利分析任务已提交',
-                        'transient': False,
-                    })
-                    await queue.put({
-                        'type': 'long_task_created',
-                        'task_id': task_id,
-                        'session_id': session_id,
-                    })
-                    await queue.put({'type': 'end'})
-                    return
+                        # Extract patent_ids from conversation history
+                        patent_ids = []
+                        conv_history = getattr(request, 'conversation_history', None) or []
+                        for msg in conv_history:
+                            if msg.get('role') == 'assistant' and msg.get('patent_data'):
+                                for p in msg['patent_data']:
+                                    if isinstance(p, dict) and 'patent_id' in p:
+                                        patent_ids.append(p['patent_id'])
+
+                        # Cast user_id to int for BIGINT columns (Redis may return bytes)
+                        local_user_id = int(user_id)
+
+                        # Bind to scene from the matched type=3 knowledge item
+                        matched_knowledge = openai_agent.get('knowledge', {})
+                        scene_id = getattr(matched_knowledge, 'scene_id', None) if matched_knowledge else None
+
+                        # Write to MySQL: session + long_task record
+                        conn = get_db_connection()
+                        try:
+                            with conn.cursor() as cur:
+                                cur.execute(
+                                    """INSERT INTO conversations (session_id, user_id, scene_id, title, messages, long_task_ids)
+                                       VALUES (%s, %s, %s, %s, %s, %s)""",
+                                    (session_id, local_user_id, scene_id,
+                                     f"专利分析 - {request.query[:50]}",
+                                     json.dumps(conv_history, ensure_ascii=False),
+                                     json.dumps([task_id])))
+                                cur.execute(
+                                    """INSERT INTO long_tasks
+                                       (task_id, session_id, user_id, scene_id, task_type, input_params, status)
+                                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                                    (task_id, session_id, local_user_id, scene_id,
+                                     'patent_analysis',
+                                     json.dumps({
+                                         'query': request.query,
+                                         'patent_ids': patent_ids,
+                                         'patent_source': 'cnipa',
+                                     }, ensure_ascii=False),
+                                     'pending'))
+                                conn.commit()
+                        finally:
+                            conn.close()
+
+                        # Submit to Celery
+                        from celery_worker import execute_patent_analysis
+                        execute_patent_analysis.delay(task_id=task_id, params={
+                            'query': request.query,
+                            'patent_ids': patent_ids,
+                            'patent_source': 'cnipa',
+                            'session_id': session_id,
+                            'scene_id': scene_id,
+                        })
+
+                        # Push SSE events
+                        await queue.put({
+                            'type': 'status',
+                            'message': '批量专利分析任务已提交',
+                            'transient': False,
+                        })
+                        await queue.put({
+                            'type': 'long_task_created',
+                            'task_id': task_id,
+                            'session_id': session_id,
+                        })
+                        await queue.put({'type': 'end'})
+                        return
+                    except Exception as e:
+                        app_logger.error(f"Long task setup failed: {str(e)}")
+                        await queue.put({'type': 'error', 'message': f'批量分析任务启动失败: {str(e)}'})
+                        await queue.put({'type': 'end'})
+                        return
 
                 try:
                     await general_agent.invoke_agent(openai_agent, handler)
