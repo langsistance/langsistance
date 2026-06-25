@@ -155,6 +155,14 @@ async def choose_knowledge_candidate(
 
     selected_id = response.get("knowledge_id")
     if selected_id is None or selected_id == "" or str(selected_id).lower() == "null":
+        # Fallback: if the LLM can't decide but this is a follow-up query
+        # (conversation history exists), and there's a type-3 long-task
+        # candidate, prefer it — the user is likely refining prior results.
+        if conversation_history:
+            type3 = [c for c in candidate_list
+                     if getattr(c[0], 'type', 1) == 3]
+            if type3:
+                return type3[0]
         return None
 
     confidence = _parse_confidence(response.get("confidence"))
