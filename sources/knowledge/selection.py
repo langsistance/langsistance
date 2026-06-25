@@ -1,6 +1,9 @@
 import json
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
+from sources.logger import Logger
+
+logger = Logger("knowledge_selection.log")
 
 KnowledgeToolCandidate = Tuple[Any, Optional[Any]]
 CompleteJson = Callable[[str, str], Awaitable[Any]]
@@ -29,7 +32,10 @@ def _clip_text(value: Any, limit: int) -> str:
 
 
 def _knowledge_type_label(knowledge: Any) -> str:
-    if getattr(knowledge, "type", 1) == 2:
+    k_type = getattr(knowledge, "type", 1)
+    if k_type == 3:
+        return "long_task"
+    if k_type == 2:
         return "composed_workflow"
     return "normal"
 
@@ -60,13 +66,21 @@ def build_routing_candidate_payload(candidates: Iterable[KnowledgeToolCandidate]
         if similarity is not None:
             item["vector_similarity"] = round(similarity, 6)
 
-        if getattr(knowledge, "type", 1) != 2:
+        k_type = getattr(knowledge, "type", 1)
+        if k_type not in (2, 3):
             answer_preview = _clip_text(
                 getattr(knowledge, "answer", ""),
                 MAX_ANSWER_PREVIEW_CHARS,
             )
             if answer_preview:
                 item["knowledge_content_preview"] = answer_preview
+        if k_type == 3:
+            # Give the routing LLM a strong hint about when to select this
+            item["long_task_hint"] = (
+                "Select this when the user asks to filter, screen, analyze, "
+                "compare, or generate a report from previous search results. "
+                "This is for follow-up / refinement queries on existing data."
+            )
 
         if tool:
             item["tool"] = {
@@ -139,6 +153,12 @@ async def choose_knowledge_candidate(
     if not candidate_list:
         return None
 
+    logger.info(
+        "Routing LLM call with %d candidates (types: %s), has_history=%s",
+        len(candidate_list),
+        [getattr(c[0], 'type', 1) for c in candidate_list],
+        bool(conversation_history),
+    )
     try:
         response = await complete_json(
             ROUTING_SYSTEM_PROMPT,
@@ -147,10 +167,13 @@ async def choose_knowledge_candidate(
                 conversation_history=conversation_history,
             ),
         )
-    except Exception:
+        logger.info("Routing LLM response: %s", response)
+    except Exception as e:
+        logger.warning("Routing LLM call failed: %s — falling back to first candidate", e)
         return candidate_list[0]
 
     if not isinstance(response, dict):
+        logger.info("Routing response not a dict, falling back to first candidate")
         return candidate_list[0]
 
     selected_id = response.get("knowledge_id")
@@ -162,7 +185,9 @@ async def choose_knowledge_candidate(
             type3 = [c for c in candidate_list
                      if getattr(c[0], 'type', 1) == 3]
             if type3:
+                logger.info("Routing returned null — fallback to type-3 candidate %s", getattr(type3[0][0], 'id', '?'))
                 return type3[0]
+        logger.info("Routing returned null, no fallback — returning None")
         return None
 
     confidence = _parse_confidence(response.get("confidence"))
