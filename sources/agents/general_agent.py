@@ -1488,7 +1488,7 @@ Begin your response now:
         self._pending_raw_items = None
         original_total = len(raw_items)
         user_prompt = getattr(self, "_last_user_prompt", "")
-        batch_size = 10
+        batch_size = 1
 
         async def emit_filter_status(event):
             on_status = getattr(callback_handler, "on_status", None)
