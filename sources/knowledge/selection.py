@@ -154,10 +154,9 @@ async def choose_knowledge_candidate(
         return None
 
     logger.info(
-        "Routing LLM call with %d candidates (types: %s), has_history=%s",
-        len(candidate_list),
-        [getattr(c[0], 'type', 1) for c in candidate_list],
-        bool(conversation_history),
+        f"Routing LLM call with {len(candidate_list)} candidates "
+        f"(types: {[getattr(c[0], 'type', 1) for c in candidate_list]}), "
+        f"has_history={bool(conversation_history)}"
     )
     try:
         response = await complete_json(
@@ -167,9 +166,9 @@ async def choose_knowledge_candidate(
                 conversation_history=conversation_history,
             ),
         )
-        logger.info("Routing LLM response: %s", response)
+        logger.info(f"Routing LLM response: {response}")
     except Exception as e:
-        logger.warning("Routing LLM call failed: %s — falling back to first candidate", e)
+        logger.warning(f"Routing LLM call failed: {e} — falling back to first candidate")
         return candidate_list[0]
 
     if not isinstance(response, dict):
@@ -185,7 +184,7 @@ async def choose_knowledge_candidate(
             type3 = [c for c in candidate_list
                      if getattr(c[0], 'type', 1) == 3]
             if type3:
-                logger.info("Routing returned null — fallback to type-3 candidate %s", getattr(type3[0][0], 'id', '?'))
+                logger.info(f"Routing returned null — fallback to type-3 candidate {getattr(type3[0][0], 'id', '?')}")
                 return type3[0]
         logger.info("Routing returned null, no fallback — returning None")
         return None
