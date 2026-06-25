@@ -415,11 +415,13 @@ def get_knowledge_tool_candidates(
         similarity_threshold: float = 0,
         push_filter: Optional[int] = None
 ) -> List[Tuple[KnowledgeItem, Optional[ToolItem]]]:
-    """Return vector-recalled knowledge/tool candidates for final routing."""
-    try:
-        query_embedding = get_embedding(question)
-        logger.info(f"Generated embedding for question: {question}")
+    """Return vector-recalled knowledge/tool candidates for final routing.
 
+    Type-3 (long task) knowledge items are always included as candidates
+    regardless of embedding availability — they are matched purely by
+    the routing LLM's understanding of the conversation context.
+    """
+    try:
         knowledge_results = get_user_knowledge(user_id)
         if not knowledge_results:
             logger.info(f"No knowledge records found for user: {user_id}")
@@ -427,9 +429,40 @@ def get_knowledge_tool_candidates(
 
         logger.info(f"Found {len(knowledge_results)} knowledge records for user: {user_id}")
 
+        # ── separate type-3 (long task) items ──────────────────────────────
+        normal_items = []
+        long_task_items = []
+        for k in knowledge_results:
+            if getattr(k, 'type', 1) == 3:
+                long_task_items.append(k)
+            else:
+                normal_items.append(k)
+
+        if long_task_items:
+            logger.info(
+                "Long task knowledge items (type=3, always candidates): "
+                f"{[k.id for k in long_task_items]}"
+            )
+
+        candidates: List[Tuple[KnowledgeItem, Optional[ToolItem]]] = []
+
+        # ── type-3 items bypass embedding — always offered to the router ───
+        for lt in long_task_items:
+            candidates.append((lt, None))
+        # Sort type-3 items by update_time descending (most recent first)
+        candidates[:len(long_task_items)] = sorted(
+            candidates[:len(long_task_items)],
+            key=lambda c: getattr(c[0], 'update_time', ''),
+            reverse=True,
+        )
+
+        # ── vector search for normal (type 1/2) items ──────────────────────
+        query_embedding = get_embedding(question)
+        logger.info(f"Generated embedding for question: {question}")
+
         redis_conn = get_redis_connection()
         knowledge_embeddings = {}
-        for knowledge in knowledge_results:
+        for knowledge in normal_items:
             knowledge_id = knowledge.id
             redis_key = f"knowledge_embedding_{knowledge_id}"
             embedding_str = redis_conn.get(redis_key)
@@ -441,56 +474,53 @@ def get_knowledge_tool_candidates(
             else:
                 logger.warning(f"No embedding found in Redis for knowledge ID: {knowledge_id}")
 
-        if not knowledge_embeddings:
-            logger.warning("No embeddings found for any knowledge records")
-            return []
+        if knowledge_embeddings:
+            embeddings_list = []
+            knowledge_items = []
+            for knowledge in normal_items:
+                knowledge_id = knowledge.id
+                if knowledge_id in knowledge_embeddings:
+                    embeddings_list.append(knowledge_embeddings[knowledge_id])
+                    knowledge_items.append(knowledge)
 
-        embeddings_list = []
-        knowledge_items = []
-        for knowledge in knowledge_results:
-            knowledge_id = knowledge.id
-            if knowledge_id in knowledge_embeddings:
-                embeddings_list.append(knowledge_embeddings[knowledge_id])
-                knowledge_items.append(knowledge)
-
-        if not embeddings_list:
-            logger.warning("No valid embeddings available for similarity calculation")
-            return []
-
-        temp_user_vector_indices = get_user_vector_indices(user_id, embeddings_list, knowledge_items)
-        logger.info(f"temp_user_vector_indices:{temp_user_vector_indices}")
-        search_results = search_knowledge_base(
-            user_id,
-            query_embedding,
-            temp_user_vector_indices,
-            top_k,
-            similarity_threshold
-        )
-        logger.info(f"search_results:{search_results}")
-        if user_id in temp_user_vector_indices:
-            del temp_user_vector_indices[user_id]
-
-        candidates = []
-        for search_result in search_results:
-            knowledge_item = _knowledge_item_from_search_result(search_result)
-            tool_info = None
-            if knowledge_item.tool_id:
-                tool_info = get_tool_by_id(knowledge_item.tool_id, push_filter=push_filter)
-                if not tool_info:
-                    logger.warning(
-                        "Skipping knowledge because linked tool is unavailable "
-                        f"or does not match push filter. knowledge_id={knowledge_item.id}, "
-                        f"tool_id={knowledge_item.tool_id}, push_filter={push_filter}"
-                    )
-                    continue
-            elif knowledge_item.type != 2:
-                logger.warning(
-                    "Skipping non-workflow knowledge without linked tool. "
-                    f"knowledge_id={knowledge_item.id}"
+            if embeddings_list:
+                temp_user_vector_indices = get_user_vector_indices(user_id, embeddings_list, knowledge_items)
+                logger.info(f"temp_user_vector_indices:{temp_user_vector_indices}")
+                search_results = search_knowledge_base(
+                    user_id,
+                    query_embedding,
+                    temp_user_vector_indices,
+                    top_k,
+                    similarity_threshold
                 )
-                continue
-            candidates.append((knowledge_item, tool_info))
+                logger.info(f"search_results:{search_results}")
+                if user_id in temp_user_vector_indices:
+                    del temp_user_vector_indices[user_id]
 
+                for search_result in search_results:
+                    knowledge_item = _knowledge_item_from_search_result(search_result)
+                    tool_info = None
+                    if knowledge_item.tool_id:
+                        tool_info = get_tool_by_id(knowledge_item.tool_id, push_filter=push_filter)
+                        if not tool_info:
+                            logger.warning(
+                                "Skipping knowledge because linked tool is unavailable "
+                                f"or does not match push filter. knowledge_id={knowledge_item.id}, "
+                                f"tool_id={knowledge_item.tool_id}, push_filter={push_filter}"
+                            )
+                            continue
+                    elif knowledge_item.type != 2:
+                        logger.warning(
+                            "Skipping non-workflow knowledge without linked tool. "
+                            f"knowledge_id={knowledge_item.id}"
+                        )
+                        continue
+                    candidates.append((knowledge_item, tool_info))
+
+        logger.info(
+            f"Total candidates: {len(candidates)} "
+            f"(type-3: {len(long_task_items)}, normal: {len(candidates) - len(long_task_items)})"
+        )
         return candidates
 
     except Exception as e:

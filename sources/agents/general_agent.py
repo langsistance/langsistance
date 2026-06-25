@@ -1259,16 +1259,21 @@ Begin your response now:
             return "general Agent is disabled."
         self._last_user_prompt = prompt
         self._last_query_id = query_id
+        conv_history = self.memory.get()
         self.knowledgeTool = await select_knowledge_tool_with_llm(
             user_id,
             prompt,
             self.llm.complete_json,
             push_filter=push_filter,
+            conversation_history=conv_history,
         )
         # user_prompt = self.expand_prompt(prompt)
         user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
         system_prompt = self.generate_system_prompt()
-        self.memory.reset([])
+        prior = self.memory.get()
+        if len(prior) > 6:
+            prior = prior[:1] + prior[-1:]
+        self.memory.reset(prior)
         self.memory.push('user', user_prompt)
         self.memory.push('system', system_prompt)
 
@@ -1293,11 +1298,15 @@ Begin your response now:
         self._last_query_id = query_id
         if callback_handler:
             await _emit_status(callback_handler, "正在分析您的问题...")
+        # Pass conversation history so the LLM routing knowledge selection
+        # can understand what "这3条" or "from the results above" refers to.
+        conv_history = self.memory.get()
         self.knowledgeTool = await select_knowledge_tool_with_llm(
             user_id,
             prompt,
             self.llm.complete_json,
             push_filter=push_filter,
+            conversation_history=conv_history,
         )
         knowledge_item, tool_info = self.knowledgeTool
         # Long task detection: type=3 knowledge triggers async Celery pipeline
@@ -1327,7 +1336,13 @@ Begin your response now:
             return None
         user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
         system_prompt = self.generate_system_prompt(tool_data)
-        self.memory.reset([])
+        # Keep prior conversation context so follow-up queries referencing
+        # previous results (e.g. "从这3条中筛选出...") can be understood.
+        prior = self.memory.get()
+        if len(prior) > 6:
+            # Keep first message + last 5 messages to bound context window
+            prior = prior[:1] + prior[-1:]
+        self.memory.reset(prior)
         self.memory.push('user', user_prompt)
         self.memory.push('system', system_prompt)
 
