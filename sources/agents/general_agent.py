@@ -1390,13 +1390,23 @@ Begin your response now:
                 "6. Present as a reader-friendly document with clear section headings. "
                 "Use comparison tables when comparing multiple records with shared fields.\n"
                 "7. Do NOT add any meta-commentary such as 'based on the query results' or "
-                "'here is the synthesized report' — just output the content directly."
+                "'here is the synthesized report' — just output the content directly.\n"
+                "8. MANDATORY — EVERY document URL, image URL, and external link found "
+                "in the source data MUST appear verbatim in your output. Even if two URLs "
+                "look similar, include BOTH if they point to different resources. "
+                "Use descriptive link text: [Title](URL) for documents, "
+                "![Description](URL) for images. This rule overrides rule #2 — never "
+                "merge or skip URLs."
             )
+            # Include raw_items from each step so links/images are not lost
             payload = {
                 "user_request": getattr(self, "_last_user_prompt", ""),
                 "workflow_question": workflow_question,
                 "workflow_instructions": workflow_instructions,
                 "combined_results": [s.data for s in workflow_result.steps],
+                "raw_items_from_all_steps": [
+                    getattr(s, "data", None) for s in workflow_result.steps
+                ],
             }
         else:
             system_prompt = (
@@ -1404,7 +1414,11 @@ Begin your response now:
                 "composed-knowledge workflow result. "
                 "Use only the user request and workflow result provided here. "
                 "Do not call tools, search externally, or invent missing data. "
-                "Return a concise, well-formatted Markdown answer."
+                "Return a concise, well-formatted Markdown answer.\n\n"
+                "CRITICAL: Every document URL, image URL, and external link in the "
+                "workflow result MUST appear in your output. Use descriptive link text: "
+                "[Title](URL) for documents, ![Description](URL) for images. "
+                "Never omit a link that exists in the source data."
             )
             payload = {
                 "user_request": getattr(self, "_last_user_prompt", ""),
@@ -1413,6 +1427,7 @@ Begin your response now:
                     "instructions": workflow_instructions,
                 },
                 "workflow_result": workflow_result.final_data,
+                "raw_items": getattr(workflow_result, "raw_items", None),
             }
 
         user_content = json.dumps(payload, ensure_ascii=False, indent=2)
