@@ -376,15 +376,13 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                     if isinstance(p, dict) and 'patent_id' in p:
                                         patent_ids.append(p['patent_id'])
 
-                        # Cast user_id to int for BIGINT columns (Redis may return bytes)
                         local_user_id = int(user_id)
-
-                        # Bind to scene from the matched type=3 knowledge item
                         matched_knowledge = openai_agent.get('knowledge', {})
                         scene_id = getattr(matched_knowledge, 'scene_id', None) if matched_knowledge else None
 
-                        # Write to MySQL: session + long_task record
+                        app_logger.info(f"Long task: connecting to DB...")
                         conn = get_db_connection()
+                        app_logger.info(f"Long task: DB connected, inserting records...")
                         try:
                             with conn.cursor() as cur:
                                 cur.execute(
@@ -407,10 +405,11 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                      }, ensure_ascii=False),
                                      'pending'))
                                 conn.commit()
+                            app_logger.info(f"Long task: DB records inserted")
                         finally:
                             conn.close()
 
-                        # Submit to Celery
+                        app_logger.info(f"Long task: submitting to Celery...")
                         from celery_worker import execute_patent_analysis
                         execute_patent_analysis.delay(task_id=task_id, params={
                             'query': request.query,
@@ -419,8 +418,8 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                             'session_id': session_id,
                             'scene_id': scene_id,
                         })
+                        app_logger.info(f"Long task: Celery task submitted")
 
-                        # Push SSE events
                         await queue.put({
                             'type': 'status',
                             'message': '批量专利分析任务已提交',
@@ -432,9 +431,12 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                             'session_id': session_id,
                         })
                         await queue.put({'type': 'end'})
+                        app_logger.info(f"Long task: SSE events pushed, pipeline done")
                         return
                     except Exception as e:
                         app_logger.error(f"Long task setup failed: {str(e)}")
+                        import traceback
+                        app_logger.error(traceback.format_exc())
                         await queue.put({'type': 'error', 'message': f'批量分析任务启动失败: {str(e)}'})
                         await queue.put({'type': 'end'})
                         return
