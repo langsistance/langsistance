@@ -359,6 +359,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
 
                 # Long task handling: create_agent returned a long_task intent marker
                 if isinstance(openai_agent, dict) and openai_agent.get('intent') == 'long_task':
+                    app_logger.info(f"Long task intent received, setting up pipeline...")
                     try:
                         import json
                         from sources.knowledge.knowledge import get_db_connection
