@@ -142,7 +142,8 @@ export default {
     localToolExecutionFailed: 'Local tool execution failed: {error}',
     sceneHint: 'Available Capabilities',
     sceneSmartQA: 'Smart Q&A',
-    sceneDeepResearch: 'Deep Research'
+    sceneDeepResearch: 'Deep Research',
+    longTaskCreated: '🔬 Deep research task submitted (ID: {taskId}), running in background...'
   },
 
   // Knowledge management

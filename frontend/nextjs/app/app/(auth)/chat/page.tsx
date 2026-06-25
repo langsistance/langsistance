@@ -191,6 +191,14 @@ export default function Chat() {
               ))
               continue
             }
+            if (event.type === 'long_task_created') {
+              setMessages((m) => updateAssistantMessage(m, assistantId,
+                t('chat.longTaskCreated')
+                  .replace('{taskId}', String(event.task_id ?? ''))
+                  .replace('{sessionId}', String(event.session_id ?? ''))
+              ))
+              continue
+            }
           }
           if (evt && typeof evt === 'object' && 'error' in evt && evt.error) {
             throw new Error(String(evt.error))
