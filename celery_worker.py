@@ -77,9 +77,9 @@ def execute_patent_analysis(self, task_id: str, params: dict):
 
     # ---- Provider setup ----
     if model_family == 'minimax':
-        flash_provider = Provider(provider_name='minimax', model='minimax-2.7-highspeed',
+        flash_provider = Provider(provider_name='minimax', model='MiniMax-M2.7-highspeed',
                                   server_address='', is_local=False)
-        pro_provider = Provider(provider_name='minimax', model='minimax-2.7-highspeed',
+        pro_provider = Provider(provider_name='minimax', model='MiniMax-M2.7-highspeed',
                                 server_address='', is_local=False)
     else:
         flash_provider = Provider(provider_name='deepseek', model='deepseek-chat',
