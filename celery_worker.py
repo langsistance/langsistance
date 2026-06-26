@@ -1,6 +1,7 @@
 """Celery worker entry point for long-running patent analysis tasks."""
 
 import asyncio
+import json
 import os
 import sys
 
@@ -11,6 +12,9 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 from celery import Celery
+from sources.logger import Logger
+
+_pipeline_logger = Logger("long_task_pipeline.log")
 
 REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
 REDIS_PORT = int(os.getenv('REDIS_PORT', '6379'))
@@ -33,6 +37,13 @@ app.conf.update(
 @app.task(bind=True, max_retries=3, default_retry_delay=30)
 def execute_patent_analysis(self, task_id: str, params: dict):
     """Batch patent analysis -- 4-phase serial pipeline with checkpointing."""
+    _pipeline_logger.info(
+        f"[task={task_id}] START — "
+        f"query={params.get('query', '')[:120]}, "
+        f"patent_source={params.get('patent_source', 'cnipa')}, "
+        f"session_id={params.get('session_id', '')}, "
+        f"scene_id={params.get('scene_id', '')}"
+    )
     from sources.long_task.status_manager import (
         update_task_status, set_task_completed, set_task_failed,
         save_checkpoint, load_checkpoint,
@@ -56,6 +67,13 @@ def execute_patent_analysis(self, task_id: str, params: dict):
     patent_ids = sorted(set(params.get('patent_ids', [])))
     patent_ids = patent_ids[:max_patents]
     total = len(patent_ids)
+
+    _pipeline_logger.info(
+        f"[task={task_id}] CONFIG — "
+        f"model_family={model_family}, max_patents={max_patents}, "
+        f"patent_ids_count={len(patent_ids)}, "
+        f"patent_ids={patent_ids[:10]}{'...' if len(patent_ids) > 10 else ''}"
+    )
 
     # ---- Provider setup ----
     if model_family == 'minimax':
@@ -95,10 +113,16 @@ def execute_patent_analysis(self, task_id: str, params: dict):
                 generate_report_section=generate_report_section,
                 create_storage=create_storage,
             ))
+            _pipeline_logger.info(
+                f"[task={task_id}] PIPELINE_DONE — status={result.get('status')}"
+            )
             return result
         finally:
             loop.close()
     except Exception as e:
+        _pipeline_logger.error(
+            f"[task={task_id}] FAILED — error={e}"
+        )
         set_task_failed(task_id, str(e))
         raise self.retry(exc=e)
 
@@ -160,6 +184,20 @@ async def _run_pipeline(
     if scene_id:
         from sources.long_task.scene_tools import get_scene_knowledge_tools
         scene_candidates = get_scene_knowledge_tools(scene_id)
+        _pipeline_logger.info(
+            f"[task={task_id}] PHASE0 — scene_id={scene_id}, "
+            f"scene_candidates_count={len(scene_candidates) if scene_candidates else 0}"
+        )
+        if scene_candidates:
+            for c in scene_candidates:
+                _pipeline_logger.info(
+                    f"[task={task_id}] PHASE0 candidate — "
+                    f"knowledge_id={c.get('knowledge_id')}, "
+                    f"knowledge_type={c.get('knowledge_type')}, "
+                    f"question={c.get('knowledge_question', '')[:80]}, "
+                    f"tool_title={c.get('tool_title', '')}, "
+                    f"tool_url={c.get('tool_url', '')}"
+                )
     id_url_map = {}          # patent_id → document_url from search results
 
     # ==== Phase 0: Search patents via scene tools (if no patent_ids provided) ====
@@ -176,6 +214,13 @@ async def _run_pipeline(
             'search patents', params['query'],
             scene_candidates, flash_provider,
         )
+        _pipeline_logger.info(
+            f"[task={task_id}] PHASE0 select_tool — "
+            f"selected={selected is not None}, "
+            f"tool_title={selected.get('tool', {}).title if selected else 'N/A'}, "
+            f"tool_url={selected.get('tool', {}).url if selected else 'N/A'}, "
+            f"reason={selected.get('reason', '') if selected else ''}"
+        )
         if selected:
             update_task_status(task_id, 'searching_patents', 2,
                                f'正在检索专利：{selected.get("reason", "")}')
@@ -183,6 +228,13 @@ async def _run_pipeline(
             raw_items = result.get('raw_items', []) or []
             patent_ids = extract_patent_ids(raw_items)
             id_url_map = extract_patent_id_url_map(raw_items)
+            _pipeline_logger.info(
+                f"[task={task_id}] PHASE0 search_result — "
+                f"raw_items_count={len(raw_items)}, "
+                f"patent_ids_found={len(patent_ids)}, "
+                f"patent_ids={patent_ids[:10]}{'...' if len(patent_ids) > 10 else ''}, "
+                f"id_url_map_size={len(id_url_map)}"
+            )
             params['patent_source'] = _infer_source_from_tool(
                 selected['tool'], params.get('patent_source', 'cnipa'),
             )
@@ -200,10 +252,19 @@ async def _run_pipeline(
     # ==== Phase 1: Generate columns (Flash) ====
     update_task_status(task_id, 'generating_columns', 5,
                        f'正在生成分析框架（{total} 个专利）...')
+    _pipeline_logger.info(
+        f"[task={task_id}] PHASE1 generate_table_columns — "
+        f"query={params['query'][:100]}, patent_count={total}, "
+        f"provider={flash_provider.model if hasattr(flash_provider, 'model') else 'flash'}"
+    )
     columns = await generate_table_columns(
         query=params['query'],
         patent_count=total,
         provider=flash_provider,
+    )
+    _pipeline_logger.info(
+        f"[task={task_id}] PHASE1 columns_generated — "
+        f"column_count={len(columns)}, columns={columns}"
     )
     update_task_status(task_id, 'generating_columns', 5,
                        f'分析维度：{" | ".join(columns[1:4])}...',
@@ -212,11 +273,22 @@ async def _run_pipeline(
     _update_mysql_progress(task_id, 'generating_columns', 5)
 
     # ==== Phase 2: Per-patent download -> analyze -> summarize ====
+    _pipeline_logger.info(
+        f"[task={task_id}] PHASE2 START — pending_count={len(pending)}, "
+        f"total={total}"
+    )
     for i, patent_id in enumerate(pending):
+        patent_index = len(table_rows) + 1
+        _pipeline_logger.info(
+            f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] — "
+            f"patent_id={patent_id}, "
+            f"has_scene_candidates={scene_candidates is not None}, "
+            f"doc_url_from_search={(id_url_map or {}).get(patent_id, '') or '(none)'}"
+        )
         try:
             update_task_status(task_id, 'analyzing',
                                progress_pct(i, total),
-                               f'正在下载专利文件（{len(table_rows)+1}/{total}）...',
+                               f'正在下载专利文件（{patent_index}/{total}）...',
                                table_rows=table_rows)
 
             # Try scene tool download first, fall back to hardcoded download
@@ -229,9 +301,15 @@ async def _run_pipeline(
                 id_url_map=id_url_map,
             )
 
+            _pipeline_logger.info(
+                f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] download_done — "
+                f"patent_id={patent_id}, "
+                f"text_length={len(patent_text) if patent_text else 0}"
+            )
+
             update_task_status(task_id, 'analyzing',
                                progress_pct(i, total),
-                               f'正在分析（{len(table_rows)+1}/{total}）：{patent_id}',
+                               f'正在分析（{patent_index}/{total}）：{patent_id}',
                                table_rows=table_rows)
 
             row = await analyze_single_patent(
@@ -239,15 +317,35 @@ async def _run_pipeline(
                 columns=columns, query=params['query'],
                 provider=pro_provider, timeout=60,
             )
+            _pipeline_logger.info(
+                f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] analyze_done — "
+                f"patent_id={patent_id}, row_keys={list(row.keys()) if row else 'None'}"
+            )
+
             row['_summary'] = await generate_patent_summary(
                 patent_id=patent_id, row=row, query=params['query'],
                 provider=pro_provider,
             )
+            _pipeline_logger.info(
+                f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] summary_done — "
+                f"patent_id={patent_id}, "
+                f"summary_length={len(row.get('_summary', '')) if row.get('_summary') else 0}"
+            )
 
         except Exception as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] FAILED — "
+                f"patent_id={patent_id}, error={e}"
+            )
             row = build_failed_row(patent_id, str(e))
 
         table_rows.append(row)
+        _pipeline_logger.info(
+            f"[task={task_id}] PHASE2 table_updated — "
+            f"completed={len(table_rows)}/{total}, "
+            f"successful={len([r for r in table_rows if not r.get('_failed')])}, "
+            f"failed={len([r for r in table_rows if r.get('_failed')])}"
+        )
         save_checkpoint(task_id, {
             'completed': [r['patent_id'] for r in table_rows if not r.get('_failed')],
             'current': patent_id,
@@ -261,14 +359,29 @@ async def _run_pipeline(
                            f'已完成 {len(table_rows)}/{total} 个专利分析',
                            table_rows=table_rows)
     # Update MySQL long_tasks table after phase 2
+    _pipeline_logger.info(
+        f"[task={task_id}] PHASE2 COMPLETE — "
+        f"total_rows={len(table_rows)}, table_columns={columns}"
+    )
     _update_mysql_progress(task_id, 'analyzing', 75)
 
     # ==== Phase 3: Generate report (Pro, dynamic) ====
+    _pipeline_logger.info(
+        f"[task={task_id}] PHASE3 generate_report — "
+        f"columns={columns}, table_rows_count={len(table_rows)}, "
+        f"provider={pro_provider.model if hasattr(pro_provider, 'model') else 'pro'}"
+    )
     update_task_status(task_id, 'generating_report', 80,
                        '正在规划报告结构...')
     outline = await generate_report_outline(
         query=params['query'], columns=columns,
         table_rows=table_rows, provider=pro_provider,
+    )
+    _pipeline_logger.info(
+        f"[task={task_id}] PHASE3 outline — "
+        f"title={outline.get('title', '')}, "
+        f"sections_count={len(outline.get('sections', []))}, "
+        f"sections={[s.get('heading', '') for s in outline.get('sections', [])]}"
     )
 
     report_parts = []
@@ -283,8 +396,16 @@ async def _run_pipeline(
             provider=pro_provider,
         )
         report_parts.append(f"## {section['heading']}\n\n{text}")
+        _pipeline_logger.info(
+            f"[task={task_id}] PHASE3 section[{idx+1}/{len(sections)}] — "
+            f"heading={section['heading']}, text_length={len(text)}"
+        )
 
     report_text = f"# {outline.get('title', '专利分析报告')}\n\n" + "\n\n".join(report_parts)
+    _pipeline_logger.info(
+        f"[task={task_id}] PHASE3 report_text — "
+        f"total_length={len(report_text)}, sections_written={len(report_parts)}"
+    )
     update_task_status(task_id, 'generating_report', 90,
                        '报告撰写完成', result_summary=report_text)
     _update_mysql_progress(task_id, 'generating_report', 90)
@@ -293,19 +414,34 @@ async def _run_pipeline(
     from sources.long_task.storage import get_storage_config
     storage_cfg = get_storage_config()
     storage = create_storage(storage_cfg)
+    _pipeline_logger.info(
+        f"[task={task_id}] PHASE4 export — "
+        f"storage_backend={storage_cfg.get('report_storage_backend', 'local')}"
+    )
 
     update_task_status(task_id, 'exporting', 92, '正在生成 PDF 文件...')
     pdf_bytes = await export_pdf_async(report_text, table_rows, columns)
     await storage.put(task_id, 'report.pdf', pdf_bytes)
+    _pipeline_logger.info(
+        f"[task={task_id}] PHASE4 pdf — size_bytes={len(pdf_bytes)}"
+    )
 
     update_task_status(task_id, 'exporting', 96, '正在生成 Word 文件...')
     docx_bytes = await export_docx_async(report_text, table_rows, columns)
     await storage.put(task_id, 'report.docx', docx_bytes)
+    _pipeline_logger.info(
+        f"[task={task_id}] PHASE4 docx — size_bytes={len(docx_bytes)}"
+    )
 
     report_files = [
         {'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes)},
         {'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes)},
     ]
+    _pipeline_logger.info(
+        f"[task={task_id}] COMPLETED — "
+        f"patents_analyzed={len(table_rows)}, "
+        f"report_files={[f['format'] for f in report_files]}"
+    )
     _update_mysql_progress(task_id, 'exporting', 100)
     set_task_completed(task_id, report_files)
     return {'status': 'completed', 'task_id': task_id}
@@ -331,13 +467,7 @@ async def _download_patent_via_scene_or_fallback(
     download_patent_document,
     id_url_map: dict | None = None,
 ) -> str:
-    """Download patent text via scene tool or fall back to hardcoded download.
-
-    Phase 0 search results include a document URL — if available, the
-    download tool fetches it directly.  Otherwise the Flash LLM selects
-    a scene download tool by patent_id.  Falls back to the hardcoded
-    download_patent_document() as last resort.
-    """
+    """Download patent text via scene tool or fall back to hardcoded download."""
     doc_url = (id_url_map or {}).get(patent_id, '')
 
     if scene_candidates:
@@ -354,14 +484,33 @@ async def _download_patent_via_scene_or_fallback(
             flash_provider,
         )
         if selected:
+            _pipeline_logger.info(
+                f"[download] scene_tool_selected — patent_id={patent_id}, "
+                f"tool_title={selected.get('tool', {}).title if selected.get('tool') else 'N/A'}, "
+                f"tool_url={selected.get('tool', {}).url if selected.get('tool') else 'N/A'}"
+            )
             result = await execute_tool(selected['tool'], selected['params'])
             from sources.long_task.scene_tools import extract_document_text
             text = extract_document_text(result)
+            _pipeline_logger.info(
+                f"[download] scene_tool_result — patent_id={patent_id}, "
+                f"text_found={text is not None}, "
+                f"text_length={len(text) if text else 0}"
+            )
             if text:
                 return text
+            _pipeline_logger.warning(
+                f"[download] scene_tool_no_text — patent_id={patent_id}, "
+                f"falling back to hardcoded download"
+            )
 
     # Fallback: existing hardcoded download
     patent_source = params.get('patent_source', 'cnipa')
+    _pipeline_logger.info(
+        f"[download] fallback — patent_id={patent_id}, "
+        f"patent_source={patent_source}, "
+        f"scene_candidates_available={scene_candidates is not None}"
+    )
     return await download_patent_document(patent_id, patent_source)
 
 
