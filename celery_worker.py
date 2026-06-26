@@ -685,17 +685,20 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
             _pipeline_logger.info(
                 f"[download] uspto_raw_doc[0] — {_json.dumps(documents[0], ensure_ascii=False)[:3000]}"
             )
-            # Compact summary: index | typeCode | typeName | format | fileName
+            # Compact summary: index | code | description
             doc_summary = []
             for i, doc in enumerate(documents):
                 if not isinstance(doc, dict):
                     continue
-                doc_summary.append(
-                    f"[{i}] code={doc.get('documentTypeCode','?')} "
-                    f"type={doc.get('documentTypeName','?')} "
-                    f"fmt={doc.get('documentFormat','?')} "
-                    f"file={doc.get('fileName','?')}"
-                )
+                # USPTO API uses documentCode / documentCodeDescriptionText
+                code = doc.get('documentCode') or doc.get('documentTypeCode', '?')
+                desc = doc.get('documentCodeDescriptionText') or doc.get('documentTypeName', '?')
+                doc_summary.append(f"[{i}] code={code} desc={desc}")
+                # Also show the downloadOptionBag info for first few
+                opts = doc.get('downloadOptionBag', [])
+                if isinstance(opts, list) and opts:
+                    first_url = opts[0].get('downloadUrl', '') if isinstance(opts[0], dict) else ''
+                    doc_summary[-1] += f" url={first_url[:80]}..."
             _pipeline_logger.info(
                 f"[download] uspto_doc_summary —\n" + "\n".join(doc_summary)
             )
@@ -735,24 +738,24 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
             for i, doc in enumerate(documents):
                 if not isinstance(doc, dict):
                     continue
+                # USPTO fields: documentCode, documentCodeDescriptionText
                 doc_lines.append(_json.dumps({
                     'index': i,
-                    'documentTypeCode': doc.get('documentTypeCode', ''),
-                    'documentTypeName': doc.get('documentTypeName', ''),
-                    'documentFormat': doc.get('documentFormat', ''),
-                    'fileName': doc.get('fileName', ''),
-                    'pageCount': doc.get('pageCount', ''),
-                    'hasDownloadOptionBag': bool(doc.get('downloadOptionBag')),
+                    'code': doc.get('documentCode') or doc.get('documentTypeCode', ''),
+                    'description': doc.get('documentCodeDescriptionText') or doc.get('documentTypeName', ''),
+                    'pageCount': doc.get('pageTotalQuantity') or doc.get('pageCount', ''),
+                    'hasDownload': bool(doc.get('downloadOptionBag')),
                 }, ensure_ascii=False))
             try:
                 selection = await flash_provider.complete_json(
                     "You are a patent document classifier. From a list of USPTO "
                     "patent application documents, identify the specification "
                     "(说明书). The specification is typically:\n"
-                    "- documentTypeCode = 'SPEC'\n"
+                    "- code = 'SPEC' or description containing 'Specification'\n"
                     "- The main detailed description of the invention\n"
-                    "- Usually the longest text document, NOT drawings/figures\n"
-                    "- NOT the abstract, claims-only, or search report\n\n"
+                    "- NOT the abstract, claims-only sequence listing, or drawings\n"
+                    "- NOT administrative documents like Power of Attorney, "
+                    "Fee Payment, Notice of Allowance\n\n"
                     "Return JSON: {\"selected_index\": <index of specification>, "
                     "\"reason\": \"<brief explanation>\"}",
                     f"Patent application: {app_number}\n"
@@ -777,21 +780,23 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
             for doc in documents:
                 if not isinstance(doc, dict):
                     continue
-                doc_type = str(doc.get('documentTypeCode', '') or doc.get('documentType', ''))
-                if 'SPEC' in doc_type.upper():
+                code = str(doc.get('documentCode', '') or doc.get('documentTypeCode', ''))
+                desc = str(doc.get('documentCodeDescriptionText', '') or doc.get('documentTypeName', ''))
+                if 'SPEC' in code.upper() or 'specification' in desc.lower():
                     spec_doc = doc
-                    _pipeline_logger.info(f"[download] heuristic_spec — type={doc_type}")
+                    _pipeline_logger.info(f"[download] heuristic_spec — code={code}, desc={desc[:60]}")
                     break
 
-        # Last fallback: first TXT/XML document
+        # Last fallback: first document that looks like it has content (skip admin docs)
         if not spec_doc:
+            admin_codes = {'N570', 'PTOA', 'IFEE', 'WFEE', 'EGRANT', 'ISSUE.NTF'}
             for doc in documents:
                 if not isinstance(doc, dict):
                     continue
-                fmt = str(doc.get('documentFormat', '') or doc.get('format', '')).upper()
-                if 'TXT' in fmt or 'XML' in fmt:
+                code = str(doc.get('documentCode', '') or doc.get('documentTypeCode', ''))
+                if code not in admin_codes:
                     spec_doc = doc
-                    _pipeline_logger.info(f"[download] fallback_txt — format={fmt}")
+                    _pipeline_logger.info(f"[download] fallback_first_content — code={code}")
                     break
 
         if not spec_doc:
@@ -803,10 +808,8 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
         # Step 3: Download the specification (may need redirect following)
         _pipeline_logger.info(
             f"[download] uspto_spec_selected — "
-            f"code={spec_doc.get('documentTypeCode','?')}, "
-            f"type={spec_doc.get('documentTypeName','?')}, "
-            f"fmt={spec_doc.get('documentFormat','?')}, "
-            f"file={spec_doc.get('fileName','?')}"
+            f"code={spec_doc.get('documentCode') or spec_doc.get('documentTypeCode','?')}, "
+            f"desc={(spec_doc.get('documentCodeDescriptionText') or spec_doc.get('documentTypeName','?'))[:80]}"
         )
         return await _download_uspto_spec_with_redirect(
             spec_doc, app_number, headers

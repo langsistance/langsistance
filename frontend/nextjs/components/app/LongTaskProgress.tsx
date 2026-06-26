@@ -70,13 +70,14 @@ function parseTaskContent(content: string): TaskState | null {
     }
   }
 
-  // Submitted / Running
-  if (taskId && progress === 0 && !stepLabel) {
+  // Submitted: explicit task ID + "提交" keyword, no progress
+  if (taskId && !stepLabel && !content.includes('✅') && !content.includes('❌') && (content.includes('已提交') || content.includes('submitted'))) {
     return { phase: 'submitted', taskId, progress: 0, stepLabel: '', message: content }
   }
 
-  if (taskId && progress >= 0) {
-    return { phase: 'running', taskId, progress, stepLabel, message: content }
+  // Running: has 🔬 marker (taskId may be absent from polling updates)
+  if (content.includes('🔬')) {
+    return { phase: 'running', taskId, progress: progress > 0 ? progress : 5, stepLabel, message: content }
   }
 
   return null
