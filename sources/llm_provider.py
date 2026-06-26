@@ -125,7 +125,7 @@ class Provider:
             },
             "minimax": {
                 "api_key": self.api_key or os.getenv("MINIMAX_API_KEY"),
-                "base_url": "https://api.minimaxi.com/v1",
+                "base_url": os.getenv("MINIMAX_API_BASE", "https://api.minimaxi.com/v1"),
             },
         }
         cfg = provider_configs.get(self.provider_name, provider_configs["openai"])
@@ -140,6 +140,8 @@ class Provider:
             kwargs["base_url"] = cfg["base_url"]
         if callback_handler:
             kwargs["callbacks"] = [callback_handler]
+        if self.provider_name == "minimax":
+            kwargs["base_url"] = os.getenv("MINIMAX_API_BASE", "https://api.minimaxi.com/v1")
 
         return ChatOpenAI(**kwargs)
 
@@ -175,7 +177,7 @@ class Provider:
             },
             "minimax": {
                 "api_key": self.api_key or os.getenv("MINIMAX_API_KEY"),
-                "base_url": "https://api.minimaxi.com/v1",
+                "base_url": os.getenv("MINIMAX_API_BASE", "https://api.minimaxi.com/v1"),
             },
         }
         cfg = provider_configs.get(self.provider_name, provider_configs["openai"])
