@@ -203,8 +203,6 @@ async def _run_pipeline(
     id_url_map = {}          # patent_id → document_url from search results
 
     # ==== Phase 0-prep: Extract patent IDs from conversation history via LLM ====
-    # When the user says "从这3条中筛选"/"filter these 3", the patent IDs are
-    # in the previous assistant response text but not in structured patent_data.
     if not patent_ids:
         conv_history = params.get('conversation_history', [])
         if conv_history:
@@ -217,50 +215,122 @@ async def _run_pipeline(
                     f"[task={task_id}] PHASE0 extract_patent_ids_from_history — "
                     f"history_text_length={len(history_text)}"
                 )
-                try:
-                    extract_result = await flash_provider.complete_json(
-                        "You are a patent ID extractor. "
-                        "Extract all patent APPLICATION NUMBERS from the provided text. "
-                        "For USPTO: application numbers are PURE 8-DIGIT NUMBERS "
-                        "(e.g. 18331482) or slash format (e.g. 18/234567). "
-                        "Publication numbers like US20230310100A1 are NOT application "
-                        "numbers — find the corresponding 8-digit application number "
-                        "in the text instead. "
-                        "For CNIPA: format CNxxxxxxxxxA (e.g. CN202111325396A). "
-                        "Return ONLY a JSON object: "
-                        '{"patent_ids": ["id1", "id2", ...], '
-                        '"source": "uspto" or "cnipa" or "unknown"}. '
-                        "Only include application numbers, not publication numbers or grant numbers.",
-                        f"Extract all patent/application IDs from:\n\n{history_text[:4000]}",
+                EXTRACT_ALL_PROMPT = (
+                    "You are a patent ID extractor. "
+                    "Extract all patent APPLICATION NUMBERS from the provided text. "
+                    "For USPTO: application numbers are PURE 8-DIGIT NUMBERS "
+                    "(e.g. 18331482) or slash format (e.g. 18/234567). "
+                    "They are labeled '申请号' or 'Application Number'. "
+                    "DO NOT extract publication numbers (e.g. US20230310100A1) "
+                    "or grant/patent numbers (e.g. 10299867, 11707334). "
+                    'Return JSON: {"patent_ids": ["id1", ...], '
+                    '"source": "uspto" or "cnipa" or "unknown"}'
+                )
+                EXTRACT_ONE_PROMPT = (
+                    "Extract the patent APPLICATION NUMBER from this entry. "
+                    "Application numbers are PURE 8-DIGIT or slash format. "
+                    "Labeled '申请号' or 'Application Number'. "
+                    "DO NOT extract publication/grant numbers. "
+                    "If none found, return empty list. "
+                    'Return JSON: {"patent_ids": ["id1"], "source": "uspto"}'
+                )
+
+                import re as _re2
+                normalized = []
+                patent_source = 'cnipa'
+
+                # Short text: one-shot LLM call.  Long text: split into sections.
+                if len(history_text) < 100000:
+                    _pipeline_logger.info(
+                        f"[task={task_id}] PHASE0 one_shot_extraction "
+                        f"({len(history_text)} chars)"
                     )
-                    if extract_result and isinstance(extract_result, dict):
-                        extracted = extract_result.get('patent_ids', [])
-                        if isinstance(extracted, list) and extracted:
-                            import re as _re2
-                            # Normalize: strip commas, US prefix, kind codes, whitespace
-                            normalized = []
-                            for pid in extracted:
-                                pid = str(pid).strip().replace(',', '').replace('/', '')
-                                # Strip "US" prefix
-                                if pid.upper().startswith('US') and len(pid) > 2:
-                                    pid = pid[2:]
-                                # Strip kind code suffix (A1, A2, B1, B2, etc.)
-                                pid = _re2.sub(r'[AB]\d$', '', pid)
-                                # US application numbers are EXACTLY 8 digits
-                                if pid and pid.isdigit() and len(pid) == 8:
-                                    normalized.append(pid)
-                            patent_ids = sorted(set(normalized))[:max_patents]
-                            params['patent_source'] = extract_result.get('source', 'cnipa')
-                            _pipeline_logger.info(
-                                f"[task={task_id}] PHASE0 llm_extracted_patent_ids — "
-                                f"count={len(patent_ids)}, "
-                                f"source={params['patent_source']}, "
-                                f"patent_ids={patent_ids}"
+                    try:
+                        extract_result = await flash_provider.complete_json(
+                            EXTRACT_ALL_PROMPT, history_text,
+                        )
+                        if extract_result and isinstance(extract_result, dict):
+                            extracted = extract_result.get('patent_ids', [])
+                            if isinstance(extracted, list):
+                                if extract_result.get('source') == 'uspto':
+                                    patent_source = 'uspto'
+                                for pid in extracted:
+                                    pid = str(pid).strip().replace(',', '').replace('/', '')
+                                    if pid.upper().startswith('US') and len(pid) > 2:
+                                        pid = pid[2:]
+                                    pid = _re2.sub(r'[AB]\d$', '', pid)
+                                    if pid and pid.isdigit() and len(pid) == 8:
+                                        normalized.append(pid)
+                    except Exception as e:
+                        _pipeline_logger.warning(
+                            f"[task={task_id}] PHASE0 one_shot LLM failed: {e}"
+                        )
+                else:
+                    # Large text: split into per-patent sections
+                    import re as _re3
+                    split_patterns = [
+                        r'\n(?=---\n)',
+                        r'\n(?=### )',
+                        r'\n(?=\d+\.\s+\*\*)',
+                        r'\n\n(?=\*\*[A-Z])',
+                        r'\n\n(?=\d+\.\s)',
+                    ]
+                    best_sections = []
+                    for pat in split_patterns:
+                        candidates = _re3.split(pat, history_text)
+                        candidates = [s.strip() for s in candidates if len(s.strip()) > 200]
+                        if len(candidates) > len(best_sections):
+                            best_sections = candidates
+                    sections = best_sections
+                    if len(sections) <= 1:
+                        sections = []
+                        start = 0
+                        while start < len(history_text):
+                            end = min(start + 8000, len(history_text))
+                            chunk = history_text[start:end].strip()
+                            if len(chunk) > 200:
+                                sections.append(chunk)
+                            start = end - 500
+                    _pipeline_logger.info(
+                        f"[task={task_id}] PHASE0 split_extraction — "
+                        f"sections={len(sections)}, "
+                        f"lengths={[len(s) for s in sections]}"
+                    )
+                    for i, section in enumerate(sections):
+                        try:
+                            result = await flash_provider.complete_json(
+                                EXTRACT_ONE_PROMPT, section[:8000],
                             )
-                except Exception as e:
-                    _pipeline_logger.warning(
-                        f"[task={task_id}] PHASE0 extract_patent_ids LLM failed: {e}"
-                    )
+                            if result and isinstance(result, dict):
+                                extracted = result.get('patent_ids', [])
+                                if isinstance(extracted, list) and extracted:
+                                    if result.get('source') == 'uspto':
+                                        patent_source = 'uspto'
+                                    for pid in extracted:
+                                        pid = str(pid).strip().replace(',', '').replace('/', '')
+                                        if pid.upper().startswith('US') and len(pid) > 2:
+                                            pid = pid[2:]
+                                        pid = _re2.sub(r'[AB]\d$', '', pid)
+                                        if pid and pid.isdigit() and len(pid) == 8:
+                                            normalized.append(pid)
+                                _pipeline_logger.info(
+                                    f"[task={task_id}] PHASE0 section[{i}] — "
+                                    f"found={extracted}"
+                                )
+                        except Exception as e:
+                            _pipeline_logger.warning(
+                                f"[task={task_id}] PHASE0 section[{i}] LLM failed: {e}"
+                            )
+
+                patent_ids = sorted(set(normalized))[:max_patents]
+                if patent_ids:
+                    params['patent_source'] = patent_source
+                _pipeline_logger.info(
+                    f"[task={task_id}] PHASE0 llm_extracted_patent_ids — "
+                    f"count={len(patent_ids)}, "
+                    f"source={params.get('patent_source', 'cnipa')}, "
+                    f"patent_ids={patent_ids}"
+                )
             if patent_ids:
                 total = len(patent_ids)
                 pending = patent_ids

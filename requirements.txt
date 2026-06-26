@@ -58,5 +58,6 @@ sniffio
 ordered_set
 pypinyin
 python-docx>=1.1,<2.0
-weasyprint>=61,<62
+weasyprint==61.2
+pydyf==0.10.0
 cos-python-sdk-v5>=1.9.37
