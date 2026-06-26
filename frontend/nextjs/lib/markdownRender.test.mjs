@@ -103,6 +103,25 @@ test('renders plain image URL fields as inline images', () => {
   assert.doesNotMatch(html, /Image URL:<\/strong> https:/)
 })
 
+test('renders markdown link with bare URL by adding https://', () => {
+  // This is the copiioai.com prefix bug: a markdown link with a bare URL
+  // (no https://) would resolve as relative and prepend our origin.
+  const html = renderMarkdownToHtml('[Patent Document](res.cnipr.com/path/to/file.pdf)')
+
+  assert.match(html, /<a\b/)
+  assert.match(html, /href="https:\/\/res\.cnipr\.com\/path\/to\/file\.pdf"/)
+  assert.match(html, /target="_blank"/)
+  assert.match(html, /rel="noopener\s+noreferrer"/)
+  assert.doesNotMatch(html, /href="res\.cnipr\.com"/)
+})
+
+test('renders markdown link with full https URL unchanged', () => {
+  const html = renderMarkdownToHtml('[Patent](https://res.cnipr.com/path/file.pdf)')
+
+  assert.match(html, /<a\b/)
+  assert.match(html, /href="https:\/\/res\.cnipr\.com\/path\/file\.pdf"/)
+})
+
 test('renders Spotify display image fields as inline images', () => {
   const imageUrl = 'https://i.scdn.co/image/ab676161000051744293385d324db8558179afd9'
   const html = renderMarkdownToHtml(`**Display image:** ${imageUrl}`)
