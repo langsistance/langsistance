@@ -47,7 +47,9 @@ services:
     volumes:
       - ./:/app
     command: celery -A celery_worker worker --loglevel=info --concurrency=1
+    working_dir: /app
     environment:
+      - PYTHONPATH=/app
       - REDIS_HOST=${REDIS_HOST}
       - REDIS_PORT=${REDIS_PORT}
       - MYSQL_HOST=${MYSQL_HOST}
