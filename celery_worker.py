@@ -234,9 +234,16 @@ async def _run_pipeline(
                     if extract_result and isinstance(extract_result, dict):
                         extracted = extract_result.get('patent_ids', [])
                         if isinstance(extracted, list) and extracted:
-                            patent_ids = sorted(set(
-                                str(pid) for pid in extracted
-                            ))[:max_patents]
+                            # Normalize: strip commas, US prefix, whitespace
+                            normalized = []
+                            for pid in extracted:
+                                pid = str(pid).strip().replace(',', '')
+                                # Strip "US" prefix if present (e.g. US20230310100A1)
+                                if pid.upper().startswith('US') and len(pid) > 2:
+                                    pid = pid[2:]
+                                if pid:
+                                    normalized.append(pid)
+                            patent_ids = sorted(set(normalized))[:max_patents]
                             params['patent_source'] = extract_result.get('source', 'cnipa')
                             _pipeline_logger.info(
                                 f"[task={task_id}] PHASE0 llm_extracted_patent_ids — "
@@ -545,9 +552,11 @@ async def _download_patent_via_scene_or_fallback(
     download_patent_document,
     id_url_map: dict | None = None,
 ) -> str:
-    """Download patent text via scene tool or fall back to hardcoded download."""
+    """Download patent text via scene tool, direct USPTO API, or fallback."""
     doc_url = (id_url_map or {}).get(patent_id, '')
+    patent_source = params.get('patent_source', 'cnipa')
 
+    # ── Step 1: Try scene tool download ──
     if scene_candidates:
         from sources.long_task.scene_tools import select_tool, execute_tool
 
@@ -575,21 +584,197 @@ async def _download_patent_via_scene_or_fallback(
                 f"text_found={text is not None}, "
                 f"text_length={len(text) if text else 0}"
             )
-            if text:
+            if text and len(text) > 50:
                 return text
-            _pipeline_logger.warning(
-                f"[download] scene_tool_no_text — patent_id={patent_id}, "
-                f"falling back to hardcoded download"
+            _pipeline_logger.info(
+                f"[download] scene_tool_short_text ({len(text) if text else 0} chars), "
+                f"trying direct USPTO API"
             )
 
-    # Fallback: existing hardcoded download
-    patent_source = params.get('patent_source', 'cnipa')
+    # ── Step 2: Direct USPTO API for US patents ──
+    if patent_source == 'uspto':
+        uspto_text = await _download_uspto_patent_direct(patent_id, flash_provider)
+        if uspto_text and len(uspto_text) > 100:
+            return uspto_text
+        _pipeline_logger.info(
+            f"[download] direct_uspto_failed — patent_id={patent_id}, "
+            f"falling back to hardcoded download"
+        )
+
+    # ── Step 3: Hardcoded download ──
     _pipeline_logger.info(
         f"[download] fallback — patent_id={patent_id}, "
-        f"patent_source={patent_source}, "
-        f"scene_candidates_available={scene_candidates is not None}"
+        f"patent_source={patent_source}"
     )
     return await download_patent_document(patent_id, patent_source)
+
+
+async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> str | None:
+    """Download USPTO patent document text directly (two-step).
+
+    Step 1: GET /api/v1/patent/applications/{appNumber}/documents → document list
+    Step 2: LLM picks the specification → GET its download URL → return text
+    """
+    import asyncio
+    import json as _json
+
+    try:
+        from sources.http_outbound import outbound_http
+
+        app_number = patent_id.strip().replace(',', '')
+        headers = {'Accept': 'application/json'}
+        uspto_key = os.getenv('USPTO_API_KEY', '')
+        if uspto_key:
+            headers['X-API-Key'] = uspto_key
+
+        # Step 1: Get document list
+        doc_list_url = (
+            f"https://api.uspto.gov/api/v1/patent/applications/"
+            f"{app_number}/documents"
+        )
+        _pipeline_logger.info(
+            f"[download] uspto_step1 — url={doc_list_url}"
+        )
+        resp = await asyncio.to_thread(
+            outbound_http.get, doc_list_url, purpose='patent_download',
+            headers=headers, timeout=20,
+        )
+        if resp.status_code != 200:
+            _pipeline_logger.warning(
+                f"[download] uspto_step1_failed — status={resp.status_code}"
+            )
+            return None
+
+        doc_list = resp.json() if resp.text else {}
+        documents = (
+            doc_list.get('documentBag', [])
+            if isinstance(doc_list, dict)
+            else []
+        )
+        _pipeline_logger.info(
+            f"[download] uspto_step1_done — doc_count={len(documents)}"
+        )
+
+        if not documents:
+            _pipeline_logger.warning(
+                f"[download] uspto_no_documents — patent_id={app_number}"
+            )
+            return None
+
+        # Step 2: LLM picks the specification document
+        spec_url = None
+        if flash_provider and len(documents) > 1:
+            # Build a compact summary for the LLM
+            doc_lines = []
+            for i, doc in enumerate(documents):
+                if not isinstance(doc, dict):
+                    continue
+                doc_lines.append(_json.dumps({
+                    'index': i,
+                    'documentTypeCode': doc.get('documentTypeCode', ''),
+                    'documentTypeName': doc.get('documentTypeName', ''),
+                    'documentFormat': doc.get('documentFormat', ''),
+                    'fileName': doc.get('fileName', ''),
+                    'pageCount': doc.get('pageCount', ''),
+                }, ensure_ascii=False))
+            try:
+                selection = await flash_provider.complete_json(
+                    "You are a patent document classifier. From a list of USPTO "
+                    "patent application documents, identify the specification "
+                    "(说明书). The specification is typically:\n"
+                    "- documentTypeCode = 'SPEC'\n"
+                    "- The main detailed description of the invention\n"
+                    "- Usually the longest text document, NOT drawings/figures\n"
+                    "- NOT the abstract, claims-only, or search report\n\n"
+                    "Return JSON: {\"selected_index\": <index of specification>, "
+                    "\"reason\": \"<brief explanation>\"}",
+                    f"Patent application: {app_number}\n"
+                    f"Available documents:\n" + "\n".join(doc_lines),
+                )
+                if selection and isinstance(selection, dict):
+                    idx = selection.get('selected_index')
+                    if isinstance(idx, int) and 0 <= idx < len(documents):
+                        doc = documents[idx]
+                        spec_url = (
+                            doc.get('downloadUrl')
+                            or doc.get('documentUrl')
+                            or doc.get('url')
+                        )
+                        _pipeline_logger.info(
+                            f"[download] llm_selected_spec — index={idx}, "
+                            f"type={doc.get('documentTypeCode')}, "
+                            f"reason={selection.get('reason', '')}"
+                        )
+            except Exception as e:
+                _pipeline_logger.warning(
+                    f"[download] llm_spec_selection_failed: {e}"
+                )
+
+        # Fallback: heuristic search for SPEC document
+        if not spec_url:
+            for doc in documents:
+                if not isinstance(doc, dict):
+                    continue
+                doc_type = str(doc.get('documentTypeCode', '') or doc.get('documentType', ''))
+                if 'SPEC' in doc_type.upper():
+                    spec_url = (
+                        doc.get('downloadUrl')
+                        or doc.get('documentUrl')
+                        or doc.get('url')
+                    )
+                    if spec_url:
+                        _pipeline_logger.info(
+                            f"[download] heuristic_spec — type={doc_type}"
+                        )
+                        break
+
+        # Last fallback: first TXT/XML document
+        if not spec_url:
+            for doc in documents:
+                if not isinstance(doc, dict):
+                    continue
+                fmt = str(doc.get('documentFormat', '') or doc.get('format', '')).upper()
+                if 'TXT' in fmt or 'XML' in fmt:
+                    spec_url = (
+                        doc.get('downloadUrl')
+                        or doc.get('documentUrl')
+                        or doc.get('url')
+                    )
+                    if spec_url:
+                        _pipeline_logger.info(
+                            f"[download] fallback_txt — format={fmt}"
+                        )
+                        break
+
+        if not spec_url:
+            _pipeline_logger.warning(
+                f"[download] uspto_no_spec_found — patent_id={app_number}"
+            )
+            return None
+
+        _pipeline_logger.info(
+            f"[download] uspto_step2 — spec_url={spec_url}"
+        )
+        resp2 = await asyncio.to_thread(
+            outbound_http.get, spec_url, purpose='patent_download',
+            headers=headers, timeout=30,
+        )
+        if resp2.status_code != 200:
+            _pipeline_logger.warning(
+                f"[download] uspto_step2_failed — status={resp2.status_code}"
+            )
+            return None
+
+        text = resp2.text or ''
+        _pipeline_logger.info(
+            f"[download] uspto_step2_done — text_length={len(text)}"
+        )
+        return text
+    except Exception as e:
+        _pipeline_logger.warning(
+            f"[download] uspto_direct_error — patent_id={patent_id}, error={e}"
+        )
+        return None
 
 
 def progress_pct(completed: int, total: int) -> int:

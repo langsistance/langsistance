@@ -113,30 +113,56 @@ async def select_tool(
     if not candidates:
         return None
 
-    # Filter to only candidates that have a linked tool
+    # Separate tool candidates (selectable) from workflow knowledge (reference only)
     tool_candidates = [c for c in candidates if c.get("_tool_item")]
+    workflow_candidates = [
+        c for c in candidates
+        if not c.get("_tool_item") and c.get("knowledge_type") in (2, 3)
+    ]
     if not tool_candidates:
         return None
 
-    # Build a compact candidate list for the LLM
-    candidate_lines = []
+    # Build candidate tool list
+    tool_lines = []
     for c in tool_candidates:
-        candidate_lines.append(
-            f"  - id={c['knowledge_id']}, name={c['knowledge_question']}, "
-            f"desc={c['knowledge_description']}, "
-            f"tool={c['tool_title']}, tool_desc={c['tool_description']}"
+        tool_lines.append(
+            f"  [id={c['knowledge_id']}] {c['tool_title']}\n"
+            f"    URL: {c['tool_url']}\n"
+            f"    描述: {c['knowledge_description'] or c['tool_description']}"
         )
-    candidate_text = "\n".join(candidate_lines)
+    tool_text = "\n".join(tool_lines)
+
+    # Build workflow reference (not selectable, but provides context)
+    workflow_text = ""
+    if workflow_candidates:
+        wf_lines = []
+        for c in workflow_candidates:
+            wf_lines.append(
+                f"  - {c['knowledge_question']}: {c['knowledge_description']}"
+            )
+        workflow_text = (
+            "\n\n参考工作流（描述正确的调用方式，但不直接可选）：\n"
+            + "\n".join(wf_lines)
+        )
 
     system_prompt = (
-        "你是一个工具选择器。根据给定的目标和上下文，从候选中选择最合适的工具，"
+        "你是一个工具选择器。根据给定的目标和上下文，从可用工具中选择最合适的工具，"
         "并生成调用该工具所需的参数。\n\n"
         "可用工具：\n"
-        f"{candidate_text}\n\n"
-        "返回 JSON 格式：\n"
-        '{"knowledge_id": <选中的知识ID>, '
-        '"reason": "<选择原因>", '
-        '"params": {"query": {...}, "body": {...}}}'
+        f"{tool_text}"
+        f"{workflow_text}\n\n"
+        "CRITICAL: generate correct `params` for the selected tool. "
+        "For USPTO tools, the URL path typically contains a patent application "
+        "number (e.g. /applications/18331482/documents). "
+        "The `path` param in `params` must include the patent ID from context. "
+        "For search tools, the `query` param must be valid USPTO query syntax "
+        "(e.g. use double quotes for exact phrases, field:value for filters).\n\n"
+        "Return JSON:\n"
+        '{"knowledge_id": <selected tool id>, '
+        '"reason": "<why this tool>", '
+        '"params": {"path": "<URL path segment if needed>", '
+        '"query": {"param_name": "value", ...}, '
+        '"body": {}}}'
     )
 
     result = await flash_provider.complete_json(

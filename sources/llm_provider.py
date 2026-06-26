@@ -31,6 +31,8 @@ def _parse_json_object_response(value):
     if "<think>" in text and "</think>" in text:
         end_idx = text.rfind("</think>") + len("</think>")
         text = text[end_idx:].strip()
+
+    # Try 1: text starts with ``` fence → strip it
     if text.startswith("```"):
         lines = text.splitlines()
         if lines and lines[0].strip().startswith("```"):
@@ -39,10 +41,35 @@ def _parse_json_object_response(value):
             lines = lines[:-1]
         text = "\n".join(lines).strip()
 
-    parsed = json.loads(text)
-    if not isinstance(parsed, dict):
-        raise ValueError("JSON response must decode to an object")
-    return parsed
+    # Try 2: direct JSON parse
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Try 3: find JSON code block (```json ... ```) embedded in markdown
+    import re as _re
+    m = _re.search(r'```(?:json)?\s*\n(\{.*?\})\s*\n```', text, _re.DOTALL)
+    if m:
+        try:
+            parsed = json.loads(m.group(1))
+            if isinstance(parsed, dict):
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # Try 4: find first { ... } object in the text
+    for m in _re.finditer(r'\{[^{}"]*(?:"[^"]*"[^{}"]*)*\}', text):
+        try:
+            parsed = json.loads(m.group())
+            if isinstance(parsed, dict):
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+    raise ValueError(f"No valid JSON object found in LLM response: {text[:200]}")
 
 class Provider:
     def __init__(self, provider_name, model, server_address="127.0.0.1:5000", is_local=False):
