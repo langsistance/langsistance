@@ -252,6 +252,12 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
     if _is_zldjs_api_url(url):
         _inject_zldjs_auth_params(request_params)
 
+    # Auto-inject USPTO API key for api.uspto.gov requests
+    if "api.uspto.gov" in url and "X-API-Key" not in headers:
+        uspto_key = os.getenv("USPTO_API_KEY")
+        if uspto_key:
+            headers["X-API-Key"] = uspto_key
+
     timeout = getattr(tool_info, "timeout", None) or 30
     if method not in {"GET", "POST", "PUT", "DELETE", "PATCH"}:
         raise ValueError(f"Unsupported HTTP method: {method}")

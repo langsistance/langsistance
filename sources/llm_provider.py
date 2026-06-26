@@ -711,19 +711,42 @@ class Provider:
             if chunk.content and callback_handler:
                 await callback_handler.on_llm_new_token(chunk.content)
 
-    async def complete_json(self, system_prompt: str, user_content: str):
+    async def complete_json(self, system_prompt: str, user_content: str, max_retries: int = 2):
         """Run a non-streaming chat completion and parse a JSON object response.
 
         Uses _get_langchain_llm so it works with openai, deepseek, and any
-        OpenAI-compatible provider."""
+        OpenAI-compatible provider.  Retries once on empty or unparseable
+        responses (MiniMax occasionally returns empty content on HTTP 200)."""
         llm = self._get_langchain_llm(streaming=False)
         messages = [
             ("system", system_prompt),
             ("human", user_content),
         ]
-        response = await llm.ainvoke(messages)
-        content = getattr(response, "content", response)
-        return _parse_json_object_response(content)
+        last_error = None
+        for attempt in range(max_retries + 1):
+            response = await llm.ainvoke(messages)
+            content = getattr(response, "content", response)
+            if isinstance(content, str):
+                content = content.strip()
+            if not content:
+                last_error = ValueError("LLM returned empty response")
+                self.logger.warning(
+                    f"complete_json empty response attempt {attempt+1}/{max_retries+1}"
+                )
+                if attempt < max_retries:
+                    continue
+                raise last_error
+            try:
+                return _parse_json_object_response(content)
+            except Exception as e:
+                last_error = e
+                self.logger.warning(
+                    f"complete_json parse error attempt {attempt+1}/{max_retries+1}: {e}"
+                )
+                if attempt < max_retries:
+                    continue
+                raise
+        raise last_error  # type: ignore[misc]
 
     def test_fn(self, tools, history, verbose=True):
         """
