@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { queryStream, getUserSceneStatus, getSceneKnowledge } from '@/services/api'
+import { queryStream, getUserSceneStatus, getSceneKnowledge, pollLongTaskStatus, getLongTaskReportUrl } from '@/services/api'
 import { useI18n } from '@/lib/app-i18n'
 import MarkdownMessage from '@/components/app/MarkdownMessage'
 import { useChatSession } from '@/contexts/ChatContext'
@@ -62,6 +62,7 @@ export default function Chat() {
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const isNearBottomRef = useRef(true)
   const [transientStatus, setTransientStatus] = useState('')
   const [enabledScenes, setEnabledScenes] = useState<any[]>([])
@@ -123,6 +124,7 @@ export default function Chat() {
   async function send() {
     const text = input.trim()
     if (!text || streaming) return
+    stopLongTaskPolling() // Stop any in-progress long task polling
     setInput('')
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
 
@@ -136,11 +138,22 @@ export default function Chat() {
     setStreaming(true)
     setStreamingId(assistantId)
 
+    // Collect the last user + assistant exchange for long-task context
+    const lastExchange: { role: string; content: string }[] = []
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i].role === 'assistant' && lastExchange.length === 0) {
+        lastExchange.unshift({ role: 'assistant', content: messages[i].content })
+      } else if (messages[i].role === 'user' && lastExchange.length === 1) {
+        lastExchange.unshift({ role: 'user', content: messages[i].content })
+        break
+      }
+    }
+
     const controller = new AbortController()
     abortRef.current = controller
 
     try {
-      const body = await queryStream(text, queryId, controller.signal)
+      const body = await queryStream(text, queryId, controller.signal, lastExchange)
       const reader = body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
@@ -192,11 +205,14 @@ export default function Chat() {
               continue
             }
             if (event.type === 'long_task_created') {
+              const taskId = String(event.task_id ?? '')
               setMessages((m) => updateAssistantMessage(m, assistantId,
                 t('chat.longTaskCreated')
-                  .replace('{taskId}', String(event.task_id ?? ''))
+                  .replace('{taskId}', taskId)
                   .replace('{sessionId}', String(event.session_id ?? ''))
               ))
+              // Start polling for progress updates
+              startLongTaskPolling(taskId, assistantId)
               continue
             }
           }
@@ -256,6 +272,60 @@ export default function Chat() {
   function abort() {
     abortRef.current?.abort()
   }
+
+  function stopLongTaskPolling() {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current)
+      pollTimerRef.current = null
+    }
+  }
+
+  function startLongTaskPolling(taskId: string, assistantId: string) {
+    stopLongTaskPolling()
+
+    async function poll() {
+      try {
+        const data = await pollLongTaskStatus(taskId)
+        if (!data || data.status === 'unknown') return
+
+        const phaseLabel = data.current_step || data.current_phase || ''
+        const progress = data.progress != null ? `[${data.progress}%]` : ''
+
+        if (data.status === 'completed' || data.status === 'success') {
+          stopLongTaskPolling()
+          const files = (data.report_files || [])
+            .map((f: { format: string }) => `[${f.format.toUpperCase()}](${getLongTaskReportUrl(taskId, f.format as 'pdf' | 'docx')})`)
+            .join(' | ')
+          setMessages((m) => updateAssistantMessage(m, assistantId,
+            `${t('chat.longTaskCompleted')}\n\n${files}`
+          ))
+        } else if (data.status === 'failed' || data.status === 'error') {
+          stopLongTaskPolling()
+          setMessages((m) => updateAssistantMessage(m, assistantId,
+            `${t('chat.longTaskFailed')} ${data.error_message || ''}`
+          ))
+        } else {
+          setMessages((m) => updateAssistantMessage(m, assistantId,
+            t('chat.longTaskProgress')
+              .replace('{progress}', String(progress))
+              .replace('{phase}', String(phaseLabel))
+          ))
+        }
+      } catch {
+        // Non-fatal poll error; continue polling
+      }
+    }
+
+    // Poll immediately, then every 3s
+    poll()
+    pollTimerRef.current = setInterval(poll, 3000)
+  }
+
+  // Cleanup poll timer on unmount
+  useEffect(() => {
+    return () => stopLongTaskPolling()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return (
     <div className="page active">

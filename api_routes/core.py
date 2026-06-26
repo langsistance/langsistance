@@ -367,9 +367,9 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         task_id = f"lt_{uuid.uuid4().hex[:12]}"
                         session_id = f"sess_{uuid.uuid4().hex[:12]}"
 
-                        # Extract patent_ids from conversation history
+                        # Extract patent_ids from conversation history (from QueryRequest)
                         patent_ids = []
-                        conv_history = getattr(request, 'conversation_history', None) or []
+                        conv_history = request.conversation_history or []
                         for msg in conv_history:
                             if msg.get('role') == 'assistant' and msg.get('patent_data'):
                                 for p in msg['patent_data']:

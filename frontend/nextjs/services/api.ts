@@ -88,15 +88,39 @@ export const markAllMessagesRead = (): ApiResult => post('/messages/read_all', {
 
 // ── Chat Stream ─────────────────────────────────────────────────────────
 
-export async function queryStream(query: string, queryId: string, abortSignal: AbortSignal): Promise<ReadableStream<Uint8Array>> {
+export async function queryStream(
+  query: string,
+  queryId: string,
+  abortSignal: AbortSignal,
+  conversationHistory: { role: string; content: string }[] = [],
+): Promise<ReadableStream<Uint8Array>> {
   const headers = await authHeaders()
   const res = await fetch(`${BASE_URL}/query_stream`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ query, query_id: queryId, push_filter: 2 }),
+    body: JSON.stringify({ query, query_id: queryId, push_filter: 2, conversation_history: conversationHistory }),
     signal: abortSignal,
   })
   if (!res.ok) throw new Error(`/query_stream failed: ${res.status}`)
   if (!res.body) throw new Error('/query_stream: response body is null')
   return res.body
+}
+
+// ── Long Task ─────────────────────────────────────────────────────────────
+
+export async function pollLongTaskStatus(taskId: string): Promise<{
+  success: boolean
+  status: string
+  progress?: number
+  current_phase?: string
+  current_step?: string
+  report_files?: { format: string; filename: string; size: number }[]
+  result_summary?: string
+  error_message?: string
+}> {
+  return get(`/long_task/${taskId}/status`)
+}
+
+export function getLongTaskReportUrl(taskId: string, format: 'pdf' | 'docx' = 'pdf'): string {
+  return `${BASE_URL}/long_task/${taskId}/report?format=${format}`
 }

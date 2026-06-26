@@ -143,7 +143,10 @@ export default {
     sceneHint: 'Available Capabilities',
     sceneSmartQA: 'Smart Q&A',
     sceneDeepResearch: 'Deep Research',
-    longTaskCreated: '🔬 Deep research task submitted (ID: {taskId}), running in background...'
+    longTaskCreated: '🔬 Deep research task submitted (ID: {taskId}), running in background...',
+    longTaskProgress: '🔬 {progress} {phase}',
+    longTaskCompleted: '✅ Deep research task complete. Download report:',
+    longTaskFailed: '❌ Deep research task failed.',
   },
 
   // Knowledge management

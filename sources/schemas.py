@@ -9,6 +9,7 @@ class QueryRequest(BaseModel):
     tts_enabled: bool = True
     tool_data: str = ""  # 新增字段，类型为str，默认为空字符串
     push_filter: Optional[int] = None  # web app passes 2 to restrict to push=2 tools
+    conversation_history: list = []  # 最近一次问答的历史记录 [{role, content, patent_data?}]
 
     def __str__(self):
         return f"Query: {self.query}, Query ID: {self.query_id}, TTS: {self.tts_enabled}, Tool Data: {self.tool_data}"

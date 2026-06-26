@@ -102,7 +102,9 @@ RUN mkdir -p /tmp && chmod 1777 /tmp
 
 # Copy application code
 COPY api.py .
+COPY celery_worker.py .
 COPY sources/ ./sources/
+COPY api_routes/ ./api_routes/
 COPY prompts/ ./prompts/
 COPY crx/ crx/
 COPY llm_router/ llm_router/
