@@ -226,23 +226,6 @@ def extract_patent_id_url_map(
         )
         id_url_map[pid] = url or ""
     return id_url_map
-    """
-    seen = set()
-    ids = []
-    for item in (items or []):
-        if not isinstance(item, dict):
-            continue
-        pid = (
-            item.get("patent_id")
-            or item.get("patentNumber")
-            or item.get("applicationNumberText")
-            or item.get("application_number")
-            or item.get("申请号")
-        )
-        if pid and pid not in seen:
-            seen.add(pid)
-            ids.append(str(pid))
-    return ids
 
 
 def extract_document_text(result: Dict[str, Any]) -> Optional[str]:
