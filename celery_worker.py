@@ -248,6 +248,9 @@ async def _run_pipeline(
                     _pipeline_logger.warning(
                         f"[task={task_id}] PHASE0 extract_patent_ids LLM failed: {e}"
                     )
+            if patent_ids:
+                total = len(patent_ids)
+                pending = patent_ids
 
     # ==== Phase 0: Search patents via scene tools (if no patent_ids provided) ====
     if not patent_ids and scene_candidates:
@@ -422,10 +425,19 @@ async def _run_pipeline(
     )
     update_task_status(task_id, 'generating_report', 80,
                        '正在规划报告结构...')
-    outline = await generate_report_outline(
-        query=params['query'], columns=columns,
-        table_rows=table_rows, provider=pro_provider,
-    )
+    try:
+        outline = await generate_report_outline(
+            query=params['query'], columns=columns,
+            table_rows=table_rows, provider=pro_provider,
+        )
+    except Exception as e:
+        _pipeline_logger.error(
+            f"[task={task_id}] PHASE3 outline FAILED — {e}, falling back to default"
+        )
+        outline = {
+            'title': '专利分析报告',
+            'sections': [{'heading': '分析结果', 'description': ''}],
+        }
     _pipeline_logger.info(
         f"[task={task_id}] PHASE3 outline — "
         f"title={outline.get('title', '')}, "
@@ -439,11 +451,17 @@ async def _run_pipeline(
         sec_pct = 80 + int((idx + 1) / len(sections) * 10)
         update_task_status(task_id, 'generating_report', sec_pct,
                            f'正在撰写：{section["heading"]}')
-        text = await generate_report_section(
-            section=section, query=params['query'],
-            columns=columns, table_rows=table_rows,
-            provider=pro_provider,
-        )
+        try:
+            text = await generate_report_section(
+                section=section, query=params['query'],
+                columns=columns, table_rows=table_rows,
+                provider=pro_provider,
+            )
+        except Exception as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] PHASE3 section[{idx+1}/{len(sections)}] FAILED — {e}"
+            )
+            text = f"（{section['heading']} 生成失败）"
         report_parts.append(f"## {section['heading']}\n\n{text}")
         _pipeline_logger.info(
             f"[task={task_id}] PHASE3 section[{idx+1}/{len(sections)}] — "
