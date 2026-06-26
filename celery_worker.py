@@ -651,6 +651,11 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
             if isinstance(doc_list, dict)
             else []
         )
+        # Log raw first document to debug field names
+        if documents:
+            _pipeline_logger.info(
+                f"[download] uspto_raw_doc[0] — {_json.dumps(documents[0], ensure_ascii=False)[:2000]}"
+            )
         _pipeline_logger.info(
             f"[download] uspto_step1_done — doc_count={len(documents)}"
         )
@@ -661,8 +666,26 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
             )
             return None
 
+        # Helper: get download URL from a document (may be nested in downloadOptionBag)
+        def _get_download_url(doc: dict) -> str:
+            # Direct field
+            for key in ('downloadUrl', 'documentUrl', 'url'):
+                val = doc.get(key, '')
+                if val:
+                    return val
+            # Nested in downloadOptionBag
+            options = doc.get('downloadOptionBag', [])
+            if isinstance(options, list) and options:
+                for opt in options:
+                    if isinstance(opt, dict):
+                        for key in ('downloadUrl', 'url'):
+                            val = opt.get(key, '')
+                            if val:
+                                return val
+            return ''
+
         # Step 2: LLM picks the specification document
-        spec_url = None
+        spec_doc = None
         if flash_provider and len(documents) > 1:
             # Build a compact summary for the LLM
             doc_lines = []
@@ -676,6 +699,7 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
                     'documentFormat': doc.get('documentFormat', ''),
                     'fileName': doc.get('fileName', ''),
                     'pageCount': doc.get('pageCount', ''),
+                    'hasDownloadOptionBag': bool(doc.get('downloadOptionBag')),
                 }, ensure_ascii=False))
             try:
                 selection = await flash_provider.complete_json(
@@ -694,15 +718,10 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
                 if selection and isinstance(selection, dict):
                     idx = selection.get('selected_index')
                     if isinstance(idx, int) and 0 <= idx < len(documents):
-                        doc = documents[idx]
-                        spec_url = (
-                            doc.get('downloadUrl')
-                            or doc.get('documentUrl')
-                            or doc.get('url')
-                        )
+                        spec_doc = documents[idx]
                         _pipeline_logger.info(
                             f"[download] llm_selected_spec — index={idx}, "
-                            f"type={doc.get('documentTypeCode')}, "
+                            f"type={spec_doc.get('documentTypeCode')}, "
                             f"reason={selection.get('reason', '')}"
                         )
             except Exception as e:
@@ -711,65 +730,37 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
                 )
 
         # Fallback: heuristic search for SPEC document
-        if not spec_url:
+        if not spec_doc:
             for doc in documents:
                 if not isinstance(doc, dict):
                     continue
                 doc_type = str(doc.get('documentTypeCode', '') or doc.get('documentType', ''))
                 if 'SPEC' in doc_type.upper():
-                    spec_url = (
-                        doc.get('downloadUrl')
-                        or doc.get('documentUrl')
-                        or doc.get('url')
-                    )
-                    if spec_url:
-                        _pipeline_logger.info(
-                            f"[download] heuristic_spec — type={doc_type}"
-                        )
-                        break
+                    spec_doc = doc
+                    _pipeline_logger.info(f"[download] heuristic_spec — type={doc_type}")
+                    break
 
         # Last fallback: first TXT/XML document
-        if not spec_url:
+        if not spec_doc:
             for doc in documents:
                 if not isinstance(doc, dict):
                     continue
                 fmt = str(doc.get('documentFormat', '') or doc.get('format', '')).upper()
                 if 'TXT' in fmt or 'XML' in fmt:
-                    spec_url = (
-                        doc.get('downloadUrl')
-                        or doc.get('documentUrl')
-                        or doc.get('url')
-                    )
-                    if spec_url:
-                        _pipeline_logger.info(
-                            f"[download] fallback_txt — format={fmt}"
-                        )
-                        break
+                    spec_doc = doc
+                    _pipeline_logger.info(f"[download] fallback_txt — format={fmt}")
+                    break
 
-        if not spec_url:
+        if not spec_doc:
             _pipeline_logger.warning(
                 f"[download] uspto_no_spec_found — patent_id={app_number}"
             )
             return None
 
-        _pipeline_logger.info(
-            f"[download] uspto_step2 — spec_url={spec_url}"
+        # Step 3: Download the specification (may need redirect following)
+        return await _download_uspto_spec_with_redirect(
+            spec_doc, app_number, headers
         )
-        resp2 = await asyncio.to_thread(
-            outbound_http.get, spec_url, purpose='patent_download',
-            headers=headers, timeout=30,
-        )
-        if resp2.status_code != 200:
-            _pipeline_logger.warning(
-                f"[download] uspto_step2_failed — status={resp2.status_code}"
-            )
-            return None
-
-        text = resp2.text or ''
-        _pipeline_logger.info(
-            f"[download] uspto_step2_done — text_length={len(text)}"
-        )
-        return text
     except Exception as e:
         _pipeline_logger.warning(
             f"[download] uspto_direct_error — patent_id={patent_id}, error={e}"
@@ -854,3 +845,104 @@ table{{border-collapse:collapse;width:100%;}}
 th,td{{border:1px solid #ddd;padding:8px;font-size:12px;text-align:left;}}
 th{{background:#f5f5f5;}}</style></head>
 <body>{text_html}{rows_html}</body></html>"""
+
+
+# ── USPTO download helpers ────────────────────────────────────────────────────
+
+import re as _re
+
+def _get_download_url_from_doc(doc: dict) -> str:
+    """Extract the download URL from a USPTO documentBag entry.
+
+    The URL may be at the top level or nested in downloadOptionBag[].downloadUrl.
+    """
+    for key in ('downloadUrl', 'documentUrl', 'url'):
+        val = doc.get(key, '')
+        if val:
+            return val
+    options = doc.get('downloadOptionBag', [])
+    if isinstance(options, list) and options:
+        for opt in options:
+            if isinstance(opt, dict):
+                for key in ('downloadUrl', 'url'):
+                    val = opt.get(key, '')
+                    if val:
+                        return val
+    return ''
+
+
+async def _download_uspto_spec_with_redirect(
+    spec_doc: dict,
+    app_number: str,
+    headers: dict,
+) -> str | None:
+    """Download USPTO specification, following redirect URLs if needed.
+
+    USPTO download URLs may return a text/JSON body containing another URL
+    (e.g. "Please use redirect URL: https://...").  We follow at most one
+    redirect.  Pattern taken from uspto_download.py.
+    """
+    import asyncio
+
+    from sources.http_outbound import outbound_http
+
+    spec_url = _get_download_url_from_doc(spec_doc)
+    if not spec_url:
+        _pipeline_logger.warning(
+            f"[download] uspto_spec_no_url — app={app_number}"
+        )
+        return None
+
+    for hop in range(2):  # max 1 redirect
+        _pipeline_logger.info(
+            f"[download] uspto_spec_hop{hop} — url={spec_url[:120]}"
+        )
+        resp = await asyncio.to_thread(
+            outbound_http.get, spec_url, purpose='patent_download',
+            headers=headers, timeout=30,
+        )
+        if resp.status_code != 200:
+            _pipeline_logger.warning(
+                f"[download] uspto_spec_hop{hop}_failed — status={resp.status_code}"
+            )
+            return None
+
+        content_type = resp.headers.get('Content-Type', '').lower()
+        content = resp.text or ''
+
+        # If response looks like a file (not text/JSON), return it directly
+        if content_type and not any(t in content_type for t in ('text/', 'json', 'xml', 'html')):
+            _pipeline_logger.info(
+                f"[download] uspto_spec_binary — type={content_type}, len={len(resp.content)}"
+            )
+            # For binary, return the text if decodeable
+            try:
+                return resp.content.decode('utf-8', errors='replace')
+            except Exception:
+                return content
+
+        # Check if the text response contains a redirect URL
+        stripped = content.strip()
+        if not stripped:
+            _pipeline_logger.warning(
+                f"[download] uspto_spec_empty — app={app_number}"
+            )
+            return None
+
+        # Try to extract a redirect URL from the response
+        from sources.dynamic_tool_params import _extract_first_url
+        redirect_url = _extract_first_url(stripped)
+        if redirect_url and redirect_url != spec_url:
+            _pipeline_logger.info(
+                f"[download] uspto_spec_redirect — to={redirect_url[:120]}"
+            )
+            spec_url = redirect_url
+            continue
+
+        # No redirect: this IS the content
+        _pipeline_logger.info(
+            f"[download] uspto_spec_done — len={len(stripped)}"
+        )
+        return stripped
+
+    return None
