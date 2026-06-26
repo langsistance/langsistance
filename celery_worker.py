@@ -594,8 +594,9 @@ async def _download_patent_via_scene_or_fallback(
             # text), go to direct USPTO download to fetch the actual specification.
             is_doc_list = (
                 text and len(text) > 50
-                and ('"documentBag"' in text or '"documentTypeCode"' in text
-                     or '"downloadOptionBag"' in text)
+                and ('documentBag' in text or 'documentTypeCode' in text
+                     or 'downloadOptionBag' in text
+                     or 'document_code' in text.lower())
             )
             if text and len(text) > 50 and not is_doc_list:
                 return text

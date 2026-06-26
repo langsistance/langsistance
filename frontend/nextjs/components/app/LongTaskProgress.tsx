@@ -18,12 +18,19 @@ interface TaskState {
 function parseTaskContent(content: string): TaskState | null {
   if (!content) return null
 
-  // Detect long task content: starts with 🔬
-  if (!content.includes('🔬')) return null
+  // Detect long task content
+  const isLongTask = content.includes('🔬') || content.includes('✅') || content.includes('❌')
+  if (!isLongTask) return null
 
-  // Extract task ID
+  // Extract task ID from text or URL
+  let taskId = ''
   const idMatch = content.match(/任务ID:\s*(lt_\w+)/)
-  const taskId = idMatch ? idMatch[1] : ''
+  if (idMatch) {
+    taskId = idMatch[1]
+  } else {
+    const urlMatch = content.match(/long_task\/(lt_\w+)/)
+    if (urlMatch) taskId = urlMatch[1]
+  }
 
   // Extract progress percentage
   const pctMatch = content.match(/\[(\d+)%\]/)
