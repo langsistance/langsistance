@@ -480,30 +480,41 @@ async def _run_pipeline(
     # ==== Phase 4: Export files ====
     from sources.long_task.storage import get_storage_config
     storage_cfg = get_storage_config()
-    storage = create_storage(storage_cfg)
+    try:
+        storage = create_storage(storage_cfg)
+    except Exception as e:
+        _pipeline_logger.error(
+            f"[task={task_id}] PHASE4 storage_init FAILED — {e}, falling back to local"
+        )
+        storage = create_storage({'report_storage_backend': 'local'})
     _pipeline_logger.info(
         f"[task={task_id}] PHASE4 export — "
         f"storage_backend={storage_cfg.get('report_storage_backend', 'local')}"
     )
 
-    update_task_status(task_id, 'exporting', 92, '正在生成 PDF 文件...')
-    pdf_bytes = await export_pdf_async(report_text, table_rows, columns)
-    await storage.put(task_id, 'report.pdf', pdf_bytes)
-    _pipeline_logger.info(
-        f"[task={task_id}] PHASE4 pdf — size_bytes={len(pdf_bytes)}"
-    )
+    report_files = []
+    try:
+        update_task_status(task_id, 'exporting', 92, '正在生成 PDF 文件...')
+        pdf_bytes = await export_pdf_async(report_text, table_rows, columns)
+        await storage.put(task_id, 'report.pdf', pdf_bytes)
+        _pipeline_logger.info(
+            f"[task={task_id}] PHASE4 pdf — size_bytes={len(pdf_bytes)}"
+        )
+        report_files.append({'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes)})
+    except Exception as e:
+        _pipeline_logger.error(f"[task={task_id}] PHASE4 pdf FAILED — {e}")
 
-    update_task_status(task_id, 'exporting', 96, '正在生成 Word 文件...')
-    docx_bytes = await export_docx_async(report_text, table_rows, columns)
-    await storage.put(task_id, 'report.docx', docx_bytes)
-    _pipeline_logger.info(
-        f"[task={task_id}] PHASE4 docx — size_bytes={len(docx_bytes)}"
-    )
+    try:
+        update_task_status(task_id, 'exporting', 96, '正在生成 Word 文件...')
+        docx_bytes = await export_docx_async(report_text, table_rows, columns)
+        await storage.put(task_id, 'report.docx', docx_bytes)
+        _pipeline_logger.info(
+            f"[task={task_id}] PHASE4 docx — size_bytes={len(docx_bytes)}"
+        )
+        report_files.append({'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes)})
+    except Exception as e:
+        _pipeline_logger.error(f"[task={task_id}] PHASE4 docx FAILED — {e}")
 
-    report_files = [
-        {'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes)},
-        {'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes)},
-    ]
     _pipeline_logger.info(
         f"[task={task_id}] COMPLETED — "
         f"patents_analyzed={len(table_rows)}, "
@@ -591,11 +602,16 @@ def progress_pct(completed: int, total: int) -> int:
 async def export_pdf_async(report_text: str, table_rows: list, columns: list) -> bytes:
     """Export report as PDF using weasyprint, run in executor."""
     import asyncio
-    import weasyprint
+    import traceback
 
     def _sync_export():
         html = _build_report_html(report_text, table_rows, columns)
-        return weasyprint.HTML(string=html).write_pdf()
+        try:
+            import weasyprint
+            return weasyprint.HTML(string=html).write_pdf()
+        except Exception:
+            _pipeline_logger.error(f"weasyprint PDF export failed:\n{traceback.format_exc()}")
+            raise
 
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _sync_export)

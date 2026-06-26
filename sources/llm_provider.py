@@ -712,26 +712,45 @@ class Provider:
                 await callback_handler.on_llm_new_token(chunk.content)
 
     async def complete_json(self, system_prompt: str, user_content: str, max_retries: int = 2):
-        """Run a non-streaming chat completion and parse a JSON object response.
+        """Run a streaming chat completion, collect all chunks, parse JSON.
 
-        Uses _get_langchain_llm so it works with openai, deepseek, and any
-        OpenAI-compatible provider.  Retries once on empty or unparseable
-        responses (MiniMax occasionally returns empty content on HTTP 200)."""
-        llm = self._get_langchain_llm(streaming=False)
+        Uses streaming mode because MiniMax's non-streaming ChatCompletions
+        returns empty content on HTTP 200 for some models."""
         messages = [
             ("system", system_prompt),
             ("human", user_content),
         ]
         last_error = None
         for attempt in range(max_retries + 1):
-            response = await llm.ainvoke(messages)
-            content = getattr(response, "content", response)
-            if isinstance(content, str):
-                content = content.strip()
-            if not content:
-                last_error = ValueError("LLM returned empty response")
+            try:
+                # Collect full response via streaming (works reliably for MiniMax)
+                llm = self._get_langchain_llm(streaming=True)
+                raw_chunks = []
+                chunks = []
+                async for chunk in llm.astream(messages):
+                    raw_chunks.append(repr(chunk))
+                    if chunk.content:
+                        chunks.append(chunk.content)
+                content = "".join(chunks).strip()
+                self.logger.info(
+                    f"complete_json chunk_count={len(raw_chunks)}, "
+                    f"content_len={len(content)}, "
+                    f"first_chunk={raw_chunks[0] if raw_chunks else 'NONE'}, "
+                    f"content[:300]={content[:300]}"
+                )
+            except Exception as e:
+                last_error = e
                 self.logger.warning(
-                    f"complete_json empty response attempt {attempt+1}/{max_retries+1}"
+                    f"complete_json stream error attempt {attempt+1}/{max_retries+1}: {e}"
+                )
+                if attempt < max_retries:
+                    continue
+                raise
+
+            if not content:
+                last_error = ValueError("LLM returned empty response (all attempts)")
+                self.logger.warning(
+                    f"complete_json empty stream attempt {attempt+1}/{max_retries+1}"
                 )
                 if attempt < max_retries:
                     continue
