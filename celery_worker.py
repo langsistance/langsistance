@@ -1055,10 +1055,23 @@ def _build_report_html(report_text: str, table_rows: list, columns: list) -> str
 
     text_html = report_text.replace('\n', '<br>')
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8">
-<style>body{{font-family:sans-serif;max-width:900px;margin:0 auto;padding:20px;}}
-table{{border-collapse:collapse;width:100%;}}
+<style>
+body{{
+  font-family: 'Noto Sans CJK SC', 'Noto Sans SC', 'Noto Sans',
+               'WenQuanYi Micro Hei', 'Microsoft YaHei',
+               'PingFang SC', 'Hiragino Sans GB',
+               'Arial', 'Helvetica Neue', sans-serif;
+  max-width:900px;margin:0 auto;padding:20px;
+  font-size:14px;line-height:1.8;color:#222;
+}}
+h1{{font-size:22px;font-weight:700;border-bottom:2px solid #10A37F;padding-bottom:8px;}}
+h2{{font-size:18px;font-weight:700;margin-top:24px;}}
+h3{{font-size:15px;font-weight:600;}}
+table{{border-collapse:collapse;width:100%;margin:16px 0;}}
 th,td{{border:1px solid #ddd;padding:8px;font-size:12px;text-align:left;}}
-th{{background:#f5f5f5;}}</style></head>
+th{{background:#f5f5f5;font-weight:600;}}
+tr:nth-child(even){{background:#fafafa;}}
+</style></head>
 <body>{text_html}{rows_html}</body></html>"""
 
 
