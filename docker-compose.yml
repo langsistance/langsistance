@@ -46,6 +46,7 @@ services:
       dockerfile: Dockerfile.backend
     volumes:
       - ./:/app
+      - ${WORK_DIR:-.}:/opt/workspace
     command: celery -A celery_worker worker --loglevel=info --concurrency=1
     working_dir: /app
     environment:

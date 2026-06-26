@@ -100,12 +100,24 @@ async def generate_patent_summary(
         f"{k}: {v}" for k, v in row.items()
         if k not in ('patent_id', '_failed', '_failure_reason', '_summary')
     )
-    system_prompt = "你是一个专利分析专家。基于分析结果，用 2-3 句话总结该专利的核心发现。"
+    system_prompt = (
+        "你是一个专利分析专家。基于分析结果，用 2-3 句话总结该专利的核心发现。"
+        "直接输出总结内容，不要输出 JSON。"
+    )
     user_content = (
         f"用户问题：{query}\n"
         f"专利：{patent_id}\n"
         f"分析结果：\n{row_str}\n\n"
         f"请给出简洁总结。"
     )
-    result = await provider.complete_json(system_prompt, user_content)
-    return result.get('summary', '')
+    # Use streaming for free-text output (not complete_json)
+    llm = provider._get_langchain_llm(streaming=True)
+    messages = [("system", system_prompt), ("human", user_content)]
+    chunks = []
+    async for chunk in llm.astream(messages):
+        if chunk.content:
+            chunks.append(chunk.content)
+    text = "".join(chunks).strip()
+    if "</think>" in text:
+        text = text[text.rfind("</think>") + len("</think>"):].strip()
+    return text or ""

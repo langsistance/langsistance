@@ -220,28 +220,34 @@ async def _run_pipeline(
                 try:
                     extract_result = await flash_provider.complete_json(
                         "You are a patent ID extractor. "
-                        "Extract all patent application numbers or publication numbers "
-                        "from the provided text. "
-                        "These can be USPTO format (e.g. 18/234,567), "
-                        "CNIPA format (e.g. CN202111325396A), "
-                        "or other national formats. "
+                        "Extract all patent APPLICATION NUMBERS from the provided text. "
+                        "For USPTO: application numbers are PURE 8-DIGIT NUMBERS "
+                        "(e.g. 18331482) or slash format (e.g. 18/234567). "
+                        "Publication numbers like US20230310100A1 are NOT application "
+                        "numbers — find the corresponding 8-digit application number "
+                        "in the text instead. "
+                        "For CNIPA: format CNxxxxxxxxxA (e.g. CN202111325396A). "
                         "Return ONLY a JSON object: "
                         '{"patent_ids": ["id1", "id2", ...], '
                         '"source": "uspto" or "cnipa" or "unknown"}. '
-                        "Do not include patent titles or descriptions, only the ID strings.",
+                        "Only include application numbers, not publication numbers or grant numbers.",
                         f"Extract all patent/application IDs from:\n\n{history_text[:4000]}",
                     )
                     if extract_result and isinstance(extract_result, dict):
                         extracted = extract_result.get('patent_ids', [])
                         if isinstance(extracted, list) and extracted:
-                            # Normalize: strip commas, US prefix, whitespace
+                            import re as _re2
+                            # Normalize: strip commas, US prefix, kind codes, whitespace
                             normalized = []
                             for pid in extracted:
-                                pid = str(pid).strip().replace(',', '')
-                                # Strip "US" prefix if present (e.g. US20230310100A1)
+                                pid = str(pid).strip().replace(',', '').replace('/', '')
+                                # Strip "US" prefix
                                 if pid.upper().startswith('US') and len(pid) > 2:
                                     pid = pid[2:]
-                                if pid:
+                                # Strip kind code suffix (A1, A2, B1, B2, etc.)
+                                pid = _re2.sub(r'[AB]\d$', '', pid)
+                                # US application numbers are EXACTLY 8 digits
+                                if pid and pid.isdigit() and len(pid) == 8:
                                     normalized.append(pid)
                             patent_ids = sorted(set(normalized))[:max_patents]
                             params['patent_source'] = extract_result.get('source', 'cnipa')
@@ -584,12 +590,27 @@ async def _download_patent_via_scene_or_fallback(
                 f"text_found={text is not None}, "
                 f"text_length={len(text) if text else 0}"
             )
-            if text and len(text) > 50:
-                return text
-            _pipeline_logger.info(
-                f"[download] scene_tool_short_text ({len(text) if text else 0} chars), "
-                f"trying direct USPTO API"
+            # If the result looks like a document list (JSON metadata, not patent
+            # text), go to direct USPTO download to fetch the actual specification.
+            is_doc_list = (
+                text and len(text) > 50
+                and ('"documentBag"' in text or '"documentTypeCode"' in text
+                     or '"downloadOptionBag"' in text)
             )
+            if text and len(text) > 50 and not is_doc_list:
+                return text
+            if is_doc_list:
+                _pipeline_logger.info(
+                    f"[download] scene_tool_returned_doc_list "
+                    f"({len(text)} chars), "
+                    f"trying direct USPTO API for specification"
+                )
+            else:
+                _pipeline_logger.info(
+                    f"[download] scene_tool_short_text "
+                    f"({len(text) if text else 0} chars), "
+                    f"trying direct USPTO API"
+                )
 
     # ── Step 2: Direct USPTO API for US patents ──
     if patent_source == 'uspto':
@@ -621,7 +642,14 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
     try:
         from sources.http_outbound import outbound_http
 
-        app_number = patent_id.strip().replace(',', '')
+        # Normalize: strip commas, slashes, non-digits (US app numbers are pure digits)
+        app_number = patent_id.strip().replace(',', '').replace('/', '')
+        app_number = ''.join(c for c in app_number if c.isdigit())
+        if not app_number or len(app_number) < 8:
+            _pipeline_logger.warning(
+                f"[download] uspto_invalid_app_number — patent_id={patent_id}"
+            )
+            return None
         headers = {'Accept': 'application/json'}
         uspto_key = os.getenv('USPTO_API_KEY', '')
         if uspto_key:
@@ -651,10 +679,24 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
             if isinstance(doc_list, dict)
             else []
         )
-        # Log raw first document to debug field names
+        # Log raw document list for debugging
         if documents:
             _pipeline_logger.info(
-                f"[download] uspto_raw_doc[0] — {_json.dumps(documents[0], ensure_ascii=False)[:2000]}"
+                f"[download] uspto_raw_doc[0] — {_json.dumps(documents[0], ensure_ascii=False)[:3000]}"
+            )
+            # Compact summary: index | typeCode | typeName | format | fileName
+            doc_summary = []
+            for i, doc in enumerate(documents):
+                if not isinstance(doc, dict):
+                    continue
+                doc_summary.append(
+                    f"[{i}] code={doc.get('documentTypeCode','?')} "
+                    f"type={doc.get('documentTypeName','?')} "
+                    f"fmt={doc.get('documentFormat','?')} "
+                    f"file={doc.get('fileName','?')}"
+                )
+            _pipeline_logger.info(
+                f"[download] uspto_doc_summary —\n" + "\n".join(doc_summary)
             )
         _pipeline_logger.info(
             f"[download] uspto_step1_done — doc_count={len(documents)}"
@@ -758,6 +800,13 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
             return None
 
         # Step 3: Download the specification (may need redirect following)
+        _pipeline_logger.info(
+            f"[download] uspto_spec_selected — "
+            f"code={spec_doc.get('documentTypeCode','?')}, "
+            f"type={spec_doc.get('documentTypeName','?')}, "
+            f"fmt={spec_doc.get('documentFormat','?')}, "
+            f"file={spec_doc.get('fileName','?')}"
+        )
         return await _download_uspto_spec_with_redirect(
             spec_doc, app_number, headers
         )
@@ -889,9 +938,13 @@ async def _download_uspto_spec_with_redirect(
     spec_url = _get_download_url_from_doc(spec_doc)
     if not spec_url:
         _pipeline_logger.warning(
-            f"[download] uspto_spec_no_url — app={app_number}"
+            f"[download] uspto_spec_no_url — app={app_number}, "
+            f"spec_doc_keys={list(spec_doc.keys()) if spec_doc else 'N/A'}"
         )
         return None
+    _pipeline_logger.info(
+        f"[download] uspto_spec_url_extracted — url={spec_url}"
+    )
 
     for hop in range(2):  # max 1 redirect
         _pipeline_logger.info(
