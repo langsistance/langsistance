@@ -200,6 +200,53 @@ async def _run_pipeline(
                 )
     id_url_map = {}          # patent_id → document_url from search results
 
+    # ==== Phase 0-prep: Extract patent IDs from conversation history via LLM ====
+    # When the user says "从这3条中筛选"/"filter these 3", the patent IDs are
+    # in the previous assistant response text but not in structured patent_data.
+    if not patent_ids:
+        conv_history = params.get('conversation_history', [])
+        if conv_history:
+            history_text = "\n".join(
+                msg.get('content', '') for msg in conv_history
+                if msg.get('role') == 'assistant'
+            )
+            if history_text and len(history_text) > 100:
+                _pipeline_logger.info(
+                    f"[task={task_id}] PHASE0 extract_patent_ids_from_history — "
+                    f"history_text_length={len(history_text)}"
+                )
+                try:
+                    extract_result = await flash_provider.complete_json(
+                        "You are a patent ID extractor. "
+                        "Extract all patent application numbers or publication numbers "
+                        "from the provided text. "
+                        "These can be USPTO format (e.g. 18/234,567), "
+                        "CNIPA format (e.g. CN202111325396A), "
+                        "or other national formats. "
+                        "Return ONLY a JSON object: "
+                        '{"patent_ids": ["id1", "id2", ...], '
+                        '"source": "uspto" or "cnipa" or "unknown"}. '
+                        "Do not include patent titles or descriptions, only the ID strings.",
+                        f"Extract all patent/application IDs from:\n\n{history_text[:4000]}",
+                    )
+                    if extract_result and isinstance(extract_result, dict):
+                        extracted = extract_result.get('patent_ids', [])
+                        if isinstance(extracted, list) and extracted:
+                            patent_ids = sorted(set(
+                                str(pid) for pid in extracted
+                            ))[:max_patents]
+                            params['patent_source'] = extract_result.get('source', 'cnipa')
+                            _pipeline_logger.info(
+                                f"[task={task_id}] PHASE0 llm_extracted_patent_ids — "
+                                f"count={len(patent_ids)}, "
+                                f"source={params['patent_source']}, "
+                                f"patent_ids={patent_ids}"
+                            )
+                except Exception as e:
+                    _pipeline_logger.warning(
+                        f"[task={task_id}] PHASE0 extract_patent_ids LLM failed: {e}"
+                    )
+
     # ==== Phase 0: Search patents via scene tools (if no patent_ids provided) ====
     if not patent_ids and scene_candidates:
         from sources.long_task.scene_tools import (

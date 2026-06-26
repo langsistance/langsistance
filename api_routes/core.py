@@ -417,6 +417,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                             'patent_source': 'cnipa',
                             'session_id': session_id,
                             'scene_id': scene_id,
+                            'conversation_history': conv_history,
                         })
                         app_logger.info(f"Long task: Celery task submitted")
 

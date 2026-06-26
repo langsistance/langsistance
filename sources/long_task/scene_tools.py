@@ -191,7 +191,7 @@ def extract_patent_ids(items: List[Dict[str, Any]]) -> List[str]:
     Tries these fields in order: patent_id, patentNumber,
     applicationNumberText, application_number, 申请号.
     """
-    return list(_extract_patent_id_url_map(items).keys())
+    return list(extract_patent_id_url_map(items).keys())
 
 
 def extract_patent_id_url_map(
