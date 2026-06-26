@@ -308,7 +308,7 @@ export default function Chat() {
         } else {
           setMessages((m) => replaceAssistantMessage(m, assistantId,
             t('chat.longTaskProgress')
-              .replace('{progress}', `[${progress}%]`)
+              .replace('{progress}', progress)
               .replace('{phase}', phaseLabel)
           ))
         }

@@ -577,26 +577,23 @@ async def _run_pipeline(
 
     report_files = []
     try:
-        update_task_status(task_id, 'exporting', 92, '正在生成 PDF 文件...')
-        pdf_bytes = await export_pdf_async(report_text, table_rows, columns)
-        await storage.put(task_id, 'report.pdf', pdf_bytes)
-        _pipeline_logger.info(
-            f"[task={task_id}] PHASE4 pdf — size_bytes={len(pdf_bytes)}"
-        )
-        report_files.append({'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes)})
-    except Exception as e:
-        _pipeline_logger.error(f"[task={task_id}] PHASE4 pdf FAILED — {e}")
-
-    try:
-        update_task_status(task_id, 'exporting', 96, '正在生成 Word 文件...')
+        update_task_status(task_id, 'exporting', 90, '正在生成 Word 文件...')
         docx_bytes = await export_docx_async(report_text, table_rows, columns)
         await storage.put(task_id, 'report.docx', docx_bytes)
         _pipeline_logger.info(
             f"[task={task_id}] PHASE4 docx — size_bytes={len(docx_bytes)}"
         )
         report_files.append({'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes)})
+
+        update_task_status(task_id, 'exporting', 95, '正在从 Word 生成 PDF 文件...')
+        pdf_bytes = await export_pdf_async(docx_bytes)
+        await storage.put(task_id, 'report.pdf', pdf_bytes)
+        _pipeline_logger.info(
+            f"[task={task_id}] PHASE4 pdf — size_bytes={len(pdf_bytes)}"
+        )
+        report_files.append({'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes)})
     except Exception as e:
-        _pipeline_logger.error(f"[task={task_id}] PHASE4 docx FAILED — {e}")
+        _pipeline_logger.error(f"[task={task_id}] PHASE4 export FAILED — {e}")
 
     _pipeline_logger.info(
         f"[task={task_id}] COMPLETED — "
@@ -898,22 +895,35 @@ def progress_pct(completed: int, total: int) -> int:
     return 5 + min(70, int(completed / total * 70))
 
 
-async def export_pdf_async(report_text: str, table_rows: list, columns: list) -> bytes:
-    """Export report as PDF using weasyprint, run in executor."""
+async def export_pdf_async(docx_bytes: bytes) -> bytes:
+    """Convert already-generated DOCX to PDF via LibreOffice headless."""
     import asyncio
-    import traceback
+    import tempfile
+    import shutil
 
-    def _sync_export():
-        html = _build_report_html(report_text, table_rows, columns)
+    def _convert():
+        tmpdir = tempfile.mkdtemp(prefix='pdfconv_')
         try:
-            import weasyprint
-            return weasyprint.HTML(string=html).write_pdf()
-        except Exception:
-            _pipeline_logger.error(f"weasyprint PDF export failed:\n{traceback.format_exc()}")
-            raise
+            docx_path = os.path.join(tmpdir, 'report.docx')
+            with open(docx_path, 'wb') as f:
+                f.write(docx_bytes)
+            # LibreOffice headless conversion
+            import subprocess
+            result = subprocess.run(
+                ['libreoffice', '--headless', '--convert-to', 'pdf',
+                 '--outdir', tmpdir, docx_path],
+                capture_output=True, text=True, timeout=60,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"LibreOffice conversion failed: {result.stderr}")
+            pdf_path = os.path.join(tmpdir, 'report.pdf')
+            with open(pdf_path, 'rb') as f:
+                return f.read()
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _sync_export)
+    return await loop.run_in_executor(None, _convert)
 
 
 async def export_docx_async(report_text: str, table_rows: list, columns: list) -> bytes:
@@ -923,7 +933,34 @@ async def export_docx_async(report_text: str, table_rows: list, columns: list) -
     from docx import Document
     from docx.shared import Inches, Pt
     from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+    from lxml import etree
     import re as _re
+
+    # Cross-platform font config for Word/WPS compatibility
+    LATIN_FONT = 'Arial'
+    CJK_FONT = 'Microsoft YaHei'  # 微软雅黑, pre-installed on Windows
+    FALLBACK_FONT = 'SimSun'      # 宋体, universal fallback
+
+    def _set_run_font(run, bold=False, italic=False):
+        """Set cross-platform fonts on a run (Latin + East Asian)."""
+        run.font.name = LATIN_FONT
+        run.bold = bold
+        run.italic = italic
+        # Access XML to set East Asian font
+        rPr = run._element.get_or_add_rPr()
+        rFonts = rPr.find(qn('w:rFonts'))
+        if rFonts is None:
+            rFonts = etree.SubElement(rPr, qn('w:rFonts'))
+        rFonts.set(qn('w:ascii'), LATIN_FONT)
+        rFonts.set(qn('w:hAnsi'), LATIN_FONT)
+        rFonts.set(qn('w:eastAsia'), CJK_FONT)
+        rFonts.set(qn('w:cs'), LATIN_FONT)
+
+    def _set_paragraph_font(paragraph):
+        """Set font on paragraph-level runs if they exist."""
+        for run in paragraph.runs:
+            _set_run_font(run)
 
     def _md_to_docx(doc, markdown_text: str):
         """Convert Markdown text to Word document with proper formatting."""
@@ -936,7 +973,8 @@ async def export_docx_async(report_text: str, table_rows: list, columns: list) -
             m = _re.match(r'^(#{1,4})\s+(.+)', line)
             if m:
                 level = min(len(m.group(1)), 4)
-                doc.add_heading(m.group(2).strip(), level=level)
+                h = doc.add_heading(m.group(2).strip(), level=level)
+                _set_heading_font(h)
                 i += 1
                 continue
 
@@ -968,6 +1006,7 @@ async def export_docx_async(report_text: str, table_rows: list, columns: list) -
             if m:
                 p = doc.add_paragraph(style='List Bullet')
                 _add_formatted_text(p, m.group(1).strip())
+                _set_paragraph_font(p)
                 i += 1
                 continue
 
@@ -976,6 +1015,7 @@ async def export_docx_async(report_text: str, table_rows: list, columns: list) -
             if m:
                 p = doc.add_paragraph(style='List Number')
                 _add_formatted_text(p, m.group(1).strip())
+                _set_paragraph_font(p)
                 i += 1
                 continue
 
@@ -999,40 +1039,62 @@ async def export_docx_async(report_text: str, table_rows: list, columns: list) -
         for part in parts:
             if part.startswith('**') and part.endswith('**'):
                 run = paragraph.add_run(part[2:-2])
-                run.bold = True
+                _set_run_font(run, bold=True)
             elif part.startswith('*') and part.endswith('*'):
                 run = paragraph.add_run(part[1:-1])
-                run.italic = True
+                _set_run_font(run, italic=True)
             else:
-                paragraph.add_run(part)
+                run = paragraph.add_run(part)
+                _set_run_font(run)
 
     def _set_cell_text(cell, text: str):
-        """Set cell text, removing ** markers."""
+        """Set cell text with cross-platform fonts."""
         cell.text = ''
         p = cell.paragraphs[0]
         _add_formatted_text(p, text)
+        _set_paragraph_font(p)
+
+    def _set_heading_font(heading):
+        """Apply cross-platform fonts to a heading paragraph."""
+        for run in heading.runs:
+            _set_run_font(run, bold=True)
 
     def _sync_export():
         doc = Document()
+
+        # Set document default fonts for cross-platform compatibility
+        style = doc.styles['Normal']
+        style.font.name = LATIN_FONT
+        style.font.size = Pt(11)
+        rPr = style.element.get_or_add_rPr()
+        rFonts = etree.SubElement(rPr, qn('w:rFonts'))
+        rFonts.set(qn('w:ascii'), LATIN_FONT)
+        rFonts.set(qn('w:hAnsi'), LATIN_FONT)
+        rFonts.set(qn('w:eastAsia'), CJK_FONT)
+        rFonts.set(qn('w:cs'), LATIN_FONT)
+
         _md_to_docx(doc, report_text)
 
         # Add analysis table at the end
         if table_rows and columns:
-            doc.add_heading('分析数据表', level=2)
+            h = doc.add_heading('分析数据表', level=2)
+            _set_heading_font(h)
             tbl = doc.add_table(rows=1, cols=len(columns))
             tbl.style = 'Table Grid'
             # Header row
             for ci, col in enumerate(columns):
                 cell = tbl.rows[0].cells[ci]
-                cell.text = col
-                for p in cell.paragraphs:
-                    for run in p.runs:
-                        run.bold = True
+                cell.text = ''
+                run = cell.paragraphs[0].add_run(str(col))
+                _set_run_font(run, bold=True)
             # Data rows
             for row_data in table_rows:
                 row = tbl.add_row()
                 for ci, col in enumerate(columns):
-                    row.cells[ci].text = str(row_data.get(col, ''))
+                    cell = row.cells[ci]
+                    cell.text = ''
+                    run = cell.paragraphs[0].add_run(str(row_data.get(col, '')))
+                    _set_run_font(run)
 
         buf = io.BytesIO()
         doc.save(buf)

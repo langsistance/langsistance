@@ -97,8 +97,11 @@ RUN pip3 install --upgrade pip setuptools wheel
 COPY requirements.txt .
 RUN pip install --no-cache-dir --default-timeout=1000 --retries 5 -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# Install Noto CJK fonts for cross-platform Chinese PDF rendering
-RUN apt-get update -y && apt-get install -y fonts-noto-cjk fonts-noto-color-emoji && rm -rf /var/lib/apt/lists/*
+# Install Noto CJK fonts for cross-platform Chinese PDF rendering + LibreOffice for DOCX→PDF
+RUN apt-get update -y && apt-get install -y \
+    fonts-noto-cjk fonts-noto-color-emoji \
+    libreoffice-writer libreoffice-impress \
+ && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /opt/workspace
 RUN mkdir -p /tmp && chmod 1777 /tmp
