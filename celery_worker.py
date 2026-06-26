@@ -847,26 +847,118 @@ async def export_docx_async(report_text: str, table_rows: list, columns: list) -
     import asyncio
     import io
     from docx import Document
+    from docx.shared import Inches, Pt
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    import re as _re
+
+    def _md_to_docx(doc, markdown_text: str):
+        """Convert Markdown text to Word document with proper formatting."""
+        lines = markdown_text.split('\n')
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+
+            # Heading: ### ...
+            m = _re.match(r'^(#{1,4})\s+(.+)', line)
+            if m:
+                level = min(len(m.group(1)), 4)
+                doc.add_heading(m.group(2).strip(), level=level)
+                i += 1
+                continue
+
+            # Table: | col1 | col2 | ...
+            if line.strip().startswith('|') and line.strip().endswith('|') and '---' not in line:
+                # Collect table rows
+                table_rows_md = []
+                while i < len(lines) and lines[i].strip().startswith('|'):
+                    row_line = lines[i].strip()
+                    if '---' not in row_line.replace('|', '').replace('-', '').replace(':', '').strip():
+                        cells = [c.strip() for c in row_line.strip('|').split('|')]
+                        table_rows_md.append(cells)
+                    i += 1
+                if table_rows_md:
+                    num_cols = max(len(r) for r in table_rows_md)
+                    if num_cols > 0:
+                        tbl = doc.add_table(rows=len(table_rows_md), cols=num_cols)
+                        tbl.style = 'Table Grid'
+                        for ri, row_cells in enumerate(table_rows_md):
+                            for ci, cell_text in enumerate(row_cells):
+                                if ci < num_cols:
+                                    cell = tbl.rows[ri].cells[ci]
+                                    _set_cell_text(cell, cell_text)
+                        doc.add_paragraph('')  # spacing
+                continue
+
+            # Bullet list: - or * item
+            m = _re.match(r'^\s*[-*]\s+(.+)', line)
+            if m:
+                p = doc.add_paragraph(style='List Bullet')
+                _add_formatted_text(p, m.group(1).strip())
+                i += 1
+                continue
+
+            # Numbered list: 1. item
+            m = _re.match(r'^\s*\d+[.)]\s+(.+)', line)
+            if m:
+                p = doc.add_paragraph(style='List Number')
+                _add_formatted_text(p, m.group(1).strip())
+                i += 1
+                continue
+
+            # Separator
+            if line.strip() in ('---', '***', '___'):
+                doc.add_paragraph('─' * 60)
+                i += 1
+                continue
+
+            # Regular paragraph
+            if line.strip():
+                p = doc.add_paragraph()
+                _add_formatted_text(p, line.strip())
+            else:
+                doc.add_paragraph('')
+            i += 1
+
+    def _add_formatted_text(paragraph, text: str):
+        """Add text with **bold** and *italic* formatting to a paragraph."""
+        parts = _re.split(r'(\*\*.*?\*\*|\*.*?\*)', text)
+        for part in parts:
+            if part.startswith('**') and part.endswith('**'):
+                run = paragraph.add_run(part[2:-2])
+                run.bold = True
+            elif part.startswith('*') and part.endswith('*'):
+                run = paragraph.add_run(part[1:-1])
+                run.italic = True
+            else:
+                paragraph.add_run(part)
+
+    def _set_cell_text(cell, text: str):
+        """Set cell text, removing ** markers."""
+        cell.text = ''
+        p = cell.paragraphs[0]
+        _add_formatted_text(p, text)
 
     def _sync_export():
         doc = Document()
-        for line in report_text.split('\n'):
-            if line.startswith('# '):
-                doc.add_heading(line[2:], level=1)
-            elif line.startswith('## '):
-                doc.add_heading(line[3:], level=2)
-            elif line.strip():
-                doc.add_paragraph(line.strip())
+        _md_to_docx(doc, report_text)
 
+        # Add analysis table at the end
         if table_rows and columns:
-            table = doc.add_table(rows=1, cols=len(columns))
-            table.style = 'Table Grid'
-            for i, col in enumerate(columns):
-                table.rows[0].cells[i].text = col
+            doc.add_heading('分析数据表', level=2)
+            tbl = doc.add_table(rows=1, cols=len(columns))
+            tbl.style = 'Table Grid'
+            # Header row
+            for ci, col in enumerate(columns):
+                cell = tbl.rows[0].cells[ci]
+                cell.text = col
+                for p in cell.paragraphs:
+                    for run in p.runs:
+                        run.bold = True
+            # Data rows
             for row_data in table_rows:
-                row = table.add_row()
-                for i, col in enumerate(columns):
-                    row.cells[i].text = str(row_data.get(col, ''))
+                row = tbl.add_row()
+                for ci, col in enumerate(columns):
+                    row.cells[ci].text = str(row_data.get(col, ''))
 
         buf = io.BytesIO()
         doc.save(buf)
