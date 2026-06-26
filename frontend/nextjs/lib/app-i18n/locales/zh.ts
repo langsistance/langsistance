@@ -145,7 +145,7 @@ export default {
     sceneDeepResearch: '深度研究',
     longTaskCreated: '🔬 深度研究任务已提交（任务ID: {taskId}），正在后台执行中...',
     longTaskProgress: '🔬 {progress} {phase}',
-    longTaskCompleted: '✅ 深度研究任务已完成，请下载报告：',
+    longTaskCompleted: '✅ 深度研究任务已完成\n\n{files}',
     longTaskFailed: '❌ 深度研究任务执行失败。',
   },
 

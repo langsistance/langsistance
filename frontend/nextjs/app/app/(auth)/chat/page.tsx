@@ -13,6 +13,7 @@ import {
   createChatId,
   createChatMessage,
   updateAssistantMessage,
+  replaceAssistantMessage,
 } from '@/lib/chatSession'
 
 function UserCopyButton({ content }: { content: string }) {
@@ -296,19 +297,19 @@ export default function Chat() {
           const files = (data.report_files || [])
             .map((f: { format: string }) => `[${f.format.toUpperCase()}](${getLongTaskReportUrl(taskId, f.format as 'pdf' | 'docx')})`)
             .join(' | ')
-          setMessages((m) => updateAssistantMessage(m, assistantId,
-            `${t('chat.longTaskCompleted')}\n\n${files}`
+          setMessages((m) => replaceAssistantMessage(m, assistantId,
+            t('chat.longTaskCompleted').replace('{files}', files)
           ))
         } else if (data.status === 'failed' || data.status === 'error') {
           stopLongTaskPolling()
-          setMessages((m) => updateAssistantMessage(m, assistantId,
+          setMessages((m) => replaceAssistantMessage(m, assistantId,
             `${t('chat.longTaskFailed')} ${data.error_message || ''}`
           ))
         } else {
-          setMessages((m) => updateAssistantMessage(m, assistantId,
+          setMessages((m) => replaceAssistantMessage(m, assistantId,
             t('chat.longTaskProgress')
-              .replace('{progress}', String(progress))
-              .replace('{phase}', String(phaseLabel))
+              .replace('{progress}', `[${progress}%]`)
+              .replace('{phase}', phaseLabel)
           ))
         }
       } catch {

@@ -145,7 +145,7 @@ export default {
     sceneDeepResearch: 'Deep Research',
     longTaskCreated: '🔬 Deep research task submitted (ID: {taskId}), running in background...',
     longTaskProgress: '🔬 {progress} {phase}',
-    longTaskCompleted: '✅ Deep research task complete. Download report:',
+    longTaskCompleted: '✅ Deep research task complete\n\n{files}',
     longTaskFailed: '❌ Deep research task failed.',
   },
 

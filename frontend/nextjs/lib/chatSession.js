@@ -19,6 +19,14 @@ export function updateAssistantMessage(messages, messageId, contentDelta) {
   )
 }
 
+export function replaceAssistantMessage(messages, messageId, newContent) {
+  return messages.map((msg) =>
+    msg.id === messageId
+      ? { ...msg, content: newContent }
+      : msg
+  )
+}
+
 export function addAssistantArtifactStart(messages, messageId, event) {
   const artifactId = event.artifact_id || event.artifactId
   if (!artifactId) return messages

@@ -11,6 +11,7 @@ import {
 import { renderMarkdownToHtml } from '@/lib/markdownRender'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { artifactVisualLabel, orderDownloadArtifacts } from '@/lib/downloadArtifacts'
+import LongTaskProgress from './LongTaskProgress'
 
 interface Props {
   content: string
@@ -208,7 +209,11 @@ export default function MarkdownMessage({ content, artifacts = [], streaming, tr
           <span className="assistant-waiting-scan" aria-hidden="true" />
         </div>
       )}
-      <div dangerouslySetInnerHTML={{ __html: html || '▋' }} />
+      {content.includes('🔬') ? (
+        <LongTaskProgress content={content} streaming={streaming} />
+      ) : (
+        <div dangerouslySetInnerHTML={{ __html: html || '▋' }} />
+      )}
       {!showWaiting && showTransientStatus && (
         <div className="assistant-transient-status" role="status" aria-live="polite">
           <span className="assistant-transient-status-dot" aria-hidden="true" />
