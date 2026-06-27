@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
@@ -8,6 +8,7 @@ import { useI18n } from '@/lib/app-i18n'
 import LanguageToggleButton from '@/components/app/LanguageToggleButton'
 import MessageBell from '@/components/app/MessageBell'
 import FeedbackFAB from '@/components/app/FeedbackFAB'
+import { getSessions, getLongTaskReportUrl, type SessionItem } from '@/services/api'
 
 const NAV_ITEMS = [
   {
@@ -91,7 +92,29 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const [devMode, setDevMode] = useState(getInitialDevMode)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [sessions, setSessions] = useState<SessionItem[]>([])
+  const [sessionsOpen, setSessionsOpen] = useState(true)
   const menuRef = useRef<HTMLDivElement>(null)
+
+  const refreshSessions = useCallback(async () => {
+    try {
+      const list = await getSessions()
+      setSessions(list.slice(0, 20))
+    } catch {
+      // Non-critical; silently fail
+    }
+  }, [])
+
+  // Fetch sessions on mount and when route changes (detect long task completion)
+  useEffect(() => {
+    refreshSessions()
+  }, [refreshSessions, pathname])
+
+  // Re-fetch sessions periodically (for long task updates)
+  useEffect(() => {
+    const timer = setInterval(refreshSessions, 15000)
+    return () => clearInterval(timer)
+  }, [refreshSessions])
 
   useEffect(() => {
     if (!menuOpen) return
@@ -165,6 +188,68 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               </Link>
             ))}
           </nav>
+
+          {sessions.length > 0 && (
+            <div className="session-history">
+              <button
+                className={`session-history-header ${sessionsOpen ? 'expanded' : ''}`}
+                onClick={() => setSessionsOpen(v => !v)}
+              >
+                <span className="session-history-title">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <polyline points="12 6 12 12 16 14" />
+                  </svg>
+                  分析历史
+                </span>
+                <span className="session-count">{sessions.length}</span>
+                <svg
+                  className={`session-chevron ${sessionsOpen ? 'open' : ''}`}
+                  width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"
+                >
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+              {sessionsOpen && (
+                <div className="session-list">
+                  {sessions.map((s) => (
+                    <div key={s.session_id} className="session-item" title={s.title}>
+                      <div className="session-item-main">
+                        <span className="session-item-title">{s.title || '专利分析'}</span>
+                        <span className="session-item-time">
+                          {s.update_time
+                            ? new Date(s.update_time).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                            : ''}
+                        </span>
+                      </div>
+                      {s.long_task_ids && s.long_task_ids.length > 0 && (
+                        <div className="session-item-actions">
+                          {s.long_task_ids.map((tid) => (
+                            <a
+                              key={tid}
+                              href={getLongTaskReportUrl(tid, 'docx')}
+                              className="session-report-link"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title={`下载报告 ${tid}`}
+                            >
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                <polyline points="7 10 12 15 17 10" />
+                                <line x1="12" y1="15" x2="12" y2="3" />
+                              </svg>
+                              DOCX
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="sidebar-footer">
             <button className="nav-item" onClick={toggleDevMode} style={{ cursor: 'pointer' }}>
               <span>{t('developer.pattern')}</span>

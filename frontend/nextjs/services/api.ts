@@ -137,6 +137,25 @@ export async function queryStreamWithFiles(
   return res.body
 }
 
+// ── Sessions ──────────────────────────────────────────────────────────────
+
+export interface SessionItem {
+  session_id: string
+  title: string
+  status: number
+  long_task_ids: string[] | null
+  create_time: string | null
+  update_time: string | null
+}
+
+export async function getSessions(): Promise<SessionItem[]> {
+  const headers = await authHeaders()
+  const res = await fetch(`${BASE_URL}/sessions`, { headers })
+  const data = await res.json()
+  assertApiResponseSuccess(data)
+  return (data.sessions || []) as SessionItem[]
+}
+
 // ── Long Task ─────────────────────────────────────────────────────────────
 
 export async function pollLongTaskStatus(taskId: string): Promise<{
