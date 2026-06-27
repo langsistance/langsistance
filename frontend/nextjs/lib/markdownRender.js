@@ -63,12 +63,18 @@ function configureMarked() {
   marked.use({
     renderer: {
       link(token) {
-        if (isImageUrl(token.href)) {
+        // Resolve bare domain-path URLs (e.g. "res.cnipr.com/path/file.pdf")
+        // so the browser does not treat them as relative paths on our origin.
+        let href = token.href
+        if (looksLikeBareUrl(href)) {
+          href = /^https?:\/\//i.test(href) ? href : `https://${href}`
+        }
+        if (isImageUrl(href)) {
           const altText = token.text || 'image'
-          return `<img src="${escapeAttribute(token.href)}" alt="${escapeAttribute(altText)}">`
+          return `<img src="${escapeAttribute(href)}" alt="${escapeAttribute(altText)}">`
         }
         const title = token.title ? ` title="${escapeAttribute(token.title)}"` : ''
-        return `<a href="${escapeAttribute(token.href)}"${title} target="_blank" rel="noopener noreferrer">${escapeAttribute(token.text)}</a>`
+        return `<a href="${escapeAttribute(href)}"${title} target="_blank" rel="noopener noreferrer">${escapeAttribute(token.text)}</a>`
       },
       codespan(token) {
         const text = token.text || ''
