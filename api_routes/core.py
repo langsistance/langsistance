@@ -408,7 +408,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         """INSERT INTO conversations (session_id, user_id, scene_id, title, messages, long_task_ids)
                            VALUES (%s, %s, %s, %s, %s, %s)""",
                         (session_id, local_user_id, None,
-                         f"专利分析 - {query[:50]}",
+                         f"{query[:60]}",
                          json.dumps(conversation_history, ensure_ascii=False),
                          json.dumps([task_id])))
                     cur.execute(
