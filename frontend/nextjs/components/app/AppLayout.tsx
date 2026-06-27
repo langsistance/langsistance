@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { useI18n } from '@/lib/app-i18n'
 import LanguageToggleButton from '@/components/app/LanguageToggleButton'
@@ -90,14 +90,21 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { t } = useI18n()
   const router = useRouter()
   const pathname = usePathname()
-  const searchParams = useSearchParams()
   const [devMode, setDevMode] = useState(getInitialDevMode)
-  const [activeSid, setActiveSid] = useState<string | null>(null)
 
-  // Derive active session from URL on mount and on navigation
+  // Read active session_id from URL (reliable across full-page refreshes)
+  function getActiveSidFromUrl(): string | null {
+    if (typeof window === 'undefined') return null
+    return new URLSearchParams(window.location.search).get('session_id')
+  }
+  const [activeSid, setActiveSid] = useState<string | null>(getActiveSidFromUrl)
+
+  // Update highlight whenever URL changes (popstate / navigation)
   useEffect(() => {
-    setActiveSid(searchParams.get('session_id'))
-  }, [searchParams])
+    const update = () => setActiveSid(getActiveSidFromUrl())
+    window.addEventListener('popstate', update)
+    return () => window.removeEventListener('popstate', update)
+  }, [])
   const [menuOpen, setMenuOpen] = useState(false)
   const [sessions, setSessions] = useState<SessionItem[]>([])
   const [sessionsOpen, setSessionsOpen] = useState(true)
