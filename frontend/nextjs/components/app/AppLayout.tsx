@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { useI18n } from '@/lib/app-i18n'
 import LanguageToggleButton from '@/components/app/LanguageToggleButton'
@@ -92,8 +92,26 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const [devMode, setDevMode] = useState(getInitialDevMode)
 
-  const searchParams = useSearchParams()
-  const activeSid = searchParams.get('session_id')
+  // Use sessionStorage for reliable highlight across full-page refreshes
+  const [activeSid, setActiveSid] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null
+    return sessionStorage.getItem('copiioai_active_session')
+  })
+
+  // Sync active session from URL on initial load
+  useEffect(() => {
+    const urlSid = new URLSearchParams(window.location.search).get('session_id')
+    if (urlSid) {
+      sessionStorage.setItem('copiioai_active_session', urlSid)
+      setActiveSid(urlSid)
+    }
+  }, [])
+
+  function selectSession(sid: string) {
+    sessionStorage.setItem('copiioai_active_session', sid)
+    setActiveSid(sid)
+    router.push(`/app/chat?session_id=${sid}`)
+  }
   const [menuOpen, setMenuOpen] = useState(false)
   const [sessions, setSessions] = useState<SessionItem[]>([])
   const [sessionsOpen, setSessionsOpen] = useState(true)
@@ -216,12 +234,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               {sessionsOpen && (
                 <div className="session-list">
                   {sessions.map((s) => (
-                    <a
+                    <div
                       key={s.session_id}
-                      href={`/app/chat?session_id=${s.session_id}`}
-                      className={`session-item${pathname === '/app/chat' && activeSid === s.session_id ? ' session-active' : ''}`}
+                      className={`session-item${activeSid === s.session_id ? ' session-active' : ''}`}
                       title={s.title}
-                      style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}
+                      onClick={() => selectSession(s.session_id)}
                     >
                         <div className="session-item-main">
                           <span className="session-item-title">{s.title || '专利分析'}</span>
@@ -252,7 +269,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                             ))}
                           </div>
                         )}
-                      </a>
+                      </div>
                   ))}
                 </div>
               )}

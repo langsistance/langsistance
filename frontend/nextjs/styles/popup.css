@@ -289,7 +289,7 @@ body {
   padding: var(--spacing-2) var(--spacing-2);
   border-radius: var(--radius-md);
   transition: all 0.15s;
-  cursor: default;
+  cursor: pointer;
 }
 
 .session-item:hover {
