@@ -13,15 +13,26 @@ def build_failed_row(patent_id: str, reason: str) -> dict:
 async def generate_table_columns(query: str, patent_count: int, provider) -> list[str]:
     """Phase 1: Use Flash to dynamically generate table column definitions."""
     system_prompt = """你是一个专利分析专家。根据用户的分析问题，确定对比表格需要哪些列。
+
 返回 JSON 格式：{"columns": ["列1", "列2", ...]}
-列数控制在 4-6 列。"专利号"必须是第一列。
-根据问题类型选择列：
-- 技术分析：技术领域、核心技术方案、创新点、相关度
-- 对比分析：申请人、技术方向、核心方案、差异点
-- 风险评估：保护范围、产品对照、风险等级、规避建议"""
-    user_content = f"用户问题：{query}\n专利数量：{patent_count}\n请确定分析表格的列定义。"
+列数控制在 5-8 列。
+
+CRITICAL: 以下 4 列每次分析都必须包含（除非用户明确说不需要）：
+- "专利号"（必须第一列）
+- "发明点"（该专利的核心创新是什么）
+- "解决的技术问题"（该专利针对什么技术痛点）
+- "技术方案"（采用了什么具体方法/结构来实现）
+- "技术效果"（达到了什么效果/性能提升）
+
+根据用户的具体问题，在以上必备列之外增加 1-3 列，例如：
+- 筛选/过滤任务：增加"相关度"、"筛选依据"
+- 对比分析：增加"申请人"、"差异点"
+- 风险评估：增加"风险等级"、"规避建议"
+- 技术分析：增加"技术领域""""
+    user_content = f"用户问题：{query}\n专利数量：{patent_count}\n请确定分析表格的列定义（必须包含发明点、解决的技术问题、技术方案、技术效果）。"
     result = await provider.complete_json(system_prompt, user_content)
-    return result.get('columns', ['专利号', '分析结果'])
+    columns = result.get('columns', ['专利号', '发明点', '解决的技术问题', '技术方案', '技术效果'])
+    return columns
 
 
 async def download_patent_document(patent_id: str, source: str = 'cnipa') -> str:
@@ -78,7 +89,15 @@ async def analyze_single_patent(
   "patent_id": "{patent_id}",
 {col_keys}
 }}
-分析要具体、有依据，基于专利文本内容。"""
+
+分析要求：
+- 基于专利说明书全文，不要编造内容
+- 发明点：用一句话概括该专利最核心的创新
+- 技术问题：说明该专利要解决的具体技术痛点
+- 技术方案：描述采用了什么方法、结构或工艺来实现
+- 技术效果：量化或定性描述达到的效果（如性能提升、成本降低等）
+- 每个维度 2-4 句话，具体有依据
+- 如果某维度在说明书中找不到明确信息，填写"说明书中未明确描述\""""
 
     user_content = f"""用户问题：{query}
 
