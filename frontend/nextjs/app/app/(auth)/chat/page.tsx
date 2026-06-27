@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { useSearchParams } from 'next/navigation'
 import { queryStream, queryStreamWithFiles, getUserSceneStatus, getSceneKnowledge, pollLongTaskStatus, getLongTaskReportUrl, getSession, saveSessionMessages } from '@/services/api'
 import { useI18n } from '@/lib/app-i18n'
 import MarkdownMessage from '@/components/app/MarkdownMessage'
@@ -63,8 +62,12 @@ export default function Chat() {
     sessionId,
     setSessionId,
   } = useChatSession()
-  const searchParams = useSearchParams()
   const sessionLoadedRef = useRef(false)
+
+  function getSidFromUrl(): string | null {
+    if (typeof window === 'undefined') return null
+    return new URLSearchParams(window.location.search).get('session_id')
+  }
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -111,7 +114,7 @@ export default function Chat() {
   // Load session from URL param (and resume long task polling if needed)
   const lastLoadedSidRef = useRef<string | null>(null)
   useEffect(() => {
-    const sid = searchParams.get('session_id')
+    const sid = getSidFromUrl()
     if (!sid) {
       // "新对话" — clear messages if coming from a previous session
       if (lastLoadedSidRef.current) {
@@ -176,7 +179,7 @@ export default function Chat() {
         // Session not found or error — start fresh
       }
     })()
-  }, [searchParams, sessionId, setMessages, setSessionId])
+  }, [sessionId, setMessages, setSessionId])
 
   // Save session after streaming completes — but ONLY if a session already exists
   // (session is created only when a long task is triggered)
