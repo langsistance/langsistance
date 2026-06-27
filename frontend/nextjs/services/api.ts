@@ -128,7 +128,7 @@ export async function queryStreamWithFiles(
   delete headers['content-type']
   const res = await fetch(`${BASE_URL}/query_stream`, {
     method: 'POST',
-    headers: restHeaders,
+    headers: headers,
     body: formData,
     signal: abortSignal,
   })
