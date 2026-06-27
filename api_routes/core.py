@@ -380,11 +380,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
             session_id = f"sess_{uuid.uuid4().hex[:12]}"
             local_user_id = int(user_id)
 
-            import tempfile
-            upload_dir = os.path.join(
-                os.environ.get("WORK_DIR", "/opt/workspace"),
-                "uploads", task_id,
-            )
+            upload_dir = os.path.join("/app", ".uploads", task_id)
             os.makedirs(upload_dir, exist_ok=True)
             patent_file_refs: list[dict] = []
             for filename, content, ct in patent_files:
