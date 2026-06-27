@@ -771,12 +771,15 @@ async def _download_patent_via_scene_or_fallback(
         uspto_text = await _download_uspto_patent_direct(patent_id, flash_provider)
         if uspto_text and len(uspto_text) > 100:
             return uspto_text
-        _pipeline_logger.info(
-            f"[download] direct_uspto_failed — patent_id={patent_id}, "
-            f"falling back to hardcoded download"
+        # No hardcoded fallback for USPTO — raise a clear error so the
+        # pipeline can record the failure properly.
+        raise RuntimeError(
+            f"Failed to extract readable text from USPTO specification for "
+            f"patent {patent_id}. The specification may be a scanned/image PDF "
+            f"without embedded text, and OCR is not available on this server."
         )
 
-    # ── Step 3: Hardcoded download ──
+    # ── Step 3: Hardcoded download (CNIPA or other sources) ──
     _pipeline_logger.info(
         f"[download] fallback — patent_id={patent_id}, "
         f"patent_source={patent_source}"
@@ -865,15 +868,24 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
             )
             return None
 
-        # Step 2: LLM picks the specification document
-        spec_doc = None
+        # Step 2: Collect ALL specification documents (there may be multiple)
+        spec_docs: list[dict] = []
+
+        # Find all SPEC documents heuristically first (fast, no LLM)
+        for doc in documents:
+            if not isinstance(doc, dict):
+                continue
+            code = str(doc.get('documentCode', '') or doc.get('documentTypeCode', ''))
+            desc = str(doc.get('documentCodeDescriptionText', '') or doc.get('documentTypeName', ''))
+            if 'SPEC' in code.upper() or 'specification' in desc.lower():
+                spec_docs.append(doc)
+
+        # If the LLM gave us a preferred index, move that one to the front
         if flash_provider and len(documents) > 1:
-            # Build a compact summary for the LLM
             doc_lines = []
             for i, doc in enumerate(documents):
                 if not isinstance(doc, dict):
                     continue
-                # USPTO fields: documentCode, documentCodeDescriptionText
                 doc_lines.append(_json.dumps({
                     'index': i,
                     'code': doc.get('documentCode') or doc.get('documentTypeCode', ''),
@@ -899,61 +911,81 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
                 if selection and isinstance(selection, dict):
                     idx = selection.get('selected_index')
                     if isinstance(idx, int) and 0 <= idx < len(documents):
-                        spec_doc = documents[idx]
+                        preferred = documents[idx]
                         _pipeline_logger.info(
                             f"[download] llm_selected_spec — index={idx}, "
-                            f"type={spec_doc.get('documentTypeCode')}, "
-                            f"reason={selection.get('reason', '')}"
+                            f"code={preferred.get('documentCode')}, "
+                            f"reason={selection.get('reason', '')[:100]}"
                         )
+                        # Move preferred to front (deduplicate if already in list)
+                        spec_docs = [preferred] + [d for d in spec_docs if d is not preferred]
             except Exception as e:
                 _pipeline_logger.warning(
                     f"[download] llm_spec_selection_failed: {e}"
                 )
 
-        # Fallback: heuristic search for SPEC document
-        if not spec_doc:
-            for doc in documents:
-                if not isinstance(doc, dict):
-                    continue
-                code = str(doc.get('documentCode', '') or doc.get('documentTypeCode', ''))
-                desc = str(doc.get('documentCodeDescriptionText', '') or doc.get('documentTypeName', ''))
-                if 'SPEC' in code.upper() or 'specification' in desc.lower():
-                    spec_doc = doc
-                    _pipeline_logger.info(f"[download] heuristic_spec — code={code}, desc={desc[:60]}")
-                    break
-
-        # Last fallback: first document that looks like it has content (skip admin docs)
-        if not spec_doc:
-            admin_codes = {'N570', 'PTOA', 'IFEE', 'WFEE', 'EGRANT', 'ISSUE.NTF'}
-            for doc in documents:
-                if not isinstance(doc, dict):
-                    continue
-                code = str(doc.get('documentCode', '') or doc.get('documentTypeCode', ''))
-                if code not in admin_codes:
-                    spec_doc = doc
-                    _pipeline_logger.info(f"[download] fallback_first_content — code={code}")
-                    break
-
-        if not spec_doc:
+        if not spec_docs:
             _pipeline_logger.warning(
                 f"[download] uspto_no_spec_found — patent_id={app_number}"
             )
             return None
 
-        # Step 3: Download the specification (may need redirect following)
         _pipeline_logger.info(
-            f"[download] uspto_spec_selected — "
-            f"code={spec_doc.get('documentCode') or spec_doc.get('documentTypeCode','?')}, "
-            f"desc={(spec_doc.get('documentCodeDescriptionText') or spec_doc.get('documentTypeName','?'))[:80]}"
+            f"[download] uspto_spec_candidates — count={len(spec_docs)}, "
+            f"indices={[documents.index(d) for d in spec_docs]}"
         )
-        return await _download_uspto_spec_with_redirect(
-            spec_doc, app_number, headers
+
+        # Step 3: Try each SPEC document until one yields readable text.
+        # DOCX/MS_WORD is preferred over PDF (set in get_download_url_from_doc).
+        for attempt, spec_doc in enumerate(spec_docs):
+            spec_code = spec_doc.get('documentCode') or spec_doc.get('documentTypeCode', '?')
+            spec_desc = (spec_doc.get('documentCodeDescriptionText') or spec_doc.get('documentTypeName', '?'))[:60]
+
+            # Log which format was selected
+            spec_url = get_download_url_from_doc(spec_doc)
+            format_label = _guess_format_from_url(spec_url)
+            _pipeline_logger.info(
+                f"[download] uspto_spec_attempt[{attempt+1}/{len(spec_docs)}] — "
+                f"code={spec_code}, format={format_label}, "
+                f"url={spec_url[:100]}"
+            )
+
+            text = await _download_uspto_spec_with_redirect(
+                spec_doc, app_number, headers,
+            )
+            if text and len(text.strip()) > 200:
+                _pipeline_logger.info(
+                    f"[download] uspto_spec_success[{attempt+1}] — "
+                    f"format={format_label}, chars={len(text)}"
+                )
+                return text
+            _pipeline_logger.info(
+                f"[download] uspto_spec_attempt[{attempt+1}] failed "
+                f"({len(text) if text else 0} chars), trying next..."
+            )
+
+        _pipeline_logger.warning(
+            f"[download] uspto_all_specs_failed — patent_id={app_number}, "
+            f"tried={len(spec_docs)}"
         )
+        return None
     except Exception as e:
         _pipeline_logger.warning(
             f"[download] uspto_direct_error — patent_id={patent_id}, error={e}"
         )
         return None
+
+
+def _guess_format_from_url(url: str) -> str:
+    """Guess the file format from a download URL."""
+    url_lower = url.lower()
+    if url_lower.endswith('.docx') or 'ms_word' in url_lower:
+        return 'DOCX'
+    if url_lower.endswith('.xml') or 'xmlarchive' in url_lower:
+        return 'XML'
+    if url_lower.endswith('.pdf'):
+        return 'PDF'
+    return 'UNKNOWN'
 
 
 def progress_pct(completed: int, total: int) -> int:
