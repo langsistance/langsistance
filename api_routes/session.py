@@ -61,6 +61,40 @@ def register_session_routes(logger, config):
         finally:
             conn.close()
 
+    @router.get("/session-by-id")
+    async def get_session_by_id(session_id: str = Query(..., min_length=1)):
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT session_id, title, status,
+                              long_task_ids, messages, create_time, update_time
+                       FROM conversations
+                       WHERE session_id = %s AND status != 2""",
+                    (session_id,))
+                row = cur.fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Session not found")
+            row['create_time'] = row['create_time'].isoformat() if row['create_time'] else None
+            row['update_time'] = row['update_time'].isoformat() if row['update_time'] else None
+            msgs = row.get('messages')
+            if isinstance(msgs, str):
+                try:
+                    row['messages'] = json.loads(msgs)
+                except (json.JSONDecodeError, TypeError):
+                    row['messages'] = []
+            lt = row.get('long_task_ids')
+            if isinstance(lt, str):
+                try:
+                    row['long_task_ids'] = json.loads(lt)
+                except (json.JSONDecodeError, TypeError):
+                    row['long_task_ids'] = []
+            elif lt is None:
+                row['long_task_ids'] = []
+            return {"success": True, **row}
+        finally:
+            conn.close()
+
     @router.get("/session/{session_id}")
     async def get_session(session_id: str):
         conn = get_db_connection()

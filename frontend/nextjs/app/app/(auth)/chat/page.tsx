@@ -116,7 +116,6 @@ export default function Chat() {
   useEffect(() => {
     const sid = getSidFromUrl()
     if (!sid) {
-      // "新对话" — clear messages if coming from a previous session
       if (lastLoadedSidRef.current) {
         setMessages([])
         setSessionId(null)
@@ -132,7 +131,9 @@ export default function Chat() {
 
     ;(async () => {
       try {
+        console.log('[chat] Loading session:', sid)
         const data = await getSession(sid)
+        console.log('[chat] Session loaded:', data.messages?.length, 'messages')
         const longTaskIds: string[] = data.long_task_ids || []
         if (data.messages && Array.isArray(data.messages)) {
           const loaded = data.messages
@@ -143,7 +144,9 @@ export default function Chat() {
               content: m.content,
               artifacts: [],
             }))
-          setMessages(loaded)
+          if (loaded.length > 0) {
+            setMessages(loaded)
+          }
         }
         setSessionId(sid)
 
@@ -175,8 +178,8 @@ export default function Chat() {
             // Task status check failed — skip
           }
         }
-      } catch {
-        // Session not found or error — start fresh
+      } catch (err) {
+        console.error('[chat] Failed to load session:', sid, err)
       }
     })()
   }, [sessionId, setMessages, setSessionId])

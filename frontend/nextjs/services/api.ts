@@ -163,7 +163,8 @@ export async function getSession(sessionId: string): Promise<{
   long_task_ids: string[] | null
 }> {
   const headers = await authHeaders()
-  const res = await fetch(`${BASE_URL}/session/${sessionId}`, { headers })
+  // Use query-param endpoint to avoid Cloudflare path-param routing issues
+  const res = await fetch(`${BASE_URL}/session-by-id?session_id=${encodeURIComponent(sessionId)}`, { headers })
   const data = await res.json()
   assertApiResponseSuccess(data)
   return data
