@@ -66,6 +66,18 @@ def execute_patent_analysis(self, task_id: str, params: dict):
     # ---- Input dedup + truncation (deterministic ordering) ----
     patent_ids = sorted(set(params.get('patent_ids', [])))
     patent_ids = patent_ids[:max_patents]
+    # Auto-detect USPTO: pure 8-digit numbers are USPTO application IDs
+    if patent_ids and params.get('patent_source', '') != 'uspto':
+        all_uspto = all(
+            pid.isdigit() and len(pid) == 8 for pid in patent_ids
+        )
+        if all_uspto:
+            params['patent_source'] = 'uspto'
+            _pipeline_logger.info(
+                f"[task={task_id}] CONFIG auto_detect_uspto — "
+                f"all {len(patent_ids)} IDs are 8-digit, "
+                f"overriding patent_source to 'uspto'"
+            )
     total = len(patent_ids)
 
     _pipeline_logger.info(
@@ -250,25 +262,37 @@ async def _run_pipeline(
                 "When the user mentions '专利申请号', 'application number', "
                 "or 'patent application', the adjacent numbers ARE the IDs. "
                 "\n\n"
-                "For USPTO: application numbers are PURE 8-DIGIT NUMBERS "
-                "(e.g. 18331482) or slash format (e.g. 18/234567). "
-                "They are labeled '申请号' or 'Application Number' "
-                "or appear in lists like 'ID1, ID2, ID3'. "
-                "DO NOT extract publication numbers (e.g. US20230310100A1) "
-                "or granted patent numbers (e.g. 10299867, 11707334) "
-                "unless they are clearly identified as application numbers. "
-                "\n\n"
+                "—— HOW TO IDENTIFY THE SOURCE COUNTRY ——\n"
+                "CNIPA (China / 中国国家知识产权局) application numbers:\n"
+                "  - Format: YYYY + 8 digits + optional '.' + 1 check digit\n"
+                "  - Examples: 202310123456.7, 2023101234567, 202410567890.1\n"
+                "  - ALWAYS start with the year (2018-2026), 13+ digits total\n"
+                "  - May have a dot before the last digit (check digit)\n\n"
+                "USPTO (United States / 美国专利商标局) application numbers:\n"
+                "  - Format: PURE 8-DIGIT NUMBERS or 2/6 slash format\n"
+                "  - Examples: 18331482, 17429113, 18/333482\n"
+                "  - Exactly 8 consecutive digits, or 2 digits + '/' + 6 digits\n"
+                "  - Do NOT confuse with publication numbers (US20230310100A1)\n"
+                "  - Do NOT confuse with granted patent numbers (e.g. 10299867)\n\n"
+                "DECISION RULE: count the digits.\n"
+                "  - Starts with year (20XX) + 9+ more digits → CNIPA\n"
+                "  - Pure 8-digit number → USPTO\n"
+                "  - If unsure, return 'unknown'\n\n"
                 'Return JSON: {"patent_ids": ["id1", ...], '
                 '"source": "uspto" or "cnipa" or "unknown"}'
             )
             EXTRACT_ONE_PROMPT = (
                 "Extract ALL patent APPLICATION NUMBERS from this text. "
-                "Application numbers are PURE 8-DIGIT or slash format. "
+                "Application numbers can be CNIPA (starts with year like 2023, "
+                "13+ digits, e.g. 202310123456.7) or USPTO (pure 8-digit, "
+                "e.g. 18331482). "
                 "Look for numbers labeled '申请号' or 'Application Number', "
-                "or bare 8-digit numbers that the user refers to as patent/application IDs. "
-                "DO NOT extract publication/grant numbers. "
+                "or bare numbers that the user refers to as patent/application IDs. "
+                "DO NOT extract publication numbers (US-prefixed like US20230310100A1) "
+                "or granted patent numbers. "
                 "If none found, return empty list. "
-                'Return JSON: {"patent_ids": ["id1", ...], "source": "uspto"}'
+                'Return JSON: {"patent_ids": ["id1", ...], '
+                '"source": "uspto" or "cnipa" or "unknown"}'
             )
 
             import re as _re2
@@ -359,7 +383,18 @@ async def _run_pipeline(
                         )
 
             patent_ids = sorted(set(normalized))[:max_patents]
+            # If all extracted IDs are pure 8-digit → almost certainly USPTO
             if patent_ids:
+                all_uspto_like = all(
+                    pid.isdigit() and len(pid) == 8 for pid in patent_ids
+                )
+                if all_uspto_like and patent_source != 'uspto':
+                    _pipeline_logger.info(
+                        f"[task={task_id}] PHASE0 auto_detect_uspto — "
+                        f"all {len(patent_ids)} IDs are 8-digit, "
+                        f"overriding source from '{patent_source}' to 'uspto'"
+                    )
+                    patent_source = 'uspto'
                 params['patent_source'] = patent_source
             _pipeline_logger.info(
                 f"[task={task_id}] PHASE0 llm_extracted_patent_ids — "
