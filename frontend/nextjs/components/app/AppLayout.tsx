@@ -214,12 +214,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               {sessionsOpen && (
                 <div className="session-list">
                   {sessions.map((s) => (
-                    <div
+                    <a
                       key={s.session_id}
+                      href={`/app/chat?session_id=${s.session_id}`}
                       className={`session-item${pathname === '/app/chat' && searchParams?.get('session_id') === s.session_id ? ' session-active' : ''}`}
                       title={s.title}
-                      onClick={() => router.push(`/app/chat?session_id=${s.session_id}`)}
-                      style={{ cursor: 'pointer' }}
+                      style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}
                     >
                         <div className="session-item-main">
                           <span className="session-item-title">{s.title || '专利分析'}</span>
@@ -250,7 +250,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                             ))}
                           </div>
                         )}
-                      </div>
+                      </a>
                   ))}
                 </div>
               )}
