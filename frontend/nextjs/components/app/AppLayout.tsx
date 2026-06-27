@@ -251,21 +251,36 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                         {s.long_task_ids && s.long_task_ids.length > 0 && (
                           <div className="session-item-actions" onClick={e => e.preventDefault()}>
                             {s.long_task_ids.map((tid) => (
-                              <a
-                                key={tid}
-                                href={getLongTaskReportUrl(tid, 'docx')}
-                                className="session-report-link"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                title={`下载报告 ${tid}`}
-                              >
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                  <polyline points="7 10 12 15 17 10" />
-                                  <line x1="12" y1="15" x2="12" y2="3" />
-                                </svg>
-                                DOCX
-                              </a>
+                              <span key={tid} className="session-report-links">
+                                <a
+                                  href={getLongTaskReportUrl(tid, 'pdf')}
+                                  className="session-report-link pdf"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  title={`下载 PDF ${tid}`}
+                                >
+                                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                                    <polyline points="14 2 14 8 20 8"/>
+                                  </svg>
+                                  PDF
+                                </a>
+                                <a
+                                  href={getLongTaskReportUrl(tid, 'docx')}
+                                  className="session-report-link docx"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  title={`下载 DOCX ${tid}`}
+                                >
+                                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                                    <polyline points="14 2 14 8 20 8"/>
+                                    <line x1="16" y1="13" x2="8" y2="13"/>
+                                    <line x1="16" y1="17" x2="8" y2="17"/>
+                                  </svg>
+                                  DOCX
+                                </a>
+                              </span>
                             ))}
                           </div>
                         )}

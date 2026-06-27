@@ -330,23 +330,39 @@ body {
   margin-top: 4px;
 }
 
+.session-report-links {
+  display: flex;
+  gap: 4px;
+}
+
 .session-report-link {
   display: inline-flex;
   align-items: center;
   gap: 3px;
   font-size: 10px;
   font-weight: 600;
-  color: var(--color-primary);
   text-decoration: none;
-  padding: 2px 8px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+  padding: 2px 7px;
+  border-radius: 5px;
   transition: all 0.15s;
 }
 
-.session-report-link:hover {
-  background: color-mix(in srgb, var(--color-primary) 16%, transparent);
-  transform: translateY(-1px);
+.session-report-link.pdf {
+  color: #dc2626;
+  background: #fef2f2;
+}
+
+.session-report-link.pdf:hover {
+  background: #fee2e2;
+}
+
+.session-report-link.docx {
+  color: #2563eb;
+  background: #eff6ff;
+}
+
+.session-report-link.docx:hover {
+  background: #dbeafe;
 }
 
 /* Scrollbar for session list */
