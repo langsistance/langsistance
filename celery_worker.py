@@ -198,18 +198,41 @@ async def _run_pipeline(
 
     # Mode 2 (file upload): extract text from saved files asynchronously
     if patent_file_refs and not patent_texts:
+        total_files = len(patent_file_refs)
         _pipeline_logger.info(
             f"[task={task_id}] FILE_EXTRACT — extracting text from "
-            f"{len(patent_file_refs)} uploaded files"
+            f"{total_files} uploaded files"
         )
+        update_task_status(task_id, 'extracting_text', 0,
+                           f'正在解析上传文件（0/{total_files}）...')
+
         from sources.long_task.text_extractor import extract_text_from_binary
-        for ref in patent_file_refs:
+
+        for idx, ref in enumerate(patent_file_refs):
             pid = ref['filename'].rsplit('.', 1)[0]
+            update_task_status(
+                task_id, 'extracting_text',
+                5 + int((idx / total_files) * 15),
+                f'正在解析：{ref["filename"]}（{idx+1}/{total_files}）...',
+            )
+
+            # Per-page OCR progress callback (updates Redis)
+            ocr_total_pages = [0]
+
+            def _ocr_callback(current: int, total: int):
+                ocr_total_pages[0] = total
+                file_pct = 5 + int(((idx + current / total) / total_files) * 15)
+                update_task_status(
+                    task_id, 'extracting_text', file_pct,
+                    f'OCR识别：{ref["filename"]}（{current}/{total}页）...',
+                )
+
             try:
                 with open(ref['path'], 'rb') as fh:
                     content = fh.read()
                 text = extract_text_from_binary(
                     content, ref.get('content_type', ''), ref['filename'],
+                    on_progress=_ocr_callback,
                 )
                 if text and len(text) > 100:
                     patent_texts[pid] = text
@@ -226,6 +249,7 @@ async def _run_pipeline(
                 _pipeline_logger.error(
                     f"[task={task_id}] FILE_EXTRACT — {ref['filename']}: {e}"
                 )
+
         # Clean up temp upload directory
         if patent_file_refs:
             import shutil as _shutil

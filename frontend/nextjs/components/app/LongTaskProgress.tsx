@@ -84,6 +84,7 @@ function parseTaskContent(content: string): TaskState | null {
 }
 
 const PHASES = [
+  { key: 'extracting_text', label: '文件解析', icon: '📎' },
   { key: 'searching_patents', label: '检索', icon: '🔍' },
   { key: 'generating_columns', label: '分析框架', icon: '📊' },
   { key: 'analyzing', label: '专利分析', icon: '📄' },
@@ -133,7 +134,9 @@ export default function LongTaskProgress({ content, streaming }: Props) {
           {PHASES.map((p) => {
             // Determine which phases are active/completed based on progress
             let status: 'done' | 'active' | 'pending' = 'pending'
-            if (p.key === 'searching_patents' && state.progress >= 2) status = 'done'
+            if (p.key === 'extracting_text' && state.progress >= 20) status = 'done'
+            else if (p.key === 'extracting_text' && state.progress >= 0) status = 'active'
+            else if (p.key === 'searching_patents' && state.progress >= 2) status = 'done'
             else if (p.key === 'generating_columns' && state.progress >= 5) status = 'done'
             else if (p.key === 'analyzing' && state.progress >= 10) status = state.progress < 75 ? 'active' : 'done'
             else if (p.key === 'generating_report' && state.progress >= 80) status = state.progress < 90 ? 'active' : 'done'

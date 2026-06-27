@@ -76,11 +76,18 @@ def get_download_url_from_doc(doc: dict) -> str:
     return ""
 
 
-def extract_text_from_pdf(content: bytes) -> str | None:
+def extract_text_from_pdf(
+    content: bytes,
+    on_progress: "Callable[[int, int], None] | None" = None,
+) -> str | None:
     """Extract text from a PDF binary using pypdf, with OCR fallback.
 
     1. Try pypdf text extraction (works for text-based PDFs)
     2. If insufficient text, fall back to OCR via pytesseract (for scanned/image PDFs)
+
+    Args:
+        content: PDF binary data.
+        on_progress: Optional callback(current_page, total_pages) for OCR progress.
     """
     from pypdf import PdfReader
 
@@ -107,13 +114,21 @@ def extract_text_from_pdf(content: bytes) -> str | None:
 
     # ── OCR fallback for scanned/image PDFs ──
     if reader is not None:
-        return _ocr_from_pdf_reader(reader)
+        return _ocr_from_pdf_reader(reader, on_progress=on_progress)
 
     return None
 
 
-def _ocr_from_pdf_reader(reader) -> str | None:
-    """Extract text from image-based PDF pages using pytesseract OCR."""
+def _ocr_from_pdf_reader(
+    reader,
+    on_progress: "Callable[[int, int], None] | None" = None,
+) -> str | None:
+    """Extract text from image-based PDF pages using pytesseract OCR.
+
+    Args:
+        reader: pypdf.PdfReader with accessible page images.
+        on_progress: Optional callback(current_page, total_pages).
+    """
     tesseract_bin = _find_tesseract_bin()
     if not tesseract_bin:
         _logger.warning("ocr_skipped — tesseract binary not found")
@@ -159,6 +174,12 @@ def _ocr_from_pdf_reader(reader) -> str | None:
             all_text.append("\n".join(page_text))
         else:
             ocr_failures += 1
+
+        if on_progress:
+            try:
+                on_progress(i + 1, page_count)
+            except Exception:
+                pass
 
     extracted = "\n\n".join(all_text).strip()
     successful_pages = page_count - ocr_failures
@@ -235,6 +256,7 @@ def extract_text_from_binary(
     content: bytes,
     content_type: str = "",
     filename: str = "",
+    on_progress: "Callable[[int, int], None] | None" = None,
 ) -> str | None:
     """Route binary content to the appropriate text extractor.
 
@@ -242,6 +264,7 @@ def extract_text_from_binary(
         content: Raw file bytes.
         content_type: MIME type (e.g. 'application/pdf'), optional.
         filename: Original filename used for extension detection, optional.
+        on_progress: Optional callback(current_page, total_pages) for OCR.
 
     Returns:
         Extracted text, or None if extraction fails.
@@ -282,7 +305,7 @@ def extract_text_from_binary(
         or content[:5] == b"%PDF-"
     )
     if is_likely_pdf:
-        return extract_text_from_pdf(content)
+        return extract_text_from_pdf(content, on_progress=on_progress)
 
     # Last resort: try UTF-8 decode
     try:
