@@ -92,19 +92,17 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const [devMode, setDevMode] = useState(getInitialDevMode)
 
-  // Read active session_id from URL (reliable across full-page refreshes)
-  function getActiveSidFromUrl(): string | null {
+  // Derive active session directly from URL on every render
+  const [routerKey, setRouterKey] = useState(0)
+  useEffect(() => {
+    const onNav = () => setRouterKey(k => k + 1)
+    window.addEventListener('popstate', onNav)
+    return () => window.removeEventListener('popstate', onNav)
+  }, [])
+  const activeSid = (() => {
     if (typeof window === 'undefined') return null
     return new URLSearchParams(window.location.search).get('session_id')
-  }
-  const [activeSid, setActiveSid] = useState<string | null>(getActiveSidFromUrl)
-
-  // Update highlight whenever URL changes (popstate / navigation)
-  useEffect(() => {
-    const update = () => setActiveSid(getActiveSidFromUrl())
-    window.addEventListener('popstate', update)
-    return () => window.removeEventListener('popstate', update)
-  }, [])
+  })()
   const [menuOpen, setMenuOpen] = useState(false)
   const [sessions, setSessions] = useState<SessionItem[]>([])
   const [sessionsOpen, setSessionsOpen] = useState(true)
@@ -204,7 +202,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </nav>
 
           {sessions.length > 0 && (
-            <div className="session-history">
+            <div className="session-history" data-nav={routerKey}>
               <button
                 className={`session-history-header ${sessionsOpen ? 'expanded' : ''}`}
                 onClick={() => setSessionsOpen(v => !v)}
