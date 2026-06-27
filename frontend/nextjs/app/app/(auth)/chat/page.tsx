@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { queryStream, queryStreamWithFiles, getUserSceneStatus, getSceneKnowledge, pollLongTaskStatus, getLongTaskReportUrl, getSession, saveSessionMessages } from '@/services/api'
 import { useI18n } from '@/lib/app-i18n'
 import MarkdownMessage from '@/components/app/MarkdownMessage'
@@ -62,12 +63,8 @@ export default function Chat() {
     sessionId,
     setSessionId,
   } = useChatSession()
+  const searchParams = useSearchParams()
   const sessionLoadedRef = useRef(false)
-
-  function getSidFromUrl(): string | null {
-    if (typeof window === 'undefined') return null
-    return new URLSearchParams(window.location.search).get('session_id')
-  }
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -114,7 +111,7 @@ export default function Chat() {
   // Load session from URL param (and resume long task polling if needed)
   const lastLoadedSidRef = useRef<string | null>(null)
   useEffect(() => {
-    const sid = getSidFromUrl()
+    const sid = searchParams.get('session_id')
     if (!sid) {
       if (lastLoadedSidRef.current) {
         setMessages([])
@@ -131,9 +128,7 @@ export default function Chat() {
 
     ;(async () => {
       try {
-        console.log('[chat] Loading session:', sid)
         const data = await getSession(sid)
-        console.log('[chat] Session loaded:', data.messages?.length, 'messages')
         const longTaskIds: string[] = data.long_task_ids || []
         if (data.messages && Array.isArray(data.messages)) {
           const loaded = data.messages
@@ -178,11 +173,11 @@ export default function Chat() {
             // Task status check failed — skip
           }
         }
-      } catch (err) {
-        console.error('[chat] Failed to load session:', sid, err)
+      } catch {
+        // Session not found or error — start fresh
       }
     })()
-  }, [sessionId, setMessages, setSessionId])
+  }, [searchParams, sessionId, setMessages, setSessionId])
 
   // Save session after streaming completes — but ONLY if a session already exists
   // (session is created only when a long task is triggered)
