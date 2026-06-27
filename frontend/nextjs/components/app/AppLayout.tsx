@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { usePathname, useRouter } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { useI18n } from '@/lib/app-i18n'
 import LanguageToggleButton from '@/components/app/LanguageToggleButton'
@@ -92,17 +92,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const [devMode, setDevMode] = useState(getInitialDevMode)
 
-  // Derive active session directly from URL on every render
-  const [routerKey, setRouterKey] = useState(0)
-  useEffect(() => {
-    const onNav = () => setRouterKey(k => k + 1)
-    window.addEventListener('popstate', onNav)
-    return () => window.removeEventListener('popstate', onNav)
-  }, [])
-  const activeSid = (() => {
-    if (typeof window === 'undefined') return null
-    return new URLSearchParams(window.location.search).get('session_id')
-  })()
+  const searchParams = useSearchParams()
+  const activeSid = searchParams.get('session_id')
   const [menuOpen, setMenuOpen] = useState(false)
   const [sessions, setSessions] = useState<SessionItem[]>([])
   const [sessionsOpen, setSessionsOpen] = useState(true)
@@ -202,7 +193,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </nav>
 
           {sessions.length > 0 && (
-            <div className="session-history" data-nav={routerKey}>
+            <div className="session-history">
               <button
                 className={`session-history-header ${sessionsOpen ? 'expanded' : ''}`}
                 onClick={() => setSessionsOpen(v => !v)}
