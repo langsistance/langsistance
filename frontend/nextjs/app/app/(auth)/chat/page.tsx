@@ -108,11 +108,24 @@ export default function Chat() {
       .catch(() => {})
   }, [])
 
-  // Load session from URL param on mount (and resume long task polling if needed)
+  // Load session from URL param (and resume long task polling if needed)
+  const lastLoadedSidRef = useRef<string | null>(null)
   useEffect(() => {
     const sid = searchParams.get('session_id')
-    if (!sid || sessionLoadedRef.current) return
-    if (sid === sessionId) return
+    if (!sid) {
+      // "新对话" — clear messages if coming from a previous session
+      if (lastLoadedSidRef.current) {
+        setMessages([])
+        setSessionId(null)
+        lastLoadedSidRef.current = null
+        sessionLoadedRef.current = false
+      }
+      return
+    }
+    if (sid === lastLoadedSidRef.current) return
+
+    lastLoadedSidRef.current = sid
+    sessionLoadedRef.current = true
 
     ;(async () => {
       try {
@@ -130,7 +143,6 @@ export default function Chat() {
           setMessages(loaded)
         }
         setSessionId(sid)
-        sessionLoadedRef.current = true
 
         // Resume polling for any incomplete long tasks
         for (const tid of longTaskIds) {
