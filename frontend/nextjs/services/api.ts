@@ -122,8 +122,10 @@ export async function queryStreamWithFiles(
     formData.append('patent_files', file)
   }
   const headers = await authHeaders()
-  // Remove Content-Type so browser sets multipart boundary
-  const { 'content-type': _, ...restHeaders } = headers
+  // Remove Content-Type so browser auto-sets multipart boundary.
+  // Delete both casings — authHeaders returns 'Content-Type' (Pascal case).
+  delete headers['Content-Type']
+  delete headers['content-type']
   const res = await fetch(`${BASE_URL}/query_stream`, {
     method: 'POST',
     headers: restHeaders,
