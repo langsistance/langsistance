@@ -539,7 +539,9 @@ export default function Chat() {
               <div className="scene-hint-header">
                 <span className="scene-hint-title">
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 5, verticalAlign: 'text-bottom' }}>
-                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                    <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+                    <polyline points="2 17 12 22 22 17"/>
+                    <polyline points="2 12 12 17 22 12"/>
                   </svg>
                   {t('chat.sceneHint')}
                 </span>
@@ -548,8 +550,8 @@ export default function Chat() {
                 {enabledScenes.map((scene, i) => (
                   <span key={i} className="scene-hint-scene-tag">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4, flexShrink: 0 }}>
-                      <rect x="3" y="3" width="18" height="18" rx="2"/>
-                      <path d="M9 3v18"/>
+                      <rect x="2" y="7" width="20" height="13" rx="2"/>
+                      <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
                     </svg>
                     {scene.name}
                   </span>
@@ -561,9 +563,7 @@ export default function Chat() {
                   <div className="scene-hint-group-header">
                     <span className="scene-hint-group-icon">
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="12" cy="12" r="10"/>
-                        <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
-                        <line x1="12" y1="17" x2="12.01" y2="17"/>
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
                       </svg>
                     </span>
                     <span className="scene-hint-group-label">{t('chat.sceneSmartQA')}</span>
@@ -583,7 +583,9 @@ export default function Chat() {
                   <div className="scene-hint-group-header">
                     <span className="scene-hint-group-icon">
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                        <circle cx="12" cy="12" r="10"/>
+                        <circle cx="12" cy="12" r="6"/>
+                        <circle cx="12" cy="12" r="2"/>
                       </svg>
                     </span>
                     <span className="scene-hint-group-label">{t('chat.sceneDeepResearch')}</span>
