@@ -12,15 +12,17 @@ from sources.logger import Logger
 
 _logger = Logger("text_extractor.log")
 
-# ── Preferred download format order (non-PDF first) ────────────────────────
+# ── Preferred download format order ───────────────────────────────────────
+# DOCX first (best for text), then PDF (widely available, with OCR fallback),
+# then XML last (USPTO xmlarchive is ZIP-wrapped binary, not plain text).
 USPTO_PREFERRED_MIME_ORDER = (
     "MS_WORD",
-    "XML",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/xml",
-    "text/xml",
     "PDF",
     "application/pdf",
+    "XML",
+    "application/xml",
+    "text/xml",
 )
 
 
@@ -50,7 +52,7 @@ def get_download_url_from_doc(doc: dict) -> str:
                     url_lower = url.lower()
                     if url_lower.endswith(".docx"):
                         mime = "MS_WORD"
-                    elif url_lower.endswith(".xml") or "xml" in url_lower:
+                    elif url_lower.endswith(".xml"):
                         mime = "XML"
                     elif url_lower.endswith(".pdf"):
                         mime = "PDF"
@@ -93,16 +95,14 @@ def extract_text_from_pdf(content: bytes) -> str | None:
         extracted = "\n\n".join(parts).strip()
         if extracted and len(extracted) > 100:
             _logger.info(
-                "pdf_text_extracted — pages=%d, chars=%d",
-                len(reader.pages), len(extracted),
+                f"pdf_text_extracted — pages={len(reader.pages)}, chars={len(extracted)}"
             )
             return extracted
         _logger.info(
-            "pdf_text_insufficient — pages=%d, chars=%d, trying OCR",
-            len(reader.pages), len(extracted),
+            f"pdf_text_insufficient — pages={len(reader.pages)}, chars={len(extracted)}, trying OCR"
         )
     except Exception as e:
-        _logger.warning("pdf_extract_failed — %s", e)
+        _logger.warning(f"pdf_extract_failed — {e}")
         reader = None
 
     # ── OCR fallback for scanned/image PDFs ──
@@ -153,7 +153,7 @@ def _ocr_from_pdf_reader(reader) -> str | None:
                 if text and text.strip():
                     page_text.append(text.strip())
             except Exception as e:
-                _logger.warning("ocr_page_%d_failed — %s", i + 1, e)
+                _logger.warning(f"ocr_page_{i+1}_failed — {e}")
 
         if page_text:
             all_text.append("\n".join(page_text))
@@ -165,14 +165,14 @@ def _ocr_from_pdf_reader(reader) -> str | None:
 
     if extracted and len(extracted) > 100:
         _logger.info(
-            "ocr_text_extracted — pages=%d, successful=%d, failed=%d, chars=%d",
-            page_count, successful_pages, ocr_failures, len(extracted),
+            f"ocr_text_extracted — pages={page_count}, successful={successful_pages}, "
+            f"failed={ocr_failures}, chars={len(extracted)}"
         )
         return extracted
 
     _logger.warning(
-        "ocr_text_empty_or_short — pages=%d, successful=%d, failed=%d, chars=%d",
-        page_count, successful_pages, ocr_failures, len(extracted),
+        f"ocr_text_empty_or_short — pages={page_count}, successful={successful_pages}, "
+        f"failed={ocr_failures}, chars={len(extracted)}"
     )
     return None
 
@@ -222,12 +222,12 @@ def extract_text_from_docx(content: bytes) -> str | None:
                         parts.append(cell.text)
         extracted = "\n".join(parts).strip()
         if extracted and len(extracted) > 100:
-            _logger.info("docx_text_extracted — chars=%d", len(extracted))
+            _logger.info(f"docx_text_extracted — chars={len(extracted)}")
             return extracted
-        _logger.warning("docx_text_empty_or_short — chars=%d", len(extracted))
+        _logger.warning(f"docx_text_empty_or_short — chars={len(extracted)}")
         return None
     except Exception as e:
-        _logger.warning("docx_extract_failed — %s", e)
+        _logger.warning(f"docx_extract_failed — {e}")
         return None
 
 
@@ -259,22 +259,20 @@ def extract_text_from_binary(
     if is_docx:
         return extract_text_from_docx(content)
 
-    # Check for XML
+    # Check for XML (plain-text XML only, not USPTO xmlarchive ZIP files)
     is_xml = (
-        "xml" in ct
+        ("xml" in ct and "vnd.openxmlformats" not in ct)
         or fn_lower.endswith(".xml")
-        or "xml" in fn_lower
         or content[:100].lstrip().startswith(b"<?xml")
-        or content[:100].lstrip().startswith(b"<")
     )
     if is_xml:
         try:
             text = content.decode("utf-8", errors="replace")
             if len(text.strip()) > 100:
-                _logger.info("xml_text — chars=%d", len(text))
+                _logger.info(f"xml_text — chars={len(text)}")
                 return text
         except Exception as e:
-            _logger.warning("xml_decode_failed — %s", e)
+            _logger.warning(f"xml_decode_failed — {e}")
 
     # Default: treat as PDF
     is_likely_pdf = (
