@@ -92,6 +92,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const [devMode, setDevMode] = useState(getInitialDevMode)
+  const [activeSid, setActiveSid] = useState<string | null>(null)
+
+  // Derive active session from URL on mount and on navigation
+  useEffect(() => {
+    setActiveSid(searchParams.get('session_id'))
+  }, [searchParams])
   const [menuOpen, setMenuOpen] = useState(false)
   const [sessions, setSessions] = useState<SessionItem[]>([])
   const [sessionsOpen, setSessionsOpen] = useState(true)
@@ -217,7 +223,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                     <a
                       key={s.session_id}
                       href={`/app/chat?session_id=${s.session_id}`}
-                      className={`session-item${pathname === '/app/chat' && searchParams?.get('session_id') === s.session_id ? ' session-active' : ''}`}
+                      className={`session-item${pathname === '/app/chat' && activeSid === s.session_id ? ' session-active' : ''}`}
                       title={s.title}
                       style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}
                     >
