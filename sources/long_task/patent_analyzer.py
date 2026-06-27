@@ -67,26 +67,49 @@ async def analyze_single_patent(
     timeout: int = 60,
 ) -> dict:
     """Phase 2b: Analyze one patent and return a table row dict."""
-    cols_desc = "\n".join(f"- {c}" for c in columns if c != '专利号')
+    non_id_columns = [c for c in columns if c != '专利号']
+    col_keys = "\n".join(f'  "{c}": "..."' for c in non_id_columns)
     system_prompt = f"""你是一个专利分析专家。根据以下维度分析专利：
 
-{cols_desc}
+{chr(10).join(f"- {c}" for c in non_id_columns)}
 
-返回 JSON 格式，key 为列名，value 为分析结果。
-"patent_id" 字段填写专利号。
+返回 JSON，**CRITICAL: JSON 的 key 必须严格使用以下列名，一个不能多一个不能少：**
+{{
+  "patent_id": "{patent_id}",
+{col_keys}
+}}
 分析要具体、有依据，基于专利文本内容。"""
 
     user_content = f"""用户问题：{query}
 
 专利号：{patent_id}
-专利文本（摘要）：
-{patent_text[:8000]}
+专利文本（说明书全文）：
+{patent_text[:16000]}
 
 请按维度分析并返回 JSON。"""
 
     result = await provider.complete_json(system_prompt, user_content)
     result['patent_id'] = patent_id
-    return result
+
+    # ── Key alignment: ensure all result keys match the expected column names ──
+    aligned: dict = {'patent_id': patent_id}
+
+    # Collect LLM-returned keys that are NOT the expected column names
+    extra_keys = [k for k in result if k not in columns and k != 'patent_id']
+
+    if len(extra_keys) == len(non_id_columns):
+        # LLM used different key names — map by position
+        for ek, col_name in zip(extra_keys, non_id_columns):
+            aligned[col_name] = result.get(ek, '')
+    else:
+        # Direct key matching or fallback
+        for col in non_id_columns:
+            if col in result:
+                aligned[col] = result[col]
+            else:
+                aligned[col] = result.get(col, '（分析数据未生成）')
+
+    return aligned
 
 
 async def generate_patent_summary(
