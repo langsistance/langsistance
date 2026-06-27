@@ -305,7 +305,6 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
     async def _handle_file_upload_query(http_request: Request):
         """Handle multipart file-upload query: extract text, dispatch long task."""
         import traceback
-        import re as _re
 
         try:
             from sources.long_task.text_extractor import extract_text_from_binary
@@ -345,27 +344,25 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
             if is_generating_flag:
                 return JSONResponse(status_code=429, content={"error": "Another query is being processed"})
 
-            # Collect uploaded patent files
+            # Collect uploaded patent files (handle multiple files with same field name)
             MAX_FILES = 100
             MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MB
             patent_files: list[tuple[str, bytes, str]] = []  # (filename, content, content_type)
             for key in form:
-                field = form[key]
-                if hasattr(field, "filename") and field.filename:
-                    if len(patent_files) >= MAX_FILES:
-                        return JSONResponse(
-                            status_code=400,
-                            content={"error": f"Too many files (max {MAX_FILES})"},
-                        )
-                    content = await field.read()
-                    if len(content) > MAX_FILE_BYTES:
-                        return JSONResponse(
-                            status_code=400,
-                            content={"error": f"File '{field.filename}' exceeds 10 MB limit"},
-                        )
-                    if len(content) < 50:
-                        continue  # skip empty/tiny files
-                    patent_files.append((field.filename, content, field.content_type or ""))
+                # Use getlist to get ALL files for multi-value fields
+                fields = form.getlist(key)
+                for field in fields:
+                    if hasattr(field, "filename") and field.filename:
+                        if len(patent_files) >= MAX_FILES:
+                            break
+                        content = await field.read()
+                        if len(content) > MAX_FILE_BYTES:
+                            continue
+                        if len(content) < 50:
+                            continue
+                        patent_files.append((field.filename, content, field.content_type or ""))
+                if len(patent_files) >= MAX_FILES:
+                    break
 
             app_logger.info(
                 f"[user={user_id}] File upload: received {len(patent_files)} files, query={query[:80]}"
@@ -393,26 +390,12 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                 msg = "; ".join(extraction_errors) if extraction_errors else "No valid text extracted from uploaded files"
                 return JSONResponse(status_code=400, content={"error": msg})
 
-            # Extract patent IDs from query text (8-digit application numbers)
-            raw_ids = _re.findall(r'\b(\d{8})\b', query)
-            patent_ids = sorted(set(raw_ids)) if raw_ids else list(patent_texts.keys())
-
-            # If patent IDs extracted from query match file count, use query IDs in order
-            if len(patent_ids) == len(patent_texts):
-                ordered_texts = {}
-                for pid, text in zip(patent_ids, patent_texts.values()):
-                    ordered_texts[pid] = text
-                patent_texts = ordered_texts
-                app_logger.info(
-                    f"[user={user_id}] File upload: matched {len(patent_ids)} patent IDs "
-                    f"from query to uploaded files"
-                )
-            else:
-                app_logger.info(
-                    f"[user={user_id}] File upload: using filename-based IDs, "
-                    f"query_ids={patent_ids}, file_count={len(patent_texts)}"
-                )
-                patent_ids = list(patent_texts.keys())
+            # Use filenames (without extension) as patent identifiers
+            patent_ids = list(patent_texts.keys())
+            app_logger.info(
+                f"[user={user_id}] File upload: {len(patent_ids)} files, "
+                f"identifiers={patent_ids}"
+            )
 
             # Dispatch long task directly
             task_id = f"lt_{uuid.uuid4().hex[:12]}"
