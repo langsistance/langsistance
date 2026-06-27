@@ -1089,7 +1089,10 @@ input[type="checkbox"] {
   box-shadow: 0 2px 12px rgba(37,99,235,0.12);
 }
 
-.lt-dl-icon { font-size: 16px; line-height: 1; }
+.lt-dl-icon { font-size: 16px; line-height: 1; display: flex; align-items: center; }
+.lt-dl-icon svg { flex-shrink: 0; }
+.lt-phase-icon { display: flex; align-items: center; }
+.scene-hint-group-icon { display: flex; align-items: center; }
 
 .lt-dl-arrow {
   width: 14px;
