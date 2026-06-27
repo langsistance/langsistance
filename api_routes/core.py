@@ -364,43 +364,44 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                 if len(patent_files) >= MAX_FILES:
                     break
 
+            if not patent_files:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "No valid patent files uploaded (PDF/DOCX only, min 50 bytes, max 10 MB each)"},
+                )
+
             app_logger.info(
                 f"[user={user_id}] File upload: received {len(patent_files)} files, query={query[:80]}"
             )
 
-            # Extract text from uploaded files
-            patent_texts: dict[str, str] = {}
-            extraction_errors: list[str] = []
-            for filename, content, ct in patent_files:
-                try:
-                    text = extract_text_from_binary(content, ct, filename)
-                except Exception as e:
-                    app_logger.warning(f"File upload: extraction error for '{filename}': {e}")
-                    text = None
-                if text and len(text) > 100:
-                    pid = filename.rsplit(".", 1)[0]
-                    patent_texts[pid] = text
-                else:
-                    extraction_errors.append(
-                        f"'{filename}': text extraction failed "
-                        f"({len(text) if text else 0} chars)"
-                    )
-
-            if not patent_texts:
-                msg = "; ".join(extraction_errors) if extraction_errors else "No valid text extracted from uploaded files"
-                return JSONResponse(status_code=400, content={"error": msg})
-
-            # Use filenames (without extension) as patent identifiers
-            patent_ids = list(patent_texts.keys())
-            app_logger.info(
-                f"[user={user_id}] File upload: {len(patent_ids)} files, "
-                f"identifiers={patent_ids}"
-            )
-
-            # Dispatch long task directly
+            # Save files to disk for async processing by Celery worker.
+            # Text extraction (esp. OCR) can take minutes — we must not block the HTTP response.
             task_id = f"lt_{uuid.uuid4().hex[:12]}"
             session_id = f"sess_{uuid.uuid4().hex[:12]}"
             local_user_id = int(user_id)
+
+            import tempfile
+            upload_dir = os.path.join(
+                tempfile.gettempdir(), "patent_uploads", task_id,
+            )
+            os.makedirs(upload_dir, exist_ok=True)
+            patent_file_refs: list[dict] = []
+            for filename, content, ct in patent_files:
+                safe_name = os.path.basename(filename) or f"upload_{len(patent_file_refs)}"
+                file_path = os.path.join(upload_dir, safe_name)
+                with open(file_path, "wb") as f:
+                    f.write(content)
+                patent_file_refs.append({
+                    "filename": filename,
+                    "path": file_path,
+                    "content_type": ct,
+                })
+
+            # Use filenames (without extension) as patent identifiers
+            patent_ids = [f.rsplit(".", 1)[0] for f, _, _ in patent_files]
+            app_logger.info(
+                f"[user={user_id}] File upload: saved {len(patent_file_refs)} files to {upload_dir}"
+            )
 
             from sources.knowledge.knowledge import get_db_connection
             conn = get_db_connection()
@@ -423,7 +424,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                              "query": query,
                              "patent_ids": patent_ids,
                              "patent_source": "uploaded_files",
-                             "patent_texts": patent_texts,
+                             "patent_file_refs": patent_file_refs,
                          }, ensure_ascii=False),
                          "pending"))
                     conn.commit()
@@ -438,7 +439,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                 "session_id": session_id,
                 "scene_id": None,
                 "conversation_history": conversation_history,
-                "patent_texts": patent_texts,
+                "patent_file_refs": patent_file_refs,
             }
             execute_patent_analysis.delay(task_id=task_id, params=celery_params)
 
@@ -453,7 +454,6 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                     "patent_ids": patent_ids,
                     "patent_count": len(patent_ids),
                     "source": "file_upload",
-                    "extraction_errors": extraction_errors if extraction_errors else None,
                 }, ensure_ascii=False)
                 yield f"data: {event_data}\n\n"
                 yield "data: {\"type\": \"end\"}\n\n"

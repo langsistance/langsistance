@@ -194,6 +194,50 @@ async def _run_pipeline(
 
     # ---- Mode detection ----
     patent_texts = params.get('patent_texts', {}) or {}
+    patent_file_refs = params.get('patent_file_refs', []) or []
+
+    # Mode 2 (file upload): extract text from saved files asynchronously
+    if patent_file_refs and not patent_texts:
+        _pipeline_logger.info(
+            f"[task={task_id}] FILE_EXTRACT — extracting text from "
+            f"{len(patent_file_refs)} uploaded files"
+        )
+        from sources.long_task.text_extractor import extract_text_from_binary
+        for ref in patent_file_refs:
+            pid = ref['filename'].rsplit('.', 1)[0]
+            try:
+                with open(ref['path'], 'rb') as fh:
+                    content = fh.read()
+                text = extract_text_from_binary(
+                    content, ref.get('content_type', ''), ref['filename'],
+                )
+                if text and len(text) > 100:
+                    patent_texts[pid] = text
+                    _pipeline_logger.info(
+                        f"[task={task_id}] FILE_EXTRACT — {ref['filename']}: "
+                        f"{len(text)} chars"
+                    )
+                else:
+                    _pipeline_logger.warning(
+                        f"[task={task_id}] FILE_EXTRACT — {ref['filename']}: "
+                        f"extraction failed ({len(text) if text else 0} chars)"
+                    )
+            except Exception as e:
+                _pipeline_logger.error(
+                    f"[task={task_id}] FILE_EXTRACT — {ref['filename']}: {e}"
+                )
+        # Clean up temp upload directory
+        if patent_file_refs:
+            import shutil as _shutil
+            upload_dir = os.path.dirname(patent_file_refs[0]['path'])
+            try:
+                _shutil.rmtree(upload_dir, ignore_errors=True)
+                _pipeline_logger.info(
+                    f"[task={task_id}] FILE_EXTRACT — cleaned up {upload_dir}"
+                )
+            except Exception:
+                pass
+
     is_file_upload_mode = bool(patent_texts)
     is_direct_id_mode = bool(patent_ids) and not is_file_upload_mode
     if is_file_upload_mode:
