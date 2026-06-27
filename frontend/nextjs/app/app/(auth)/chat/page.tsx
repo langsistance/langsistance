@@ -537,35 +537,17 @@ export default function Chat() {
           {enabledScenes.length > 0 && (
             <div className="scene-hint scene-hint-persistent">
               <div className="scene-hint-header">
-                <span className="scene-hint-title">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 5, verticalAlign: 'text-bottom' }}>
-                    <polygon points="12 2 2 7 12 12 22 7 12 2"/>
-                    <polyline points="2 17 12 22 22 17"/>
-                    <polyline points="2 12 12 17 22 12"/>
-                  </svg>
-                  {t('chat.sceneHint')}
-                </span>
+                <span className="scene-hint-title">{t('chat.sceneHint')}</span>
               </div>
               <div className="scene-hint-scenes">
                 {enabledScenes.map((scene, i) => (
-                  <span key={i} className="scene-hint-scene-tag">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4, flexShrink: 0 }}>
-                      <rect x="2" y="7" width="20" height="13" rx="2"/>
-                      <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
-                    </svg>
-                    {scene.name}
-                  </span>
+                  <span key={i} className="scene-hint-scene-tag">{scene.name}</span>
                 ))}
               </div>
 
               {sceneSmartQA.length > 0 && (
                 <div className="scene-hint-group scene-hint-group-smart">
                   <div className="scene-hint-group-header">
-                    <span className="scene-hint-group-icon">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-                      </svg>
-                    </span>
                     <span className="scene-hint-group-label">{t('chat.sceneSmartQA')}</span>
                   </div>
                   <ul className="scene-hint-list">
@@ -581,13 +563,6 @@ export default function Chat() {
               {sceneDeepResearch.length > 0 && (
                 <div className="scene-hint-group scene-hint-group-deep">
                   <div className="scene-hint-group-header">
-                    <span className="scene-hint-group-icon">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="12" cy="12" r="10"/>
-                        <circle cx="12" cy="12" r="6"/>
-                        <circle cx="12" cy="12" r="2"/>
-                      </svg>
-                    </span>
                     <span className="scene-hint-group-label">{t('chat.sceneDeepResearch')}</span>
                   </div>
                   <ul className="scene-hint-list">
