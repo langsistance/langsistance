@@ -156,6 +156,49 @@ export async function getSessions(): Promise<SessionItem[]> {
   return (data.sessions || []) as SessionItem[]
 }
 
+export async function getSession(sessionId: string): Promise<{
+  session_id: string
+  title: string
+  messages: { role: string; content: string; patent_data?: unknown[] }[]
+  long_task_ids: string[] | null
+}> {
+  const headers = await authHeaders()
+  const res = await fetch(`${BASE_URL}/session/${sessionId}`, { headers })
+  const data = await res.json()
+  assertApiResponseSuccess(data)
+  return data
+}
+
+export async function saveSessionMessages(
+  sessionId: string,
+  messages: { role: string; content: string; patent_data?: unknown[] }[],
+  title?: string,
+): Promise<void> {
+  const headers = await authHeaders()
+  const res = await fetch(`${BASE_URL}/session/${sessionId}/messages`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ messages, title: title || '' }),
+  })
+  const data = await res.json()
+  assertApiResponseSuccess(data)
+}
+
+export async function createSession(
+  title: string,
+  messages: { role: string; content: string }[] = [],
+): Promise<string> {
+  const headers = await authHeaders()
+  const res = await fetch(`${BASE_URL}/session`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ title, messages }),
+  })
+  const data = await res.json()
+  assertApiResponseSuccess(data)
+  return data.session_id as string
+}
+
 // ── Long Task ─────────────────────────────────────────────────────────────
 
 export async function pollLongTaskStatus(taskId: string): Promise<{

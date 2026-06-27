@@ -30,6 +30,8 @@ interface ChatContextValue {
   streamingId: string | null
   setStreamingId: Dispatch<SetStateAction<string | null>>
   abortRef: MutableRefObject<AbortController | null>
+  sessionId: string | null
+  setSessionId: Dispatch<SetStateAction<string | null>>
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null)
@@ -39,6 +41,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [streamingId, setStreamingId] = useState<string | null>(null)
+  const [sessionId, setSessionId] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   return (
@@ -53,6 +56,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         streamingId,
         setStreamingId,
         abortRef,
+        sessionId,
+        setSessionId,
       }}
     >
       {children}

@@ -105,7 +105,7 @@ export default {
     noHistory: '暂无聊天记录',
     clearHistory: '清空历史',
     newChat: '新建对话',
-    dialogue:'对话',
+    dialogue:'新对话',
     toolExecution: '工具执行',
     executingTool: '正在执行工具...',
     toolExecuted: '工具执行完成',

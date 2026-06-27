@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { usePathname, useRouter } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { useI18n } from '@/lib/app-i18n'
 import LanguageToggleButton from '@/components/app/LanguageToggleButton'
@@ -90,6 +90,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { t } = useI18n()
   const router = useRouter()
   const pathname = usePathname()
+  const searchParams = useSearchParams()
   const [devMode, setDevMode] = useState(getInitialDevMode)
   const [menuOpen, setMenuOpen] = useState(false)
   const [sessions, setSessions] = useState<SessionItem[]>([])
@@ -213,37 +214,46 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               {sessionsOpen && (
                 <div className="session-list">
                   {sessions.map((s) => (
-                    <div key={s.session_id} className="session-item" title={s.title}>
-                      <div className="session-item-main">
-                        <span className="session-item-title">{s.title || '专利分析'}</span>
-                        <span className="session-item-time">
-                          {s.update_time
-                            ? new Date(s.update_time).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-                            : ''}
-                        </span>
-                      </div>
-                      {s.long_task_ids && s.long_task_ids.length > 0 && (
-                        <div className="session-item-actions">
-                          {s.long_task_ids.map((tid) => (
-                            <a
-                              key={tid}
-                              href={getLongTaskReportUrl(tid, 'docx')}
-                              className="session-report-link"
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              title={`下载报告 ${tid}`}
-                            >
-                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                <polyline points="7 10 12 15 17 10" />
-                                <line x1="12" y1="15" x2="12" y2="3" />
-                              </svg>
-                              DOCX
-                            </a>
-                          ))}
+                    <Link
+                      key={s.session_id}
+                      href={`/app/chat?session_id=${s.session_id}`}
+                      style={{ textDecoration: 'none' }}
+                    >
+                      <div
+                        className={`session-item${pathname === '/app/chat' && searchParams?.get('session_id') === s.session_id ? ' session-active' : ''}`}
+                        title={s.title}
+                      >
+                        <div className="session-item-main">
+                          <span className="session-item-title">{s.title || '专利分析'}</span>
+                          <span className="session-item-time">
+                            {s.update_time
+                              ? new Date(s.update_time).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                              : ''}
+                          </span>
                         </div>
-                      )}
-                    </div>
+                        {s.long_task_ids && s.long_task_ids.length > 0 && (
+                          <div className="session-item-actions" onClick={e => e.preventDefault()}>
+                            {s.long_task_ids.map((tid) => (
+                              <a
+                                key={tid}
+                                href={getLongTaskReportUrl(tid, 'docx')}
+                                className="session-report-link"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title={`下载报告 ${tid}`}
+                              >
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                  <polyline points="7 10 12 15 17 10" />
+                                  <line x1="12" y1="15" x2="12" y2="3" />
+                                </svg>
+                                DOCX
+                              </a>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </Link>
                   ))}
                 </div>
               )}

@@ -30,6 +30,11 @@ class AppendMessageRequest(BaseModel):
     timestamp: str | None = None
 
 
+class SaveMessagesRequest(BaseModel):
+    messages: list
+    title: str = ""
+
+
 def register_session_routes(logger, config):
     """Register session CRUD routes with dependency injection."""
     router = APIRouter()
@@ -136,6 +141,35 @@ def register_session_routes(logger, config):
                     (json.dumps(messages, ensure_ascii=False), session_id))
                 conn.commit()
             logger.info(f"Message appended to session: {session_id}")
+            return {"success": True}
+        finally:
+            conn.close()
+
+    @router.put("/session/{session_id}/messages")
+    async def save_messages(session_id: str, req: SaveMessagesRequest, http_request: Request):
+        """Bulk-save all messages for a session (replace entire messages array)."""
+        auth_header = http_request.headers.get("Authorization")
+        verify_firebase_token(auth_header)
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                # Verify session exists and belongs to user
+                cur.execute(
+                    "SELECT id FROM conversations WHERE session_id = %s AND status != 2",
+                    (session_id,))
+                if cur.fetchone() is None:
+                    raise HTTPException(status_code=404, detail="Session not found")
+                updates = ["messages = %s"]
+                params = [json.dumps(req.messages, ensure_ascii=False)]
+                if req.title:
+                    updates.append("title = %s")
+                    params.append(req.title)
+                params.append(session_id)
+                cur.execute(
+                    f"UPDATE conversations SET {', '.join(updates)} WHERE session_id = %s",
+                    params)
+                conn.commit()
+            logger.info(f"Session messages saved: {session_id}, count={len(req.messages)}")
             return {"success": True}
         finally:
             conn.close()

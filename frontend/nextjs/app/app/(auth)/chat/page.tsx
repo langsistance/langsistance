@@ -1,7 +1,8 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { queryStream, queryStreamWithFiles, getUserSceneStatus, getSceneKnowledge, pollLongTaskStatus, getLongTaskReportUrl } from '@/services/api'
+import { useSearchParams } from 'next/navigation'
+import { queryStream, queryStreamWithFiles, getUserSceneStatus, getSceneKnowledge, pollLongTaskStatus, getLongTaskReportUrl, getSession, saveSessionMessages, createSession } from '@/services/api'
 import { useI18n } from '@/lib/app-i18n'
 import MarkdownMessage from '@/components/app/MarkdownMessage'
 import { useChatSession } from '@/contexts/ChatContext'
@@ -59,7 +60,11 @@ export default function Chat() {
     streamingId,
     setStreamingId,
     abortRef,
+    sessionId,
+    setSessionId,
   } = useChatSession()
+  const searchParams = useSearchParams()
+  const sessionLoadedRef = useRef(false)
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -103,6 +108,59 @@ export default function Chat() {
       .catch(() => {})
   }, [])
 
+  // Load session from URL param on mount
+  useEffect(() => {
+    const sid = searchParams.get('session_id')
+    if (!sid || sessionLoadedRef.current) return
+    if (sid === sessionId) return
+
+    ;(async () => {
+      try {
+        const data = await getSession(sid)
+        if (data.messages && Array.isArray(data.messages)) {
+          const loaded = data.messages
+            .filter((m: { role: string; content: string }) => m.role && m.content)
+            .map((m: { role: string; content: string }, i: number) => ({
+              id: `hist_${i}_${Date.now()}`,
+              role: m.role,
+              content: m.content,
+              artifacts: [],
+            }))
+          setMessages(loaded)
+        }
+        setSessionId(sid)
+        sessionLoadedRef.current = true
+      } catch {
+        // Session not found or error — start fresh
+      }
+    })()
+  }, [searchParams, sessionId, setMessages, setSessionId])
+
+  // Save session after streaming completes — but ONLY if a session already exists
+  // (session is created only when a long task is triggered)
+  const pendingSaveRef = useRef(false)
+  useEffect(() => {
+    if (streaming || messages.length === 0) return
+    if (!sessionId) return  // No session yet = no long task ever triggered
+    if (pendingSaveRef.current) return
+    pendingSaveRef.current = true
+
+    const timer = setTimeout(async () => {
+      try {
+        const toSave = messages.map(m => ({
+          role: m.role,
+          content: m.content,
+        }))
+        await saveSessionMessages(sessionId, toSave)
+      } catch {
+        // Non-critical
+      }
+      pendingSaveRef.current = false
+    }, 1000)
+
+    return () => { clearTimeout(timer); pendingSaveRef.current = false }
+  }, [streaming, messages.length, sessionId])
+
   // Track whether the user is scrolled near the bottom of the chat.
   useEffect(() => {
     const container = chatContainerRef.current
@@ -142,16 +200,11 @@ export default function Chat() {
     setStreaming(true)
     setStreamingId(assistantId)
 
-    // Collect the last user + assistant exchange for long-task context
-    const lastExchange: { role: string; content: string }[] = []
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      if (messages[i].role === 'assistant' && lastExchange.length === 0) {
-        lastExchange.unshift({ role: 'assistant', content: messages[i].content })
-      } else if (messages[i].role === 'user' && lastExchange.length === 1) {
-        lastExchange.unshift({ role: 'user', content: messages[i].content })
-        break
-      }
-    }
+    // Collect full conversation history for context
+    const conversationHistory = messages.map(m => ({
+      role: m.role,
+      content: m.content,
+    }))
 
     const controller = new AbortController()
     abortRef.current = controller
@@ -161,8 +214,8 @@ export default function Chat() {
       setSelectedFiles([])
 
       const body = currentFiles.length > 0
-        ? await queryStreamWithFiles(text, queryId, controller.signal, currentFiles, lastExchange)
-        : await queryStream(text, queryId, controller.signal, lastExchange)
+        ? await queryStreamWithFiles(text, queryId, controller.signal, currentFiles, conversationHistory)
+        : await queryStream(text, queryId, controller.signal, conversationHistory)
       const reader = body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
@@ -220,6 +273,21 @@ export default function Chat() {
                   .replace('{taskId}', taskId)
                   .replace('{sessionId}', String(event.session_id ?? ''))
               ))
+              // Create a session for this conversation (if not already created)
+              if (!sessionId) {
+                const currentMsgs = messages.map(m => ({
+                  role: m.role,
+                  content: m.content,
+                }))
+                const firstUser = currentMsgs.find(m => m.role === 'user')
+                const title = firstUser?.content?.slice(0, 50) || '专利分析'
+                createSession(title, currentMsgs).then((sid) => {
+                  setSessionId(sid)
+                  const url = new URL(window.location.href)
+                  url.searchParams.set('session_id', sid)
+                  window.history.replaceState({}, '', url.toString())
+                }).catch(() => {})
+              }
               // Start polling for progress updates
               startLongTaskPolling(taskId, assistantId)
               continue
