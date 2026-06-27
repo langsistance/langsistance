@@ -1225,6 +1225,200 @@ body {
   transform: scale(1.1);
 }
 
+/* ── File Upload ─────────────────────────────────────────────────────────── */
+.file-input-hidden {
+  display: none;
+}
+
+.file-upload-btn {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-text-secondary);
+  border: 1.5px dashed var(--color-border);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.25s ease;
+  flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.file-upload-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--color-primary), var(--color-primary-hover));
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.file-upload-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  border-style: solid;
+  transform: scale(1.05);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.08);
+}
+
+.file-upload-btn:hover::before {
+  opacity: 0.06;
+}
+
+.file-upload-btn svg {
+  position: relative;
+  z-index: 1;
+}
+
+.file-upload-btn.has-files {
+  border-color: var(--color-primary);
+  border-style: solid;
+  color: var(--color-primary);
+  background: rgba(59, 130, 246, 0.06);
+}
+
+/* File chips bar */
+.file-chips-bar {
+  max-width: 720px;
+  margin: 0 auto var(--spacing-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+  padding: 0 var(--spacing-1);
+}
+
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--color-bg-white);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 4px 8px 4px 4px;
+  font-size: 12px;
+  animation: fileChipIn 0.25s ease-out;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  transition: all 0.15s ease;
+  max-width: 280px;
+}
+
+.file-chip:hover {
+  border-color: var(--color-primary);
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.12);
+}
+
+@keyframes fileChipIn {
+  from { opacity: 0; transform: translateY(-8px) scale(0.92); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.file-chip-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.file-chip-badge.pdf {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.file-chip-badge.docx {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.file-chip-name {
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.file-chip-size {
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.file-chip-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.file-chip-remove:hover {
+  background: var(--color-text-secondary);
+  color: white;
+}
+
+/* Drag-drop overlay */
+.file-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.file-drop-zone {
+  background: var(--color-bg-white);
+  border: 2px dashed var(--color-primary);
+  border-radius: 24px;
+  padding: 48px 64px;
+  text-align: center;
+  color: var(--color-text-secondary);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+  animation: slideInUp 0.3s ease-out;
+}
+
+.file-drop-zone svg {
+  color: var(--color-primary);
+  margin-bottom: 16px;
+}
+
+.file-drop-zone p {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: 8px;
+}
+
+.file-drop-hint {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 /* Tool Info Card */
 .tool-info-card {
   position: fixed;

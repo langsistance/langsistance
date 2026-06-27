@@ -1,0 +1,296 @@
+"""Patent document text extraction — PDF (pypdf + OCR), DOCX, XML, and routing.
+
+Shared between celery_worker.py (pipeline Phase 2 download) and
+api_routes/core.py (file upload text extraction).
+"""
+
+import io
+import os as _os
+import shutil as _shutil
+
+from sources.logger import Logger
+
+_logger = Logger("text_extractor.log")
+
+# ── Preferred download format order (non-PDF first) ────────────────────────
+USPTO_PREFERRED_MIME_ORDER = (
+    "MS_WORD",
+    "XML",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/xml",
+    "text/xml",
+    "PDF",
+    "application/pdf",
+)
+
+
+def get_download_url_from_doc(doc: dict) -> str:
+    """Extract the best download URL from a USPTO documentBag entry.
+
+    Prefers DOCX/MS_WORD and XML formats over PDF for text extraction.
+    The URL may be at the top level or nested in downloadOptionBag[].downloadUrl.
+    """
+    options = doc.get("downloadOptionBag", [])
+    if isinstance(options, list) and options:
+        # Collect all download options with their mime types
+        url_by_mime: dict[str, str] = {}
+        for opt in options:
+            if not isinstance(opt, dict):
+                continue
+            url = ""
+            for key in ("downloadUrl", "url"):
+                val = opt.get(key, "")
+                if val:
+                    url = val
+                    break
+            if url:
+                mime = str(opt.get("mimeTypeIdentifier", "")).upper()
+                # If no mime, infer from URL extension
+                if not mime:
+                    url_lower = url.lower()
+                    if url_lower.endswith(".docx"):
+                        mime = "MS_WORD"
+                    elif url_lower.endswith(".xml") or "xml" in url_lower:
+                        mime = "XML"
+                    elif url_lower.endswith(".pdf"):
+                        mime = "PDF"
+                if mime not in url_by_mime:
+                    url_by_mime[mime] = url
+
+        if url_by_mime:
+            # Pick the best option based on preference order
+            for preferred in USPTO_PREFERRED_MIME_ORDER:
+                mime_key = preferred.upper()
+                if mime_key in url_by_mime:
+                    return url_by_mime[mime_key]
+            # Fallback: return any available URL
+            return next(iter(url_by_mime.values()))
+
+    # Top-level fallback
+    for key in ("downloadUrl", "documentUrl", "url"):
+        val = doc.get(key, "")
+        if val:
+            return val
+    return ""
+
+
+def extract_text_from_pdf(content: bytes) -> str | None:
+    """Extract text from a PDF binary using pypdf, with OCR fallback.
+
+    1. Try pypdf text extraction (works for text-based PDFs)
+    2. If insufficient text, fall back to OCR via pytesseract (for scanned/image PDFs)
+    """
+    from pypdf import PdfReader
+
+    reader = None
+    try:
+        reader = PdfReader(io.BytesIO(content))
+        parts: list[str] = []
+        for page in reader.pages:
+            text = page.extract_text()
+            if text:
+                parts.append(text)
+        extracted = "\n\n".join(parts).strip()
+        if extracted and len(extracted) > 100:
+            _logger.info(
+                "pdf_text_extracted — pages=%d, chars=%d",
+                len(reader.pages), len(extracted),
+            )
+            return extracted
+        _logger.info(
+            "pdf_text_insufficient — pages=%d, chars=%d, trying OCR",
+            len(reader.pages), len(extracted),
+        )
+    except Exception as e:
+        _logger.warning("pdf_extract_failed — %s", e)
+        reader = None
+
+    # ── OCR fallback for scanned/image PDFs ──
+    if reader is not None:
+        return _ocr_from_pdf_reader(reader)
+
+    return None
+
+
+def _ocr_from_pdf_reader(reader) -> str | None:
+    """Extract text from image-based PDF pages using pytesseract OCR."""
+    tesseract_bin = _find_tesseract_bin()
+    if not tesseract_bin:
+        _logger.warning("ocr_skipped — tesseract binary not found")
+        return None
+
+    try:
+        import pytesseract
+    except ImportError:
+        _logger.warning("ocr_skipped — pytesseract not installed")
+        return None
+
+    try:
+        from PIL import Image
+    except ImportError:
+        _logger.warning("ocr_skipped — Pillow not installed")
+        return None
+
+    pytesseract.pytesseract.tesseract_cmd = tesseract_bin
+
+    page_count = len(reader.pages)
+    all_text: list[str] = []
+    ocr_failures = 0
+
+    for i, page in enumerate(reader.pages):
+        page_images = page.images
+        if not page_images:
+            ocr_failures += 1
+            continue
+
+        page_text: list[str] = []
+        for img in page_images:
+            try:
+                pil_img = Image.open(io.BytesIO(img.data))
+                if pil_img.mode not in ("RGB", "L", "1"):
+                    pil_img = pil_img.convert("RGB")
+                text = pytesseract.image_to_string(pil_img, lang="eng")
+                if text and text.strip():
+                    page_text.append(text.strip())
+            except Exception as e:
+                _logger.warning("ocr_page_%d_failed — %s", i + 1, e)
+
+        if page_text:
+            all_text.append("\n".join(page_text))
+        else:
+            ocr_failures += 1
+
+    extracted = "\n\n".join(all_text).strip()
+    successful_pages = page_count - ocr_failures
+
+    if extracted and len(extracted) > 100:
+        _logger.info(
+            "ocr_text_extracted — pages=%d, successful=%d, failed=%d, chars=%d",
+            page_count, successful_pages, ocr_failures, len(extracted),
+        )
+        return extracted
+
+    _logger.warning(
+        "ocr_text_empty_or_short — pages=%d, successful=%d, failed=%d, chars=%d",
+        page_count, successful_pages, ocr_failures, len(extracted),
+    )
+    return None
+
+
+def _find_tesseract_bin() -> str | None:
+    """Find the tesseract binary on the system.
+
+    Checks PATH first, then common installation directories.
+    """
+    # 1. Check PATH
+    path = _shutil.which("tesseract")
+    if path:
+        return path
+
+    # 2. Check common installation directories
+    candidates = [
+        # Windows
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        # Linux / macOS
+        "/usr/bin/tesseract",
+        "/usr/local/bin/tesseract",
+        "/opt/homebrew/bin/tesseract",
+    ]
+    for candidate in candidates:
+        if _os.path.isfile(candidate) and _os.access(candidate, _os.X_OK):
+            return candidate
+
+    return None
+
+
+def extract_text_from_docx(content: bytes) -> str | None:
+    """Extract text from a DOCX binary using python-docx."""
+    from docx import Document
+
+    try:
+        doc = Document(io.BytesIO(content))
+        parts: list[str] = []
+        for para in doc.paragraphs:
+            if para.text.strip():
+                parts.append(para.text)
+        # Also extract text from tables
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    if cell.text.strip():
+                        parts.append(cell.text)
+        extracted = "\n".join(parts).strip()
+        if extracted and len(extracted) > 100:
+            _logger.info("docx_text_extracted — chars=%d", len(extracted))
+            return extracted
+        _logger.warning("docx_text_empty_or_short — chars=%d", len(extracted))
+        return None
+    except Exception as e:
+        _logger.warning("docx_extract_failed — %s", e)
+        return None
+
+
+def extract_text_from_binary(
+    content: bytes,
+    content_type: str = "",
+    filename: str = "",
+) -> str | None:
+    """Route binary content to the appropriate text extractor.
+
+    Args:
+        content: Raw file bytes.
+        content_type: MIME type (e.g. 'application/pdf'), optional.
+        filename: Original filename used for extension detection, optional.
+
+    Returns:
+        Extracted text, or None if extraction fails.
+    """
+    ct = content_type.lower()
+    fn_lower = filename.lower()
+
+    # Check for DOCX
+    is_docx = (
+        "vnd.openxmlformats-officedocument.wordprocessingml" in ct
+        or "msword" in ct
+        or fn_lower.endswith(".docx")
+        or content[:4] == b"PK\x03\x04"  # DOCX is a ZIP; check magic bytes
+    )
+    if is_docx:
+        return extract_text_from_docx(content)
+
+    # Check for XML
+    is_xml = (
+        "xml" in ct
+        or fn_lower.endswith(".xml")
+        or "xml" in fn_lower
+        or content[:100].lstrip().startswith(b"<?xml")
+        or content[:100].lstrip().startswith(b"<")
+    )
+    if is_xml:
+        try:
+            text = content.decode("utf-8", errors="replace")
+            if len(text.strip()) > 100:
+                _logger.info("xml_text — chars=%d", len(text))
+                return text
+        except Exception as e:
+            _logger.warning("xml_decode_failed — %s", e)
+
+    # Default: treat as PDF
+    is_likely_pdf = (
+        "pdf" in ct
+        or "octet-stream" in ct
+        or fn_lower.endswith(".pdf")
+        or content[:5] == b"%PDF-"
+    )
+    if is_likely_pdf:
+        return extract_text_from_pdf(content)
+
+    # Last resort: try UTF-8 decode
+    try:
+        text = content.decode("utf-8", errors="replace")
+        if text.strip():
+            return text
+    except Exception:
+        pass
+    return None

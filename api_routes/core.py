@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Form, UploadFile, File as FastAPIFile
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 import os
 import uuid
@@ -302,8 +302,183 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                 }
             )
 
+    async def _handle_file_upload_query(http_request: Request):
+        """Handle multipart file-upload query: extract text, dispatch long task."""
+        import re as _re
+        from sources.long_task.text_extractor import extract_text_from_binary
+
+        form = await http_request.form()
+
+        query = (form.get("query") or "").strip()
+        query_id = form.get("query_id") or f"q_{uuid.uuid4().hex[:8]}"
+        push_filter_str = form.get("push_filter") or ""
+        push_filter = int(push_filter_str) if push_filter_str.isdigit() else None
+        conv_json = form.get("conversation_history") or "[]"
+        try:
+            conversation_history = json.loads(conv_json) if isinstance(conv_json, str) else []
+        except json.JSONDecodeError:
+            conversation_history = []
+
+        if not query:
+            return JSONResponse(status_code=400, content={"error": "query is required"})
+
+        # Auth + usage
+        auth_header = http_request.headers.get("Authorization")
+        try:
+            user = await get_cached_token_validation(auth_header)
+        except Exception as e:
+            app_logger.error(f"Token validation failed: {str(e)}")
+            return JSONResponse(status_code=401, content={"error": "Invalid token"})
+        user_id = user["uid"]
+        allowed = await check_usage_async(user_id)
+        if not allowed:
+            return JSONResponse(status_code=429, content={"error": "Daily API usage limit exceeded (100/day)"})
+
+        if is_generating_flag:
+            return JSONResponse(status_code=429, content={"error": "Another query is being processed"})
+
+        # Collect uploaded patent files
+        MAX_FILES = 100
+        MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MB
+        patent_files: list[tuple[str, bytes, str]] = []  # (filename, content, content_type)
+        for key in form:
+            field = form[key]
+            if hasattr(field, "filename") and field.filename:
+                if len(patent_files) >= MAX_FILES:
+                    return JSONResponse(
+                        status_code=400,
+                        content={"error": f"Too many files (max {MAX_FILES})"},
+                    )
+                content = await field.read()
+                if len(content) > MAX_FILE_BYTES:
+                    return JSONResponse(
+                        status_code=400,
+                        content={"error": f"File '{field.filename}' exceeds 10 MB limit"},
+                    )
+                if len(content) < 50:
+                    continue  # skip empty/tiny files
+                patent_files.append((field.filename, content, field.content_type or ""))
+
+        # Extract text from uploaded files
+        patent_texts: dict[str, str] = {}
+        extraction_errors: list[str] = []
+        for filename, content, ct in patent_files:
+            text = extract_text_from_binary(content, ct, filename)
+            if text and len(text) > 100:
+                pid = filename.rsplit(".", 1)[0]
+                patent_texts[pid] = text
+            else:
+                extraction_errors.append(
+                    f"'{filename}': text extraction failed "
+                    f"({len(text) if text else 0} chars)"
+                )
+
+        if not patent_texts:
+            msg = "; ".join(extraction_errors) if extraction_errors else "No valid text extracted from uploaded files"
+            return JSONResponse(status_code=400, content={"error": msg})
+
+        # Extract patent IDs from query text (8-digit application numbers)
+        raw_ids = _re.findall(r'\b(\d{8})\b', query)
+        patent_ids = sorted(set(raw_ids)) if raw_ids else list(patent_texts.keys())
+
+        # If patent IDs extracted from query match file count, use query IDs in order
+        if len(patent_ids) == len(patent_texts):
+            ordered_texts = {}
+            for pid, text in zip(patent_ids, patent_texts.values()):
+                ordered_texts[pid] = text
+            patent_texts = ordered_texts
+            app_logger.info(
+                f"[user={user_id}] File upload: matched {len(patent_ids)} patent IDs "
+                f"from query to uploaded files"
+            )
+        else:
+            app_logger.info(
+                f"[user={user_id}] File upload: using filename-based IDs, "
+                f"query_ids={patent_ids}, file_count={len(patent_texts)}"
+            )
+            patent_ids = list(patent_texts.keys())
+
+        # Dispatch long task directly
+        task_id = f"lt_{uuid.uuid4().hex[:12]}"
+        session_id = f"sess_{uuid.uuid4().hex[:12]}"
+        local_user_id = int(user_id)
+
+        from sources.knowledge.knowledge import get_db_connection
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO conversations (session_id, user_id, scene_id, title, messages, long_task_ids)
+                       VALUES (%s, %s, %s, %s, %s, %s)""",
+                    (session_id, local_user_id, None,
+                     f"专利分析 - {query[:50]}",
+                     json.dumps(conversation_history, ensure_ascii=False),
+                     json.dumps([task_id])))
+                cur.execute(
+                    """INSERT INTO long_tasks
+                       (task_id, session_id, user_id, scene_id, task_type, input_params, status)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                    (task_id, session_id, local_user_id, None,
+                     "patent_analysis",
+                     json.dumps({
+                         "query": query,
+                         "patent_ids": patent_ids,
+                         "patent_source": "uploaded_files",
+                         "patent_texts": patent_texts,
+                     }, ensure_ascii=False),
+                     "pending"))
+                conn.commit()
+        finally:
+            conn.close()
+
+        from celery_worker import execute_patent_analysis
+        celery_params = {
+            "query": query,
+            "patent_ids": patent_ids,
+            "patent_source": "uspto",
+            "session_id": session_id,
+            "scene_id": None,
+            "conversation_history": conversation_history,
+            "patent_texts": patent_texts,
+        }
+        execute_patent_analysis.delay(task_id=task_id, params=celery_params)
+
+        # Return SSE with long_task_created
+        async def generate_sse():
+            event_data = json.dumps({
+                "type": "long_task_created",
+                "task_id": task_id,
+                "session_id": session_id,
+                "patent_ids": patent_ids,
+                "patent_count": len(patent_ids),
+                "source": "file_upload",
+                "extraction_errors": extraction_errors if extraction_errors else None,
+            }, ensure_ascii=False)
+            yield f"data: {event_data}\n\n"
+            yield "data: {\"type\": \"end\"}\n\n"
+
+        return StreamingResponse(
+            generate_sse(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     @router.post("/query_stream")
-    async def process_query_stream(request: QueryRequest, http_request: Request):
+    async def process_query_stream(http_request: Request):
+        content_type = http_request.headers.get("content-type", "")
+
+        # ── Multipart file-upload path ──
+        if "multipart/form-data" in content_type:
+            return await _handle_file_upload_query(http_request)
+
+        # ── JSON path (existing) ──
+        body = await http_request.json()
+        request = QueryRequest(**body)
+
         # Optimize: Use cached token validation
         auth_header = http_request.headers.get("Authorization")
         try:
@@ -367,14 +542,19 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         task_id = f"lt_{uuid.uuid4().hex[:12]}"
                         session_id = f"sess_{uuid.uuid4().hex[:12]}"
 
-                        # Extract patent_ids from conversation history (from QueryRequest)
+                        # Extract patent_ids and patent_texts from conversation history
                         patent_ids = []
+                        patent_texts = {}
                         conv_history = request.conversation_history or []
                         for msg in conv_history:
                             if msg.get('role') == 'assistant' and msg.get('patent_data'):
                                 for p in msg['patent_data']:
                                     if isinstance(p, dict) and 'patent_id' in p:
-                                        patent_ids.append(p['patent_id'])
+                                        pid = p['patent_id']
+                                        patent_ids.append(pid)
+                                        st = p.get('spec_text', '')
+                                        if st and len(st) > 100:
+                                            patent_texts[pid] = st
 
                         local_user_id = int(user_id)
                         matched_knowledge = openai_agent.get('knowledge', {})
@@ -402,6 +582,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                          'query': request.query,
                                          'patent_ids': patent_ids,
                                          'patent_source': 'cnipa',
+                                         **({'patent_texts': patent_texts} if patent_texts else {}),
                                      }, ensure_ascii=False),
                                      'pending'))
                                 conn.commit()
@@ -411,14 +592,17 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
 
                         app_logger.info(f"Long task: submitting to Celery...")
                         from celery_worker import execute_patent_analysis
-                        execute_patent_analysis.delay(task_id=task_id, params={
+                        celery_params = {
                             'query': request.query,
                             'patent_ids': patent_ids,
                             'patent_source': 'cnipa',
                             'session_id': session_id,
                             'scene_id': scene_id,
                             'conversation_history': conv_history,
-                        })
+                        }
+                        if patent_texts:
+                            celery_params['patent_texts'] = patent_texts
+                        execute_patent_analysis.delay(task_id=task_id, params=celery_params)
                         app_logger.info(f"Long task: Celery task submitted")
 
                         await queue.put({

@@ -106,6 +106,35 @@ export async function queryStream(
   return res.body
 }
 
+export async function queryStreamWithFiles(
+  query: string,
+  queryId: string,
+  abortSignal: AbortSignal,
+  files: File[],
+  conversationHistory: { role: string; content: string }[] = [],
+): Promise<ReadableStream<Uint8Array>> {
+  const formData = new FormData()
+  formData.append('query', query)
+  formData.append('query_id', queryId)
+  formData.append('push_filter', '2')
+  formData.append('conversation_history', JSON.stringify(conversationHistory))
+  for (const file of files) {
+    formData.append('patent_files', file)
+  }
+  const headers = await authHeaders()
+  // Remove Content-Type so browser sets multipart boundary
+  const { 'content-type': _, ...restHeaders } = headers
+  const res = await fetch(`${BASE_URL}/query_stream`, {
+    method: 'POST',
+    headers: restHeaders,
+    body: formData,
+    signal: abortSignal,
+  })
+  if (!res.ok) throw new Error(`/query_stream (multipart) failed: ${res.status}`)
+  if (!res.body) throw new Error('/query_stream: response body is null')
+  return res.body
+}
+
 // ── Long Task ─────────────────────────────────────────────────────────────
 
 export async function pollLongTaskStatus(taskId: string): Promise<{
