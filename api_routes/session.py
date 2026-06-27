@@ -98,6 +98,15 @@ def register_session_routes(logger, config):
             for r in rows:
                 r['create_time'] = r['create_time'].isoformat() if r['create_time'] else None
                 r['update_time'] = r['update_time'].isoformat() if r['update_time'] else None
+                # long_task_ids may be stored as JSON string — parse to list
+                lt = r.get('long_task_ids')
+                if isinstance(lt, str):
+                    try:
+                        r['long_task_ids'] = json.loads(lt)
+                    except (json.JSONDecodeError, TypeError):
+                        r['long_task_ids'] = []
+                elif lt is None:
+                    r['long_task_ids'] = []
             return {"success": True, "sessions": rows}
         finally:
             conn.close()
