@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { queryStream, queryStreamWithFiles, getUserSceneStatus, getSceneKnowledge, pollLongTaskStatus, getLongTaskReportUrl, getSession, saveSessionMessages, createSession } from '@/services/api'
+import { queryStream, queryStreamWithFiles, getUserSceneStatus, getSceneKnowledge, pollLongTaskStatus, getLongTaskReportUrl, getSession, saveSessionMessages } from '@/services/api'
 import { useI18n } from '@/lib/app-i18n'
 import MarkdownMessage from '@/components/app/MarkdownMessage'
 import { useChatSession } from '@/contexts/ChatContext'
@@ -108,7 +108,7 @@ export default function Chat() {
       .catch(() => {})
   }, [])
 
-  // Load session from URL param on mount
+  // Load session from URL param on mount (and resume long task polling if needed)
   useEffect(() => {
     const sid = searchParams.get('session_id')
     if (!sid || sessionLoadedRef.current) return
@@ -117,6 +117,7 @@ export default function Chat() {
     ;(async () => {
       try {
         const data = await getSession(sid)
+        const longTaskIds: string[] = data.long_task_ids || []
         if (data.messages && Array.isArray(data.messages)) {
           const loaded = data.messages
             .filter((m: { role: string; content: string }) => m.role && m.content)
@@ -130,6 +131,35 @@ export default function Chat() {
         }
         setSessionId(sid)
         sessionLoadedRef.current = true
+
+        // Resume polling for any incomplete long tasks
+        for (const tid of longTaskIds) {
+          try {
+            const status = await pollLongTaskStatus(tid)
+            if (!status || status.status === 'unknown' || status.status === 'completed' || status.status === 'failed') {
+              continue
+            }
+            // Task is still running — find the message that references it and resume
+            const taskMsgId = `lt_resume_${tid}`
+            setMessages(m => {
+              const hasMsg = m.some(msg => msg.content.includes(tid))
+              if (!hasMsg) {
+                const phaseLabel = status.current_step || status.current_phase || ''
+                const progress = status.progress != null ? `[${status.progress}%]` : ''
+                return [...m, {
+                  id: taskMsgId,
+                  role: 'assistant',
+                  content: progress ? `${progress} ${phaseLabel}` : `🔬 深度分析进行中... ${phaseLabel}`,
+                  artifacts: [],
+                }]
+              }
+              return m
+            })
+            startLongTaskPolling(tid, taskMsgId)
+          } catch {
+            // Task status check failed — skip
+          }
+        }
       } catch {
         // Session not found or error — start fresh
       }
@@ -268,25 +298,24 @@ export default function Chat() {
             }
             if (event.type === 'long_task_created') {
               const taskId = String(event.task_id ?? '')
+              const sid = String(event.session_id ?? '')
               setMessages((m) => updateAssistantMessage(m, assistantId,
                 t('chat.longTaskCreated')
                   .replace('{taskId}', taskId)
-                  .replace('{sessionId}', String(event.session_id ?? ''))
+                  .replace('{sessionId}', sid)
               ))
-              // Create a session for this conversation (if not already created)
-              if (!sessionId) {
+              // Use the backend-created session_id (don't create a new one)
+              if (!sessionId && sid) {
+                setSessionId(sid)
+                const url = new URL(window.location.href)
+                url.searchParams.set('session_id', sid)
+                window.history.replaceState({}, '', url.toString())
+                // Save current messages to the backend session
                 const currentMsgs = messages.map(m => ({
                   role: m.role,
                   content: m.content,
                 }))
-                const firstUser = currentMsgs.find(m => m.role === 'user')
-                const title = firstUser?.content?.slice(0, 50) || '专利分析'
-                createSession(title, currentMsgs).then((sid) => {
-                  setSessionId(sid)
-                  const url = new URL(window.location.href)
-                  url.searchParams.set('session_id', sid)
-                  window.history.replaceState({}, '', url.toString())
-                }).catch(() => {})
+                saveSessionMessages(sid, currentMsgs).catch(() => {})
               }
               // Start polling for progress updates
               startLongTaskPolling(taskId, assistantId)
