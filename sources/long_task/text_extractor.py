@@ -96,41 +96,47 @@ def extract_text_from_pdf(
         content: PDF binary data.
         on_progress: Ignored (kept for API compatibility).
     """
-    import subprocess
-    import tempfile
-
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = tmp.name
+    import pypdfium2 as pdfium
 
     try:
-        # Scan first 3 pages to decide
-        scan_result = subprocess.run(
-            ["pdftotext", "-l", "3", "-layout -enc UTF-8", tmp_path, "-"],
-            capture_output=True, text=True, timeout=120,
-        )
-        scan_text = (scan_result.stdout or "").strip()
+        pdf = pdfium.PdfDocument(content)
+        total = len(pdf)
+
+        # Scan first 3 pages
+        scan_parts: list[str] = []
+        for i in range(min(3, total)):
+            text = pdf[i].get_text()
+            if text:
+                scan_parts.append(text)
+        scan_text = "\n\n".join(scan_parts).strip()
 
         if len(scan_text) <= 2000:
             _logger.info(
-                f"pdftotext_scan_short — chars={len(scan_text)}, "
-                f"likely scanned PDF"
+                f"pdfium_scan_short — pages_scanned={min(3, total)}, "
+                f"chars={len(scan_text)}, likely scanned PDF"
             )
+            pdf.close()
             return None
 
         # Full extraction
         _logger.info(
-            f"pdftotext_scan_ok — chars={len(scan_text)}, extracting all pages"
+            f"pdfium_scan_ok — chars={len(scan_text)}, extracting all {total} pages"
         )
-        result = subprocess.run(
-            ["pdftotext", "-layout -enc UTF-8", tmp_path, "-"],
-            capture_output=True, text=True, timeout=300,
-        )
-        extracted = (result.stdout or "").strip()
-        _logger.info(f"pdftotext_extracted — chars={len(extracted)}")
+        parts: list[str] = []
+        for i in range(total):
+            text = pdf[i].get_text()
+            if text:
+                parts.append(text)
+        pdf.close()
+        extracted = "\n\n".join(parts).strip()
+        _logger.info(f"pdfium_extracted — pages={total}, chars={len(extracted)}")
         return extracted if extracted else None
     except Exception as e:
-        _logger.warning(f"pdftotext_failed — {e}")
+        _logger.warning(f"pdfium_failed — {e}")
+        try:
+            pdf.close()
+        except Exception:
+            pass
         return None
     finally:
         try:
