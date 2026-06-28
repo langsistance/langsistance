@@ -9,7 +9,7 @@ Endpoints:
 from fastapi import APIRouter, Query, HTTPException, Request
 from fastapi.responses import Response
 from sources.long_task.status_manager import get_task_status
-from sources.long_task.storage import create_storage, get_storage_config
+from sources.long_task.storage import create_storage, get_storage_config, LocalReportStorage
 from sources.user.passport import verify_firebase_token
 
 
@@ -36,6 +36,20 @@ def register_long_task_routes(logger, config):
             content = await storage.get(task_id, filename)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="Report not found")
+        except Exception as e:
+            # Primary storage failed — try local fallback
+            logger.warning(
+                f"Primary storage get failed for {task_id}/{filename}: {e}, "
+                f"trying local fallback"
+            )
+            try:
+                local = LocalReportStorage()
+                content = await local.get(task_id, filename)
+            except FileNotFoundError:
+                raise HTTPException(status_code=404, detail="Report not found")
+            except Exception as e2:
+                logger.error(f"Local fallback also failed: {e2}")
+                raise HTTPException(status_code=500, detail="Failed to retrieve report")
 
         media_type = "application/pdf" if format == "pdf" else \
                      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"

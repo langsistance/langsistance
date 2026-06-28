@@ -12,6 +12,12 @@ from sources.logger import Logger
 
 _logger = Logger("text_extractor.log")
 
+# ── OCR image pre-processing ────────────────────────────────────────────────
+# Resize images whose longest side exceeds this value before OCR.
+# A4 at 300 DPI ≈ 3508 px. Capping at 2400 px gives ~200 DPI equivalent
+# — good balance between OCR speed and accuracy, especially for CJK text.
+OCR_MAX_DIMENSION = 2400
+
 # ── Preferred download format order ───────────────────────────────────────
 # DOCX first (best for text), then PDF (widely available, with OCR fallback),
 # then XML last (USPTO xmlarchive is ZIP-wrapped binary, not plain text).
@@ -164,6 +170,15 @@ def _ocr_from_pdf_reader(
                 pil_img = Image.open(io.BytesIO(img.data))
                 if pil_img.mode not in ("RGB", "L", "1"):
                     pil_img = pil_img.convert("RGB")
+
+                # Resize large images before OCR — dramatically faster
+                # with negligible accuracy loss.
+                w, h = pil_img.size
+                longest = max(w, h)
+                if longest > OCR_MAX_DIMENSION:
+                    scale = OCR_MAX_DIMENSION / longest
+                    new_size = (int(w * scale), int(h * scale))
+                    pil_img = pil_img.resize(new_size, Image.LANCZOS)
                 text = pytesseract.image_to_string(pil_img, lang="eng")
                 if text and text.strip():
                     page_text.append(text.strip())

@@ -734,24 +734,63 @@ async def _run_pipeline(
     )
 
     report_files = []
+    local_storage = None
+
+    def _get_local_storage():
+        """Lazy-init local storage for fallback."""
+        nonlocal local_storage
+        if local_storage is None:
+            from sources.long_task.storage import create_storage as _create
+            local_storage = _create({'report_storage_backend': 'local'})
+        return local_storage
+
+    # ── Generate and upload DOCX ──
+    update_task_status(task_id, 'exporting', 90, '正在生成 Word 文件...')
+    docx_bytes = await export_docx_async(report_text, table_rows, columns)
     try:
-        update_task_status(task_id, 'exporting', 90, '正在生成 Word 文件...')
-        docx_bytes = await export_docx_async(report_text, table_rows, columns)
         await storage.put(task_id, 'report.docx', docx_bytes)
         _pipeline_logger.info(
             f"[task={task_id}] PHASE4 docx — size_bytes={len(docx_bytes)}"
         )
         report_files.append({'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes)})
+    except Exception as e:
+        _pipeline_logger.error(
+            f"[task={task_id}] PHASE4 docx upload FAILED — {e}, falling back to local"
+        )
+        try:
+            await _get_local_storage().put(task_id, 'report.docx', docx_bytes)
+            _pipeline_logger.info(
+                f"[task={task_id}] PHASE4 docx — local fallback OK, size_bytes={len(docx_bytes)}"
+            )
+            report_files.append({'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes)})
+        except Exception as e2:
+            _pipeline_logger.error(
+                f"[task={task_id}] PHASE4 docx local fallback ALSO FAILED — {e2}"
+            )
 
-        update_task_status(task_id, 'exporting', 95, '正在从 Word 生成 PDF 文件...')
-        pdf_bytes = await export_pdf_async(docx_bytes)
+    # ── Generate and upload PDF ──
+    update_task_status(task_id, 'exporting', 95, '正在从 Word 生成 PDF 文件...')
+    pdf_bytes = await export_pdf_async(docx_bytes)
+    try:
         await storage.put(task_id, 'report.pdf', pdf_bytes)
         _pipeline_logger.info(
             f"[task={task_id}] PHASE4 pdf — size_bytes={len(pdf_bytes)}"
         )
         report_files.append({'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes)})
     except Exception as e:
-        _pipeline_logger.error(f"[task={task_id}] PHASE4 export FAILED — {e}")
+        _pipeline_logger.error(
+            f"[task={task_id}] PHASE4 pdf upload FAILED — {e}, falling back to local"
+        )
+        try:
+            await _get_local_storage().put(task_id, 'report.pdf', pdf_bytes)
+            _pipeline_logger.info(
+                f"[task={task_id}] PHASE4 pdf — local fallback OK, size_bytes={len(pdf_bytes)}"
+            )
+            report_files.append({'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes)})
+        except Exception as e2:
+            _pipeline_logger.error(
+                f"[task={task_id}] PHASE4 pdf local fallback ALSO FAILED — {e2}"
+            )
 
     _pipeline_logger.info(
         f"[task={task_id}] COMPLETED — "
@@ -1156,7 +1195,10 @@ async def export_docx_async(report_text: str, table_rows: list, columns: list) -
                 table_rows_md = []
                 while i < len(lines) and lines[i].strip().startswith('|'):
                     row_line = lines[i].strip()
-                    if '---' not in row_line.replace('|', '').replace('-', '').replace(':', '').strip():
+                    # A separator row (|:---:|:---|) becomes empty after removing
+                    # pipe, hyphen, colon, and whitespace characters.
+                    cleaned = row_line.replace('|', '').replace('-', '').replace(':', '').replace(' ', '')
+                    if cleaned:
                         cells = [c.strip() for c in row_line.strip('|').split('|')]
                         table_rows_md.append(cells)
                     i += 1
