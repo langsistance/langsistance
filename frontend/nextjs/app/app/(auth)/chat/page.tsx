@@ -160,11 +160,15 @@ export default function Chat() {
             }
             const phaseLabel = status.current_step || status.current_phase || ''
             const progress = status.progress != null ? `[${status.progress}%]` : ''
-            const progressContent = `${progress} ${phaseLabel}`.trim()
+            const progressContent = (progress || phaseLabel)
+              ? t('chat.longTaskProgress')
+                  .replace('{progress}', progress)
+                  .replace('{phase}', phaseLabel)
+              : ''
             setMessages(m => {
               const existingIdx = m.findIndex(msg => msg.taskId === tid)
               if (existingIdx >= 0) {
-                return replaceAssistantMessage(m, m[existingIdx].id, progressContent)
+                return replaceAssistantMessage(m, m[existingIdx].id, progressContent || '🔬 深度分析进行中...')
               }
               // No existing progress message — add one tagged with taskId
               return [...m, {

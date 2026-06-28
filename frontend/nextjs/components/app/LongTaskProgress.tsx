@@ -15,11 +15,19 @@ interface TaskState {
   message: string
 }
 
+function hasProgressMarker(content: string): boolean {
+  return /\[\d+%\]/.test(content)
+}
+
 function parseTaskContent(content: string): TaskState | null {
   if (!content) return null
 
-  // Detect long task content
-  const isLongTask = content.includes('🔬') || content.includes('✅') || content.includes('❌')
+  // Detect long task content — explicit markers OR progress percentage pattern
+  const isLongTask =
+    content.includes('🔬') ||
+    content.includes('✅') ||
+    content.includes('❌') ||
+    hasProgressMarker(content)
   if (!isLongTask) return null
 
   // Extract task ID from text or URL
@@ -75,8 +83,8 @@ function parseTaskContent(content: string): TaskState | null {
     return { phase: 'submitted', taskId, progress: 0, stepLabel: '', message: content }
   }
 
-  // Running: has 🔬 marker (taskId may be absent from polling updates)
-  if (content.includes('🔬')) {
+  // Running: has 🔬 marker or progress percentage (taskId may be absent from polling updates)
+  if (content.includes('🔬') || hasProgressMarker(content)) {
     return { phase: 'running', taskId, progress: progress > 0 ? progress : 5, stepLabel, message: content }
   }
 
