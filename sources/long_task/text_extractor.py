@@ -106,9 +106,13 @@ def extract_text_from_pdf(
         scan_pages = min(3, total_pages)
         scan_parts: list[str] = []
         for i in range(scan_pages):
-            text = doc[i].get_text("text")  # plain text, no layout
-            if text:
-                scan_parts.append(text)
+            # Try "text" first (fast), fall back to "blocks" for tricky PDFs
+            page_text = doc[i].get_text("text")
+            if not page_text.strip():
+                blocks = doc[i].get_text("blocks", sort=True)
+                page_text = " ".join(b[4] for b in blocks if b[4].strip())
+            if page_text:
+                scan_parts.append(page_text)
         scan_text = "\n\n".join(scan_parts).strip()
 
         if len(scan_text) <= 2000:
@@ -125,9 +129,12 @@ def extract_text_from_pdf(
         )
         parts: list[str] = []
         for i in range(total_pages):
-            text = doc[i].get_text("text")
-            if text:
-                parts.append(text)
+            page_text = doc[i].get_text("text")
+            if not page_text.strip():
+                blocks = doc[i].get_text("blocks", sort=True)
+                page_text = " ".join(b[4] for b in blocks if b[4].strip())
+            if page_text:
+                parts.append(page_text)
         extracted = "\n\n".join(parts).strip()
         _logger.info(
             f"pdf_text_extracted — pages={total_pages}, chars={len(extracted)}"
