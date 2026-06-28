@@ -945,7 +945,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                         """INSERT INTO conversations (session_id, user_id, scene_id, title, messages, long_task_ids)
                                            VALUES (%s, %s, %s, %s, %s, %s)""",
                                         (session_id, local_user_id, scene_id,
-                                         f"专利分析 - {request.query[:50]}",
+                                         f"{request.query[:60]}",
                                          json.dumps(conv_history, ensure_ascii=False),
                                          json.dumps([task_id])))
                                     app_logger.info(f"Long task: created new session {session_id}")
