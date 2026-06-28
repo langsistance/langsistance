@@ -165,21 +165,26 @@ export default function Chat() {
                   .replace('{progress}', progress)
                   .replace('{phase}', phaseLabel)
               : ''
+            // Capture the actual message ID BEFORE setMessages (the closure
+            // captures `m` but we need the ID for polling — it must match
+            // the message that gets created or updated below).
+            let pollMsgId = `lt_resume_${tid}`
             setMessages(m => {
               const existingIdx = m.findIndex(msg => msg.taskId === tid)
               if (existingIdx >= 0) {
-                return replaceAssistantMessage(m, m[existingIdx].id, progressContent || '🔬 深度分析进行中...')
+                pollMsgId = m[existingIdx].id
+                return replaceAssistantMessage(m, pollMsgId, progressContent || '🔬 深度分析进行中...')
               }
               // No existing progress message — add one tagged with taskId
               return [...m, {
-                id: `lt_resume_${tid}`,
+                id: pollMsgId,
                 role: 'assistant',
                 content: progressContent || '🔬 深度分析进行中...',
                 artifacts: [],
                 taskId: tid,
               }]
             })
-            startLongTaskPolling(tid, `lt_resume_${tid}`)
+            startLongTaskPolling(tid, pollMsgId)
           } catch {
             // Task status check failed — skip
           }
