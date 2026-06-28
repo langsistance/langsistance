@@ -257,7 +257,14 @@ export default function Chat() {
     const assistant = createChatMessage('assistant', '')
     const assistantId = assistant.id
 
-    setMessages((m) => [...m.filter((msg: { taskId?: string }) => !msg.taskId), userMsg, assistant])
+    // Keep completed/failed long task cards, only remove in-progress ones
+    // (polling was just stopped, a stale progress bar is confusing).
+    setMessages((m) => [...m.filter((msg: { taskId?: string, content?: string }) => {
+      if (!msg.taskId) return true
+      // Preserve completed (✅) and failed (❌) results across queries
+      if (msg.content?.includes('✅') || msg.content?.includes('❌')) return true
+      return false // drop running progress (🔬)
+    }), userMsg, assistant])
     setStreaming(true)
     setStreamingId(assistantId)
 
