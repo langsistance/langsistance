@@ -912,7 +912,10 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         # ── Session reuse: if the client already has a session, append to it ──
                         reused_session = False
                         session_id = request.session_id.strip() if request.session_id else ""
-                        app_logger.info(f"Long task: connecting to DB...")
+                        app_logger.info(
+                            f"Long task: session_id from request="
+                            f"'{request.session_id}', resolved='{session_id}'"
+                        )
                         conn = get_db_connection()
                         app_logger.info(f"Long task: DB connected, inserting records...")
                         try:
