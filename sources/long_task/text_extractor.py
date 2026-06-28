@@ -105,7 +105,8 @@ def extract_text_from_pdf(
         # Scan first 3 pages
         scan_parts: list[str] = []
         for i in range(min(3, total)):
-            text = pdf[i].get_text()
+            tp = pdf[i].get_textpage()
+            text = tp.get_text_range()
             if text:
                 scan_parts.append(text)
         scan_text = "\n\n".join(scan_parts).strip()
@@ -124,7 +125,8 @@ def extract_text_from_pdf(
         )
         parts: list[str] = []
         for i in range(total):
-            text = pdf[i].get_text()
+            tp = pdf[i].get_textpage()
+            text = tp.get_text_range()
             if text:
                 parts.append(text)
         pdf.close()
