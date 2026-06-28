@@ -155,9 +155,51 @@ export default function Chat() {
         for (const tid of longTaskIds) {
           try {
             const status = await pollLongTaskStatus(tid)
-            if (!status || status.status === 'unknown' || status.status === 'completed' || status.status === 'failed') {
+
+            // Session save happens ~1s after SSE end, but the task may complete
+            // minutes later.  The in-memory message transitions to ✅/❌ via
+            // polling, but the saved session still has the stale 🔬 content.
+            // Update completed/failed messages so the card shows the final state
+            // and so send()'s filter (which checks for ✅/❌) preserves them.
+            if (status && (status.status === 'completed' || status.status === 'success')) {
+              const files = (status.report_files || [])
+                .map((f: { format: string }) =>
+                  `[${f.format.toUpperCase()}](${getLongTaskReportUrl(tid, f.format as 'pdf' | 'docx')})`)
+                .join(' | ')
+              setMessages(m => {
+                const idx = m.findIndex(msg => msg.taskId === tid)
+                if (idx >= 0) {
+                  return replaceAssistantMessage(m, m[idx].id,
+                    t('chat.longTaskCompleted').replace('{files}', files))
+                }
+                return [...m, {
+                  id: `lt_resume_${tid}`, role: 'assistant',
+                  content: t('chat.longTaskCompleted').replace('{files}', files),
+                  artifacts: [], taskId: tid,
+                }]
+              })
               continue
             }
+            if (status && (status.status === 'failed' || status.status === 'error')) {
+              setMessages(m => {
+                const idx = m.findIndex(msg => msg.taskId === tid)
+                if (idx >= 0) {
+                  return replaceAssistantMessage(m, m[idx].id,
+                    `${t('chat.longTaskFailed')} ${status.error_message || ''}`)
+                }
+                return [...m, {
+                  id: `lt_resume_${tid}`, role: 'assistant',
+                  content: `${t('chat.longTaskFailed')} ${status.error_message || ''}`,
+                  artifacts: [], taskId: tid,
+                }]
+              })
+              continue
+            }
+
+            if (!status || status.status === 'unknown') {
+              continue
+            }
+
             const phaseLabel = status.current_step || status.current_phase || ''
             const progress = status.progress != null ? `[${status.progress}%]` : ''
             const progressContent = (progress || phaseLabel)
