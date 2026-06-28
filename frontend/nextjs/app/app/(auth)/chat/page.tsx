@@ -152,23 +152,29 @@ export default function Chat() {
             if (!status || status.status === 'unknown' || status.status === 'completed' || status.status === 'failed') {
               continue
             }
-            // Task is still running — resume polling if no progress msg exists
-            const taskMsgId = `lt_resume_${tid}`
+            // Task is still running — find or create a progress message
+            // Progress messages contain `[task:${tid}]` prefix in their content,
+            // so we can reliably find them across save/load cycles (IDs are lost).
+            const phaseLabel = status.current_step || status.current_phase || ''
+            const progress = status.progress != null ? `[${status.progress}%]` : ''
+            const progressContent = `[task:${tid}] ${progress} ${phaseLabel}`.trim()
             setMessages(m => {
-              const hasMsg = m.some(msg => msg.id === taskMsgId)
-              if (!hasMsg) {
-                const phaseLabel = status.current_step || status.current_phase || ''
-                const progress = status.progress != null ? `[${status.progress}%]` : ''
-                return [...m, {
-                  id: taskMsgId,
-                  role: 'assistant',
-                  content: progress ? `${progress} ${phaseLabel}` : `🔬 深度分析进行中... ${phaseLabel}`,
-                  artifacts: [],
-                }]
+              const existingIdx = m.findIndex(msg =>
+                msg.role === 'assistant' && msg.content.includes(tid)
+              )
+              if (existingIdx >= 0) {
+                // Update existing progress message with latest status
+                return replaceAssistantMessage(m, m[existingIdx].id, progressContent)
               }
-              return m
+              // No existing progress message — add one
+              return [...m, {
+                id: `lt_resume_${tid}`,
+                role: 'assistant',
+                content: progressContent,
+                artifacts: [],
+              }]
             })
-            startLongTaskPolling(tid, taskMsgId)
+            startLongTaskPolling(tid, `lt_resume_${tid}`)
           } catch {
             // Task status check failed — skip
           }
@@ -317,25 +323,21 @@ export default function Chat() {
             if (event.type === 'long_task_created') {
               const taskId = String(event.task_id ?? '')
               const sid = String(event.session_id ?? '')
-              setMessages((m) => replaceAssistantMessage(m, assistantId,
-                t('chat.longTaskProgress')
-                  .replace('{progress}', '[0%]')
-                  .replace('{phase}', '正在准备专利分析...')
-              ))
+              const initContent = `[task:${taskId}] ` + t('chat.longTaskProgress')
+                .replace('{progress}', '[0%]')
+                .replace('{phase}', '正在准备专利分析...')
+              setMessages((m) => replaceAssistantMessage(m, assistantId, initContent))
               // Use the backend-created session_id (don't create a new one)
               if (!sessionId && sid) {
                 setSessionId(sid)
                 const url = new URL(window.location.href)
                 url.searchParams.set('session_id', sid)
                 window.history.replaceState({}, '', url.toString())
-                // Save messages INCLUDING the current user question (messages
-                // variable is stale — build from userMsg + assistant in scope)
+                // Save messages INCLUDING the current user question
                 const currentMsgs = [
                   ...messages,
                   { role: userMsg.role, content: userMsg.content },
-                  { role: assistant.role, content: t('chat.longTaskProgress')
-                    .replace('{progress}', '[0%]')
-                    .replace('{phase}', '正在准备专利分析...') },
+                  { role: assistant.role, content: initContent },
                 ]
                 saveSessionMessages(sid, currentMsgs).catch(() => {})
               }
@@ -491,9 +493,8 @@ export default function Chat() {
       try {
         const data = await pollLongTaskStatus(taskId)
         if (!data || data.status === 'unknown') {
-          // Task just created — Redis not yet updated. Show preparing message.
           setMessages((m) => replaceAssistantMessage(m, assistantId,
-            t('chat.longTaskProgress')
+            `[task:${taskId}] ` + t('chat.longTaskProgress')
               .replace('{progress}', '[0%]')
               .replace('{phase}', '正在准备专利分析...')
           ))
@@ -518,7 +519,7 @@ export default function Chat() {
           ))
         } else {
           setMessages((m) => replaceAssistantMessage(m, assistantId,
-            t('chat.longTaskProgress')
+            `[task:${taskId}] ` + t('chat.longTaskProgress')
               .replace('{progress}', progress)
               .replace('{phase}', phaseLabel)
           ))
