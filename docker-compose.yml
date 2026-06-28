@@ -47,7 +47,7 @@ services:
     volumes:
       - ./:/app
       - ${WORK_DIR:-.}:/opt/workspace
-    command: celery -A celery_worker worker --loglevel=info --concurrency=1
+    command: celery -A celery_worker worker --loglevel=info --concurrency=3
     working_dir: /app
     environment:
       - PYTHONPATH=/app

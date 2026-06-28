@@ -152,10 +152,10 @@ export default function Chat() {
             if (!status || status.status === 'unknown' || status.status === 'completed' || status.status === 'failed') {
               continue
             }
-            // Task is still running — find the message that references it and resume
+            // Task is still running — resume polling if no progress msg exists
             const taskMsgId = `lt_resume_${tid}`
             setMessages(m => {
-              const hasMsg = m.some(msg => msg.content.includes(tid))
+              const hasMsg = m.some(msg => msg.id === taskMsgId)
               if (!hasMsg) {
                 const phaseLabel = status.current_step || status.current_phase || ''
                 const progress = status.progress != null ? `[${status.progress}%]` : ''
@@ -328,11 +328,15 @@ export default function Chat() {
                 const url = new URL(window.location.href)
                 url.searchParams.set('session_id', sid)
                 window.history.replaceState({}, '', url.toString())
-                // Save current messages to the backend session
-                const currentMsgs = messages.map(m => ({
-                  role: m.role,
-                  content: m.content,
-                }))
+                // Save messages INCLUDING the current user question (messages
+                // variable is stale — build from userMsg + assistant in scope)
+                const currentMsgs = [
+                  ...messages,
+                  { role: userMsg.role, content: userMsg.content },
+                  { role: assistant.role, content: t('chat.longTaskProgress')
+                    .replace('{progress}', '[0%]')
+                    .replace('{phase}', '正在准备专利分析...') },
+                ]
                 saveSessionMessages(sid, currentMsgs).catch(() => {})
               }
               // Start polling for progress updates
