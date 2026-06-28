@@ -323,8 +323,10 @@ def _prepare_long_task_inputs(
         patent_source = llm_result.get("patent_source", "auto")
         llm_ids = llm_result.get("patent_ids", []) or []
 
-        # Merge LLM IDs + regex IDs (LLM may miss IDs due to truncation)
-        patent_ids = list(dict.fromkeys(llm_ids + regex_ids))
+        # Trust LLM for ID extraction (regex catches too many false positives
+        # like parent/provisional/continuation numbers in patent metadata).
+        # Fall back to regex only when LLM returns zero IDs.
+        patent_ids = list(dict.fromkeys(llm_ids)) if llm_ids else list(dict.fromkeys(regex_ids))
 
         if scenario == "conversation_refs":
             patent_texts = {}
