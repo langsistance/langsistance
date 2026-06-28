@@ -96,27 +96,57 @@ def extract_text_from_pdf(
         content: PDF binary data.
         on_progress: Ignored (kept for API compatibility).
     """
-    from pdfminer.high_level import extract_text as pdfminer_extract
+    import subprocess
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
 
     try:
-        # Scan first 3 pages
-        scan_text = pdfminer_extract(io.BytesIO(content), page_numbers=[0, 1, 2])
-        scan_chars = len(scan_text.strip()) if scan_text else 0
+        # qpdf → pdftotext pipeline: qpdf repairs malformed PDF structures
+        scan = subprocess.run(
+            ["qpdf", "--linearize", "--", tmp_path, "-"],
+            capture_output=True, timeout=30,
+        )
+        scan_pdf = scan.stdout if scan.returncode == 0 and scan.stdout else content
 
-        if scan_chars <= 2000:
-            _logger.info(
-                f"pdfminer_scan_short — chars={scan_chars}, likely scanned PDF"
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp2:
+            tmp2.write(scan_pdf)
+            scan_path = tmp2.name
+
+        try:
+            result = subprocess.run(
+                ["pdftotext", "-l", "3", "-layout", scan_path, "-"],
+                capture_output=True, text=True, timeout=120,
             )
-            return None
+            scan_text = (result.stdout or "").strip()
 
-        # Full extraction
-        _logger.info(f"pdfminer_scan_ok — chars={scan_chars}, extracting all pages")
-        extracted = pdfminer_extract(io.BytesIO(content))
-        chars = len(extracted.strip()) if extracted else 0
-        _logger.info(f"pdfminer_extracted — chars={chars}")
-        return extracted if extracted else None
+            if len(scan_text) <= 2000:
+                _logger.info(
+                    f"qpdf_pdftotext_scan_short — chars={len(scan_text)}, "
+                    f"likely scanned PDF"
+                )
+                return None
+
+            # Full extraction
+            _logger.info(
+                f"qpdf_pdftotext_scan_ok — chars={len(scan_text)}, extracting all pages"
+            )
+            result = subprocess.run(
+                ["pdftotext", "-layout", scan_path, "-"],
+                capture_output=True, text=True, timeout=300,
+            )
+            extracted = (result.stdout or "").strip()
+            _logger.info(f"qpdf_pdftotext_extracted — chars={len(extracted)}")
+            return extracted if extracted else None
+        finally:
+            try:
+                _os.unlink(scan_path)
+            except OSError:
+                pass
     except Exception as e:
-        _logger.warning(f"pdfminer_failed — {e}")
+        _logger.warning(f"qpdf_pdftotext_failed — {e}")
         return None
     finally:
         try:

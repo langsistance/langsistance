@@ -104,6 +104,7 @@ RUN apt-get update -y && apt-get install -y \
     libreoffice-writer libreoffice-impress \
     tesseract-ocr tesseract-ocr-eng \
     poppler-utils \
+    qpdf \
  && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /opt/workspace
