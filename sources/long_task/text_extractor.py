@@ -106,7 +106,7 @@ def extract_text_from_pdf(
     try:
         # Scan first 3 pages to decide
         scan_result = subprocess.run(
-            ["pdftotext", "-l", "3", "-layout", tmp_path, "-"],
+            ["pdftotext", "-l", "3", "-layout -enc UTF-8", tmp_path, "-"],
             capture_output=True, text=True, timeout=120,
         )
         scan_text = (scan_result.stdout or "").strip()
@@ -123,7 +123,7 @@ def extract_text_from_pdf(
             f"pdftotext_scan_ok — chars={len(scan_text)}, extracting all pages"
         )
         result = subprocess.run(
-            ["pdftotext", "-layout", tmp_path, "-"],
+            ["pdftotext", "-layout -enc UTF-8", tmp_path, "-"],
             capture_output=True, text=True, timeout=300,
         )
         extracted = (result.stdout or "").strip()
