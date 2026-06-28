@@ -23,6 +23,9 @@ soundfile>=0.13.1
 protobuf>=3.20.3
 termcolor>=2.4.0
 pypdf>=5.4.0
+pymupdf>=1.25.0
+cryptography>=44.0.0
+scikit-learn>=1.5.0
 Pillow>=11.0
 pytesseract>=0.3.13
 # pytesseract needs tesseract-ocr installed on the system: apt install tesseract-ocr
