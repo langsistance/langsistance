@@ -133,10 +133,11 @@ export default function Chat() {
         if (data.messages && Array.isArray(data.messages)) {
           const loaded = data.messages
             .filter((m: { role: string; content: string }) => m.role && m.content)
-            .map((m: { role: string; content: string }, i: number) => ({
+            .map((m: { role: string; content: string; taskId?: string }, i: number) => ({
               id: `hist_${i}_${Date.now()}`,
               role: m.role,
               content: m.content,
+              taskId: (m as any).taskId || undefined,
               artifacts: [],
             }))
           if (loaded.length > 0) {
@@ -157,26 +158,21 @@ export default function Chat() {
             if (!status || status.status === 'unknown' || status.status === 'completed' || status.status === 'failed') {
               continue
             }
-            // Task is still running — find or create a progress message
-            // Progress messages contain `[task:${tid}]` prefix in their content,
-            // so we can reliably find them across save/load cycles (IDs are lost).
             const phaseLabel = status.current_step || status.current_phase || ''
             const progress = status.progress != null ? `[${status.progress}%]` : ''
-            const progressContent = `[task:${tid}] ${progress} ${phaseLabel}`.trim()
+            const progressContent = `${progress} ${phaseLabel}`.trim()
             setMessages(m => {
-              const existingIdx = m.findIndex(msg =>
-                msg.role === 'assistant' && msg.content.includes(tid)
-              )
+              const existingIdx = m.findIndex(msg => msg.taskId === tid)
               if (existingIdx >= 0) {
-                // Update existing progress message with latest status
                 return replaceAssistantMessage(m, m[existingIdx].id, progressContent)
               }
-              // No existing progress message — add one
+              // No existing progress message — add one tagged with taskId
               return [...m, {
                 id: `lt_resume_${tid}`,
                 role: 'assistant',
-                content: progressContent,
+                content: progressContent || '🔬 深度分析进行中...',
                 artifacts: [],
+                taskId: tid,
               }]
             })
             startLongTaskPolling(tid, `lt_resume_${tid}`)
@@ -204,6 +200,7 @@ export default function Chat() {
         const toSave = messages.map(m => ({
           role: m.role,
           content: m.content,
+          ...(m.taskId ? { taskId: m.taskId } : {}),
         }))
         await saveSessionMessages(sessionId, toSave)
       } catch {
@@ -328,21 +325,26 @@ export default function Chat() {
             if (event.type === 'long_task_created') {
               const taskId = String(event.task_id ?? '')
               const sid = String(event.session_id ?? '')
-              const initContent = `[task:${taskId}] ` + t('chat.longTaskProgress')
+              const initContent = t('chat.longTaskProgress')
                 .replace('{progress}', '[0%]')
                 .replace('{phase}', '正在准备专利分析...')
-              setMessages((m) => replaceAssistantMessage(m, assistantId, initContent))
+              setMessages((m) => {
+                const updated = replaceAssistantMessage(m, assistantId, initContent)
+                // Tag the assistant message with taskId for tracking
+                return updated.map(msg =>
+                  msg.id === assistantId ? { ...msg, taskId } : msg
+                ) as typeof updated
+              })
               // Use the backend-created session_id (don't create a new one)
               if (!sessionId && sid) {
                 setSessionId(sid)
                 const url = new URL(window.location.href)
                 url.searchParams.set('session_id', sid)
                 window.history.replaceState({}, '', url.toString())
-                // Save messages INCLUDING the current user question
                 const currentMsgs = [
                   ...messages,
                   { role: userMsg.role, content: userMsg.content },
-                  { role: assistant.role, content: initContent },
+                  { role: assistant.role, content: initContent, taskId },
                 ]
                 saveSessionMessages(sid, currentMsgs).catch(() => {})
               }
@@ -498,10 +500,12 @@ export default function Chat() {
       try {
         const data = await pollLongTaskStatus(taskId)
         if (!data || data.status === 'unknown') {
-          setMessages((m) => replaceAssistantMessage(m, assistantId,
-            `[task:${taskId}] ` + t('chat.longTaskProgress')
-              .replace('{progress}', '[0%]')
-              .replace('{phase}', '正在准备专利分析...')
+          setMessages((m) => m.map(msg =>
+            msg.id === assistantId
+              ? { ...msg, taskId, content: t('chat.longTaskProgress')
+                  .replace('{progress}', '[0%]')
+                  .replace('{phase}', '正在准备专利分析...') }
+              : msg
           ))
           return
         }
@@ -514,19 +518,25 @@ export default function Chat() {
           const files = (data.report_files || [])
             .map((f: { format: string }) => `[${f.format.toUpperCase()}](${getLongTaskReportUrl(taskId, f.format as 'pdf' | 'docx')})`)
             .join(' | ')
-          setMessages((m) => replaceAssistantMessage(m, assistantId,
-            t('chat.longTaskCompleted').replace('{files}', files)
+          setMessages((m) => m.map(msg =>
+            msg.id === assistantId
+              ? { ...msg, content: t('chat.longTaskCompleted').replace('{files}', files) }
+              : msg
           ))
         } else if (data.status === 'failed' || data.status === 'error') {
           stopLongTaskPolling()
-          setMessages((m) => replaceAssistantMessage(m, assistantId,
-            `${t('chat.longTaskFailed')} ${data.error_message || ''}`
+          setMessages((m) => m.map(msg =>
+            msg.id === assistantId
+              ? { ...msg, content: `${t('chat.longTaskFailed')} ${data.error_message || ''}` }
+              : msg
           ))
         } else {
-          setMessages((m) => replaceAssistantMessage(m, assistantId,
-            `[task:${taskId}] ` + t('chat.longTaskProgress')
-              .replace('{progress}', progress)
-              .replace('{phase}', phaseLabel)
+          setMessages((m) => m.map(msg =>
+            msg.id === assistantId
+              ? { ...msg, taskId, content: t('chat.longTaskProgress')
+                  .replace('{progress}', progress)
+                  .replace('{phase}', phaseLabel) }
+              : msg
           ))
         }
       } catch {

@@ -18,6 +18,7 @@ export interface ChatMessage {
   role: string
   content: string
   artifacts?: ChatArtifact[]
+  taskId?: string  // long task ID for progress tracking across save/load
 }
 
 interface ChatContextValue {
