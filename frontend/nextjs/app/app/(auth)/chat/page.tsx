@@ -330,10 +330,9 @@ export default function Chat() {
                 .replace('{phase}', '正在准备专利分析...')
               setMessages((m) => {
                 const updated = replaceAssistantMessage(m, assistantId, initContent)
-                // Tag the assistant message with taskId for tracking
-                return updated.map(msg =>
+                return updated.map((msg: { id: string; [key: string]: unknown }) =>
                   msg.id === assistantId ? { ...msg, taskId } : msg
-                ) as typeof updated
+                )
               })
               // Use the backend-created session_id (don't create a new one)
               if (!sessionId && sid) {
