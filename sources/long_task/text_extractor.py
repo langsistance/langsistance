@@ -96,49 +96,27 @@ def extract_text_from_pdf(
         content: PDF binary data.
         on_progress: Ignored (kept for API compatibility).
     """
-    import pypdfium2 as pdfium
+    from pdfminer.high_level import extract_text as pdfminer_extract
 
     try:
-        pdf = pdfium.PdfDocument(content)
-        total = len(pdf)
-
         # Scan first 3 pages
-        scan_parts: list[str] = []
-        for i in range(min(3, total)):
-            tp = pdf[i].get_textpage()
-            text = tp.get_text_range()
-            if text:
-                scan_parts.append(text)
-        scan_text = "\n\n".join(scan_parts).strip()
+        scan_text = pdfminer_extract(io.BytesIO(content), page_numbers=[0, 1, 2])
+        scan_chars = len(scan_text.strip()) if scan_text else 0
 
-        if len(scan_text) <= 2000:
+        if scan_chars <= 2000:
             _logger.info(
-                f"pdfium_scan_short — pages_scanned={min(3, total)}, "
-                f"chars={len(scan_text)}, likely scanned PDF"
+                f"pdfminer_scan_short — chars={scan_chars}, likely scanned PDF"
             )
-            pdf.close()
             return None
 
         # Full extraction
-        _logger.info(
-            f"pdfium_scan_ok — chars={len(scan_text)}, extracting all {total} pages"
-        )
-        parts: list[str] = []
-        for i in range(total):
-            tp = pdf[i].get_textpage()
-            text = tp.get_text_range()
-            if text:
-                parts.append(text)
-        pdf.close()
-        extracted = "\n\n".join(parts).strip()
-        _logger.info(f"pdfium_extracted — pages={total}, chars={len(extracted)}")
+        _logger.info(f"pdfminer_scan_ok — chars={scan_chars}, extracting all pages")
+        extracted = pdfminer_extract(io.BytesIO(content))
+        chars = len(extracted.strip()) if extracted else 0
+        _logger.info(f"pdfminer_extracted — chars={chars}")
         return extracted if extracted else None
     except Exception as e:
-        _logger.warning(f"pdfium_failed — {e}")
-        try:
-            pdf.close()
-        except Exception:
-            pass
+        _logger.warning(f"pdfminer_failed — {e}")
         return None
     finally:
         try:
