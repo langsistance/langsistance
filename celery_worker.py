@@ -62,6 +62,7 @@ def execute_patent_analysis(self, task_id: str, params: dict):
     ltc = get_long_task_config()
     model_family = ltc['provider_family']
     max_patents = ltc['max_patents']
+    vision_enabled = ltc.get('vision_enabled', True)
 
     # ---- Input dedup + truncation (deterministic ordering) ----
     patent_ids = sorted(set(params.get('patent_ids', [])))
@@ -95,8 +96,16 @@ def execute_patent_analysis(self, task_id: str, params: dict):
     if model_family == 'minimax':
         flash_provider = Provider(provider_name='minimax', model='MiniMax-M2.7-highspeed',
                                   server_address='', is_local=False)
-        pro_provider = Provider(provider_name='minimax', model='MiniMax-M2.7-highspeed',
-                                server_address='', is_local=False)
+        # Single patent: use M2.7 for text analysis
+        # Batch or vision: use M3
+        if total == 1:
+            pro_provider = Provider(provider_name='minimax', model='MiniMax-M2.7-highspeed',
+                                    server_address='', is_local=False)
+        else:
+            pro_provider = Provider(provider_name='minimax', model='MiniMax-M3',
+                                    server_address='', is_local=False)
+        vision_provider = Provider(provider_name='minimax', model='MiniMax-M3',
+                                   server_address='', is_local=False)
     else:
         flash_provider = Provider(provider_name='deepseek', model='deepseek-chat',
                                   server_address='', is_local=False)
@@ -116,6 +125,7 @@ def execute_patent_analysis(self, task_id: str, params: dict):
                 max_patents=max_patents,
                 flash_provider=flash_provider,
                 pro_provider=pro_provider,
+                vision_provider=vision_provider if (model_family == 'minimax' and vision_enabled) else None,
                 update_task_status=update_task_status,
                 set_task_completed=set_task_completed,
                 set_task_failed=set_task_failed,
@@ -171,6 +181,7 @@ async def _run_pipeline(
     max_patents: int,
     flash_provider,
     pro_provider,
+    vision_provider,
     update_task_status,
     set_task_completed,
     set_task_failed,
@@ -605,15 +616,70 @@ async def _run_pipeline(
                                f'正在分析（{patent_index}/{total}）：{patent_id}',
                                table_rows=table_rows)
 
-            row = await analyze_single_patent(
-                patent_id=patent_id, patent_text=patent_text,
-                columns=columns, query=params['query'],
-                provider=pro_provider, timeout=60,
-            )
-            _pipeline_logger.info(
-                f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] analyze_done — "
-                f"patent_id={patent_id}, row_keys={list(row.keys()) if row else 'None'}"
-            )
+            # ── Text extraction may fail for scanned/image PDFs.
+            #     Strategy: try vision (MiniMax-M3) first, then OCR as fallback.
+            #     When vision_enabled=false, skip straight to OCR.
+            text_ok = patent_text and len(patent_text) >= 100
+            want_vision = vision_provider is not None
+
+            if text_ok:
+                row = await analyze_single_patent(
+                    patent_id=patent_id, patent_text=patent_text,
+                    columns=columns, query=params['query'],
+                    provider=pro_provider, timeout=60,
+                )
+                _pipeline_logger.info(
+                    f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] analyze_done — "
+                    f"patent_id={patent_id}, row_keys={list(row.keys()) if row else 'None'}"
+                )
+            else:
+                # Text insufficient — need binary for vision or OCR
+                pdf_bytes = None
+                if params.get('patent_source') == 'uspto':
+                    pdf_bytes = await _download_uspto_binary_for_vision(
+                        patent_id, flash_provider,
+                    )
+                if not pdf_bytes:
+                    row = build_failed_row(patent_id,
+                        "PDF text extraction failed and could not download binary")
+                elif want_vision:
+                    # Path A: MiniMax-M3 vision → OCR fallback
+                    from sources.long_task.patent_analyzer import analyze_patent_with_vision
+                    row = await analyze_patent_with_vision(
+                        pdf_bytes=pdf_bytes, patent_id=patent_id,
+                        columns=columns, query=params['query'],
+                        vision_provider=vision_provider,
+                    )
+                    if row.get('_failed'):
+                        _pipeline_logger.info(
+                            f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
+                            f"vision_failed_fallback_to_ocr — patent_id={patent_id}"
+                        )
+                        ocr_text = _extract_text_from_binary(
+                            pdf_bytes, 'application/pdf', f'{patent_id}.pdf')
+                        if ocr_text and len(ocr_text) >= 100:
+                            row = await analyze_single_patent(
+                                patent_id=patent_id, patent_text=ocr_text,
+                                columns=columns, query=params['query'],
+                                provider=pro_provider, timeout=60,
+                            )
+                else:
+                    # Path B: Vision disabled — straight to OCR
+                    _pipeline_logger.info(
+                        f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
+                        f"vision_disabled_ocr — patent_id={patent_id}"
+                    )
+                    ocr_text = _extract_text_from_binary(
+                        pdf_bytes, 'application/pdf', f'{patent_id}.pdf')
+                    if ocr_text and len(ocr_text) >= 100:
+                        row = await analyze_single_patent(
+                            patent_id=patent_id, patent_text=ocr_text,
+                            columns=columns, query=params['query'],
+                            provider=pro_provider, timeout=60,
+                        )
+                    else:
+                        row = build_failed_row(patent_id,
+                            f"Text extraction and OCR both failed ({len(ocr_text) if ocr_text else 0} chars)")
 
             row['_summary'] = await generate_patent_summary(
                 patent_id=patent_id, row=row, query=params['query'],
@@ -1455,5 +1521,155 @@ async def _download_uspto_spec_with_redirect(
             f"[download] uspto_spec_done — len={len(stripped)}"
         )
         return stripped
+
+    return None
+
+
+# ── Binary download for vision fallback ──────────────────────────────────────
+
+async def _download_uspto_binary_for_vision(
+    patent_id: str,
+    flash_provider,
+) -> bytes | None:
+    """Download USPTO specification as raw PDF bytes for vision LLM analysis.
+
+    Mirrors the text-extraction path (_download_uspto_patent_direct) but
+    returns the raw binary content instead of extracted text.
+    """
+    import asyncio
+
+    from sources.dynamic_tool_params import _extract_first_url
+    from sources.http_outbound import outbound_http
+
+    uspto_headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; PatentAnalysis/1.0)",
+        "Accept": "application/pdf, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/octet-stream, */*",
+    }
+
+    app_number = patent_id.strip()
+    if not app_number.isdigit():
+        app_number = "".join(c for c in app_number if c.isdigit())
+        if not app_number:
+            _pipeline_logger.warning(
+                f"[vision_dl] uspto_invalid_app_number — patent_id={patent_id}"
+            )
+            return None
+
+    # Step 1: Document list API
+    docs_url = (
+        f"https://api.uspto.gov/api/v1/patent/applications/{app_number}/documents"
+    )
+    try:
+        resp = await asyncio.to_thread(
+            outbound_http.get, docs_url, purpose="patent_download",
+            headers=uspto_headers, timeout=30,
+        )
+        if resp.status_code != 200:
+            _pipeline_logger.warning(
+                f"[vision_dl] uspto_doc_list_failed — status={resp.status_code}"
+            )
+            return None
+        data = resp.json()
+    except Exception as e:
+        _pipeline_logger.warning(f"[vision_dl] uspto_doc_list_error — {e}")
+        return None
+
+    documents = data.get("documentBag", [])
+    if not documents:
+        return None
+
+    # Step 2: Find specification (SPEC) documents
+    spec_docs = [
+        d for d in documents
+        if d.get("documentCode") == "SPEC"
+        or d.get("documentTypeCode") == "SPEC"
+        or "SPEC" in str(d.get("applicationTypeCode", ""))
+    ]
+    if not spec_docs:
+        # If LLM classification is available, use it
+        if flash_provider and len(documents) > 1:
+            try:
+                doc_list = [
+                    {
+                        "idx": i,
+                        "code": d.get("documentCode") or d.get("documentTypeCode", "?"),
+                        "desc": (d.get("documentCodeDescriptionText") or d.get("documentTypeName", "")),
+                        "has_docx": any(
+                            "docx" in str(o.get("mimeTypeIdentifier", "")).lower()
+                            or "ms_word" in str(o.get("mimeTypeIdentifier", "")).lower()
+                            for o in d.get("downloadOptionBag", [])
+                        ),
+                    }
+                    for i, d in enumerate(documents)
+                ]
+                prompt = (
+                    "Which document index contains the patent specification "
+                    "(detailed description)? Choose the one with code SPEC or "
+                    "the most detailed description. Return JSON: "
+                    '{"index": <number>, "code": "<code>", "reason": "<brief>"}'
+                )
+                selection = await flash_provider.complete_json(
+                    "You select specification documents from patent document lists. "
+                    "Return only valid JSON.",
+                    f"Documents:\n{doc_list}\n\n{prompt}",
+                )
+                idx = int(selection.get("index", -1))
+                if 0 <= idx < len(documents):
+                    chosen = documents[idx]
+                    spec_docs = [chosen]
+                    _pipeline_logger.info(
+                        f"[vision_dl] llm_selected_spec — index={idx}, "
+                        f"code={chosen.get('documentCode', '?')}"
+                    )
+            except Exception:
+                pass
+
+    if not spec_docs:
+        _pipeline_logger.warning(
+            f"[vision_dl] uspto_no_spec — patent_id={app_number}"
+        )
+        return None
+
+    # Step 3: Download binary from first successful spec URL
+    from sources.long_task.text_extractor import get_download_url_from_doc
+
+    for attempt, spec_doc in enumerate(spec_docs):
+        spec_url = get_download_url_from_doc(spec_doc)
+        if not spec_url:
+            continue
+
+        _pipeline_logger.info(
+            f"[vision_dl] attempt[{attempt+1}/{len(spec_docs)}] — "
+            f"url={spec_url[:100]}"
+        )
+
+        for hop in range(2):
+            try:
+                resp = await asyncio.to_thread(
+                    outbound_http.get, spec_url, purpose="patent_download",
+                    headers=uspto_headers, timeout=30,
+                )
+                if resp.status_code != 200:
+                    break
+
+                ct = resp.headers.get("Content-Type", "").lower()
+                if ct and not any(t in ct for t in ("text/", "json", "xml", "html")):
+                    _pipeline_logger.info(
+                        f"[vision_dl] binary_downloaded — type={ct}, "
+                        f"len={len(resp.content)}"
+                    )
+                    return resp.content
+
+                # Check for redirect
+                stripped = (resp.text or "").strip()
+                redirect_url = _extract_first_url(stripped)
+                if redirect_url and redirect_url != spec_url:
+                    spec_url = redirect_url
+                    continue
+
+                break
+            except Exception as e:
+                _pipeline_logger.warning(f"[vision_dl] hop{hop}_error — {e}")
+                break
 
     return None

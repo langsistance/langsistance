@@ -23,7 +23,11 @@ def get_long_task_config(config_path: str = 'config.ini') -> dict:
         max_patents = cfg.getint('LONG_TASK', 'max_patents',
                                  fallback=DEFAULT_MAX_PATENTS)
 
+    vision_enabled = cfg.getboolean('LONG_TASK', 'vision_enabled',
+                                     fallback=True)
+
     return {
         'provider_family': provider_family,
         'max_patents': max_patents,
+        'vision_enabled': vision_enabled,
     }
