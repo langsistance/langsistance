@@ -248,7 +248,7 @@ export default function Chat() {
     const assistant = createChatMessage('assistant', '')
     const assistantId = assistant.id
 
-    setMessages((m) => [...m, userMsg, assistant])
+    setMessages((m) => [...m.filter((msg: { taskId?: string }) => !msg.taskId), userMsg, assistant])
     setStreaming(true)
     setStreamingId(assistantId)
 
@@ -329,7 +329,9 @@ export default function Chat() {
                 .replace('{progress}', '[0%]')
                 .replace('{phase}', '正在准备专利分析...')
               setMessages((m) => {
-                const updated = replaceAssistantMessage(m, assistantId, initContent)
+                // Dedup: remove any stale task messages with the same taskId
+                const cleaned = m.filter((msg: { taskId?: string }) => msg.taskId !== taskId)
+                const updated = replaceAssistantMessage(cleaned, assistantId, initContent)
                 return updated.map((msg: { id: string; [key: string]: unknown }) =>
                   msg.id === assistantId ? { ...msg, taskId } : msg
                 )
