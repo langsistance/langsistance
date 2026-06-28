@@ -87,6 +87,10 @@ def execute_patent_analysis(self, task_id: str, params: dict):
         f"patent_ids={patent_ids[:10]}{'...' if len(patent_ids) > 10 else ''}"
     )
 
+    # ── Immediate progress update so frontend shows feedback right away ──
+    update_task_status(task_id, 'preparing', 1,
+                       f'正在准备专利分析（{total} 个专利）...')
+
     # ---- Provider setup ----
     if model_family == 'minimax':
         flash_provider = Provider(provider_name='minimax', model='MiniMax-M2.7-highspeed',
