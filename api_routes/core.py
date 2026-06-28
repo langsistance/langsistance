@@ -92,17 +92,40 @@ def _detect_patent_source(
     query: str = "",
     app_logger=None,
 ) -> str:
-    """Detect patent source (uspto/cnipa) from scene tools and conversation context.
+    """Detect patent source (uspto/cnipa) from conversation context and scene tools.
 
-    Detection order:
-      1. Scene tools URL heuristics (most reliable)
-      2. Conversation / query text keywords
-      3. Default fallback: let the pipeline auto-detect via patent ID format
+    Detection order (text keywords take priority — scene tools only provide fallback):
+      1. Conversation / query text keywords (most reliable — what user is searching)
+      2. Scene tools URL heuristics (fallback)
+      3. Default: let the pipeline auto-detect via patent ID format
     """
     conv_history = conv_history or []
-    source = "auto"  # Default: let celery_worker auto-detect from patent IDs
 
-    # ── 1. Scene tools ──
+    # ── Build combined text ──
+    combined = query + " " + " ".join(
+        m.get("content", "") for m in (conv_history or [])
+        if isinstance(m, dict)
+    )
+    combined_lower = combined.lower()
+
+    # ── 1. Text keywords (primary — user intent) ──
+    uspto_keywords = ["uspto", "美国专利", "美国专利商标局", "united states patent",
+                      "us patent", "us application"]
+    cnipa_keywords = ["cnipa", "中国专利", "中国国家知识产权", "国家知识产权局",
+                      "chinese patent", "china patent",
+                      "zldsj"]
+    if any(kw in combined_lower for kw in uspto_keywords):
+        source = "uspto"
+        if app_logger:
+            app_logger.info(f"patent_source: text_keywords → uspto")
+        return source
+    if any(kw in combined_lower for kw in cnipa_keywords):
+        source = "cnipa"
+        if app_logger:
+            app_logger.info(f"patent_source: text_keywords → cnipa")
+        return source
+
+    # ── 2. Scene tools (fallback) ──
     if scene_id:
         try:
             from sources.long_task.scene_tools import get_scene_knowledge_tools
@@ -116,36 +139,265 @@ def _detect_patent_source(
                 source = "uspto"
             elif "zldsj" in url_text or "cnipa" in url_text:
                 source = "cnipa"
+            else:
+                source = "auto"
             if app_logger:
                 app_logger.info(
-                    f"patent_source detection: scene_id={scene_id}, "
-                    f"tool_urls={urls[:3]}, detected={source}"
+                    f"patent_source: scene_id={scene_id}, "
+                    f"tool_urls={urls[:3]}, → {source}"
                 )
+            return source
         except Exception:
             pass
 
-    # ── 2. Conversation / query text ──
-    if source == "auto":
-        combined = query + " " + " ".join(
-            m.get("content", "") for m in (conv_history or [])
-            if isinstance(m, dict)
-        )
-        combined_lower = combined.lower()
-        uspto_keywords = ["uspto", "美国专利", "美国专利商标局", "united states patent",
-                          "us patent", "us application"]
-        cnipa_keywords = ["cnipa", "中国专利", "中国国家知识产权", "国家知识产权局",
-                          "chinese patent", "china patent", "发明专利",
-                          "zldsj", "专利申请号"]
-        if any(kw in combined_lower for kw in uspto_keywords):
-            source = "uspto"
-        elif any(kw in combined_lower for kw in cnipa_keywords):
-            source = "cnipa"
-        if app_logger:
-            app_logger.info(
-                f"patent_source detection: text_keywords, detected={source}"
+    # ── 3. Default ──
+    if app_logger:
+        app_logger.info(f"patent_source: no signal found → auto")
+    return "auto"
+
+
+async def _classify_long_task_async(
+    query: str,
+    conv_history: list,
+    scene_id=None,
+    app_logger=None,
+) -> dict:
+    """Use LLM to classify scenario, extract patent IDs, and detect source.
+
+    Returns dict with: scenario, patent_ids, patent_source, reasoning
+    """
+    from sources.llm_provider import Provider
+    from sources.long_task.config import get_long_task_config
+
+    ltc = get_long_task_config()
+    flash = Provider(
+        provider_name=ltc['provider_family'],
+        model='deepseek-chat' if ltc['provider_family'] == 'deepseek' else 'MiniMax-M2.7-highspeed',
+        server_address='', is_local=False,
+    )
+
+    # Trim long conversation messages for the classification prompt
+    conv_summary = []
+    for msg in (conv_history or []):
+        if isinstance(msg, dict):
+            role = msg.get('role', '')
+            content = str(msg.get('content', ''))
+            conv_summary.append(
+                f"[{role}]: {content[:500]}"
+                f"{'...(truncated)' if len(content) > 500 else ''}"
             )
 
-    return source
+    system_prompt = (
+        "你是一个专利分析任务分类器。分析用户查询 + 对话历史，判断场景、提取专利ID、识别来源。\n\n"
+        "## 三种场景\n"
+        "1. direct_ids — 用户当前提问本身包含专利申请号，是独立问题"
+        "（不依赖历史对话即可理解）。\n"
+        "   例：「分析专利申请 17429113, 18012525, 18331482」\n"
+        "   例：「帮我查一下202310123456.7这个专利」\n"
+        "2. conversation_refs — 用户的问题是针对历史对话中出现的专利结果的追问。"
+        "当前提问如果不看历史对话就无法确定要分析哪些专利。\n"
+        "   例：（历史对话返回了3个专利）用户：「从这3条中筛选出橡胶垫圈相关专利」\n"
+        "   例：（历史对话返回了专利列表）用户：「上述专利里哪些已授权」\n"
+        "   例：（历史对话返回了专利结果）用户：「帮我分析第一个专利」\n\n"
+        "## 专利ID格式\n"
+        "- USPTO（美国）: 纯8位数字，如 17429113, 18331482\n"
+        "- CNIPA（中国）: 20XX + 8~9位数字，可选 .校验位，如 202310123456.7\n\n"
+        "## 专利来源判断\n"
+        "- 如果对话提到 USPTO、美国专利、美国专利商标局 → uspto\n"
+        "- 如果对话提到 CNIPA、中国专利、国家知识产权局 → cnipa\n"
+        "- 纯8位数字ID → uspto\n"
+        "- 20XX开头的长数字ID → cnipa\n"
+        "- 不确定 → unknown\n\n"
+        "## 输出JSON\n"
+        '{"scenario": "direct_ids"|"conversation_refs", '
+        '"patent_ids": ["id1","id2"], '
+        '"patent_source": "uspto"|"cnipa"|"unknown", '
+        '"reasoning": "简要说明"}'
+    )
+
+    user_text = (
+        f"用户当前提问：{query}\n\n"
+        f"对话历史：\n" + "\n".join(conv_summary) if conv_summary else "(无历史对话)"
+    )
+
+    try:
+        result = await flash.complete_json(system_prompt, user_text)
+    except Exception as e:
+        if app_logger:
+            app_logger.warning(f"LLM scenario classification failed: {e}, falling back to regex")
+        return {
+            "scenario": "unknown",
+            "patent_ids": [],
+            "patent_source": "auto",
+            "reasoning": f"LLM error: {e}",
+        }
+
+    if not result or not isinstance(result, dict):
+        return {
+            "scenario": "unknown",
+            "patent_ids": [],
+            "patent_source": "auto",
+            "reasoning": "LLM returned empty/invalid response",
+        }
+
+    return {
+        "scenario": result.get("scenario", "unknown"),
+        "patent_ids": result.get("patent_ids", []) or [],
+        "patent_source": result.get("patent_source", "auto"),
+        "reasoning": result.get("reasoning", ""),
+    }
+
+
+def _prepare_long_task_inputs(
+    query: str,
+    conv_history: list,
+    scene_id=None,
+    patent_file_refs: list = None,
+    app_logger=None,
+    llm_result: dict = None,
+) -> dict:
+    """Prepare patent analysis inputs, optionally enriched by LLM classification.
+
+    Three scenarios:
+      1. "conversation_refs" — query is a FOLLOW-UP about previous results.
+         IDs come from conversation history (LLM extracts them).
+      2. "direct_ids" — query ITSELF contains patent application IDs.
+         Self-contained question. IDs come from query.
+      3. "file_upload" — user uploaded patent specification files.
+
+    When ``llm_result`` is provided (from ``_classify_long_task_async``),
+    scenario and patent_source from the LLM are used directly.
+    Otherwise falls back to regex extraction + keyword detection.
+
+    Returns dict with keys:
+      scenario, patent_ids, patent_source, patent_texts
+    """
+    import re as _patent_id_re
+
+    conv_history = conv_history or []
+    patent_file_refs = patent_file_refs or []
+
+    # ── Scenario 3: file upload (unambiguous, no LLM needed) ──
+    if patent_file_refs:
+        patent_ids = [
+            ref.get("filename", "").rsplit(".", 1)[0]
+            for ref in patent_file_refs
+        ]
+        patent_source = _detect_patent_source(
+            scene_id=scene_id,
+            conv_history=conv_history,
+            query=query,
+            app_logger=app_logger,
+        )
+        if app_logger:
+            app_logger.info(
+                f"Long task scenario=file_upload — "
+                f"files={len(patent_file_refs)}, ids={patent_ids[:5]}, "
+                f"patent_source={patent_source}"
+            )
+        return {
+            "scenario": "file_upload",
+            "patent_ids": patent_ids,
+            "patent_source": patent_source,
+            "patent_texts": None,
+        }
+
+    # ── Use LLM result if available ──
+    if llm_result and llm_result.get("scenario") != "unknown":
+        scenario = llm_result["scenario"]
+        patent_source = llm_result.get("patent_source", "auto")
+        llm_ids = llm_result.get("patent_ids", []) or []
+
+        if scenario == "direct_ids" and llm_ids:
+            patent_ids = list(dict.fromkeys(llm_ids))
+            patent_texts = None
+        elif scenario == "conversation_refs":
+            # LLM IDs + fallback to structured patent_data + regex
+            patent_ids = list(dict.fromkeys(llm_ids))
+            patent_texts = {}
+            for msg in conv_history:
+                if msg.get('role') == 'assistant' and msg.get('patent_data'):
+                    for p in msg['patent_data']:
+                        if isinstance(p, dict) and 'patent_id' in p:
+                            pid = str(p['patent_id'])
+                            if pid not in patent_ids:
+                                patent_ids.append(pid)
+                            st = p.get('spec_text', '')
+                            if st and len(st) > 100:
+                                patent_texts[pid] = st
+            patent_texts = patent_texts if patent_texts else None
+        else:
+            patent_ids = list(dict.fromkeys(llm_ids))
+            patent_texts = None
+
+        # Regex fallback if LLM found no IDs
+        if not patent_ids:
+            text_sources = [query or ""]
+            for msg in conv_history:
+                if isinstance(msg, dict):
+                    text_sources.append(msg.get("content", ""))
+            combined_text = "\n".join(text_sources)
+            uspto_matches = _patent_id_re.findall(r'\b(\d{8})\b', combined_text)
+            slash_matches = _patent_id_re.findall(r'\b(\d{2})/(\d{6})\b', combined_text)
+            uspto_matches += [a + b for a, b in slash_matches]
+            cnipa_matches = _patent_id_re.findall(r'\b(20[12]\d{8,9}(?:\.\d)?)\b', combined_text)
+            patent_ids = list(dict.fromkeys(uspto_matches + cnipa_matches))
+    else:
+        # ── Fallback: regex + keyword detection (no LLM available) ──
+        patent_ids = []
+        patent_texts = {}
+        for msg in conv_history:
+            if msg.get('role') == 'assistant' and msg.get('patent_data'):
+                for p in msg['patent_data']:
+                    if isinstance(p, dict) and 'patent_id' in p:
+                        pid = p['patent_id']
+                        patent_ids.append(pid)
+                        st = p.get('spec_text', '')
+                        if st and len(st) > 100:
+                            patent_texts[pid] = st
+
+        if not patent_ids:
+            text_sources = [query or ""]
+            for msg in conv_history:
+                if isinstance(msg, dict):
+                    text_sources.append(msg.get("content", ""))
+            combined_text = "\n".join(text_sources)
+            uspto_matches = _patent_id_re.findall(r'\b(\d{8})\b', combined_text)
+            slash_matches = _patent_id_re.findall(r'\b(\d{2})/(\d{6})\b', combined_text)
+            uspto_matches += [a + b for a, b in slash_matches]
+            cnipa_matches = _patent_id_re.findall(r'\b(20[12]\d{8,9}(?:\.\d)?)\b', combined_text)
+            patent_ids = list(dict.fromkeys(uspto_matches + cnipa_matches))
+
+        query_uspto = _patent_id_re.findall(r'\b(\d{8})\b', query or "")
+        query_slash = _patent_id_re.findall(r'\b(\d{2})/(\d{6})\b', query or "")
+        query_uspto += [a + b for a, b in query_slash]
+        query_cnipa = _patent_id_re.findall(r'\b(20[12]\d{8,9}(?:\.\d)?)\b', query or "")
+        query_has_ids = bool(query_uspto or query_cnipa)
+
+        followup_keywords = ["这", "上述", "前面", "以上", "从中", "其中", "筛选", "过滤",
+                            "挑出", "选出", "哪些", "哪个", "这几个", "那几个"]
+        query_is_followup = any(kw in (query or "") for kw in followup_keywords)
+
+        scenario = "direct_ids" if (query_has_ids and not query_is_followup) else "conversation_refs"
+        patent_source = _detect_patent_source(
+            scene_id=scene_id, conv_history=conv_history, query=query, app_logger=app_logger,
+        )
+        patent_texts = patent_texts if patent_texts else None
+
+    if app_logger:
+        app_logger.info(
+            f"Long task scenario={scenario} — "
+            f"patent_ids_count={len(patent_ids)}, "
+            f"patent_source={patent_source}, "
+            f"patent_ids={patent_ids[:10]}{'...' if len(patent_ids) > 10 else ''}"
+        )
+
+    return {
+        "scenario": scenario,
+        "patent_ids": patent_ids,
+        "patent_source": patent_source,
+        "patent_texts": patent_texts,
+    }
 
 
 def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, config_ref, is_generating_flag, think_wrapper_func, create_agent_func):
@@ -463,6 +715,17 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
 
             # ── Session reuse for file upload path ──
             from sources.knowledge.knowledge import get_db_connection
+
+            # Detect patent source from query + conversation context
+            # (pipeline will further auto-detect from document content)
+            inputs = _prepare_long_task_inputs(
+                query=query,
+                conv_history=conversation_history,
+                patent_file_refs=patent_file_refs,
+                app_logger=app_logger,
+            )
+            patent_source = inputs["patent_source"]
+
             reused_session = False
             existing_session_id = (form.get("session_id") or "").strip()
             conn = get_db_connection()
@@ -508,7 +771,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                          json.dumps({
                              "query": query,
                              "patent_ids": patent_ids,
-                             "patent_source": "uploaded_files",
+                             "patent_source": patent_source,
                              "patent_file_refs": patent_file_refs,
                          }, ensure_ascii=False),
                          "pending"))
@@ -520,7 +783,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
             celery_params = {
                 "query": query,
                 "patent_ids": patent_ids,
-                "patent_source": "uspto",
+                "patent_source": patent_source,
                 "session_id": session_id,
                 "scene_id": None,
                 "conversation_history": conversation_history,
@@ -634,68 +897,29 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         from sources.knowledge.knowledge import get_db_connection
 
                         task_id = f"lt_{uuid.uuid4().hex[:12]}"
-
-                        # Extract patent_ids and patent_texts from conversation history
-                        patent_ids = []
-                        patent_texts = {}
                         conv_history = request.conversation_history or []
-
-                        # ── Primary: extract from structured patent_data ──
-                        for msg in conv_history:
-                            if msg.get('role') == 'assistant' and msg.get('patent_data'):
-                                for p in msg['patent_data']:
-                                    if isinstance(p, dict) and 'patent_id' in p:
-                                        pid = p['patent_id']
-                                        patent_ids.append(pid)
-                                        st = p.get('spec_text', '')
-                                        if st and len(st) > 100:
-                                            patent_texts[pid] = st
-
-                        # ── Fallback: extract USPTO/CNIPA IDs from plain text ──
-                        if not patent_ids:
-                            import re as _patent_id_re
-                            # Build combined text from query + all messages
-                            text_sources = [request.query or ""]
-                            for msg in conv_history:
-                                if isinstance(msg, dict):
-                                    text_sources.append(msg.get("content", ""))
-                            combined_text = "\n".join(text_sources)
-
-                            # USPTO: pure 8-digit numbers (most common format)
-                            uspto_matches = _patent_id_re.findall(
-                                r'\b(\d{8})\b', combined_text
-                            )
-                            # CNIPA: YYYY + 8 digits (+ optional . + check digit)
-                            cnipa_matches = _patent_id_re.findall(
-                                r'\b(20[12]\d{9,10}(?:\.\d)?)\b', combined_text
-                            )
-                            # Also match slashed USPTO format: XX/XXXXXX
-                            slash_matches = _patent_id_re.findall(
-                                r'\b(\d{2}/\d{6})\b', combined_text
-                            )
-                            for m in slash_matches:
-                                uspto_matches += (m.replace("/", ""),)
-
-                            patent_ids = list(dict.fromkeys(
-                                uspto_matches + cnipa_matches
-                            ))
-                            if patent_ids:
-                                app_logger.info(
-                                    f"Long task: regex-extracted {len(patent_ids)} "
-                                    f"patent_ids from plain text: {patent_ids[:5]}"
-                                )
 
                         local_user_id = int(user_id)
                         matched_knowledge = openai_agent.get('knowledge', {})
                         scene_id = getattr(matched_knowledge, 'scene_id', None) if matched_knowledge else None
 
-                        # ── Detect patent source from scene / conversation context ──
-                        patent_source = _detect_patent_source(
-                            scene_id=scene_id,
-                            conv_history=conv_history,
+                        # ── LLM: classify scenario → extract IDs → detect source ──
+                        llm_result = await _classify_long_task_async(
                             query=request.query,
+                            conv_history=conv_history,
+                            scene_id=scene_id,
                             app_logger=app_logger,
                         )
+                        inputs = _prepare_long_task_inputs(
+                            query=request.query,
+                            conv_history=conv_history,
+                            scene_id=scene_id,
+                            app_logger=app_logger,
+                            llm_result=llm_result,
+                        )
+                        patent_ids = inputs["patent_ids"]
+                        patent_source = inputs["patent_source"]
+                        patent_texts = inputs["patent_texts"] or {}
 
                         # ── Session reuse: if the client already has a session, append to it ──
                         reused_session = False
