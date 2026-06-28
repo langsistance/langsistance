@@ -86,6 +86,68 @@ async def check_usage_async(user_id: str) -> bool:
     """Async wrapper for check_and_increase_usage"""
     return await asyncio.to_thread(check_and_increase_usage, user_id)
 
+def _detect_patent_source(
+    scene_id=None,
+    conv_history: list = None,
+    query: str = "",
+    app_logger=None,
+) -> str:
+    """Detect patent source (uspto/cnipa) from scene tools and conversation context.
+
+    Detection order:
+      1. Scene tools URL heuristics (most reliable)
+      2. Conversation / query text keywords
+      3. Default fallback: let the pipeline auto-detect via patent ID format
+    """
+    conv_history = conv_history or []
+    source = "auto"  # Default: let celery_worker auto-detect from patent IDs
+
+    # ── 1. Scene tools ──
+    if scene_id:
+        try:
+            from sources.long_task.scene_tools import get_scene_knowledge_tools
+            candidates = get_scene_knowledge_tools(scene_id)
+            urls = [
+                c.get("tool_url", "") for c in candidates
+                if c.get("tool_url")
+            ]
+            url_text = " ".join(urls).lower()
+            if "uspto" in url_text:
+                source = "uspto"
+            elif "zldsj" in url_text or "cnipa" in url_text:
+                source = "cnipa"
+            if app_logger:
+                app_logger.info(
+                    f"patent_source detection: scene_id={scene_id}, "
+                    f"tool_urls={urls[:3]}, detected={source}"
+                )
+        except Exception:
+            pass
+
+    # ── 2. Conversation / query text ──
+    if source == "auto":
+        combined = query + " " + " ".join(
+            m.get("content", "") for m in (conv_history or [])
+            if isinstance(m, dict)
+        )
+        combined_lower = combined.lower()
+        uspto_keywords = ["uspto", "美国专利", "美国专利商标局", "united states patent",
+                          "us patent", "us application"]
+        cnipa_keywords = ["cnipa", "中国专利", "中国国家知识产权", "国家知识产权局",
+                          "chinese patent", "china patent", "发明专利",
+                          "zldsj", "专利申请号"]
+        if any(kw in combined_lower for kw in uspto_keywords):
+            source = "uspto"
+        elif any(kw in combined_lower for kw in cnipa_keywords):
+            source = "cnipa"
+        if app_logger:
+            app_logger.info(
+                f"patent_source detection: text_keywords, detected={source}"
+            )
+
+    return source
+
+
 def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, config_ref, is_generating_flag, think_wrapper_func, create_agent_func):
     """注册核心路由并传递所需的依赖"""
 
@@ -377,7 +439,6 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
             # Save files to disk for async processing by Celery worker.
             # Text extraction (esp. OCR) can take minutes — we must not block the HTTP response.
             task_id = f"lt_{uuid.uuid4().hex[:12]}"
-            session_id = f"sess_{uuid.uuid4().hex[:12]}"
             local_user_id = int(user_id)
 
             upload_dir = os.path.join("/app", ".uploads", task_id)
@@ -400,17 +461,44 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                 f"[user={user_id}] File upload: saved {len(patent_file_refs)} files to {upload_dir}"
             )
 
+            # ── Session reuse for file upload path ──
             from sources.knowledge.knowledge import get_db_connection
+            reused_session = False
+            existing_session_id = (form.get("session_id") or "").strip()
             conn = get_db_connection()
             try:
                 with conn.cursor() as cur:
-                    cur.execute(
-                        """INSERT INTO conversations (session_id, user_id, scene_id, title, messages, long_task_ids)
-                           VALUES (%s, %s, %s, %s, %s, %s)""",
-                        (session_id, local_user_id, None,
-                         f"{query[:60]}",
-                         json.dumps(conversation_history, ensure_ascii=False),
-                         json.dumps([task_id])))
+                    if existing_session_id:
+                        cur.execute(
+                            """SELECT id, long_task_ids FROM conversations
+                               WHERE session_id = %s AND user_id = %s AND status != 2""",
+                            (existing_session_id, local_user_id))
+                        existing = cur.fetchone()
+                        if existing:
+                            existing_task_ids = json.loads(existing['long_task_ids']) if isinstance(existing['long_task_ids'], str) else (existing['long_task_ids'] or [])
+                            existing_task_ids.append(task_id)
+                            cur.execute(
+                                """UPDATE conversations
+                                   SET messages = %s, long_task_ids = %s, update_time = NOW()
+                                   WHERE session_id = %s""",
+                                (json.dumps(conversation_history, ensure_ascii=False),
+                                 json.dumps(existing_task_ids),
+                                 existing_session_id))
+                            session_id = existing_session_id
+                            reused_session = True
+                            app_logger.info(f"File upload: reusing session {session_id}")
+
+                    if not reused_session:
+                        session_id = f"sess_{uuid.uuid4().hex[:12]}"
+                        cur.execute(
+                            """INSERT INTO conversations (session_id, user_id, scene_id, title, messages, long_task_ids)
+                               VALUES (%s, %s, %s, %s, %s, %s)""",
+                            (session_id, local_user_id, None,
+                             f"{query[:60]}",
+                             json.dumps(conversation_history, ensure_ascii=False),
+                             json.dumps([task_id])))
+                        app_logger.info(f"File upload: created new session {session_id}")
+
                     cur.execute(
                         """INSERT INTO long_tasks
                            (task_id, session_id, user_id, scene_id, task_type, input_params, status)
@@ -546,12 +634,13 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         from sources.knowledge.knowledge import get_db_connection
 
                         task_id = f"lt_{uuid.uuid4().hex[:12]}"
-                        session_id = f"sess_{uuid.uuid4().hex[:12]}"
 
                         # Extract patent_ids and patent_texts from conversation history
                         patent_ids = []
                         patent_texts = {}
                         conv_history = request.conversation_history or []
+
+                        # ── Primary: extract from structured patent_data ──
                         for msg in conv_history:
                             if msg.get('role') == 'assistant' and msg.get('patent_data'):
                                 for p in msg['patent_data']:
@@ -562,22 +651,93 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                         if st and len(st) > 100:
                                             patent_texts[pid] = st
 
+                        # ── Fallback: extract USPTO/CNIPA IDs from plain text ──
+                        if not patent_ids:
+                            import re as _patent_id_re
+                            # Build combined text from query + all messages
+                            text_sources = [request.query or ""]
+                            for msg in conv_history:
+                                if isinstance(msg, dict):
+                                    text_sources.append(msg.get("content", ""))
+                            combined_text = "\n".join(text_sources)
+
+                            # USPTO: pure 8-digit numbers (most common format)
+                            uspto_matches = _patent_id_re.findall(
+                                r'\b(\d{8})\b', combined_text
+                            )
+                            # CNIPA: YYYY + 8 digits (+ optional . + check digit)
+                            cnipa_matches = _patent_id_re.findall(
+                                r'\b(20[12]\d{9,10}(?:\.\d)?)\b', combined_text
+                            )
+                            # Also match slashed USPTO format: XX/XXXXXX
+                            slash_matches = _patent_id_re.findall(
+                                r'\b(\d{2}/\d{6})\b', combined_text
+                            )
+                            for m in slash_matches:
+                                uspto_matches += (m.replace("/", ""),)
+
+                            patent_ids = list(dict.fromkeys(
+                                uspto_matches + cnipa_matches
+                            ))
+                            if patent_ids:
+                                app_logger.info(
+                                    f"Long task: regex-extracted {len(patent_ids)} "
+                                    f"patent_ids from plain text: {patent_ids[:5]}"
+                                )
+
                         local_user_id = int(user_id)
                         matched_knowledge = openai_agent.get('knowledge', {})
                         scene_id = getattr(matched_knowledge, 'scene_id', None) if matched_knowledge else None
 
+                        # ── Detect patent source from scene / conversation context ──
+                        patent_source = _detect_patent_source(
+                            scene_id=scene_id,
+                            conv_history=conv_history,
+                            query=request.query,
+                            app_logger=app_logger,
+                        )
+
+                        # ── Session reuse: if the client already has a session, append to it ──
+                        reused_session = False
+                        session_id = request.session_id.strip() if request.session_id else ""
                         app_logger.info(f"Long task: connecting to DB...")
                         conn = get_db_connection()
                         app_logger.info(f"Long task: DB connected, inserting records...")
                         try:
                             with conn.cursor() as cur:
-                                cur.execute(
-                                    """INSERT INTO conversations (session_id, user_id, scene_id, title, messages, long_task_ids)
-                                       VALUES (%s, %s, %s, %s, %s, %s)""",
-                                    (session_id, local_user_id, scene_id,
-                                     f"专利分析 - {request.query[:50]}",
-                                     json.dumps(conv_history, ensure_ascii=False),
-                                     json.dumps([task_id])))
+                                if session_id:
+                                    # Validate session exists and belongs to this user
+                                    cur.execute(
+                                        """SELECT id, long_task_ids FROM conversations
+                                           WHERE session_id = %s AND user_id = %s AND status != 2""",
+                                        (session_id, local_user_id))
+                                    existing = cur.fetchone()
+                                    if existing:
+                                        # Reuse: update messages and append new task_id
+                                        existing_task_ids = json.loads(existing['long_task_ids']) if isinstance(existing['long_task_ids'], str) else (existing['long_task_ids'] or [])
+                                        existing_task_ids.append(task_id)
+                                        cur.execute(
+                                            """UPDATE conversations
+                                               SET messages = %s, long_task_ids = %s, update_time = NOW()
+                                               WHERE session_id = %s""",
+                                            (json.dumps(conv_history, ensure_ascii=False),
+                                             json.dumps(existing_task_ids),
+                                             session_id))
+                                        reused_session = True
+                                        app_logger.info(f"Long task: reusing session {session_id}, long_task_ids={existing_task_ids}")
+
+                                if not reused_session:
+                                    # Create new session (existing behavior)
+                                    session_id = f"sess_{uuid.uuid4().hex[:12]}"
+                                    cur.execute(
+                                        """INSERT INTO conversations (session_id, user_id, scene_id, title, messages, long_task_ids)
+                                           VALUES (%s, %s, %s, %s, %s, %s)""",
+                                        (session_id, local_user_id, scene_id,
+                                         f"专利分析 - {request.query[:50]}",
+                                         json.dumps(conv_history, ensure_ascii=False),
+                                         json.dumps([task_id])))
+                                    app_logger.info(f"Long task: created new session {session_id}")
+
                                 cur.execute(
                                     """INSERT INTO long_tasks
                                        (task_id, session_id, user_id, scene_id, task_type, input_params, status)
@@ -587,7 +747,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                      json.dumps({
                                          'query': request.query,
                                          'patent_ids': patent_ids,
-                                         'patent_source': 'cnipa',
+                                         'patent_source': patent_source,
                                          **({'patent_texts': patent_texts} if patent_texts else {}),
                                      }, ensure_ascii=False),
                                      'pending'))
@@ -601,7 +761,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         celery_params = {
                             'query': request.query,
                             'patent_ids': patent_ids,
-                            'patent_source': 'cnipa',
+                            'patent_source': patent_source,
                             'session_id': session_id,
                             'scene_id': scene_id,
                             'conversation_history': conv_history,

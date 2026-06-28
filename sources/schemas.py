@@ -10,6 +10,7 @@ class QueryRequest(BaseModel):
     tool_data: str = ""  # 新增字段，类型为str，默认为空字符串
     push_filter: Optional[int] = None  # web app passes 2 to restrict to push=2 tools
     conversation_history: list = []  # 最近一次问答的历史记录 [{role, content, patent_data?}]
+    session_id: str = ""  # 已有的 session_id，用于复用会话而非创建新会话
 
     def __str__(self):
         return f"Query: {self.query}, Query ID: {self.query_id}, TTS: {self.tts_enabled}, Tool Data: {self.tool_data}"
@@ -21,6 +22,7 @@ class QueryRequest(BaseModel):
             "tts_enabled": self.tts_enabled,
             "tool_data": self.tool_data,
             "push_filter": self.push_filter,
+            "session_id": self.session_id,
         }
 
 class QueryResponse(BaseModel):

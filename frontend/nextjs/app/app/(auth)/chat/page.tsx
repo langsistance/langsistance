@@ -257,8 +257,8 @@ export default function Chat() {
       setSelectedFiles([])
 
       const body = currentFiles.length > 0
-        ? await queryStreamWithFiles(text, queryId, controller.signal, currentFiles, conversationHistory)
-        : await queryStream(text, queryId, controller.signal, conversationHistory)
+        ? await queryStreamWithFiles(text, queryId, controller.signal, currentFiles, conversationHistory, sessionId || undefined)
+        : await queryStream(text, queryId, controller.signal, conversationHistory, sessionId || undefined)
       const reader = body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''

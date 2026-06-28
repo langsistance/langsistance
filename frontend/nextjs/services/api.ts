@@ -93,12 +93,15 @@ export async function queryStream(
   queryId: string,
   abortSignal: AbortSignal,
   conversationHistory: { role: string; content: string }[] = [],
+  sessionId?: string,
 ): Promise<ReadableStream<Uint8Array>> {
   const headers = await authHeaders()
+  const body: Record<string, unknown> = { query, query_id: queryId, push_filter: 2, conversation_history: conversationHistory }
+  if (sessionId) body.session_id = sessionId
   const res = await fetch(`${BASE_URL}/query_stream`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ query, query_id: queryId, push_filter: 2, conversation_history: conversationHistory }),
+    body: JSON.stringify(body),
     signal: abortSignal,
   })
   if (!res.ok) throw new Error(`/query_stream failed: ${res.status}`)
@@ -112,12 +115,14 @@ export async function queryStreamWithFiles(
   abortSignal: AbortSignal,
   files: File[],
   conversationHistory: { role: string; content: string }[] = [],
+  sessionId?: string,
 ): Promise<ReadableStream<Uint8Array>> {
   const formData = new FormData()
   formData.append('query', query)
   formData.append('query_id', queryId)
   formData.append('push_filter', '2')
   formData.append('conversation_history', JSON.stringify(conversationHistory))
+  if (sessionId) formData.append('session_id', sessionId)
   for (const file of files) {
     formData.append('patent_files', file)
   }
