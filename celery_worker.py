@@ -305,16 +305,6 @@ async def _run_pipeline(
             f"[task={task_id}] PHASE0 — scene_id={scene_id}, "
             f"scene_candidates_count={len(scene_candidates) if scene_candidates else 0}"
         )
-        if scene_candidates:
-            for c in scene_candidates:
-                _pipeline_logger.info(
-                    f"[task={task_id}] PHASE0 candidate — "
-                    f"knowledge_id={c.get('knowledge_id')}, "
-                    f"knowledge_type={c.get('knowledge_type')}, "
-                    f"question={c.get('knowledge_question', '')[:80]}, "
-                    f"tool_title={c.get('tool_title', '')}, "
-                    f"tool_url={c.get('tool_url', '')}"
-                )
     id_url_map = {}          # patent_id → document_url from search results
 
     # ==== Phase 0-prep: Extract patent IDs from query + conversation via LLM ====
@@ -569,12 +559,6 @@ async def _run_pipeline(
     )
     for i, patent_id in enumerate(pending):
         patent_index = len(table_rows) + 1
-        _pipeline_logger.info(
-            f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] — "
-            f"patent_id={patent_id}, "
-            f"has_scene_candidates={scene_candidates is not None}, "
-            f"doc_url_from_search={(id_url_map or {}).get(patent_id, '') or '(none)'}"
-        )
         try:
             update_task_status(task_id, 'analyzing',
                                progress_pct(i, total),
@@ -909,8 +893,7 @@ async def _download_patent_via_scene_or_fallback(
         if selected:
             _pipeline_logger.info(
                 f"[download] scene_tool_selected — patent_id={patent_id}, "
-                f"tool_title={selected.get('tool', {}).title if selected.get('tool') else 'N/A'}, "
-                f"tool_url={selected.get('tool', {}).url if selected.get('tool') else 'N/A'}"
+                f"tool={(selected.get('tool') or {}).get('title', '?')}"
             )
             result = await execute_tool(selected['tool'], selected['params'])
             from sources.long_task.scene_tools import extract_document_text
@@ -1013,27 +996,15 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
             if isinstance(doc_list, dict)
             else []
         )
-        # Log raw document list for debugging
+        # Keep a compact one-line summary only
         if documents:
-            _pipeline_logger.info(
-                f"[download] uspto_raw_doc[0] — {_json.dumps(documents[0], ensure_ascii=False)[:3000]}"
+            spec_count = sum(
+                1 for d in documents
+                if isinstance(d, dict) and d.get('documentCode') == 'SPEC'
             )
-            # Compact summary: index | code | description
-            doc_summary = []
-            for i, doc in enumerate(documents):
-                if not isinstance(doc, dict):
-                    continue
-                # USPTO API uses documentCode / documentCodeDescriptionText
-                code = doc.get('documentCode') or doc.get('documentTypeCode', '?')
-                desc = doc.get('documentCodeDescriptionText') or doc.get('documentTypeName', '?')
-                doc_summary.append(f"[{i}] code={code} desc={desc}")
-                # Also show the downloadOptionBag info for first few
-                opts = doc.get('downloadOptionBag', [])
-                if isinstance(opts, list) and opts:
-                    first_url = opts[0].get('downloadUrl', '') if isinstance(opts[0], dict) else ''
-                    doc_summary[-1] += f" url={first_url[:80]}..."
             _pipeline_logger.info(
-                f"[download] uspto_doc_summary —\n" + "\n".join(doc_summary)
+                f"[download] uspto_step1_done — doc_count={len(documents)}, "
+                f"spec_count={spec_count}"
             )
         _pipeline_logger.info(
             f"[download] uspto_step1_done — doc_count={len(documents)}"
@@ -1461,14 +1432,7 @@ async def _download_uspto_spec_with_redirect(
             f"spec_doc_keys={list(spec_doc.keys()) if spec_doc else 'N/A'}"
         )
         return None
-    _pipeline_logger.info(
-        f"[download] uspto_spec_url_extracted — url={spec_url}"
-    )
-
     for hop in range(2):  # max 1 redirect
-        _pipeline_logger.info(
-            f"[download] uspto_spec_hop{hop} — url={spec_url[:120]}"
-        )
         resp = await asyncio.to_thread(
             outbound_http.get, spec_url, purpose='patent_download',
             headers=headers, timeout=30,
@@ -1486,7 +1450,7 @@ async def _download_uspto_spec_with_redirect(
         if content_type and not any(t in content_type for t in ('text/', 'json', 'xml', 'html')):
             _pipeline_logger.info(
                 f"[download] uspto_spec_binary — type={content_type}, "
-                f"len={len(resp.content)}, url={spec_url[:80]}"
+                f"len={len(resp.content)}"
             )
             extracted = _extract_text_from_binary(
                 resp.content, content_type, spec_url,
