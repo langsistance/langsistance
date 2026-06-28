@@ -585,7 +585,7 @@ async def _run_pipeline(
             # In file-upload mode, use pre-extracted text from conversation_history
             if is_file_upload_mode:
                 patent_text = patent_texts.get(patent_id, '')
-                if not patent_text or len(patent_text) < 100:
+                if not patent_text or len(patent_text) < 10000:
                     raise ValueError(
                         f"Uploaded text for '{patent_id}' is empty or too short "
                         f"({len(patent_text) if patent_text else 0} chars)"
@@ -616,10 +616,12 @@ async def _run_pipeline(
                                f'正在分析（{patent_index}/{total}）：{patent_id}',
                                table_rows=table_rows)
 
-            # ── Text extraction may fail for scanned/image PDFs.
+            # ── Text extraction may be incomplete for short patents or
+            #     scanned/image PDFs (pypdf returns little/nothing).  Threshold
+            #     at 10k chars ensures we have enough text for meaningful analysis.
             #     Strategy: try vision (MiniMax-M3) first, then OCR as fallback.
             #     When vision_enabled=false, skip straight to OCR.
-            text_ok = patent_text and len(patent_text) >= 100
+            text_ok = patent_text and len(patent_text) >= 10000
             want_vision = vision_provider is not None
 
             if text_ok:
@@ -655,9 +657,8 @@ async def _run_pipeline(
                             f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
                             f"vision_failed_fallback_to_ocr — patent_id={patent_id}"
                         )
-                        ocr_text = _extract_text_from_binary(
-                            pdf_bytes, 'application/pdf', f'{patent_id}.pdf')
-                        if ocr_text and len(ocr_text) >= 100:
+                        ocr_text = _ocr_from_pdf_reader(pdf_bytes)
+                        if ocr_text and len(ocr_text) >= 10000:
                             row = await analyze_single_patent(
                                 patent_id=patent_id, patent_text=ocr_text,
                                 columns=columns, query=params['query'],
@@ -669,9 +670,8 @@ async def _run_pipeline(
                         f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
                         f"vision_disabled_ocr — patent_id={patent_id}"
                     )
-                    ocr_text = _extract_text_from_binary(
-                        pdf_bytes, 'application/pdf', f'{patent_id}.pdf')
-                    if ocr_text and len(ocr_text) >= 100:
+                    ocr_text = _ocr_from_pdf_reader(pdf_bytes)
+                    if ocr_text and len(ocr_text) >= 10000:
                         row = await analyze_single_patent(
                             patent_id=patent_id, patent_text=ocr_text,
                             columns=columns, query=params['query'],
@@ -1428,6 +1428,7 @@ from sources.long_task.text_extractor import (
     extract_text_from_pdf,
     extract_text_from_docx,
     extract_text_from_binary,
+    _ocr_from_pdf_reader,
 )
 
 # Backward-compatible aliases used within this file

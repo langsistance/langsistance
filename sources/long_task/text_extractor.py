@@ -86,53 +86,68 @@ def extract_text_from_pdf(
     content: bytes,
     on_progress: "Callable[[int, int], None] | None" = None,
 ) -> str | None:
-    """Extract text from a PDF binary using pypdf, with OCR fallback.
+    """Extract text from a PDF binary using PyMuPDF (fitz), plain-text mode.
 
-    1. Try pypdf text extraction (works for text-based PDFs)
-    2. If insufficient text, fall back to OCR via pytesseract (for scanned/image PDFs)
+    1. Scan first 3 pages with page.get_text("text") — no layout preservation.
+    2. If >2000 chars across first 3 pages → extract all pages.
+    3. If ≤2000 chars → return None (likely scanned PDF → caller uses vision).
 
     Args:
         content: PDF binary data.
-        on_progress: Optional callback(current_page, total_pages) for OCR progress.
+        on_progress: Ignored (kept for API compatibility).
     """
-    from pypdf import PdfReader
+    import fitz
 
-    reader = None
+    doc = fitz.open(stream=content, filetype="pdf")
     try:
-        reader = PdfReader(io.BytesIO(content))
+        total_pages = len(doc)
+
+        # Phase 1: scan first 3 pages to decide
+        scan_pages = min(3, total_pages)
+        scan_parts: list[str] = []
+        for i in range(scan_pages):
+            text = doc[i].get_text("text")  # plain text, no layout
+            if text:
+                scan_parts.append(text)
+        scan_text = "\n\n".join(scan_parts).strip()
+
+        if len(scan_text) <= 2000:
+            _logger.info(
+                f"pdf_scan_insufficient — pages_scanned={scan_pages}, "
+                f"chars={len(scan_text)}, likely scanned PDF"
+            )
+            return None
+
+        # Phase 2: full extraction
+        _logger.info(
+            f"pdf_scan_sufficient — pages_scanned={scan_pages}, "
+            f"chars={len(scan_text)}, extracting all {total_pages} pages"
+        )
         parts: list[str] = []
-        for page in reader.pages:
-            text = page.extract_text()
+        for i in range(total_pages):
+            text = doc[i].get_text("text")
             if text:
                 parts.append(text)
         extracted = "\n\n".join(parts).strip()
-        if extracted and len(extracted) > 100:
-            _logger.info(
-                f"pdf_text_extracted — pages={len(reader.pages)}, chars={len(extracted)}"
-            )
-            return extracted
         _logger.info(
-            f"pdf_text_insufficient — pages={len(reader.pages)}, chars={len(extracted)}, trying OCR"
+            f"pdf_text_extracted — pages={total_pages}, chars={len(extracted)}"
         )
+        return extracted if extracted else None
     except Exception as e:
         _logger.warning(f"pdf_extract_failed — {e}")
-        reader = None
-
-    # ── OCR fallback for scanned/image PDFs ──
-    if reader is not None:
-        return _ocr_from_pdf_reader(reader, on_progress=on_progress)
-
-    return None
+        return None
+    finally:
+        doc.close()
 
 
-def _ocr_from_pdf_reader(
-    reader,
+def _ocr_from_pdf_bytes(
+    content: bytes,
     on_progress: "Callable[[int, int], None] | None" = None,
 ) -> str | None:
-    """Extract text from image-based PDF pages using pytesseract OCR.
+    """OCR fallback for image-based PDFs — PyMuPDF rendering + tesseract.
 
     Args:
-        reader: pypdf.PdfReader with accessible page images.
+        content: PDF binary data.
         on_progress: Optional callback(current_page, total_pages).
     """
     tesseract_bin = _find_tesseract_bin()
@@ -154,63 +169,55 @@ def _ocr_from_pdf_reader(
 
     pytesseract.pytesseract.tesseract_cmd = tesseract_bin
 
-    page_count = len(reader.pages)
-    all_text: list[str] = []
-    ocr_failures = 0
+    import fitz
 
-    for i, page in enumerate(reader.pages):
-        page_images = page.images
-        if not page_images:
-            ocr_failures += 1
-            continue
+    doc = fitz.open(stream=content, filetype="pdf")
+    try:
+        page_count = len(doc)
+        all_text: list[str] = []
+        ocr_failures = 0
 
-        page_text: list[str] = []
-        for img in page_images:
+        for i in range(page_count):
             try:
-                pil_img = Image.open(io.BytesIO(img.data))
-                if pil_img.mode not in ("RGB", "L", "1"):
-                    pil_img = pil_img.convert("RGB")
-
-                # Resize large images before OCR — dramatically faster
-                # with negligible accuracy loss.
-                w, h = pil_img.size
-                longest = max(w, h)
-                if longest > OCR_MAX_DIMENSION:
-                    scale = OCR_MAX_DIMENSION / longest
-                    new_size = (int(w * scale), int(h * scale))
-                    pil_img = pil_img.resize(new_size, Image.LANCZOS)
+                # Render page to pixmap at 200 DPI, then to PIL
+                pix = doc[i].get_pixmap(dpi=200)
+                pil_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                 text = pytesseract.image_to_string(pil_img, lang="eng")
                 if text and text.strip():
-                    page_text.append(text.strip())
+                    all_text.append(text.strip())
+                else:
+                    ocr_failures += 1
             except Exception as e:
                 _logger.warning(f"ocr_page_{i+1}_failed — {e}")
+                ocr_failures += 1
 
-        if page_text:
-            all_text.append("\n".join(page_text))
-        else:
-            ocr_failures += 1
+            if on_progress:
+                try:
+                    on_progress(i + 1, page_count)
+                except Exception:
+                    pass
 
-        if on_progress:
-            try:
-                on_progress(i + 1, page_count)
-            except Exception:
-                pass
+        extracted = "\n\n".join(all_text).strip()
+        successful = page_count - ocr_failures
 
-    extracted = "\n\n".join(all_text).strip()
-    successful_pages = page_count - ocr_failures
+        if extracted and len(extracted) > 100:
+            _logger.info(
+                f"ocr_text_extracted — pages={page_count}, successful={successful}, "
+                f"failed={ocr_failures}, chars={len(extracted)}"
+            )
+            return extracted
 
-    if extracted and len(extracted) > 100:
-        _logger.info(
-            f"ocr_text_extracted — pages={page_count}, successful={successful_pages}, "
+        _logger.warning(
+            f"ocr_text_empty_or_short — pages={page_count}, successful={successful}, "
             f"failed={ocr_failures}, chars={len(extracted)}"
         )
-        return extracted
+        return None
+    finally:
+        doc.close()
 
-    _logger.warning(
-        f"ocr_text_empty_or_short — pages={page_count}, successful={successful_pages}, "
-        f"failed={ocr_failures}, chars={len(extracted)}"
-    )
-    return None
+
+# Backward-compatible alias used by celery_worker
+_ocr_from_pdf_reader = _ocr_from_pdf_bytes
 
 
 def _find_tesseract_bin() -> str | None:
