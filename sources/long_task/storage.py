@@ -34,8 +34,10 @@ def get_storage_config(config_path: str = "config.ini") -> dict:
             "COS_SECRET_KEY",
             cfg.get("STORAGE", "cos_secret_key", fallback=""),
         ),
-        "report_storage_cos_prefix": cfg.get("STORAGE", "cos_prefix",
-                                              fallback="reports"),
+        "report_storage_cos_prefix": os.getenv(
+            "COS_REPORT_PREFIX",
+            cfg.get("STORAGE", "cos_prefix", fallback="reports"),
+        ),
     }
 
 
