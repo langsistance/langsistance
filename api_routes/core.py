@@ -176,15 +176,18 @@ async def _classify_long_task_async(
         server_address='', is_local=False,
     )
 
-    # Trim long conversation messages for the classification prompt
+    # Build conversation summary for the LLM prompt.
+    # Patent search results can be extremely long (multiple patents with full
+    # metadata, each easily 5k+ chars). Use a high limit to avoid truncating IDs.
+    MAX_MSG_CHARS = 200000
     conv_summary = []
     for msg in (conv_history or []):
         if isinstance(msg, dict):
             role = msg.get('role', '')
             content = str(msg.get('content', ''))
             conv_summary.append(
-                f"[{role}]: {content[:500]}"
-                f"{'...(truncated)' if len(content) > 500 else ''}"
+                f"[{role}]: {content[:MAX_MSG_CHARS]}"
+                f"{'...(truncated)' if len(content) > MAX_MSG_CHARS else ''}"
             )
 
     system_prompt = (
@@ -302,18 +305,28 @@ def _prepare_long_task_inputs(
             "patent_texts": None,
         }
 
+    # ── Regex sweep on full text (always run — catches IDs LLM might miss) ──
+    text_sources = [query or ""]
+    for msg in conv_history:
+        if isinstance(msg, dict):
+            text_sources.append(msg.get("content", ""))
+    combined_text = "\n".join(text_sources)
+    uspto_matches = _patent_id_re.findall(r'\b(\d{8})\b', combined_text)
+    slash_matches = _patent_id_re.findall(r'\b(\d{2})/(\d{6})\b', combined_text)
+    uspto_matches += [a + b for a, b in slash_matches]
+    cnipa_matches = _patent_id_re.findall(r'\b(20[12]\d{8,9}(?:\.\d)?)\b', combined_text)
+    regex_ids = list(dict.fromkeys(uspto_matches + cnipa_matches))
+
     # ── Use LLM result if available ──
     if llm_result and llm_result.get("scenario") != "unknown":
         scenario = llm_result["scenario"]
         patent_source = llm_result.get("patent_source", "auto")
         llm_ids = llm_result.get("patent_ids", []) or []
 
-        if scenario == "direct_ids" and llm_ids:
-            patent_ids = list(dict.fromkeys(llm_ids))
-            patent_texts = None
-        elif scenario == "conversation_refs":
-            # LLM IDs + fallback to structured patent_data + regex
-            patent_ids = list(dict.fromkeys(llm_ids))
+        # Merge LLM IDs + regex IDs (LLM may miss IDs due to truncation)
+        patent_ids = list(dict.fromkeys(llm_ids + regex_ids))
+
+        if scenario == "conversation_refs":
             patent_texts = {}
             for msg in conv_history:
                 if msg.get('role') == 'assistant' and msg.get('patent_data'):
@@ -327,46 +340,21 @@ def _prepare_long_task_inputs(
                                 patent_texts[pid] = st
             patent_texts = patent_texts if patent_texts else None
         else:
-            patent_ids = list(dict.fromkeys(llm_ids))
             patent_texts = None
-
-        # Regex fallback if LLM found no IDs
-        if not patent_ids:
-            text_sources = [query or ""]
-            for msg in conv_history:
-                if isinstance(msg, dict):
-                    text_sources.append(msg.get("content", ""))
-            combined_text = "\n".join(text_sources)
-            uspto_matches = _patent_id_re.findall(r'\b(\d{8})\b', combined_text)
-            slash_matches = _patent_id_re.findall(r'\b(\d{2})/(\d{6})\b', combined_text)
-            uspto_matches += [a + b for a, b in slash_matches]
-            cnipa_matches = _patent_id_re.findall(r'\b(20[12]\d{8,9}(?:\.\d)?)\b', combined_text)
-            patent_ids = list(dict.fromkeys(uspto_matches + cnipa_matches))
     else:
         # ── Fallback: regex + keyword detection (no LLM available) ──
-        patent_ids = []
+        patent_ids = list(dict.fromkeys(regex_ids))
         patent_texts = {}
         for msg in conv_history:
             if msg.get('role') == 'assistant' and msg.get('patent_data'):
                 for p in msg['patent_data']:
                     if isinstance(p, dict) and 'patent_id' in p:
                         pid = p['patent_id']
-                        patent_ids.append(pid)
+                        if pid not in patent_ids:
+                            patent_ids.append(pid)
                         st = p.get('spec_text', '')
                         if st and len(st) > 100:
                             patent_texts[pid] = st
-
-        if not patent_ids:
-            text_sources = [query or ""]
-            for msg in conv_history:
-                if isinstance(msg, dict):
-                    text_sources.append(msg.get("content", ""))
-            combined_text = "\n".join(text_sources)
-            uspto_matches = _patent_id_re.findall(r'\b(\d{8})\b', combined_text)
-            slash_matches = _patent_id_re.findall(r'\b(\d{2})/(\d{6})\b', combined_text)
-            uspto_matches += [a + b for a, b in slash_matches]
-            cnipa_matches = _patent_id_re.findall(r'\b(20[12]\d{8,9}(?:\.\d)?)\b', combined_text)
-            patent_ids = list(dict.fromkeys(uspto_matches + cnipa_matches))
 
         query_uspto = _patent_id_re.findall(r'\b(\d{8})\b', query or "")
         query_slash = _patent_id_re.findall(r'\b(\d{2})/(\d{6})\b', query or "")
