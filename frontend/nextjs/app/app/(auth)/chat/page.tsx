@@ -235,16 +235,21 @@ export default function Chat() {
 
     const queryId = createChatId()
     setTransientStatus('')
-    setMessages((m) => [...m, createChatMessage('user', text)])
 
+    const userMsg = createChatMessage('user', text)
     const assistant = createChatMessage('assistant', '')
     const assistantId = assistant.id
-    setMessages((m) => [...m, assistant])
+
+    setMessages((m) => [...m, userMsg, assistant])
     setStreaming(true)
     setStreamingId(assistantId)
 
-    // Collect full conversation history for context
-    const conversationHistory = messages.map(m => ({
+    // Collect full conversation history for context — include the new messages
+    const conversationHistory = [
+      ...messages,
+      userMsg,
+      assistant,
+    ].map(m => ({
       role: m.role,
       content: m.content,
     }))
@@ -312,10 +317,10 @@ export default function Chat() {
             if (event.type === 'long_task_created') {
               const taskId = String(event.task_id ?? '')
               const sid = String(event.session_id ?? '')
-              setMessages((m) => updateAssistantMessage(m, assistantId,
-                t('chat.longTaskCreated')
-                  .replace('{taskId}', taskId)
-                  .replace('{sessionId}', sid)
+              setMessages((m) => replaceAssistantMessage(m, assistantId,
+                t('chat.longTaskProgress')
+                  .replace('{progress}', '[0%]')
+                  .replace('{phase}', '正在准备专利分析...')
               ))
               // Use the backend-created session_id (don't create a new one)
               if (!sessionId && sid) {
@@ -481,7 +486,15 @@ export default function Chat() {
     async function poll() {
       try {
         const data = await pollLongTaskStatus(taskId)
-        if (!data || data.status === 'unknown') return
+        if (!data || data.status === 'unknown') {
+          // Task just created — Redis not yet updated. Show preparing message.
+          setMessages((m) => replaceAssistantMessage(m, assistantId,
+            t('chat.longTaskProgress')
+              .replace('{progress}', '[0%]')
+              .replace('{phase}', '正在准备专利分析...')
+          ))
+          return
+        }
 
         const phaseLabel = data.current_step || data.current_phase || ''
         const progress = data.progress != null ? `[${data.progress}%]` : ''
