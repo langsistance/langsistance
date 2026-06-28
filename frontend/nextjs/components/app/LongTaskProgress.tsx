@@ -215,34 +215,9 @@ export default function LongTaskProgress({ content, streaming }: Props) {
         <p className="lt-current-step">{state.stepLabel}</p>
       )}
 
-      {/* Completed: download buttons */}
-      {state.phase === 'completed' && state.reportLinks && (
-        <div className="lt-downloads">
-          {state.reportLinks.map((link) => (
-            <a
-              key={link.label}
-              href={link.url}
-              className={`lt-dl-btn ${link.label.toLowerCase()}`}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <span className="lt-dl-icon">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                  <polyline points="14 2 14 8 20 8"/>
-                  <path d="M12 18v-6"/>
-                  <path d="m9 15 3 3 3-3"/>
-                </svg>
-              </span>
-              <span className="lt-dl-label">
-                下载 {link.label}
-              </span>
-              <svg className="lt-dl-arrow" viewBox="0 0 16 16" fill="none" strokeWidth="2" strokeLinecap="round">
-                <path d="M8 3v8M4 8l4 4 4-4" />
-              </svg>
-            </a>
-          ))}
-        </div>
+      {/* Completed state — no download buttons; reports are accessed elsewhere */}
+      {state.phase === 'completed' && (
+        <p className="lt-current-step">✅ 分析完成</p>
       )}
 
       {/* Failed: error */}
