@@ -891,9 +891,10 @@ async def _download_patent_via_scene_or_fallback(
             flash_provider,
         )
         if selected:
+            tool_obj = selected.get('tool')
             _pipeline_logger.info(
                 f"[download] scene_tool_selected — patent_id={patent_id}, "
-                f"tool={(selected.get('tool') or {}).get('title', '?')}"
+                f"tool={getattr(tool_obj, 'title', '?') if tool_obj else '?'}"
             )
             result = await execute_tool(selected['tool'], selected['params'])
             from sources.long_task.scene_tools import extract_document_text
