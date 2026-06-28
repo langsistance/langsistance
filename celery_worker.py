@@ -1007,10 +1007,6 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
                 f"[download] uspto_step1_done — doc_count={len(documents)}, "
                 f"spec_count={spec_count}"
             )
-        _pipeline_logger.info(
-            f"[download] uspto_step1_done — doc_count={len(documents)}"
-        )
-
         if not documents:
             _pipeline_logger.warning(
                 f"[download] uspto_no_documents — patent_id={app_number}"

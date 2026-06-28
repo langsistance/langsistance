@@ -99,41 +99,38 @@ def extract_text_from_pdf(
     import subprocess
     import tempfile
 
-    # Write content to a temp file (pdftotext needs a file path)
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
 
     try:
-        # Phase 1: scan first 3 pages to decide
+        # Scan first 3 pages to decide
         scan_result = subprocess.run(
             ["pdftotext", "-l", "3", "-layout", tmp_path, "-"],
             capture_output=True, text=True, timeout=120,
         )
         scan_text = (scan_result.stdout or "").strip()
-        scan_chars = len(scan_text)
 
-        if scan_chars <= 2000:
+        if len(scan_text) <= 2000:
             _logger.info(
-                f"pdf_scan_insufficient — pages_scanned=3, "
-                f"chars={scan_chars}, likely scanned PDF"
+                f"pdftotext_scan_short — chars={len(scan_text)}, "
+                f"likely scanned PDF"
             )
             return None
 
-        # Phase 2: full extraction
+        # Full extraction
         _logger.info(
-            f"pdf_scan_sufficient — chars={scan_chars}, extracting all pages"
+            f"pdftotext_scan_ok — chars={len(scan_text)}, extracting all pages"
         )
         result = subprocess.run(
             ["pdftotext", "-layout", tmp_path, "-"],
             capture_output=True, text=True, timeout=300,
         )
         extracted = (result.stdout or "").strip()
-        chars = len(extracted)
-        _logger.info(f"pdftotext_extracted — chars={chars}")
+        _logger.info(f"pdftotext_extracted — chars={len(extracted)}")
         return extracted if extracted else None
     except Exception as e:
-        _logger.warning(f"pdftotext_extract_failed — {e}")
+        _logger.warning(f"pdftotext_failed — {e}")
         return None
     finally:
         try:
