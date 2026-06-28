@@ -141,6 +141,11 @@ export default function Chat() {
             }))
           if (loaded.length > 0) {
             setMessages(loaded)
+            // Scroll to bottom after loading session messages
+            requestAnimationFrame(() => {
+              isNearBottomRef.current = true
+              bottomRef.current?.scrollIntoView({ behavior: 'instant' as ScrollBehavior })
+            })
           }
         }
         setSessionId(sid)
