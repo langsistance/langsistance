@@ -949,13 +949,13 @@ async def _download_patent_via_scene_or_fallback(
         uspto_text = await _download_uspto_patent_direct(patent_id, flash_provider)
         if uspto_text and len(uspto_text) > 100:
             return uspto_text
-        # No hardcoded fallback for USPTO — raise a clear error so the
-        # pipeline can record the failure properly.
-        raise RuntimeError(
-            f"Failed to extract readable text from USPTO specification for "
-            f"patent {patent_id}. The specification may be a scanned/image PDF "
-            f"without embedded text, and OCR is not available on this server."
+        # Text extraction failed — return None so the pipeline Phase 2
+        # can try vision/OCR fallback (re-downloads PDF binary for vision LLM).
+        _pipeline_logger.info(
+            f"[download] uspto_text_extraction_failed — patent_id={patent_id}, "
+            f"falling through to vision/OCR in pipeline"
         )
+        return None
 
     # ── Step 3: Hardcoded download (CNIPA or other sources) ──
     _pipeline_logger.info(

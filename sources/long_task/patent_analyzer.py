@@ -169,26 +169,32 @@ async def generate_patent_summary(
 # ── Vision-based patent analysis (MiniMax-M3) ─────────────────────────────────
 
 def _pdf_to_base64_images(pdf_bytes: bytes) -> list[str]:
-    """Extract all PDF pages as base64-encoded images for vision LLM input.
+    """Render PDF pages as base64 PNG images for vision LLM input.
 
-    Uses pypdf's embedded images at native resolution.  Falls back to
-    pdf2image render only when a page has no embedded images.
+    Uses pdf2image to render each page at 150 DPI, then encodes as PNG.
+    This avoids the unreliable embedded-image extraction approach (which
+    can produce JPEG / JPEG2000 / JBIG2 data that vision APIs reject).
     """
-    import io as _io
     import base64 as _b64
-    from pypdf import PdfReader
+    import io as _io
 
-    reader = PdfReader(_io.BytesIO(pdf_bytes))
-    images: list[str] = []
+    try:
+        from pdf2image import convert_from_bytes
+        from PIL import Image
 
-    for page in reader.pages:
-        page_images = page.images
-        if page_images:
-            img_data = page_images[0].data
-            b64 = _b64.b64encode(img_data).decode("ascii")
+        pil_images = convert_from_bytes(pdf_bytes, dpi=150)
+        images: list[str] = []
+        for pil_img in pil_images:
+            buf = _io.BytesIO()
+            pil_img.save(buf, format="PNG")
+            b64 = _b64.b64encode(buf.getvalue()).decode("ascii")
             images.append(f"data:image/png;base64,{b64}")
-
-    return images
+        return images
+    except Exception as e:
+        from sources.logger import Logger
+        _vlog = Logger("text_extractor.log")
+        _vlog.warning(f"pdf_to_base64_images_failed — {e}")
+        return []
 
 
 async def analyze_patent_with_vision(
@@ -281,20 +287,28 @@ async def analyze_patent_with_vision(
         from sources.logger import Logger
         _vlog = Logger("text_extractor.log")
         _vlog.warning(f"vision_json_mode_failed — {e}, retrying without response_format")
-        loop = asyncio.get_running_loop()
-        resp = await loop.run_in_executor(
-            None,
-            lambda: client.chat.completions.create(
-                model=vision_provider.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content},
-                ],
-                temperature=0.3,
-                max_tokens=4096,
-            ),
-        )
-        result_raw = resp.choices[0].message.content
+        try:
+            loop = asyncio.get_running_loop()
+            resp = await loop.run_in_executor(
+                None,
+                lambda: client.chat.completions.create(
+                    model=vision_provider.model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content},
+                    ],
+                    temperature=0.3,
+                    max_tokens=4096,
+                ),
+            )
+            result_raw = resp.choices[0].message.content
+        except Exception as e2:
+            _vlog.warning(f"vision_api_failed — {e2}")
+            return {
+                'patent_id': patent_id,
+                '_failed': True,
+                '_failure_reason': f'Vision API call failed: {str(e2)[:200]}',
+            }
 
     # Parse JSON from response
     import json
