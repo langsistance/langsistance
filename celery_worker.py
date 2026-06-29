@@ -1166,17 +1166,17 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
             f"indices={[documents.index(d) for d in spec_docs]}"
         )
 
-        # Step 3: Try each SPEC document until one yields readable text.
-        # DOCX/MS_WORD is preferred over PDF (set in get_download_url_from_doc).
+        # Step 3: Download ALL SPEC documents and concatenate their text.
+        # A single patent application may have multiple SPEC files; downloading
+        # all of them gives the most complete specification.
+        all_parts: list[str] = []
         for attempt, spec_doc in enumerate(spec_docs):
             spec_code = spec_doc.get('documentCode') or spec_doc.get('documentTypeCode', '?')
-            spec_desc = (spec_doc.get('documentCodeDescriptionText') or spec_doc.get('documentTypeName', '?'))[:60]
 
-            # Log which format was selected
             spec_url = get_download_url_from_doc(spec_doc)
             format_label = _guess_format_from_url(spec_url)
             _pipeline_logger.info(
-                f"[download] uspto_spec_attempt[{attempt+1}/{len(spec_docs)}] — "
+                f"[download] uspto_spec[{attempt+1}/{len(spec_docs)}] — "
                 f"code={spec_code}, format={format_label}, "
                 f"url={spec_url[:100]}"
             )
@@ -1184,16 +1184,26 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
             text = await _download_uspto_spec_with_redirect(
                 spec_doc, app_number, headers,
             )
-            if text and len(text.strip()) > 200:
+            chars = len(text.strip()) if text else 0
+            if chars > 200:
                 _pipeline_logger.info(
-                    f"[download] uspto_spec_success[{attempt+1}] — "
-                    f"format={format_label}, chars={len(text)}"
+                    f"[download] uspto_spec[{attempt+1}] ok — "
+                    f"format={format_label}, chars={chars}"
                 )
-                return text
+                all_parts.append(text.strip())
+            else:
+                _pipeline_logger.info(
+                    f"[download] uspto_spec[{attempt+1}] skipped "
+                    f"({chars} chars)"
+                )
+
+        if all_parts:
+            combined = "\n\n".join(all_parts)
             _pipeline_logger.info(
-                f"[download] uspto_spec_attempt[{attempt+1}] failed "
-                f"({len(text) if text else 0} chars), trying next..."
+                f"[download] uspto_all_specs_done — "
+                f"parts={len(all_parts)}, total_chars={len(combined)}"
             )
+            return combined
 
         _pipeline_logger.warning(
             f"[download] uspto_all_specs_failed — patent_id={app_number}, "
