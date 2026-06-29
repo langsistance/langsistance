@@ -248,7 +248,7 @@ async def analyze_patent_with_vision(
     for img_url in images:
         user_content.append({
             "type": "image_url",
-            "image_url": {"url": img_url, "detail": "auto"},
+            "image_url": {"url": img_url},
         })
 
     from openai import OpenAI
