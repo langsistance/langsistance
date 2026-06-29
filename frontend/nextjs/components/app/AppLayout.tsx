@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { usePathname, useRouter } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { useI18n } from '@/lib/app-i18n'
 import LanguageToggleButton from '@/components/app/LanguageToggleButton'
@@ -90,6 +90,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { t } = useI18n()
   const router = useRouter()
   const pathname = usePathname()
+  const searchParams = useSearchParams()
   const [devMode, setDevMode] = useState(getInitialDevMode)
 
   // Use sessionStorage for reliable highlight across full-page refreshes
@@ -98,14 +99,17 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     return sessionStorage.getItem('copiioai_active_session')
   })
 
-  // Sync active session from URL on initial load
+  // Sync active session from URL — clears when navigating to /app/chat (新对话)
   useEffect(() => {
-    const urlSid = new URLSearchParams(window.location.search).get('session_id')
+    const urlSid = searchParams.get('session_id')
     if (urlSid) {
       sessionStorage.setItem('copiioai_active_session', urlSid)
       setActiveSid(urlSid)
+    } else {
+      sessionStorage.removeItem('copiioai_active_session')
+      setActiveSid(null)
     }
-  }, [])
+  }, [searchParams])
 
   function selectSession(sid: string) {
     sessionStorage.setItem('copiioai_active_session', sid)

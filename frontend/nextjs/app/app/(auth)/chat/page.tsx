@@ -113,12 +113,15 @@ export default function Chat() {
   useEffect(() => {
     const sid = searchParams.get('session_id')
     if (!sid) {
-      if (lastLoadedSidRef.current) {
-        setMessages([])
-        setSessionId(null)
-        lastLoadedSidRef.current = null
-        sessionLoadedRef.current = false
-      }
+      // Always clear when navigating to a URL without session_id (e.g. 新对话).
+      // This handles both the case where the component persisted across
+      // a client-side navigation and the case where it freshly mounted
+      // with stale ChatProvider state from the parent layout.
+      stopLongTaskPolling()
+      setMessages([])
+      setSessionId(null)
+      lastLoadedSidRef.current = null
+      sessionLoadedRef.current = false
       return
     }
     if (sid === lastLoadedSidRef.current) return
