@@ -185,6 +185,12 @@ def _pdf_to_base64_images(pdf_bytes: bytes) -> list[str]:
         from pdf2image import convert_from_bytes
 
         pil_images = convert_from_bytes(pdf_bytes, dpi=_DPI)
+        from sources.logger import Logger as _Logger
+        _vlog = _Logger("text_extractor.log")
+        _vlog.info(
+            f"pdf_to_base64_images_rendered — pages={len(pil_images)}, "
+            f"dpi={_DPI}, format=JPEG"
+        )
         images: list[str] = []
         for pil_img in pil_images:
             if pil_img.mode not in ("RGB", "L"):
