@@ -302,14 +302,9 @@ export default function Chat() {
     const assistant = createChatMessage('assistant', '')
     const assistantId = assistant.id
 
-    // Keep completed/failed long task cards, only remove in-progress ones
-    // (polling was just stopped, a stale progress bar is confusing).
-    setMessages((m) => [...m.filter((msg: { taskId?: string, content?: string }) => {
-      if (!msg.taskId) return true
-      // Preserve completed (✅) and failed (❌) results across queries
-      if (msg.content?.includes('✅') || msg.content?.includes('❌')) return true
-      return false // drop running progress (🔬)
-    }), userMsg, assistant])
+    // Preserve all long task cards (running / completed / failed) so the
+    // user can see multiple concurrent or queued tasks in one conversation.
+    setMessages((m) => [...m, userMsg, assistant])
     setStreaming(true)
     setStreamingId(assistantId)
 
@@ -386,9 +381,12 @@ export default function Chat() {
             if (event.type === 'long_task_created') {
               const taskId = String(event.task_id ?? '')
               const sid = String(event.session_id ?? '')
-              const initContent = t('chat.longTaskProgress')
-                .replace('{progress}', '[0%]')
-                .replace('{phase}', '正在准备专利分析...')
+              const isQueued = String(event.status ?? '') === 'queued'
+              const initContent = isQueued
+                ? '🔬 深度分析已排队，将在当前任务完成后自动开始...'
+                : t('chat.longTaskProgress')
+                    .replace('{progress}', '[0%]')
+                    .replace('{phase}', '正在准备专利分析...')
               setMessages((m) => {
                 // Dedup: remove any stale task messages with the same taskId
                 const cleaned = m.filter((msg: { taskId?: string }) => msg.taskId !== taskId)
@@ -570,6 +568,15 @@ export default function Chat() {
               ? { ...msg, taskId, content: t('chat.longTaskProgress')
                   .replace('{progress}', '[0%]')
                   .replace('{phase}', '正在准备专利分析...') }
+              : msg
+          ))
+          return
+        }
+
+        if (data.status === 'queued') {
+          setMessages((m) => m.map(msg =>
+            msg.id === assistantId
+              ? { ...msg, content: '🔬 深度分析排队中，将在当前任务完成后自动开始...' }
               : msg
           ))
           return

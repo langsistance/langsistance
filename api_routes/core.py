@@ -769,7 +769,9 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
             finally:
                 conn.close()
 
-            from celery_worker import execute_patent_analysis
+            from sources.long_task.user_queue import try_start_user_task
+            queue_result = try_start_user_task(str(local_user_id), task_id)
+
             celery_params = {
                 "query": query,
                 "patent_ids": patent_ids,
@@ -778,20 +780,37 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                 "scene_id": None,
                 "conversation_history": conversation_history,
                 "patent_file_refs": patent_file_refs,
+                "user_id": str(local_user_id),
             }
-            execute_patent_analysis.delay(task_id=task_id, params=celery_params)
 
-            app_logger.info(f"[user={user_id}] File upload: dispatched task={task_id}")
+            if queue_result == "running":
+                from celery_worker import execute_patent_analysis
+                execute_patent_analysis.delay(task_id=task_id, params=celery_params)
+                app_logger.info(f"[user={user_id}] File upload: dispatched task={task_id}")
+                event_type = "long_task_created"
+                event_status = "running"
+            else:
+                # Queued — update MySQL status, worker will pick it up later
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE long_tasks SET status = 'queued' WHERE task_id = %s",
+                        (task_id,),
+                    )
+                    conn.commit()
+                app_logger.info(f"[user={user_id}] File upload: queued task={task_id}")
+                event_type = "long_task_created"
+                event_status = "queued"
 
             # Return SSE with long_task_created
             async def generate_sse():
                 event_data = json.dumps({
-                    "type": "long_task_created",
+                    "type": event_type,
                     "task_id": task_id,
                     "session_id": session_id,
                     "patent_ids": patent_ids,
                     "patent_count": len(patent_ids),
                     "source": "file_upload",
+                    "status": event_status,
                 }, ensure_ascii=False)
                 yield f"data: {event_data}\n\n"
                 yield "data: {\"type\": \"end\"}\n\n"
@@ -973,8 +992,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         finally:
                             conn.close()
 
-                        app_logger.info(f"Long task: submitting to Celery...")
-                        from celery_worker import execute_patent_analysis
+                        from sources.long_task.user_queue import try_start_user_task
                         celery_params = {
                             'query': request.query,
                             'patent_ids': patent_ids,
@@ -982,21 +1000,38 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                             'session_id': session_id,
                             'scene_id': scene_id,
                             'conversation_history': conv_history,
+                            'user_id': str(local_user_id),
                         }
                         if patent_texts:
                             celery_params['patent_texts'] = patent_texts
-                        execute_patent_analysis.delay(task_id=task_id, params=celery_params)
-                        app_logger.info(f"Long task: Celery task submitted")
+
+                        queue_result = try_start_user_task(str(local_user_id), task_id)
+
+                        if queue_result == 'running':
+                            app_logger.info(f"Long task: submitting to Celery...")
+                            from celery_worker import execute_patent_analysis
+                            execute_patent_analysis.delay(task_id=task_id, params=celery_params)
+                            app_logger.info(f"Long task: Celery task submitted")
+                        else:
+                            # Queued — update MySQL, Celery will pick it up when dequeued
+                            app_logger.info(f"Long task: queued (user already has running task)")
+                            with conn.cursor() as cur:
+                                cur.execute(
+                                    "UPDATE long_tasks SET status = 'queued' WHERE task_id = %s",
+                                    (task_id,),
+                                )
+                                conn.commit()
 
                         await queue.put({
                             'type': 'status',
-                            'message': '批量专利分析任务已提交',
+                            'message': '批量专利分析任务已提交' if queue_result == 'running' else '批量专利分析任务已排队，将在当前任务完成后自动开始',
                             'transient': False,
                         })
                         await queue.put({
                             'type': 'long_task_created',
                             'task_id': task_id,
                             'session_id': session_id,
+                            'status': queue_result,
                         })
                         await queue.put({'type': 'end'})
                         app_logger.info(f"Long task: SSE events pushed, pipeline done")

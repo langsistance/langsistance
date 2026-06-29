@@ -151,7 +151,28 @@ def execute_patent_analysis(self, task_id: str, params: dict):
             f"[task={task_id}] FAILED — error={e}"
         )
         set_task_failed(task_id, str(e))
-        raise self.retry(exc=e)
+        try:
+            raise self.retry(exc=e)
+        except self.MaxRetriesExceededError:
+            # Permanent failure — clear user's running key so queued tasks proceed
+            _pipeline_logger.error(
+                f"[task={task_id}] MAX_RETRIES_EXCEEDED — clearing user queue lock"
+            )
+            user_id = params.get('user_id', '')
+            if user_id:
+                try:
+                    from sources.long_task.user_queue import complete_user_task
+                    next_id = complete_user_task(str(user_id), task_id)
+                    if next_id:
+                        _pipeline_logger.info(
+                            f"[task={task_id}] QUEUE_DISPATCHED_AFTER_FAILURE — "
+                            f"next_task_id={next_id}"
+                        )
+                except Exception as qe:
+                    _pipeline_logger.warning(
+                        f"[task={task_id}] QUEUE_CLEANUP_FAILED — {qe}"
+                    )
+            raise
 
 
 def _update_mysql_progress(task_id: str, current_phase: str, progress: int) -> None:
@@ -866,6 +887,54 @@ async def _run_pipeline(
     )
     _update_mysql_progress(task_id, 'exporting', 100)
     set_task_completed(task_id, report_files)
+
+    # ── Per-user queue: dispatch next queued task if any ──
+    user_id = params.get('user_id', '')
+    if user_id:
+        try:
+            from sources.long_task.user_queue import complete_user_task
+            next_task_id = complete_user_task(str(user_id), task_id)
+            if next_task_id:
+                # Read the queued task's params from MySQL and dispatch it
+                import json as _json
+                from sources.knowledge.knowledge import get_db_connection as _gdc
+                conn = _gdc()
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """SELECT input_params, session_id, scene_id
+                               FROM long_tasks WHERE task_id = %s""",
+                            (next_task_id,),
+                        )
+                        row = cur.fetchone()
+                    if row:
+                        stored = _json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                        next_params = {
+                            'query': stored.get('query', ''),
+                            'patent_ids': stored.get('patent_ids', []),
+                            'patent_source': stored.get('patent_source', 'auto'),
+                            'session_id': row[1] or '',
+                            'scene_id': row[2],
+                            'conversation_history': stored.get('conversation_history', []),
+                            'patent_file_refs': stored.get('patent_file_refs', []),
+                            'user_id': str(user_id),
+                        }
+                        if stored.get('patent_texts'):
+                            next_params['patent_texts'] = stored['patent_texts']
+                        execute_patent_analysis.delay(
+                            task_id=next_task_id, params=next_params,
+                        )
+                        _pipeline_logger.info(
+                            f"[task={task_id}] QUEUE_DISPATCHED — "
+                            f"next_task_id={next_task_id}"
+                        )
+                finally:
+                    conn.close()
+        except Exception as e:
+            _pipeline_logger.warning(
+                f"[task={task_id}] QUEUE_DISPATCH_FAILED — {e}"
+            )
+
     return {'status': 'completed', 'task_id': task_id}
 
 
