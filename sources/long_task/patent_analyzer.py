@@ -223,6 +223,12 @@ async def analyze_patent_with_vision(
     """
     images = _pdf_to_base64_images(pdf_bytes)
     if not images:
+        from sources.logger import Logger as _VLogger
+        _vlog = _VLogger("text_extractor.log")
+        _vlog.warning(
+            f"vision_no_images — patent_id={patent_id}, "
+            f"pdf2image returned 0 pages"
+        )
         return {
             'patent_id': patent_id,
             '_failed': True,
@@ -261,6 +267,14 @@ async def analyze_patent_with_vision(
             "image_url": {"url": img_url},
         })
 
+    from sources.logger import Logger as _PLogger
+    _plog = _PLogger("text_extractor.log")
+    _total_img_bytes = sum(len(i) for i in images)
+    _plog.info(
+        f"vision_request — patent_id={patent_id}, "
+        f"pages={len(images)}, total_image_base64_bytes={_total_img_bytes}"
+    )
+
     from openai import OpenAI
 
     # MiniMax uses OpenAI-compatible API
@@ -274,13 +288,34 @@ async def analyze_patent_with_vision(
     else:
         client = cfg
 
+    async def _call_vision_api(**kwargs):
+        """Call the vision API with timeout via run_in_executor."""
+        import asyncio as _asyncio
+        loop = _asyncio.get_running_loop()
+        future = loop.run_in_executor(
+            None,
+            lambda: client.chat.completions.create(**kwargs),
+        )
+        return await _asyncio.wait_for(future, timeout=timeout)
+
     result_raw = None
     try:
-        import asyncio
-        loop = asyncio.get_running_loop()
-        resp = await loop.run_in_executor(
-            None,
-            lambda: client.chat.completions.create(
+        resp = await _call_vision_api(
+            model=vision_provider.model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=0.3,
+            max_tokens=4096,
+            response_format={"type": "json_object"},
+        )
+        result_raw = resp.choices[0].message.content
+    except Exception as e:
+        # If json_object not supported, retry without response_format
+        _plog.warning(f"vision_json_mode_failed — {e}, retrying without response_format")
+        try:
+            resp = await _call_vision_api(
                 model=vision_provider.model,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -288,32 +323,10 @@ async def analyze_patent_with_vision(
                 ],
                 temperature=0.3,
                 max_tokens=4096,
-                response_format={"type": "json_object"},
-            ),
-        )
-        result_raw = resp.choices[0].message.content
-    except Exception as e:
-        # If json_object not supported, retry without response_format
-        from sources.logger import Logger
-        _vlog = Logger("text_extractor.log")
-        _vlog.warning(f"vision_json_mode_failed — {e}, retrying without response_format")
-        try:
-            loop = asyncio.get_running_loop()
-            resp = await loop.run_in_executor(
-                None,
-                lambda: client.chat.completions.create(
-                    model=vision_provider.model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_content},
-                    ],
-                    temperature=0.3,
-                    max_tokens=4096,
-                ),
             )
             result_raw = resp.choices[0].message.content
         except Exception as e2:
-            _vlog.warning(f"vision_api_failed — {e2}")
+            _plog.warning(f"vision_api_failed — {e2}")
             return {
                 'patent_id': patent_id,
                 '_failed': True,
@@ -322,6 +335,13 @@ async def analyze_patent_with_vision(
 
     # Parse JSON from response
     import json
+    from sources.logger import Logger as _SLogger
+    _slog = _SLogger("text_extractor.log")
+    _slog.info(
+        f"vision_api_response — patent_id={patent_id}, "
+        f"content_length={len(result_raw or '')}, "
+        f"preview={(result_raw or '')[:150]}"
+    )
     try:
         text = (result_raw or "").strip()
         # Strip markdown code fences if present
@@ -332,6 +352,12 @@ async def analyze_patent_with_vision(
             text = text[:-3].strip()
         result = json.loads(text)
     except json.JSONDecodeError:
+        from sources.logger import Logger as _JLogger
+        _jlog = _JLogger("text_extractor.log")
+        _jlog.warning(
+            f"vision_json_parse_failed — patent_id={patent_id}, "
+            f"raw_preview={(result_raw or '')[:200]}"
+        )
         return {
             'patent_id': patent_id,
             '_failed': True,
