@@ -344,6 +344,9 @@ async def analyze_patent_with_vision(
     )
     try:
         text = (result_raw or "").strip()
+        # Strip <think>...</think> wrapper (MiniMax-M3 reasoning output)
+        if "</think>" in text:
+            text = text[text.rfind("</think>") + len("</think>"):].strip()
         # Strip markdown code fences if present
         if text.startswith("```"):
             lines = text.split("\n")
