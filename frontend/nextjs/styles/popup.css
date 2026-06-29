@@ -1512,6 +1512,11 @@ body {
   color: #2563eb;
 }
 
+.file-chip-badge.xml {
+  background: #f0fdf4;
+  color: #16a34a;
+}
+
 .file-chip-name {
   color: var(--color-text-primary);
   overflow: hidden;

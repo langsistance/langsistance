@@ -474,10 +474,12 @@ export default function Chat() {
 
   const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
   const MAX_FILE_COUNT = 100
-  const ALLOWED_EXTENSIONS = ['.pdf', '.docx']
+  const ALLOWED_EXTENSIONS = ['.pdf', '.docx', '.xml']
   const ALLOWED_MIMES = [
     'application/pdf',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/xml',
+    'text/xml',
   ]
 
   function addFiles(files: FileList | File[]) {
@@ -539,6 +541,7 @@ export default function Chat() {
   function getFileTypeBadge(file: File): string {
     const ext = '.' + file.name.split('.').pop()?.toLowerCase()
     if (ext === '.docx') return 'DOCX'
+    if (ext === '.xml') return 'XML'
     return 'PDF'
   }
 
@@ -706,7 +709,7 @@ export default function Chat() {
                 <line x1="12" y1="3" x2="12" y2="15" />
               </svg>
               <p>{t('chat.dropFilesHere') || 'Drop patent specification files here'}</p>
-              <span className="file-drop-hint">PDF, DOCX · Max 10 MB each · Up to 100 files</span>
+              <span className="file-drop-hint">PDF, DOCX, XML · Max 10 MB each · Up to 100 files</span>
             </div>
           </div>
         )}
@@ -743,7 +746,7 @@ export default function Chat() {
               ref={fileInputRef}
               type="file"
               className="file-input-hidden"
-              accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              accept=".pdf,.docx,.xml,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/xml,text/xml"
               multiple
               onChange={e => { if (e.target.files) addFiles(e.target.files); e.target.value = '' }}
             />
@@ -751,7 +754,7 @@ export default function Chat() {
               className="file-upload-btn"
               onClick={openFilePicker}
               aria-label="Attach patent files"
-              title={t('chat.attachFiles') || 'Attach patent specification files (PDF, DOCX)'}
+              title={t('chat.attachFiles') || 'Attach patent specification files (PDF, DOCX, XML)'}
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />

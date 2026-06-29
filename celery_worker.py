@@ -265,18 +265,6 @@ async def _run_pipeline(
                     f"[task={task_id}] FILE_EXTRACT — {ref['filename']}: {e}"
                 )
 
-        # Clean up temp upload directory
-        if patent_file_refs:
-            import shutil as _shutil
-            upload_dir = os.path.dirname(patent_file_refs[0]['path'])
-            try:
-                _shutil.rmtree(upload_dir, ignore_errors=True)
-                _pipeline_logger.info(
-                    f"[task={task_id}] FILE_EXTRACT — cleaned up {upload_dir}"
-                )
-            except Exception:
-                pass
-
     is_file_upload_mode = bool(patent_texts)
     is_direct_id_mode = bool(patent_ids) and not is_file_upload_mode
     if is_file_upload_mode:
@@ -569,11 +557,6 @@ async def _run_pipeline(
             # In file-upload mode, use pre-extracted text from conversation_history
             if is_file_upload_mode:
                 patent_text = patent_texts.get(patent_id, '')
-                if not patent_text or len(patent_text) < 10000:
-                    raise ValueError(
-                        f"Uploaded text for '{patent_id}' is empty or too short "
-                        f"({len(patent_text) if patent_text else 0} chars)"
-                    )
                 _pipeline_logger.info(
                     f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] — "
                     f"patent_id={patent_id}, using_uploaded_text, "
@@ -605,7 +588,7 @@ async def _run_pipeline(
             #     at 10k chars ensures we have enough text for meaningful analysis.
             #     Strategy: try vision (MiniMax-M3) first, then OCR as fallback.
             #     When vision_enabled=false, skip straight to OCR.
-            text_ok = patent_text and len(patent_text) >= 10000
+            text_ok = patent_text and len(patent_text) >= 1000
             want_vision = vision_provider is not None
 
             if text_ok:
@@ -621,7 +604,30 @@ async def _run_pipeline(
             else:
                 # Text insufficient — need binary for vision or OCR
                 pdf_bytes = None
-                if params.get('patent_source') == 'uspto':
+                if is_file_upload_mode:
+                    # Read the uploaded file from disk for vision/OCR
+                    ref = next(
+                        (r for r in patent_file_refs
+                         if r['filename'].rsplit('.', 1)[0] == patent_id),
+                        None,
+                    )
+                    if ref:
+                        try:
+                            with open(ref['path'], 'rb') as fh:
+                                pdf_bytes = fh.read()
+                            _pipeline_logger.info(
+                                f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
+                                f"file_upload_binary_read — patent_id={patent_id}, "
+                                f"file={ref['filename']}, "
+                                f"len={len(pdf_bytes)}"
+                            )
+                        except Exception as e:
+                            _pipeline_logger.warning(
+                                f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
+                                f"file_upload_binary_read_failed — patent_id={patent_id}, "
+                                f"error={e}"
+                            )
+                elif params.get('patent_source') == 'uspto':
                     pdf_bytes = await _download_uspto_binary_for_vision(
                         patent_id, flash_provider,
                     )
@@ -642,7 +648,7 @@ async def _run_pipeline(
                             f"vision_failed_fallback_to_ocr — patent_id={patent_id}"
                         )
                         ocr_text = _ocr_from_pdf_reader(pdf_bytes)
-                        if ocr_text and len(ocr_text) >= 10000:
+                        if ocr_text and len(ocr_text) >= 1000:
                             row = await analyze_single_patent(
                                 patent_id=patent_id, patent_text=ocr_text,
                                 columns=columns, query=params['query'],
@@ -655,7 +661,7 @@ async def _run_pipeline(
                         f"vision_disabled_ocr — patent_id={patent_id}"
                     )
                     ocr_text = _ocr_from_pdf_reader(pdf_bytes)
-                    if ocr_text and len(ocr_text) >= 10000:
+                    if ocr_text and len(ocr_text) >= 1000:
                         row = await analyze_single_patent(
                             patent_id=patent_id, patent_text=ocr_text,
                             columns=columns, query=params['query'],
@@ -701,6 +707,17 @@ async def _run_pipeline(
                            progress_pct(i + 1, total),
                            f'已完成 {len(table_rows)}/{total} 个专利分析',
                            table_rows=table_rows)
+    # Clean up temp upload directory after Phase 2 (vision fallback may have read files)
+    if patent_file_refs:
+        import shutil as _shutil
+        upload_dir = os.path.dirname(patent_file_refs[0]['path'])
+        try:
+            _shutil.rmtree(upload_dir, ignore_errors=True)
+            _pipeline_logger.info(
+                f"[task={task_id}] FILE_CLEANUP — removed {upload_dir}"
+            )
+        except Exception:
+            pass
     # Update MySQL long_tasks table after phase 2
     _pipeline_logger.info(
         f"[task={task_id}] PHASE2 COMPLETE — "

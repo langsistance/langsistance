@@ -671,7 +671,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
             if not patent_files:
                 return JSONResponse(
                     status_code=400,
-                    content={"error": "No valid patent files uploaded (PDF/DOCX only, min 50 bytes, max 10 MB each)"},
+                    content={"error": "No valid patent files uploaded (PDF/DOCX/XML only, min 50 bytes, max 10 MB each)"},
                 )
 
             app_logger.info(
