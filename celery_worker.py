@@ -1067,10 +1067,7 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
         _pipeline_logger.info(
             f"[download] uspto_step1 — url={doc_list_url}"
         )
-        resp = await asyncio.to_thread(
-            outbound_http.get, doc_list_url, purpose='patent_download',
-            headers=headers, timeout=20,
-        )
+        resp = await _uspto_get_with_retry(doc_list_url, headers, timeout=20)
         if resp.status_code != 200:
             _pipeline_logger.warning(
                 f"[download] uspto_step1_failed — status={resp.status_code}"
@@ -1505,6 +1502,34 @@ _extract_text_from_docx = extract_text_from_docx
 _extract_text_from_binary = extract_text_from_binary
 
 
+async def _uspto_get_with_retry(url: str, headers: dict, timeout: int = 30):
+    """GET *url* with up to 10 retries on 429 (rate-limit), sleeping 1 s between.
+
+    Returns the ``requests.Response`` or raises on non-429 errors after
+    exhausting retries.
+    """
+    import asyncio as _asyncio
+    from sources.http_outbound import outbound_http
+
+    last_status = None
+    for attempt in range(10):
+        resp = await _asyncio.to_thread(
+            outbound_http.get, url, purpose="patent_download",
+            headers=headers, timeout=timeout,
+        )
+        if resp.status_code != 429:
+            return resp
+        last_status = resp.status_code
+        _pipeline_logger.info(
+            f"[download] uspto_429_retry — attempt={attempt+1}/10, "
+            f"url={url[:80]}"
+        )
+        await _asyncio.sleep(1)
+    raise RuntimeError(
+        f"USPTO rate-limit retries exhausted (429) for {url[:120]}"
+    )
+
+
 async def _download_uspto_spec_with_redirect(
     spec_doc: dict,
     app_number: str,
@@ -1528,10 +1553,7 @@ async def _download_uspto_spec_with_redirect(
         )
         return None
     for hop in range(2):  # max 1 redirect
-        resp = await asyncio.to_thread(
-            outbound_http.get, spec_url, purpose='patent_download',
-            headers=headers, timeout=30,
-        )
+        resp = await _uspto_get_with_retry(spec_url, headers, timeout=30)
         if resp.status_code != 200:
             _pipeline_logger.warning(
                 f"[download] uspto_spec_hop{hop}_failed — status={resp.status_code}"
@@ -1625,10 +1647,7 @@ async def _download_uspto_binary_for_vision(
         f"https://api.uspto.gov/api/v1/patent/applications/{app_number}/documents"
     )
     try:
-        resp = await asyncio.to_thread(
-            outbound_http.get, docs_url, purpose="patent_download",
-            headers=uspto_headers, timeout=30,
-        )
+        resp = await _uspto_get_with_retry(docs_url, uspto_headers, timeout=30)
         if resp.status_code != 200:
             _pipeline_logger.warning(
                 f"[vision_dl] uspto_doc_list_failed — status={resp.status_code}"
@@ -1711,10 +1730,7 @@ async def _download_uspto_binary_for_vision(
 
         for hop in range(2):
             try:
-                resp = await asyncio.to_thread(
-                    outbound_http.get, spec_url, purpose="patent_download",
-                    headers=uspto_headers, timeout=30,
-                )
+                resp = await _uspto_get_with_retry(spec_url, uspto_headers, timeout=30)
                 if resp.status_code != 200:
                     break
 
