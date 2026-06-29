@@ -129,9 +129,11 @@ export default function Chat() {
     lastLoadedSidRef.current = sid
     sessionLoadedRef.current = true
 
+    let cancelled = false
     ;(async () => {
       try {
         const data = await getSession(sid)
+        if (cancelled) return
         const longTaskIds: string[] = data.long_task_ids || []
         if (data.messages && Array.isArray(data.messages)) {
           const loaded = data.messages
@@ -238,6 +240,8 @@ export default function Chat() {
         // Session not found or error — start fresh
       }
     })()
+
+    return () => { cancelled = true }
   }, [searchParams, sessionId, setMessages, setSessionId])
 
   // Save session after streaming completes — but ONLY if a session already exists
