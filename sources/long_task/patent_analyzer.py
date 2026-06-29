@@ -169,26 +169,30 @@ async def generate_patent_summary(
 # ── Vision-based patent analysis (MiniMax-M3) ─────────────────────────────────
 
 def _pdf_to_base64_images(pdf_bytes: bytes) -> list[str]:
-    """Render PDF pages as base64 PNG images for vision LLM input.
+    """Render PDF pages as base64 JPEG images for vision LLM input.
 
-    Uses pdf2image to render each page at 150 DPI, then encodes as PNG.
-    This avoids the unreliable embedded-image extraction approach (which
-    can produce JPEG / JPEG2000 / JBIG2 data that vision APIs reject).
+    Uses pdf2image at 120 DPI, encodes as JPEG (quality 75) to keep payload
+    size manageable.  Capped at 20 pages — patent specifications rarely need
+    more for LLM comprehension, and vision APIs have image-count limits.
     """
     import base64 as _b64
     import io as _io
 
+    _DPI = 150
+    _JPEG_QUALITY = 75
+
     try:
         from pdf2image import convert_from_bytes
-        from PIL import Image
 
-        pil_images = convert_from_bytes(pdf_bytes, dpi=150)
+        pil_images = convert_from_bytes(pdf_bytes, dpi=_DPI)
         images: list[str] = []
         for pil_img in pil_images:
+            if pil_img.mode not in ("RGB", "L"):
+                pil_img = pil_img.convert("RGB")
             buf = _io.BytesIO()
-            pil_img.save(buf, format="PNG")
+            pil_img.save(buf, format="JPEG", quality=_JPEG_QUALITY)
             b64 = _b64.b64encode(buf.getvalue()).decode("ascii")
-            images.append(f"data:image/png;base64,{b64}")
+            images.append(f"data:image/jpeg;base64,{b64}")
         return images
     except Exception as e:
         from sources.logger import Logger
