@@ -19,25 +19,48 @@ _logger = Logger("text_extractor.log")
 OCR_MAX_DIMENSION = 2400
 
 # ── Preferred download format order ───────────────────────────────────────
-# DOCX first (best for text), then PDF (widely available, with OCR fallback),
-# then XML last (USPTO xmlarchive is ZIP-wrapped binary, not plain text).
+# DOCX first (best for text), then XML (USPTO xmlarchive tar containing
+# .SPEC.XML with full specification text), then PDF last (sent directly
+# to vision LLM — no text extraction attempted).
 USPTO_PREFERRED_MIME_ORDER = (
     "MS_WORD",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "XML",
+    "application/xml",
+    "text/xml",
     "PDF",
     "application/pdf",
+)
+
+# PDF-first order for vision/binary download (vision LLM needs PDF page images).
+USPTO_PDF_PREFERRED_MIME_ORDER = (
+    "PDF",
+    "application/pdf",
+    "MS_WORD",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "XML",
     "application/xml",
     "text/xml",
 )
 
 
-def get_download_url_from_doc(doc: dict) -> str:
+def get_download_url_from_doc(
+    doc: dict,
+    mime_order: tuple[str, ...] | None = None,
+) -> str:
     """Extract the best download URL from a USPTO documentBag entry.
 
-    Prefers DOCX/MS_WORD and XML formats over PDF for text extraction.
     The URL may be at the top level or nested in downloadOptionBag[].downloadUrl.
+
+    Args:
+        doc: USPTO documentBag entry dict.
+        mime_order: Optional custom MIME preference order.  Defaults to
+            USPTO_PREFERRED_MIME_ORDER (DOCX > XML > PDF).
+
+    Returns:
+        Best download URL string, or empty string if none found.
     """
+    order = mime_order if mime_order is not None else USPTO_PREFERRED_MIME_ORDER
     options = doc.get("downloadOptionBag", [])
     if isinstance(options, list) and options:
         # Collect all download options with their mime types
@@ -67,7 +90,7 @@ def get_download_url_from_doc(doc: dict) -> str:
 
         if url_by_mime:
             # Pick the best option based on preference order
-            for preferred in USPTO_PREFERRED_MIME_ORDER:
+            for preferred in order:
                 mime_key = preferred.upper()
                 if mime_key in url_by_mime:
                     return url_by_mime[mime_key]
@@ -80,6 +103,78 @@ def get_download_url_from_doc(doc: dict) -> str:
         if val:
             return val
     return ""
+
+
+# ── USPTO xmlarchive tar extraction ──────────────────────────────────────
+
+def _is_tar_archive(content: bytes) -> bool:
+    """Check if binary content looks like a tar archive.
+
+    POSIX tar archives have the ``ustar`` magic at offset 257.
+    Also tries ``tarfile.open()`` as a definitive check for GNU-tar variants.
+    """
+    import io as _io
+    import tarfile as _tarfile
+
+    # POSIX ustar magic at byte 257
+    if len(content) > 262 and content[257:262] == b"ustar":
+        return True
+
+    # Definitive check — let the tarfile module decide
+    try:
+        with _tarfile.open(fileobj=_io.BytesIO(content), mode="r"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def extract_text_from_xmlarchive_tar(tar_bytes: bytes) -> str | None:
+    """Extract patent specification text from a USPTO xmlarchive tar file.
+
+    The tar archive typically contains a directory structure like::
+
+        <appNumber>/<docId>/<filename>.SPEC.XML       ← specification text
+        <appNumber>/<docId>/<filename>.SPEC_svg.zip   ← drawings (ignored)
+
+    We locate the ``.SPEC.XML`` member and return its decoded text content.
+
+    Args:
+        tar_bytes: Raw tar archive bytes downloaded from USPTO.
+
+    Returns:
+        Decoded XML specification text, or None if extraction fails.
+    """
+    import io as _io
+    import tarfile as _tarfile
+
+    try:
+        with _tarfile.open(fileobj=_io.BytesIO(tar_bytes), mode="r") as tf:
+            # Find the .SPEC.XML file (skip .zip / SVG members)
+            for member in tf.getmembers():
+                if not member.isfile():
+                    continue
+                if not member.name.endswith(".SPEC.XML"):
+                    continue
+                f = tf.extractfile(member)
+                if f is None:
+                    continue
+                content = f.read()
+                text = content.decode("utf-8", errors="replace")
+                if len(text.strip()) > 100:
+                    _logger.info(
+                        f"xmlarchive_tar_extracted — "
+                        f"member={member.name}, chars={len(text)}"
+                    )
+                    return text
+            _logger.warning(
+                f"xmlarchive_tar_no_spec_xml — "
+                f"members={[m.name for m in tf.getmembers()]}"
+            )
+            return None
+    except Exception as e:
+        _logger.warning(f"xmlarchive_tar_extract_failed — {e}")
+        return None
 
 
 def extract_text_from_pdf(
@@ -295,14 +390,18 @@ def extract_text_from_binary(
     content_type: str = "",
     filename: str = "",
     on_progress: "Callable[[int, int], None] | None" = None,
+    skip_pdf_extraction: bool = False,
 ) -> str | None:
     """Route binary content to the appropriate text extractor.
 
     Args:
         content: Raw file bytes.
         content_type: MIME type (e.g. 'application/pdf'), optional.
-        filename: Original filename used for extension detection, optional.
+        filename: Original filename or download URL used for extension
+            / format detection (e.g. xmlarchive URLs).
         on_progress: Optional callback(current_page, total_pages) for OCR.
+        skip_pdf_extraction: When True, PDF content returns None immediately
+            instead of attempting text extraction (caller will use vision LLM).
 
     Returns:
         Extracted text, or None if extraction fails.
@@ -320,7 +419,21 @@ def extract_text_from_binary(
     if is_docx:
         return extract_text_from_docx(content)
 
-    # Check for XML (plain-text XML only, not USPTO xmlarchive ZIP files)
+    # Check for USPTO xmlarchive tar before plain XML check.
+    # xmlarchive downloads are tar archives (not plain XML), detected by:
+    #   - 'xmlarchive' keyword in download URL / filename
+    #   - POSIX tar magic bytes (ustar at offset 257)
+    is_xmlarchive = (
+        "xmlarchive" in fn_lower
+        or _is_tar_archive(content)
+    )
+    if is_xmlarchive:
+        text = extract_text_from_xmlarchive_tar(content)
+        if text:
+            return text
+        # If tar extraction fails, fall through to try other methods.
+
+    # Check for XML (plain-text XML only, not USPTO xmlarchive ZIP/tar files)
     is_xml = (
         ("xml" in ct and "vnd.openxmlformats" not in ct)
         or fn_lower.endswith(".xml")
@@ -343,6 +456,11 @@ def extract_text_from_binary(
         or content[:5] == b"%PDF-"
     )
     if is_likely_pdf:
+        if skip_pdf_extraction:
+            _logger.info(
+                "pdf_extraction_skipped — caller will use vision LLM fallback"
+            )
+            return None
         return extract_text_from_pdf(content, on_progress=on_progress)
 
     # Last resort: try UTF-8 decode

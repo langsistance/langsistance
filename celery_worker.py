@@ -1392,6 +1392,7 @@ import re as _re
 # Text extraction functions moved to shared module
 from sources.long_task.text_extractor import (
     USPTO_PREFERRED_MIME_ORDER,
+    USPTO_PDF_PREFERRED_MIME_ORDER,
     get_download_url_from_doc,
     extract_text_from_pdf,
     extract_text_from_docx,
@@ -1401,6 +1402,7 @@ from sources.long_task.text_extractor import (
 
 # Backward-compatible aliases used within this file
 _USPTO_PREFERRED_MIME_ORDER = USPTO_PREFERRED_MIME_ORDER
+_USPTO_PDF_PREFERRED_MIME_ORDER = USPTO_PDF_PREFERRED_MIME_ORDER
 _get_download_url_from_doc = get_download_url_from_doc
 _extract_text_from_pdf = extract_text_from_pdf
 _extract_text_from_docx = extract_text_from_docx
@@ -1443,14 +1445,19 @@ async def _download_uspto_spec_with_redirect(
         content_type = resp.headers.get('Content-Type', '').lower()
         content = resp.text or ''
 
+        # xmlarchive URLs always deliver tar binaries regardless of Content-Type
+        # (USPTO may label them application/xml even though they are tar files).
+        force_binary = 'xmlarchive' in spec_url.lower()
+
         # If response looks like a file (not text/JSON), extract text properly
-        if content_type and not any(t in content_type for t in ('text/', 'json', 'xml', 'html')):
+        if force_binary or (content_type and not any(t in content_type for t in ('text/', 'json', 'xml', 'html'))):
             _pipeline_logger.info(
                 f"[download] uspto_spec_binary — type={content_type}, "
                 f"len={len(resp.content)}"
             )
             extracted = _extract_text_from_binary(
                 resp.content, content_type, spec_url,
+                skip_pdf_extraction=True,
             )
             if extracted and len(extracted) > 100:
                 return extracted
@@ -1592,11 +1599,12 @@ async def _download_uspto_binary_for_vision(
         )
         return None
 
-    # Step 3: Download binary from first successful spec URL
-    from sources.long_task.text_extractor import get_download_url_from_doc
-
+    # Step 3: Download binary from first successful spec URL.
+    # Use PDF-first MIME order since vision LLM needs PDF page images.
     for attempt, spec_doc in enumerate(spec_docs):
-        spec_url = get_download_url_from_doc(spec_doc)
+        spec_url = get_download_url_from_doc(
+            spec_doc, mime_order=_USPTO_PDF_PREFERRED_MIME_ORDER,
+        )
         if not spec_url:
             continue
 
