@@ -122,6 +122,8 @@ export default {
     downloadCsv: 'Download CSV',
     downloadExcel: 'Download Excel',
     downloadArtifacts: 'Download data files',
+    attachFiles: 'Attach patent specification files (PDF, DOCX, XML)',
+    dropFilesHere: 'Drop patent specification files here',
     imageLoadFailed: 'Image failed to load',
     openInNewTab: 'Open in new tab',
     noResult: "Sorry, I haven't found any relevant information to answer your question.\n\nYou can try：\n1. 📝Record relevant API requests as a tool\n2. 📚Add relevant information to the knowledge base\n3. 🔄 Describe your question in different ways",

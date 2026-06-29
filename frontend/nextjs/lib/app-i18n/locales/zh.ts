@@ -122,6 +122,8 @@ export default {
     downloadCsv: '下载 CSV',
     downloadExcel: '下载 Excel',
     downloadArtifacts: '下载数据文件',
+    attachFiles: '上传专利说明书文件（支持 PDF、DOCX、XML 格式）',
+    dropFilesHere: '将专利说明书文件拖放到此处',
     imageLoadFailed: '图片加载失败',
     openInNewTab: '在新标签页打开',
     noResult: "抱歉，我没有找到相关的信息来回答您的问题。\n\n您可以尝试：\n1. 📝 录制相关的API请求作为工具\n2. 📚 在知识库中添加相关信息\n3. 🔄 用不同的方式描述您的问题",
