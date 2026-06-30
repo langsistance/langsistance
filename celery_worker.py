@@ -111,6 +111,9 @@ def execute_patent_analysis(self, task_id: str, params: dict):
                                   server_address='', is_local=False)
         pro_provider = Provider(provider_name='deepseek', model='deepseek-reasoner',
                                 server_address='', is_local=False)
+        # Use MiniMax-M3 for vision even in deepseek mode
+        vision_provider = Provider(provider_name='minimax', model='MiniMax-M3',
+                                   server_address='', is_local=False)
 
     try:
         # ---- Run the 4-phase pipeline using event-loop-safe pattern ----
@@ -125,7 +128,7 @@ def execute_patent_analysis(self, task_id: str, params: dict):
                 max_patents=max_patents,
                 flash_provider=flash_provider,
                 pro_provider=pro_provider,
-                vision_provider=vision_provider if (model_family == 'minimax' and vision_enabled) else None,
+                vision_provider=vision_provider if vision_enabled else None,
                 update_task_status=update_task_status,
                 set_task_completed=set_task_completed,
                 set_task_failed=set_task_failed,
