@@ -16,6 +16,7 @@ from pydantic import BaseModel, EmailStr
 from sources.crypto_utils import decrypt_password
 from sources.http_outbound import outbound_http
 from sources.logger import Logger
+from sources.analytics import track_event
 from sources.user.local_user import ensure_local_user_record
 # 触发 firebase_admin.initialize_app 的调用（在 passport 模块顶层）
 from sources.user import passport as passport_module  # noqa: F401
@@ -106,6 +107,8 @@ async def auth_signup(body: EmailPasswordRequest):
         use_cache=False,
     )
     logger.info(f"/auth/signup ok: {body.email} -> {uid}")
+    track_event("auth:signup", user_id=uid, email=fresh.get("email", body.email),
+                extra={"source": "signup"})
     return {
         "idToken": fresh["idToken"],
         "refreshToken": fresh["refreshToken"],
@@ -124,6 +127,8 @@ async def auth_login(body: EmailPasswordRequest):
         {"email": body.email, "password": password, "returnSecureToken": True},
     )
     logger.info(f"/auth/login ok: {body.email} -> {data.get('localId')}")
+    uid = data["localId"]
+    track_event("auth:login", user_id=uid, email=data.get("email", body.email))
     return {
         "idToken": data["idToken"],
         "refreshToken": data["refreshToken"],
@@ -139,6 +144,8 @@ async def auth_refresh(body: RefreshRequest):
         SECURE_TOKEN,
         {"grant_type": "refresh_token", "refresh_token": body.refreshToken},
     )
+    uid = data["user_id"]
+    track_event("auth:refresh", user_id=uid)
     return {
         "idToken": data["id_token"],
         "refreshToken": data["refresh_token"],

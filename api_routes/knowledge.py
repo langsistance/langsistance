@@ -26,6 +26,7 @@ from sources.knowledge.public_dependencies import (
 )
 from sources.knowledge.type_utils import infer_knowledge_type
 from sources.logger import Logger
+from sources.analytics import track_event
 from sources.user.passport import verify_firebase_token, get_user_by_id
 
 logger = Logger("backend.log")
@@ -166,6 +167,9 @@ async def create_knowledge_record(request: KnowledgeCreateRequest, http_request:
 
             # 获取插入的记录ID
             logger.info(f"Knowledge record created successfully with ID: {record_id}")
+            track_event("knowledge:create", user_id=str(user_id), knowledge_id=record_id,
+                        query_text=request.question[:80] if request.question else None,
+                        scene_id=getattr(request, 'scene_id', None))
 
             query_embedding = get_embedding(build_knowledge_embedding_text(
                 request.question,

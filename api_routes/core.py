@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 
 from sources.schemas import QueryResponse
 from sources.logger import Logger
+from sources.analytics import track_event
 from api_routes.models import QueryRequest, QuestionRequest
 from sources.knowledge.knowledge import get_knowledge_tool
 from sources.user.passport import verify_firebase_token, check_and_increase_usage
@@ -428,6 +429,8 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
         user_id = user['uid']
 
         app_logger.info(f"[user={user_id}] Processing query: {request.query}")
+        track_event("query", user_id=str(user_id), query_text=request.query,
+                    query_id=request.query_id)
 
         allowed = check_and_increase_usage(user_id)
         if not allowed:
@@ -523,6 +526,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
         user_id = user['uid']
 
         app_logger.info(f"Finding knowledge tool for user: {user_id} with question: {request.question}")
+        track_event("knowledge:find", user_id=str(user_id), query_text=request.question)
 
         try:
             # 参数校验
@@ -751,6 +755,8 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                              json.dumps(conversation_history, ensure_ascii=False),
                              json.dumps([task_id])))
                         app_logger.info(f"File upload: created new session {session_id}")
+                        track_event("session:new", user_id=str(local_user_id),
+                                    session_id=session_id, query_text=query)
 
                     cur.execute(
                         """INSERT INTO long_tasks
@@ -787,6 +793,11 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                 from celery_worker import execute_patent_analysis
                 execute_patent_analysis.delay(task_id=task_id, params=celery_params)
                 app_logger.info(f"[user={user_id}] File upload: dispatched task={task_id}")
+                track_event("long_task:submit", user_id=str(local_user_id),
+                            task_id=task_id, patent_count=len(patent_ids),
+                            patent_source=patent_source,
+                            session_id=session_id or None,
+                            query_text="[file upload]")
                 event_type = "long_task_created"
                 event_status = "running"
             else:
@@ -798,6 +809,11 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                     )
                     conn.commit()
                 app_logger.info(f"[user={user_id}] File upload: queued task={task_id}")
+                track_event("long_task:queued", user_id=str(local_user_id),
+                            task_id=task_id, patent_count=len(patent_ids),
+                            patent_source=patent_source,
+                            session_id=session_id or None,
+                            query_text="[file upload]")
                 event_type = "long_task_created"
                 event_status = "queued"
 
@@ -856,6 +872,9 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
         user_id = user['uid']
 
         app_logger.info(f"[user={user_id}] Processing query_stream: {request.query}")
+        track_event("query_stream", user_id=str(user_id), query_text=request.query,
+                    query_id=request.query_id,
+                    session_id=request.session_id or None)
 
         # Optimize: Make usage check async
         allowed = await check_usage_async(user_id)
@@ -973,6 +992,9 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                          json.dumps(conv_history, ensure_ascii=False),
                                          json.dumps([task_id])))
                                     app_logger.info(f"Long task: created new session {session_id}")
+                                    track_event("session:new", user_id=str(local_user_id),
+                                                session_id=session_id,
+                                                query_text=request.query)
 
                                 cur.execute(
                                     """INSERT INTO long_tasks
@@ -1012,9 +1034,19 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                             from celery_worker import execute_patent_analysis
                             execute_patent_analysis.delay(task_id=task_id, params=celery_params)
                             app_logger.info(f"Long task: Celery task submitted")
+                            track_event("long_task:submit", user_id=str(local_user_id),
+                                        task_id=task_id, patent_count=len(patent_ids),
+                                        patent_source=patent_source,
+                                        session_id=session_id or None,
+                                        query_text=request.query)
                         else:
                             # Queued — update MySQL, Celery will pick it up when dequeued
                             app_logger.info(f"Long task: queued (user already has running task)")
+                            track_event("long_task:queued", user_id=str(local_user_id),
+                                        task_id=task_id, patent_count=len(patent_ids),
+                                        patent_source=patent_source,
+                                        session_id=session_id or None,
+                                        query_text=request.query)
                             with conn.cursor() as cur:
                                 cur.execute(
                                     "UPDATE long_tasks SET status = 'queued' WHERE task_id = %s",

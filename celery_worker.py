@@ -13,6 +13,7 @@ if _project_root not in sys.path:
 
 from celery import Celery
 from sources.logger import Logger
+from sources.analytics import track_event
 
 _pipeline_logger = Logger("long_task_pipeline.log")
 
@@ -154,6 +155,11 @@ def execute_patent_analysis(self, task_id: str, params: dict):
             f"[task={task_id}] FAILED — error={e}"
         )
         set_task_failed(task_id, str(e))
+        user_id_for_analytics = params.get('user_id', '')
+        if user_id_for_analytics:
+            track_event("long_task:fail", user_id=user_id_for_analytics,
+                        task_id=task_id,
+                        extra={"error": str(e)[:100]})
         try:
             raise self.retry(exc=e)
         except self.MaxRetriesExceededError:
@@ -538,6 +544,11 @@ async def _run_pipeline(
                                patent_ids=patent_ids)
         else:
             set_task_failed(task_id, '未找到匹配的专利')
+            user_id_for_analytics = params.get('user_id', '')
+            if user_id_for_analytics:
+                track_event("long_task:fail", user_id=user_id_for_analytics,
+                            task_id=task_id,
+                            extra={"error": "no_patents_found"})
             return {'status': 'failed', 'task_id': task_id,
                     'error': 'No patents found matching the search criteria'}
 
@@ -890,6 +901,11 @@ async def _run_pipeline(
     )
     _update_mysql_progress(task_id, 'exporting', 100)
     set_task_completed(task_id, report_files)
+    user_id_for_analytics = params.get('user_id', '')
+    if user_id_for_analytics:
+        track_event("long_task:complete", user_id=user_id_for_analytics,
+                    task_id=task_id, patent_count=len(table_rows),
+                    patent_source=params.get('patent_source', ''))
 
     # ── Per-user queue: dispatch next queued task if any ──
     user_id = params.get('user_id', '')
