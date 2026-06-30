@@ -49,7 +49,11 @@ def execute_patent_analysis(self, task_id: str, params: dict):
         update_task_status, set_task_completed, set_task_failed,
         save_checkpoint, load_checkpoint,
     )
-    from sources.long_task.config import get_long_task_config
+    from sources.long_task.config import (
+        get_long_task_config,
+        DEFAULT_VISION_PROVIDER,
+        DEFAULT_VISION_MODEL,
+    )
     from sources.long_task.patent_analyzer import (
         generate_table_columns, download_patent_document,
         analyze_single_patent, generate_patent_summary, build_failed_row,
@@ -98,23 +102,31 @@ def execute_patent_analysis(self, task_id: str, params: dict):
         flash_provider = Provider(provider_name='minimax', model='MiniMax-M2.7-highspeed',
                                   server_address='', is_local=False)
         # Single patent: use M2.7 for text analysis
-        # Batch or vision: use M3
+        # Batch: use M3
         if total == 1:
             pro_provider = Provider(provider_name='minimax', model='MiniMax-M2.7-highspeed',
                                     server_address='', is_local=False)
         else:
             pro_provider = Provider(provider_name='minimax', model='MiniMax-M3',
                                     server_address='', is_local=False)
-        vision_provider = Provider(provider_name='minimax', model='MiniMax-M3',
-                                   server_address='', is_local=False)
     else:
         flash_provider = Provider(provider_name='deepseek', model='deepseek-chat',
                                   server_address='', is_local=False)
         pro_provider = Provider(provider_name='deepseek', model='deepseek-reasoner',
                                 server_address='', is_local=False)
-        # Use MiniMax-M3 for vision even in deepseek mode
-        vision_provider = Provider(provider_name='minimax', model='MiniMax-M3',
-                                   server_address='', is_local=False)
+
+    # Vision provider — configured via config.ini [LONG_TASK]
+    #   vision_provider / vision_model — independent of provider_family
+    vision_provider = None
+    if vision_enabled:
+        vision_cfg_provider = ltc.get('vision_provider', DEFAULT_VISION_PROVIDER)
+        vision_cfg_model = ltc.get('vision_model', DEFAULT_VISION_MODEL)
+        vision_provider = Provider(
+            provider_name=vision_cfg_provider,
+            model=vision_cfg_model,
+            server_address='',
+            is_local=False,
+        )
 
     try:
         # ---- Run the 4-phase pipeline using event-loop-safe pattern ----
