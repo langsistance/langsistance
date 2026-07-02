@@ -28,34 +28,6 @@ SECURE_TOKEN = "https://securetoken.googleapis.com/v1/token"
 
 HTTP_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
 
-# Map raw Firebase error codes to user-friendly messages.
-# Keep in sync with frontend i18n locales (auth.errors section).
-_FIREBASE_ERROR_MAP: dict[str, str] = {
-    # Login errors
-    "INVALID_PASSWORD": "Incorrect password. Please try again.",
-    "INVALID_LOGIN_CREDENTIALS": "Invalid email or password. Please check and try again.",
-    "EMAIL_NOT_FOUND": "No account found with this email. Please sign up first.",
-    "USER_DISABLED": "This account has been disabled. Please contact support.",
-    "TOO_MANY_ATTEMPTS_TRY_LATER": "Too many failed attempts. Please try again later or reset your password.",
-    # Signup errors
-    "EMAIL_EXISTS": "An account with this email already exists. Please sign in instead.",
-    "WEAK_PASSWORD": "Password is too weak. Please use at least 6 characters.",
-    "INVALID_EMAIL": "Please enter a valid email address.",
-    "MISSING_PASSWORD": "Please enter a password.",
-    "MISSING_EMAIL": "Please enter an email address.",
-    # Token errors
-    "EXPIRED_OOB_CODE": "This reset link has expired. Please request a new one.",
-    "INVALID_OOB_CODE": "Invalid reset link. Please request a new one.",
-    "INVALID_ID_TOKEN": "Session expired. Please sign in again.",
-    "TOKEN_EXPIRED": "Session expired. Please sign in again.",
-    "USER_NOT_FOUND": "Account not found. Please sign up first.",
-}
-
-
-def _friendly_auth_error(firebase_message: str) -> str:
-    """Return a user-friendly message for a Firebase error code."""
-    return _FIREBASE_ERROR_MAP.get(firebase_message, firebase_message)
-
 
 def _api_key() -> str:
     key = os.getenv("FIREBASE_WEB_API_KEY")
@@ -90,7 +62,7 @@ async def _firebase_post(url: str, payload: dict) -> dict:
         )
     except httpx.HTTPError as e:
         logger.error(f"Firebase REST call failed: {e}")
-        raise HTTPException(status_code=502, detail="Authentication service is temporarily unavailable. Please try again later.")
+        raise HTTPException(status_code=502, detail="AUTH_SERVICE_UNAVAILABLE")
 
     if resp.status_code >= 400:
         try:
@@ -99,8 +71,7 @@ async def _firebase_post(url: str, payload: dict) -> dict:
         except Exception:
             msg = "AUTH_ERROR"
         logger.info(f"Firebase REST returned {resp.status_code}: {msg}")
-        friendly = _friendly_auth_error(msg)
-        raise HTTPException(status_code=resp.status_code, detail=friendly)
+        raise HTTPException(status_code=resp.status_code, detail=msg)
 
     return resp.json()
 
