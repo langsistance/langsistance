@@ -7,6 +7,19 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useI18n } from '@/lib/app-i18n'
 import LanguageToggleButton from '@/components/app/LanguageToggleButton'
 
+/**
+ * Strip technical prefixes that may leak from older backends or raw HTTP errors.
+ * Keeps the message clean for end-user display.
+ */
+function sanitizeAuthError(raw: string): string {
+  // Remove "/auth/login 400 — {...}" style prefixes from older backends
+  const cleaned = raw.replace(/^\/auth\/\w+\s+\d{3}\s*(—|-)\s*/i, '')
+  // If the result looks like raw JSON, try to extract detail
+  const jsonMatch = cleaned.match(/^\{"detail"\s*:\s*"([^"]+)"\}$/)
+  if (jsonMatch) return jsonMatch[1]
+  return cleaned
+}
+
 export default function LoginForm() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -32,7 +45,8 @@ export default function LoginForm() {
       }
       // Auth state change will trigger parent re-render — no redirect needed
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Authentication failed')
+      const raw = err instanceof Error ? err.message : 'Authentication failed'
+      setError(sanitizeAuthError(raw))
     }
   }
 

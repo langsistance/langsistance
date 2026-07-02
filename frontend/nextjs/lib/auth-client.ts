@@ -195,7 +195,18 @@ async function call<T>(path: string, body: unknown): Promise<T> {
   })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
-    throw new Error(`${path} ${res.status}${text ? ` — ${text}` : ''}`)
+    // Try to extract a friendly detail message from the JSON error body.
+    // FastAPI errors follow the shape {"detail": "<message>"}.
+    let message = text
+    try {
+      const parsed = JSON.parse(text)
+      if (parsed.detail && typeof parsed.detail === 'string') {
+        message = parsed.detail
+      }
+    } catch {
+      // Not JSON — keep the raw text (e.g. plain-text error, network hiccup).
+    }
+    throw new Error(message)
   }
   return res.json() as Promise<T>
 }
