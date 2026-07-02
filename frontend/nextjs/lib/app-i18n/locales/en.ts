@@ -281,6 +281,29 @@ export default {
     unknown: 'Unknown error'
   },
 
+  // Auth error messages — keyed by Firebase error code
+  auth: {
+    errors: {
+      INVALID_PASSWORD: 'Incorrect password. Please try again.',
+      INVALID_LOGIN_CREDENTIALS: 'Invalid email or password. Please check and try again.',
+      EMAIL_NOT_FOUND: 'No account found with this email. Please sign up first.',
+      USER_DISABLED: 'This account has been disabled. Please contact support.',
+      TOO_MANY_ATTEMPTS_TRY_LATER: 'Too many failed attempts. Please try again later or reset your password.',
+      EMAIL_EXISTS: 'An account with this email already exists. Please sign in instead.',
+      WEAK_PASSWORD: 'Password is too weak. Please use at least 6 characters.',
+      INVALID_EMAIL: 'Please enter a valid email address.',
+      MISSING_PASSWORD: 'Please enter a password.',
+      MISSING_EMAIL: 'Please enter an email address.',
+      EXPIRED_OOB_CODE: 'This reset link has expired. Please request a new one.',
+      INVALID_OOB_CODE: 'Invalid reset link. Please request a new one.',
+      INVALID_ID_TOKEN: 'Session expired. Please sign in again.',
+      TOKEN_EXPIRED: 'Session expired. Please sign in again.',
+      USER_NOT_FOUND: 'Account not found. Please sign up first.',
+      AUTH_ERROR: 'Authentication failed. Please try again.',
+      AUTH_SERVICE_UNAVAILABLE: 'Authentication service is temporarily unavailable. Please try again later.',
+    },
+  },
+
   // Confirmation dialogs
   confirmations: {
     deleteApi: 'Are you sure you want to delete this API record?',

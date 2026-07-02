@@ -7,6 +7,28 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useI18n } from '@/lib/app-i18n'
 import LanguageToggleButton from '@/components/app/LanguageToggleButton'
 
+/**
+ * Extract a clean auth error code from various error formats:
+ *   - Firebase code: "INVALID_PASSWORD"
+ *   - Old proxy format: "/auth/login 400 — {"detail":"INVALID_PASSWORD"}"
+ *   - FastAPI JSON: '{"detail":"INVALID_PASSWORD"}'
+ * Returns the original string if no known pattern matches.
+ */
+function extractAuthErrorCode(raw: string): string {
+  // Strip old proxy prefix: "/auth/login 400 — ..."
+  let cleaned = raw.replace(/^\/auth\/\w+\s+\d{3}\s*(—|-)\s*/i, '')
+  // Try to parse as JSON and extract detail
+  try {
+    const parsed = JSON.parse(cleaned)
+    if (parsed.detail && typeof parsed.detail === 'string') {
+      return parsed.detail
+    }
+  } catch {
+    // Not JSON, use as-is
+  }
+  return cleaned
+}
+
 export default function LoginForm() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -32,7 +54,11 @@ export default function LoginForm() {
       }
       // Auth state change will trigger parent re-render — no redirect needed
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Authentication failed')
+      const raw = err instanceof Error ? err.message : 'AUTH_ERROR'
+      const code = extractAuthErrorCode(raw)
+      // Try i18n translation first, fall back to the raw code
+      const translated = t(`auth.errors.${code}`)
+      setError(translated === `auth.errors.${code}` ? code : translated)
     }
   }
 

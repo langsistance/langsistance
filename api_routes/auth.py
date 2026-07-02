@@ -63,7 +63,7 @@ async def _firebase_post(url: str, payload: dict) -> dict:
         )
     except httpx.HTTPError as e:
         logger.error(f"Firebase REST call failed: {e}")
-        raise HTTPException(status_code=502, detail="Auth upstream unreachable")
+        raise HTTPException(status_code=502, detail="AUTH_SERVICE_UNAVAILABLE")
 
     if resp.status_code >= 400:
         try:

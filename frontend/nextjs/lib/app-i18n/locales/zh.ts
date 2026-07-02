@@ -281,6 +281,29 @@ export default {
     unknown: '未知错误'
   },
 
+  // 登录/注册错误提示 — 按 Firebase 错误码索引
+  auth: {
+    errors: {
+      INVALID_PASSWORD: '密码错误，请重新输入。',
+      INVALID_LOGIN_CREDENTIALS: '邮箱或密码错误，请检查后重试。',
+      EMAIL_NOT_FOUND: '该邮箱未注册，请先创建账号。',
+      USER_DISABLED: '该账号已被禁用，请联系客服。',
+      TOO_MANY_ATTEMPTS_TRY_LATER: '尝试次数过多，请稍后再试或重置密码。',
+      EMAIL_EXISTS: '该邮箱已注册，请直接登录。',
+      WEAK_PASSWORD: '密码强度太弱，请使用至少 6 位字符。',
+      INVALID_EMAIL: '请输入有效的邮箱地址。',
+      MISSING_PASSWORD: '请输入密码。',
+      MISSING_EMAIL: '请输入邮箱地址。',
+      EXPIRED_OOB_CODE: '重置链接已过期，请重新申请。',
+      INVALID_OOB_CODE: '重置链接无效，请重新申请。',
+      INVALID_ID_TOKEN: '登录已过期，请重新登录。',
+      TOKEN_EXPIRED: '登录已过期，请重新登录。',
+      USER_NOT_FOUND: '账号不存在，请先注册。',
+      AUTH_ERROR: '认证失败，请稍后重试。',
+      AUTH_SERVICE_UNAVAILABLE: '认证服务暂时不可用，请稍后重试。',
+    },
+  },
+
   // 确认对话框
   confirmations: {
     deleteApi: '确定要删除这个 API 记录吗？',
