@@ -269,7 +269,7 @@ def generate_answer_with_context(question: str, context: List[Dict]) -> str:
         return f"生成答案时出错: {str(e)}"
 
 def get_db_connection():
-    """创建并返回数据库连接"""
+    """创建并返回数据库连接（支持断线自动重连）"""
     db_config = {
         'host': os.getenv('MYSQL_HOST', 'copiioai_db'),
         'port' : int(os.getenv('MYSQL_PORT', 3306)),
@@ -277,9 +277,16 @@ def get_db_connection():
         'password': os.getenv('MYSQL_PASSWORD', ''),
         'database': os.getenv('MYSQL_DATABASE', 'copiioai_db'),
         'charset': 'utf8mb4',
-        'cursorclass': pymysql.cursors.DictCursor
+        'cursorclass': pymysql.cursors.DictCursor,
+        'autocommit': True,
+        'connect_timeout': 10,
+        'read_timeout': 30,
+        'write_timeout': 30,
     }
-    return pymysql.connect(**db_config)
+    conn = pymysql.connect(**db_config)
+    # Ping to verify the connection is alive; reconnect if the server closed it
+    conn.ping(reconnect=True)
+    return conn
 
 def get_redis_connection():
     """创建并返回 Redis 连接"""

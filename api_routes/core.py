@@ -1012,7 +1012,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                 conn.commit()
                             app_logger.info(f"Long task: DB records inserted")
                         finally:
-                            conn.close()
+                            pass  # conn is closed below after both branches
 
                         from sources.long_task.user_queue import try_start_user_task
                         celery_params = {
@@ -1039,6 +1039,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                         patent_source=patent_source,
                                         session_id=session_id or None,
                                         query_text=request.query)
+                            conn.close()
                         else:
                             # Queued — update MySQL, Celery will pick it up when dequeued
                             app_logger.info(f"Long task: queued (user already has running task)")
@@ -1047,12 +1048,14 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                         patent_source=patent_source,
                                         session_id=session_id or None,
                                         query_text=request.query)
+                            conn.ping(reconnect=True)
                             with conn.cursor() as cur:
                                 cur.execute(
                                     "UPDATE long_tasks SET status = 'queued' WHERE task_id = %s",
                                     (task_id,),
                                 )
                                 conn.commit()
+                            conn.close()
 
                         await queue.put({
                             'type': 'status',
