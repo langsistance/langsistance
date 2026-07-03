@@ -141,7 +141,7 @@ async def generate_patent_summary(
     """Phase 2c: Generate a short summary for a single analyzed patent."""
     row_str = "\n".join(
         f"{k}: {v}" for k, v in row.items()
-        if k not in ('patent_id', '_failed', '_failure_reason', '_summary')
+        if k not in ('专利号', '_failed', '_failure_reason', '_summary')
     )
     system_prompt = (
         "你是一个专利分析专家。基于分析结果，用 2-3 句话总结该专利的核心发现。"

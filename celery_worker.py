@@ -768,11 +768,11 @@ async def _run_pipeline(
             f"failed={len([r for r in table_rows if r.get('_failed')])}"
         )
         save_checkpoint(task_id, {
-            'completed': [r['patent_id'] for r in table_rows if not r.get('_failed')],
+            'completed': [r.get('专利号', patent_id) for r in table_rows if not r.get('_failed')],
             'current': patent_id,
             'pending': pending[i+1:],
             'completed_rows': table_rows,
-            'failed': [r['patent_id'] for r in table_rows if r.get('_failed')],
+            'failed': [r.get('专利号', patent_id) for r in table_rows if r.get('_failed')],
         })
 
         update_task_status(task_id, 'analyzing',
