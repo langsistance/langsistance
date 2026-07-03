@@ -25,7 +25,7 @@ def get_scene_knowledge_tools(scene_id: int) -> List[Dict[str, Any]]:
 
     Returns a list of dicts each with:
       knowledge_id, knowledge_question, knowledge_description, knowledge_type,
-      knowledge_params,
+      knowledge_params, knowledge_answer,
       tool_id, tool_title, tool_description, tool_url, tool_push, tool_params
     """
     conn = get_db_connection()
@@ -36,6 +36,7 @@ def get_scene_knowledge_tools(scene_id: int) -> List[Dict[str, Any]]:
                        k.id          AS knowledge_id,
                        k.question    AS knowledge_question,
                        k.description AS knowledge_description,
+                       k.answer      AS knowledge_answer,
                        k.`type`      AS knowledge_type,
                        k.params      AS knowledge_params,
                        t.id          AS tool_id,
@@ -62,6 +63,7 @@ def get_scene_knowledge_tools(scene_id: int) -> List[Dict[str, Any]]:
             "knowledge_id": row["knowledge_id"],
             "knowledge_question": row["knowledge_question"],
             "knowledge_description": row["knowledge_description"] or "",
+            "knowledge_answer": row["knowledge_answer"] or "",
             "knowledge_type": row["knowledge_type"],
             "knowledge_params": row["knowledge_params"] or "",
             "tool_id": row["tool_id"],
@@ -156,17 +158,23 @@ async def select_tool(
     if not tool_candidates:
         return None
 
-    # Build candidate tool list — include actual params template for each tool
+    # Build candidate tool list — include usage guide (answer) and params template
     tool_blocks = []
     for c in tool_candidates:
         params_template = _sanitize_params_for_llm(c.get("tool_params", "") or c.get("knowledge_params", ""))
         params_block = ""
         if params_template:
             params_block = f"\n    Params 模板: {params_template}"
+        # Include knowledge answer as usage guide (same role as general_agent's Context from knowledge base)
+        usage_guide = c.get("knowledge_answer", "")
+        usage_block = ""
+        if usage_guide:
+            usage_block = f"\n    使用指南: {usage_guide}"
         tool_blocks.append(
             f"  [id={c['knowledge_id']}] {c['tool_title']}\n"
             f"    URL: {c['tool_url']}\n"
             f"    描述: {c['knowledge_description'] or c['tool_description']}"
+            f"{usage_block}"
             f"{params_block}"
         )
     tool_text = "\n".join(tool_blocks)
@@ -190,13 +198,18 @@ async def select_tool(
         "可用工具：\n"
         f"{tool_text}"
         f"{workflow_text}\n\n"
-        "参数生成规则（CRITICAL）：\n"
+        "工具选择优先级（CRITICAL）：\n"
+        "— 默认优先选择 assignee（专利受让人）搜索工具，按公司/机构名检索专利\n"
+        "— 只有在用户明确要求用关键词检索时，才选择 keyword 搜索工具\n"
+        "— 其他工具（如文档下载）根据目标选择合适的即可\n\n"
+        "参数生成规则（与 general_agent 对齐）：\n"
         "1. 基于选中工具的 Params 模板来生成参数，保持完全相同的 JSON 结构\n"
-        "2. 只能修改模板中与用户目标相关的字段值，不要新增或删除字段\n"
+        "2. 只修改模板中与用户目标明确相关的字段值，不要新增或删除字段\n"
+        "   — Replace a value only if the user query clearly maps to the meaning of an existing field\n"
+        "   — 模板中的示例值展示了该字段的预期格式和语法，参照示例的格式来替换值\n"
         "3. 不要修改 method、Content-Type、header 等固定字段\n"
-        "4. 对于搜索工具：修改 body.q 为实际搜索词，可调整 body.pagination.limit\n"
-        "5. 对于下载工具：在 path 中填入 patent_id（如 /{patent_id}/documents）\n"
-        "6. 如果工具 URL 已包含 /applications，path 只需 /{patent_id}/documents\n\n"
+        "4. 如果模板中某个字段的值与用户目标无关，保持原值不变\n"
+        "5. 如果工具 URL 已包含 /applications，path 只需 /{patent_id}/documents\n\n"
         "Return JSON:\n"
         '{"knowledge_id": <selected tool id>, '
         '"reason": "<why this tool>", '
