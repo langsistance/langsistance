@@ -90,6 +90,40 @@ def get_scene_knowledge_tools(scene_id: int) -> List[Dict[str, Any]]:
     return candidates
 
 
+# ── Params sanitisation ────────────────────────────────────────────────────
+
+_SENSITIVE_HEADER_RE = __import__('re').compile(
+    r'api[_-]?key|token|secret|password|auth',
+    __import__('re').IGNORECASE,
+)
+
+
+def _sanitize_params_for_llm(params_str: str) -> str:
+    """Return params JSON with sensitive header values replaced by '****'.
+
+    The real header values stay in the tool definition for server-side use only.
+    This sanitised copy is the only version the LLM ever sees.
+    """
+    if not params_str:
+        return ""
+    try:
+        data = json.loads(params_str)
+        if not isinstance(data, dict):
+            return params_str
+        sanitized = {}
+        for k, v in data.items():
+            if k == "header" and isinstance(v, dict):
+                sanitized[k] = {
+                    hk: "****" if _SENSITIVE_HEADER_RE.search(hk) else hv
+                    for hk, hv in v.items()
+                }
+            else:
+                sanitized[k] = v
+        return json.dumps(sanitized, ensure_ascii=False, indent=2)
+    except Exception:
+        return params_str
+
+
 # ── LLM-driven tool selection ──────────────────────────────────────────────
 
 async def select_tool(
@@ -122,15 +156,20 @@ async def select_tool(
     if not tool_candidates:
         return None
 
-    # Build candidate tool list
-    tool_lines = []
+    # Build candidate tool list — include actual params template for each tool
+    tool_blocks = []
     for c in tool_candidates:
-        tool_lines.append(
+        params_template = _sanitize_params_for_llm(c.get("tool_params", "") or c.get("knowledge_params", ""))
+        params_block = ""
+        if params_template:
+            params_block = f"\n    Params 模板: {params_template}"
+        tool_blocks.append(
             f"  [id={c['knowledge_id']}] {c['tool_title']}\n"
             f"    URL: {c['tool_url']}\n"
             f"    描述: {c['knowledge_description'] or c['tool_description']}"
+            f"{params_block}"
         )
-    tool_text = "\n".join(tool_lines)
+    tool_text = "\n".join(tool_blocks)
 
     # Build workflow reference (not selectable, but provides context)
     workflow_text = ""
@@ -147,23 +186,21 @@ async def select_tool(
 
     system_prompt = (
         "你是一个工具选择器。根据给定的目标和上下文，从可用工具中选择最合适的工具，"
-        "并生成调用该工具所需的参数。\n\n"
+        "并基于该工具的 Params 模板生成调用参数。\n\n"
         "可用工具：\n"
         f"{tool_text}"
         f"{workflow_text}\n\n"
-        "CRITICAL: generate correct `params` for the selected tool.\n"
-        "- Check the tool's URL carefully. If the URL already ends with "
-        "/applications, the `path` should be only /{patent_id}/documents "
-        "(NOT /applications/{patent_id}/documents which would double up).\n"
-        "- For search tools, the `query` param must be valid USPTO query syntax "
-        "(e.g. use double quotes for exact phrases, fieldName:value for filters).\n"
-        "- The patent_id from context MUST be included in the path or query.\n\n"
+        "参数生成规则（CRITICAL）：\n"
+        "1. 基于选中工具的 Params 模板来生成参数，保持完全相同的 JSON 结构\n"
+        "2. 只能修改模板中与用户目标相关的字段值，不要新增或删除字段\n"
+        "3. 不要修改 method、Content-Type、header 等固定字段\n"
+        "4. 对于搜索工具：修改 body.q 为实际搜索词，可调整 body.pagination.limit\n"
+        "5. 对于下载工具：在 path 中填入 patent_id（如 /{patent_id}/documents）\n"
+        "6. 如果工具 URL 已包含 /applications，path 只需 /{patent_id}/documents\n\n"
         "Return JSON:\n"
         '{"knowledge_id": <selected tool id>, '
         '"reason": "<why this tool>", '
-        '"params": {"path": "<URL path segment if needed>", '
-        '"query": {"param_name": "value", ...}, '
-        '"body": {}}}'
+        '"params": <完整的 params 对象，基于模板修改，保持原结构>}'
     )
 
     result = await flash_provider.complete_json(
