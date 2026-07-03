@@ -952,7 +952,9 @@ async def _run_pipeline(
             from sources.long_task.user_queue import complete_user_task
             next_task_id = complete_user_task(str(user_id), task_id)
             if next_task_id:
-                # Read the queued task's params from MySQL and dispatch it
+                # Read the queued task's params from MySQL and dispatch it.
+                # If this fails, the stale-lock detection in try_start_user_task
+                # will automatically clean up on the next submission.
                 import json as _json
                 from sources.knowledge.knowledge import get_db_connection as _gdc
                 conn = _gdc()

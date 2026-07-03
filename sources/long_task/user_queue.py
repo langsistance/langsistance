@@ -21,14 +21,22 @@ def _r():
 
 
 def _is_task_terminal(task_id: str) -> bool:
-    """Check if a task has reached a terminal state (completed or failed)."""
+    """Check if a task has reached a terminal state (completed, failed, or stuck queued)."""
     try:
         from sources.long_task.status_manager import get_task_status
         status = get_task_status(task_id)
         if not status:
             # Status key doesn't exist — task never started or was cleaned up
             return True
-        return status.get('status') in ('completed', 'failed')
+        task_status = status.get('status', '')
+        if task_status in ('completed', 'failed'):
+            return True
+        if task_status in ('queued', 'pending'):
+            # Task is marked as 'running' in the user queue but its actual status
+            # is still queued/pending — it was dequeued but never dispatched.
+            # Treat as stale so the next task can take over.
+            return True
+        return False
     except Exception:
         return True  # If we can't check, assume stale
 
