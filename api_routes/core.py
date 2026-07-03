@@ -332,10 +332,15 @@ def _prepare_long_task_inputs(
         patent_source = llm_result.get("patent_source", "auto")
         llm_ids = llm_result.get("patent_ids", []) or []
 
-        # Trust LLM for ID extraction (regex catches too many false positives
-        # like parent/provisional/continuation numbers in patent metadata).
-        # Fall back to regex only when LLM returns zero IDs.
-        patent_ids = list(dict.fromkeys(llm_ids)) if llm_ids else list(dict.fromkeys(regex_ids))
+        # For direct_ids: trust the LLM's patent_ids exactly as returned.
+        # If it returned an empty list, the query has no IDs and should
+        # fall through to search mode — do NOT backfill from regex on
+        # history (which would pick up unrelated 8-digit numbers).
+        # For conversation_refs: fall back to regex if LLM returned no IDs.
+        if scenario == "direct_ids":
+            patent_ids = list(dict.fromkeys(llm_ids))
+        else:
+            patent_ids = list(dict.fromkeys(llm_ids)) if llm_ids else list(dict.fromkeys(regex_ids))
 
         if scenario == "conversation_refs":
             patent_texts = {}
