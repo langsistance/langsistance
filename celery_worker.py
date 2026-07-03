@@ -342,14 +342,19 @@ async def _run_pipeline(
     if not is_file_upload_mode and not is_direct_id_mode and not patent_ids:
         query_text = params.get('query', '')
         conv_history = params.get('conversation_history', [])
-
-        # Build combined text: query + ALL conversation messages (user & assistant)
-        combined_parts = [query_text] if query_text else []
-        for msg in (conv_history or []):
-            content = msg.get('content', '') if isinstance(msg, dict) else ''
-            if content and content not in combined_parts:  # deduplicate
-                combined_parts.append(content)
-        combined_text = "\n".join(combined_parts)
+        scenario = params.get('scenario', '')
+        # Only search conversation history for IDs when the user is explicitly
+        # referencing previous results (conversation_refs). For standalone queries
+        # (direct_ids or search), limit to the query text only.
+        if scenario == 'conversation_refs':
+            combined_parts = [query_text] if query_text else []
+            for msg in (conv_history or []):
+                content = msg.get('content', '') if isinstance(msg, dict) else ''
+                if content and content not in combined_parts:
+                    combined_parts.append(content)
+            combined_text = "\n".join(combined_parts)
+        else:
+            combined_text = query_text
 
         if combined_text and len(combined_text) > 20:
             _pipeline_logger.info(

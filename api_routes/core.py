@@ -800,6 +800,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                 "conversation_history": conversation_history,
                 "patent_file_refs": patent_file_refs,
                 "user_id": str(local_user_id),
+                "scenario": scenario,
             }
 
             if queue_result == "running":
@@ -1039,6 +1040,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                             'scene_id': scene_id,
                             'conversation_history': conv_history,
                             'user_id': str(local_user_id),
+                            'scenario': scenario,
                         }
                         if patent_texts:
                             celery_params['patent_texts'] = patent_texts
