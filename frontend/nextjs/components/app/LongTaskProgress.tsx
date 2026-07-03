@@ -135,13 +135,28 @@ const PHASE_ICONS: Record<string, JSX.Element> = {
 }
 
 const PHASES = [
-  { key: 'extracting_text', label: '文件解析' },
-  { key: 'searching_patents', label: '检索' },
+  { key: 'extracting_text', label: '文件解析', fileUploadOnly: true },
+  { key: 'searching_patents', label: '专利检索' },
   { key: 'generating_columns', label: '分析框架' },
   { key: 'analyzing', label: '专利分析' },
   { key: 'generating_report', label: '报告撰写' },
   { key: 'exporting', label: '文件导出' },
 ]
+
+// Keywords used to match backend status messages to phases for active highlighting.
+// The backend sends Chinese status messages; we check if any keyword appears in stepLabel.
+const PHASE_MATCH_KEYWORDS: Record<string, string[]> = {
+  extracting_text: ['文件解析', '解析上传'],
+  searching_patents: ['检索'],
+  generating_columns: ['分析框架', '分析维度'],
+  analyzing: ['正在分析', '下载专利', '专利分析', '已完成'],
+  generating_report: ['报告', '撰写'],
+  exporting: ['Word', 'PDF', '导出'],
+}
+
+function isFileUploadMode(content: string): boolean {
+  return content.includes('上传文件') || content.includes('extracting_text')
+}
 
 export default function LongTaskProgress({ content, streaming }: Props) {
   const state = parseTaskContent(content)
@@ -182,7 +197,7 @@ export default function LongTaskProgress({ content, streaming }: Props) {
       {/* Phase indicators */}
       {(state.phase === 'running' || state.phase === 'submitted') && (
         <div className="lt-phases">
-          {PHASES.map((p) => {
+          {PHASES.filter(p => !p.fileUploadOnly || isFileUploadMode(content)).map((p) => {
             // Determine which phases are active/completed based on progress
             let status: 'done' | 'active' | 'pending' = 'pending'
             if (p.key === 'extracting_text' && state.progress >= 20) status = 'done'
@@ -193,8 +208,9 @@ export default function LongTaskProgress({ content, streaming }: Props) {
             else if (p.key === 'generating_report' && state.progress >= 80) status = state.progress < 90 ? 'active' : 'done'
             else if (p.key === 'exporting' && state.progress >= 92) status = 'active'
 
-            // Highlight current based on step label
-            if (state.stepLabel.includes(p.label) && status !== 'done') status = 'active'
+            // Highlight current based on step label keywords
+            const keywords = PHASE_MATCH_KEYWORDS[p.key] || [p.label]
+            if (keywords.some(kw => state.stepLabel.includes(kw)) && status !== 'done') status = 'active'
 
             return (
               <div
