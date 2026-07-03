@@ -529,6 +529,7 @@ async def _run_pipeline(
             f"selected={selected is not None}, "
             f"tool_title={selected.get('tool', {}).title if selected else 'N/A'}, "
             f"tool_url={selected.get('tool', {}).url if selected else 'N/A'}, "
+            f"llm_params={json.dumps(selected.get('params', {}), ensure_ascii=False) if selected else 'N/A'}, "
             f"reason={selected.get('reason', '') if selected else ''}"
         )
         if selected:
@@ -610,7 +611,7 @@ async def _run_pipeline(
                     f"text_length={len(patent_text)}"
                 )
             else:
-                patent_text = await _download_patent_via_scene_or_fallback(
+                patent_text, fallback_binary = await _download_patent_via_scene_or_fallback(
                     patent_id=patent_id,
                     params=params,
                     scene_candidates=scene_candidates,
@@ -622,7 +623,9 @@ async def _run_pipeline(
             _pipeline_logger.info(
                 f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] download_done — "
                 f"patent_id={patent_id}, "
-                f"text_length={len(patent_text) if patent_text else 0}"
+                f"text_length={len(patent_text) if patent_text else 0}, "
+                f"binary_cached={fallback_binary is not None}, "
+                f"binary_len={len(fallback_binary) if fallback_binary else 0}"
             )
 
             update_task_status(task_id, 'analyzing',
@@ -651,7 +654,15 @@ async def _run_pipeline(
             else:
                 # Text insufficient — need binary for vision or OCR
                 pdf_bytes = None
-                if is_file_upload_mode:
+                if fallback_binary is not None:
+                    # Reuse binary already downloaded during text extraction
+                    pdf_bytes = fallback_binary
+                    _pipeline_logger.info(
+                        f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
+                        f"vision_using_cached_binary — patent_id={patent_id}, "
+                        f"len={len(pdf_bytes)}"
+                    )
+                elif is_file_upload_mode:
                     # Read the uploaded file from disk for vision/OCR
                     ref = next(
                         (r for r in patent_file_refs
@@ -988,8 +999,14 @@ async def _download_patent_via_scene_or_fallback(
     flash_provider,
     download_patent_document,
     id_url_map: dict | None = None,
-) -> str:
-    """Download patent text via scene tool, direct USPTO API, or fallback."""
+) -> tuple[str | None, bytes | None]:
+    """Download patent text via scene tool, direct USPTO API, or fallback.
+
+    Returns (text, binary):
+      - (text, None)          — text extracted successfully
+      - (None, binary_bytes)  — binary cached for vision/OCR fallback
+      - (None, None)          — download failed entirely
+    """
     doc_url = (id_url_map or {}).get(patent_id, '')
     patent_source = params.get('patent_source', 'cnipa')
 
@@ -1030,7 +1047,7 @@ async def _download_patent_via_scene_or_fallback(
                      or 'document_code' in text.lower())
             )
             if text and len(text) > 50 and not is_doc_list:
-                return text
+                return (text, None)
             if is_doc_list:
                 _pipeline_logger.info(
                     f"[download] scene_tool_returned_doc_list "
@@ -1046,30 +1063,41 @@ async def _download_patent_via_scene_or_fallback(
 
     # ── Step 2: Direct USPTO API for US patents ──
     if patent_source == 'uspto':
-        uspto_text = await _download_uspto_patent_direct(patent_id, flash_provider)
+        uspto_text, uspto_binary = await _download_uspto_patent_direct(patent_id, flash_provider)
         if uspto_text and len(uspto_text) > 100:
-            return uspto_text
-        # Text extraction failed — return None so the pipeline Phase 2
-        # can try vision/OCR fallback (re-downloads PDF binary for vision LLM).
+            return (uspto_text, None)
+        if uspto_binary is not None:
+            _pipeline_logger.info(
+                f"[download] uspto_text_extraction_failed_but_binary_cached — "
+                f"patent_id={patent_id}, binary_len={len(uspto_binary)}, "
+                f"passing to vision/OCR fallback"
+            )
+            return (None, uspto_binary)
         _pipeline_logger.info(
             f"[download] uspto_text_extraction_failed — patent_id={patent_id}, "
-            f"falling through to vision/OCR in pipeline"
+            f"no binary cached, falling through to vision/OCR re-download"
         )
-        return None
+        return (None, None)
 
     # ── Step 3: Hardcoded download (CNIPA or other sources) ──
     _pipeline_logger.info(
         f"[download] fallback — patent_id={patent_id}, "
         f"patent_source={patent_source}"
     )
-    return await download_patent_document(patent_id, patent_source)
+    text = await download_patent_document(patent_id, patent_source)
+    return (text, None) if text else (None, None)
 
 
-async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> str | None:
+async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> tuple[str | None, bytes | None]:
     """Download USPTO patent document text directly (two-step).
 
     Step 1: GET /api/v1/patent/applications/{appNumber}/documents → document list
     Step 2: LLM picks the specification → GET its download URL → return text
+
+    Returns (text, binary):
+      - (text, None)          — text extracted successfully
+      - (None, binary_bytes)  — all specs failed text extraction, but binary cached
+      - (None, None)          — download failed entirely
     """
     import asyncio
     import json as _json
@@ -1084,7 +1112,7 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
             _pipeline_logger.warning(
                 f"[download] uspto_invalid_app_number — patent_id={patent_id}"
             )
-            return None
+            return (None, None)
         headers = {'Accept': 'application/json'}
         uspto_key = os.getenv('USPTO_API_KEY', '')
         if uspto_key:
@@ -1103,7 +1131,7 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
             _pipeline_logger.warning(
                 f"[download] uspto_step1_failed — status={resp.status_code}"
             )
-            return None
+            return (None, None)
 
         doc_list = resp.json() if resp.text else {}
         documents = (
@@ -1125,7 +1153,7 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
             _pipeline_logger.warning(
                 f"[download] uspto_no_documents — patent_id={app_number}"
             )
-            return None
+            return (None, None)
 
         # Step 2: Collect ALL specification documents (there may be multiple)
         spec_docs: list[dict] = []
@@ -1187,7 +1215,7 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
             _pipeline_logger.warning(
                 f"[download] uspto_no_spec_found — patent_id={app_number}"
             )
-            return None
+            return (None, None)
 
         _pipeline_logger.info(
             f"[download] uspto_spec_candidates — count={len(spec_docs)}, "
@@ -1198,6 +1226,7 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
         # A single patent application may have multiple SPEC files; downloading
         # all of them gives the most complete specification.
         all_parts: list[str] = []
+        first_binary_fallback: bytes | None = None
         for attempt, spec_doc in enumerate(spec_docs):
             spec_code = spec_doc.get('documentCode') or spec_doc.get('documentTypeCode', '?')
 
@@ -1209,7 +1238,7 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
                 f"url={spec_url[:100]}"
             )
 
-            text = await _download_uspto_spec_with_redirect(
+            text, binary = await _download_uspto_spec_with_redirect(
                 spec_doc, app_number, headers,
             )
             chars = len(text.strip()) if text else 0
@@ -1224,6 +1253,12 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
                     f"[download] uspto_spec[{attempt+1}] skipped "
                     f"({chars} chars)"
                 )
+                if binary is not None and first_binary_fallback is None:
+                    first_binary_fallback = binary
+                    _pipeline_logger.info(
+                        f"[download] uspto_spec[{attempt+1}] binary_cached "
+                        f"for vision fallback — len={len(binary)}"
+                    )
 
         if all_parts:
             combined = "\n\n".join(all_parts)
@@ -1231,18 +1266,25 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
                 f"[download] uspto_all_specs_done — "
                 f"parts={len(all_parts)}, total_chars={len(combined)}"
             )
-            return combined
+            return (combined, None)
+
+        if first_binary_fallback is not None:
+            _pipeline_logger.info(
+                f"[download] uspto_all_text_failed_but_binary_cached — "
+                f"patent_id={app_number}, binary_len={len(first_binary_fallback)}"
+            )
+            return (None, first_binary_fallback)
 
         _pipeline_logger.warning(
             f"[download] uspto_all_specs_failed — patent_id={app_number}, "
             f"tried={len(spec_docs)}"
         )
-        return None
+        return (None, None)
     except Exception as e:
         _pipeline_logger.warning(
             f"[download] uspto_direct_error — patent_id={patent_id}, error={e}"
         )
-        return None
+        return (None, None)
 
 
 def _guess_format_from_url(url: str) -> str:
@@ -1565,12 +1607,17 @@ async def _download_uspto_spec_with_redirect(
     spec_doc: dict,
     app_number: str,
     headers: dict,
-) -> str | None:
+) -> tuple[str | None, bytes | None]:
     """Download USPTO specification, following redirect URLs if needed.
 
     USPTO download URLs may return a text/JSON body containing another URL
     (e.g. "Please use redirect URL: https://...").  We follow at most one
     redirect.  Pattern taken from uspto_download.py.
+
+    Returns (text, binary):
+      - (text, None)          — text extracted successfully
+      - (None, binary_bytes)  — binary downloaded but text extraction failed
+      - (None, None)          — download failed entirely
     """
     import asyncio
 
@@ -1582,14 +1629,14 @@ async def _download_uspto_spec_with_redirect(
             f"[download] uspto_spec_no_url — app={app_number}, "
             f"spec_doc_keys={list(spec_doc.keys()) if spec_doc else 'N/A'}"
         )
-        return None
+        return (None, None)
     for hop in range(2):  # max 1 redirect
         resp = await _uspto_get_with_retry(spec_url, headers, timeout=30)
         if resp.status_code != 200:
             _pipeline_logger.warning(
                 f"[download] uspto_spec_hop{hop}_failed — status={resp.status_code}"
             )
-            return None
+            return (None, None)
 
         content_type = resp.headers.get('Content-Type', '').lower()
         content = resp.text or ''
@@ -1609,12 +1656,12 @@ async def _download_uspto_spec_with_redirect(
                 skip_pdf_extraction=True,
             )
             if extracted and len(extracted) > 100:
-                return extracted
+                return (extracted, None)
             _pipeline_logger.warning(
                 f"[download] uspto_spec_extract_empty — "
                 f"type={content_type}, len={len(resp.content)}"
             )
-            return None
+            return (None, resp.content)
 
         # Check if the text response contains a redirect URL
         stripped = content.strip()
@@ -1622,7 +1669,7 @@ async def _download_uspto_spec_with_redirect(
             _pipeline_logger.warning(
                 f"[download] uspto_spec_empty — app={app_number}"
             )
-            return None
+            return (None, None)
 
         # Try to extract a redirect URL from the response
         from sources.dynamic_tool_params import _extract_first_url
@@ -1638,9 +1685,9 @@ async def _download_uspto_spec_with_redirect(
         _pipeline_logger.info(
             f"[download] uspto_spec_done — len={len(stripped)}"
         )
-        return stripped
+        return (stripped, None)
 
-    return None
+    return (None, None)
 
 
 # ── Binary download for vision fallback ──────────────────────────────────────

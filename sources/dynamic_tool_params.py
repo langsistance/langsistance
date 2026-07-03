@@ -278,6 +278,15 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
             f"  body: {json.dumps(request_body, ensure_ascii=False) if request_body else 'None'}"
         )
 
+    # 对 api.uspto.gov 请求打印完整请求信息
+    if "api.uspto.gov" in url:
+        logger.info(
+            f"[USPTO REQUEST] {method} {url}\n"
+            f"  params: {json.dumps(request_params, ensure_ascii=False)}\n"
+            f"  headers: {json.dumps({k: v for k, v in headers.items() if k.lower() != 'x-api-key'}, ensure_ascii=False)}\n"
+            f"  body: {json.dumps(request_body, ensure_ascii=False) if request_body else 'None'}"
+        )
+
     response = outbound_http.request(method, url, purpose="backend_tool", **request_kwargs)
 
     # 对 open.zldsj.com 请求打印完整返回值
@@ -291,6 +300,21 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
             f"[ZLDJS RESPONSE] status={response.status_code}\n"
             f"  headers: {json.dumps(dict(response.headers), ensure_ascii=False)}\n"
             f"  body: {resp_body}"
+        )
+
+    # 对 api.uspto.gov 请求打印响应摘要
+    if "api.uspto.gov" in url:
+        resp_summary = ""
+        try:
+            if response.text:
+                resp_summary = response.text[:5000]
+        except Exception:
+            resp_summary = "(unable to decode response body)"
+        logger.info(
+            f"[USPTO RESPONSE] status={response.status_code}, "
+            f"content_type={response.headers.get('Content-Type', '?')}, "
+            f"body_len={len(response.content)}, "
+            f"body_preview={resp_summary[:2000]}"
         )
 
     if response.status_code != 200:
