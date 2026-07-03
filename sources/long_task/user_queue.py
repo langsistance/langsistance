@@ -21,8 +21,9 @@ def _r():
 
 
 def _is_task_terminal(task_id: str) -> bool:
-    """Check if a task has reached a terminal state (completed, failed, or stuck queued)."""
+    """Check if a task has reached a terminal state (completed, failed, stuck, or timed out)."""
     try:
+        import time
         from sources.long_task.status_manager import get_task_status
         status = get_task_status(task_id)
         if not status:
@@ -34,7 +35,11 @@ def _is_task_terminal(task_id: str) -> bool:
         if task_status in ('queued', 'pending'):
             # Task is marked as 'running' in the user queue but its actual status
             # is still queued/pending — it was dequeued but never dispatched.
-            # Treat as stale so the next task can take over.
+            return True
+        # Heartbeat check: if the task hasn't updated its status in 5+ minutes,
+        # it's likely dead or stuck (e.g. Celery worker crashed, infinite retry).
+        last_update = status.get('last_update', 0)
+        if time.time() - last_update > 300:
             return True
         return False
     except Exception:

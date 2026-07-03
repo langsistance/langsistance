@@ -176,12 +176,21 @@ def execute_patent_analysis(self, task_id: str, params: dict):
         try:
             raise self.retry(exc=e)
         except self.MaxRetriesExceededError:
-            # Permanent failure — clear user's running key so queued tasks proceed
+            # Permanent failure — clear user's running key so queued tasks proceed.
+            # Delete the running key directly first (safety net), then try
+            # complete_user_task to dispatch the next queued task.
             _pipeline_logger.error(
                 f"[task={task_id}] MAX_RETRIES_EXCEEDED — clearing user queue lock"
             )
             user_id = params.get('user_id', '')
             if user_id:
+                try:
+                    from sources.knowledge.knowledge import get_redis_connection
+                    r = get_redis_connection()
+                    running_key = f"lt:user:{user_id}:running"
+                    r.delete(running_key)
+                except Exception:
+                    pass
                 try:
                     from sources.long_task.user_queue import complete_user_task
                     next_id = complete_user_task(str(user_id), task_id)
