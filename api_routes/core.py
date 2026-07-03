@@ -773,7 +773,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                          "pending"))
                     conn.commit()
             finally:
-                conn.close()
+                pass  # conn is closed below after both branches
 
             from sources.long_task.user_queue import try_start_user_task
             queue_result = try_start_user_task(str(local_user_id), task_id)
@@ -800,8 +800,10 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                             query_text="[file upload]")
                 event_type = "long_task_created"
                 event_status = "running"
+                conn.close()
             else:
                 # Queued — update MySQL status, worker will pick it up later
+                conn.ping(reconnect=True)
                 with conn.cursor() as cur:
                     cur.execute(
                         "UPDATE long_tasks SET status = 'queued' WHERE task_id = %s",
@@ -816,6 +818,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                             query_text="[file upload]")
                 event_type = "long_task_created"
                 event_status = "queued"
+                conn.close()
 
             # Return SSE with long_task_created
             async def generate_sse():
