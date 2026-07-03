@@ -20,6 +20,19 @@ def _r():
     return get_redis_connection()
 
 
+def _is_task_terminal(task_id: str) -> bool:
+    """Check if a task has reached a terminal state (completed or failed)."""
+    try:
+        from sources.long_task.status_manager import get_task_status
+        status = get_task_status(task_id)
+        if not status:
+            # Status key doesn't exist — task never started or was cleaned up
+            return True
+        return status.get('status') in ('completed', 'failed')
+    except Exception:
+        return True  # If we can't check, assume stale
+
+
 def try_start_user_task(user_id: str, task_id: str) -> str:
     """Attempt to start a long task for *user_id*.
 
@@ -32,17 +45,24 @@ def try_start_user_task(user_id: str, task_id: str) -> str:
     queue_key = _USER_QUEUE_KEY.format(user_id=user_id)
 
     current = r.get(running_key)
-    if current and (current.decode() if isinstance(current, bytes) else current) != task_id:
-        r.rpush(queue_key, task_id)
-        # Set an initial Redis status so the frontend polling can see the
-        # task exists (otherwise it would show "unknown" until the worker
-        # picks it up).
-        from sources.long_task.status_manager import update_task_status as _uts
-        _uts(task_id, "queued", 0, "排队中，等待当前任务完成...")
-        _logger.info(
-            f"[queue] task_queued — user_id={user_id}, task_id={task_id}"
-        )
-        return "queued"
+    if current:
+        current_str = current.decode() if isinstance(current, bytes) else current
+        if current_str != task_id:
+            # Check if the "running" task is actually dead (crashed without cleanup)
+            if _is_task_terminal(current_str):
+                _logger.info(
+                    f"[queue] stale_lock_detected — running_task={current_str} "
+                    f"is terminal, taking over"
+                )
+                r.delete(running_key)
+            else:
+                r.rpush(queue_key, task_id)
+                from sources.long_task.status_manager import update_task_status as _uts
+                _uts(task_id, "queued", 0, "排队中，等待当前任务完成...")
+                _logger.info(
+                    f"[queue] task_queued — user_id={user_id}, task_id={task_id}"
+                )
+                return "queued"
 
     r.set(running_key, task_id, ex=86400)  # 24 h TTL
     _logger.info(
