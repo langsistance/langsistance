@@ -69,9 +69,8 @@ def execute_patent_analysis(self, task_id: str, params: dict):
     max_patents = ltc['max_patents']
     vision_enabled = ltc.get('vision_enabled', True)
 
-    # ---- Input dedup + truncation (deterministic ordering) ----
+    # ---- Input dedup + source-based truncation ----
     patent_ids = sorted(set(params.get('patent_ids', [])))
-    patent_ids = patent_ids[:max_patents]
     # Auto-detect USPTO: pure 8-digit numbers are USPTO application IDs
     if patent_ids and params.get('patent_source', '') != 'uspto':
         all_uspto = all(
@@ -84,11 +83,13 @@ def execute_patent_analysis(self, task_id: str, params: dict):
                 f"all {len(patent_ids)} IDs are 8-digit, "
                 f"overriding patent_source to 'uspto'"
             )
+    source_max = _get_max_patents_for_source(params.get('patent_source', ''), max_patents)
+    patent_ids = patent_ids[:source_max]
     total = len(patent_ids)
 
     _pipeline_logger.info(
         f"[task={task_id}] CONFIG — "
-        f"model_family={model_family}, max_patents={max_patents}, "
+        f"model_family={model_family}, max_patents={source_max}, "
         f"patent_ids_count={len(patent_ids)}, "
         f"patent_ids={patent_ids[:10]}{'...' if len(patent_ids) > 10 else ''}"
     )
@@ -485,7 +486,7 @@ async def _run_pipeline(
                             f"[task={task_id}] PHASE0 section[{i}] LLM failed: {e}"
                         )
 
-            patent_ids = sorted(set(normalized))[:max_patents]
+            patent_ids = sorted(set(normalized))
             # If all extracted IDs are pure 8-digit → almost certainly USPTO
             if patent_ids:
                 all_uspto_like = all(
@@ -499,6 +500,8 @@ async def _run_pipeline(
                     )
                     patent_source = 'uspto'
                 params['patent_source'] = patent_source
+            source_max = _get_max_patents_for_source(patent_source, max_patents)
+            patent_ids = patent_ids[:source_max]
             _pipeline_logger.info(
                 f"[task={task_id}] PHASE0 llm_extracted_patent_ids — "
                 f"count={len(patent_ids)}, "
@@ -550,6 +553,17 @@ async def _run_pipeline(
                 selected['tool'], params.get('patent_source', 'cnipa'),
             )
         if patent_ids:
+            source_max = _get_max_patents_for_source(
+                params.get('patent_source', 'cnipa'), max_patents,
+            )
+            if len(patent_ids) > source_max:
+                _pipeline_logger.info(
+                    f"[task={task_id}] PHASE0 truncating — "
+                    f"source={params.get('patent_source', 'cnipa')}, "
+                    f"max={source_max}, found={len(patent_ids)}, "
+                    f"truncated_to={source_max}"
+                )
+                patent_ids = patent_ids[:source_max]
             total = len(patent_ids)
             pending = patent_ids
             update_task_status(task_id, 'searching_patents', 5,
@@ -981,6 +995,17 @@ async def _run_pipeline(
 
 
 # ── Phase 0 helpers ─────────────────────────────────────────────────────────
+
+def _get_max_patents_for_source(patent_source: str, default_max: int) -> int:
+    """Return the per-source patent count cap.
+
+    CNIPA (China) → max 10, USPTO (US) → max 50.
+    Unknown / other → conservative 10.
+    """
+    if patent_source == 'uspto':
+        return min(default_max, 50)
+    return min(default_max, 10)
+
 
 def _infer_source_from_tool(tool_info, default: str = 'cnipa') -> str:
     """Infer patent source (cnipa/uspto) from a tool's URL."""

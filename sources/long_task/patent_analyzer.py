@@ -4,7 +4,7 @@
 def build_failed_row(patent_id: str, reason: str) -> dict:
     """Return a placeholder row for a patent that failed to process."""
     return {
-        'patent_id': patent_id,
+        '专利号': patent_id,
         '_failed': True,
         '_failure_reason': reason,
     }
@@ -109,10 +109,10 @@ async def analyze_single_patent(
 请按维度分析并返回 JSON。"""
 
     result = await provider.complete_json(system_prompt, user_content)
-    result['patent_id'] = patent_id
 
-    # ── Key alignment: ensure all result keys match the expected column names ──
-    aligned: dict = {'patent_id': patent_id}
+    # ── Key alignment: use the actual Chinese column name for patent ID ──
+    patent_id_col = '专利号'  # columns[0] is always 专利号
+    aligned: dict = {patent_id_col: patent_id}
 
     # Collect LLM-returned keys that are NOT the expected column names
     extra_keys = [k for k in result if k not in columns and k != 'patent_id']
@@ -230,7 +230,7 @@ async def analyze_patent_with_vision(
             f"pdf2image returned 0 pages"
         )
         return {
-            'patent_id': patent_id,
+            '专利号': patent_id,
             '_failed': True,
             '_failure_reason': 'No extractable images found in patent PDF — '
                               'vision analysis not possible.',
@@ -328,7 +328,7 @@ async def analyze_patent_with_vision(
         except Exception as e2:
             _plog.warning(f"vision_api_failed — {e2}")
             return {
-                'patent_id': patent_id,
+                '专利号': patent_id,
                 '_failed': True,
                 '_failure_reason': f'Vision API call failed: {str(e2)[:200]}',
             }
@@ -362,15 +362,14 @@ async def analyze_patent_with_vision(
             f"raw_preview={(result_raw or '')[:200]}"
         )
         return {
-            'patent_id': patent_id,
+            '专利号': patent_id,
             '_failed': True,
             '_failure_reason': f'Vision model returned unparseable response: {(result_raw or "")[:200]}',
         }
 
-    result['patent_id'] = patent_id
-
-    # Key alignment (same logic as analyze_single_patent)
-    aligned: dict = {'patent_id': patent_id}
+    # Key alignment: use the actual Chinese column name for patent ID
+    patent_id_col = '专利号'
+    aligned: dict = {patent_id_col: patent_id}
     extra_keys = [k for k in result if k not in columns and k != 'patent_id']
 
     if len(extra_keys) == len(non_id_columns):
