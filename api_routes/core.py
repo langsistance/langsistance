@@ -732,6 +732,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                 app_logger=app_logger,
             )
             patent_source = inputs["patent_source"]
+            scenario = inputs["scenario"]
 
             reused_session = False
             existing_session_id = (form.get("session_id") or "").strip()
