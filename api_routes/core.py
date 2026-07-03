@@ -965,6 +965,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         patent_ids = inputs["patent_ids"]
                         patent_source = inputs["patent_source"]
                         patent_texts = inputs["patent_texts"] or {}
+                        scenario = inputs["scenario"]
 
                         # ── Session reuse: if the client already has a session, append to it ──
                         reused_session = False
