@@ -617,6 +617,7 @@ async def _run_pipeline(
 
             # Try scene tool download first, fall back to hardcoded download
             # In file-upload mode, use pre-extracted text from conversation_history
+            fallback_binary = None
             if is_file_upload_mode:
                 patent_text = patent_texts.get(patent_id, '')
                 _pipeline_logger.info(
