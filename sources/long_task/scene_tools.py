@@ -209,7 +209,13 @@ async def select_tool(
         "   — 模板中的示例值展示了该字段的预期格式和语法，参照示例的格式来替换值\n"
         "3. 不要修改 method、Content-Type、header 等固定字段\n"
         "4. 如果模板中某个字段的值与用户目标无关，保持原值不变\n"
-        "5. 如果工具 URL 已包含 /applications，path 只需 /{patent_id}/documents\n\n"
+        "5. 如果工具 URL 已包含 /applications，path 只需 /{patent_id}/documents\n"
+        "6. CRITICAL — assignee 搜索规则：\n"
+        "   — assignee 搜索的 body.q 只能用公司名检索，不要附加标题、技术关键词等额外条件\n"
+        "   — 即使用户提到了某个技术领域（如'自动驾驶'），也只搜公司名\n"
+        "   — 技术主题的筛选留给后续的专利分析阶段处理\n"
+        "   — 反例：q: \"Tesla AND autonomous\"（错）\n"
+        "   — 正例：q: \"Tesla Inc.\" 或 q: \"Tesla Motors\"（对）\n\n"
         "Return JSON:\n"
         '{"knowledge_id": <selected tool id>, '
         '"reason": "<why this tool>", '
