@@ -161,6 +161,7 @@ function isFileUploadMode(content: string): boolean {
 export default function LongTaskProgress({ content, streaming }: Props) {
   const state = parseTaskContent(content)
   if (!state) return null
+  console.log('[LongTaskProgress] progress=%d content=%s', state.progress, content.slice(0, 80))
 
   return (
     <div className="lt-progress-card">
