@@ -71,7 +71,7 @@ export default function Chat() {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
-  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pollTimersRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map())
   const isNearBottomRef = useRef(true)
   const [transientStatus, setTransientStatus] = useState('')
   const [enabledScenes, setEnabledScenes] = useState<any[]>([])
@@ -553,15 +553,22 @@ export default function Chat() {
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
   }
 
-  function stopLongTaskPolling() {
-    if (pollTimerRef.current) {
-      clearInterval(pollTimerRef.current)
-      pollTimerRef.current = null
+  function stopLongTaskPolling(taskId?: string) {
+    if (taskId) {
+      const timer = pollTimersRef.current.get(taskId)
+      if (timer) {
+        clearInterval(timer)
+        pollTimersRef.current.delete(taskId)
+      }
+    } else {
+      pollTimersRef.current.forEach(timer => clearInterval(timer))
+      pollTimersRef.current.clear()
     }
   }
 
   function startLongTaskPolling(taskId: string, assistantId: string) {
-    stopLongTaskPolling()
+    // Stop any existing poll for this taskId
+    stopLongTaskPolling(taskId)
 
     async function poll() {
       try {
@@ -590,7 +597,7 @@ export default function Chat() {
         const progress = data.progress != null ? `[${data.progress}%]` : ''
 
         if (data.status === 'completed' || data.status === 'success') {
-          stopLongTaskPolling()
+          stopLongTaskPolling(taskId)
           const files = (data.report_files || [])
             .map((f: { format: string }) => `[${f.format.toUpperCase()}](${getLongTaskReportUrl(taskId, f.format as 'pdf' | 'docx')})`)
             .join(' | ')
@@ -600,7 +607,7 @@ export default function Chat() {
               : msg
           ))
         } else if (data.status === 'failed' || data.status === 'error') {
-          stopLongTaskPolling()
+          stopLongTaskPolling(taskId)
           setMessages((m) => m.map(msg =>
             msg.id === assistantId
               ? { ...msg, content: `${t('chat.longTaskFailed')} ${data.error_message || ''}` }
@@ -622,7 +629,7 @@ export default function Chat() {
 
     // Poll immediately, then every 3s
     poll()
-    pollTimerRef.current = setInterval(poll, 3000)
+    pollTimersRef.current.set(taskId, setInterval(poll, 3000))
   }
 
   // Cleanup poll timer on unmount
