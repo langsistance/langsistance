@@ -138,22 +138,20 @@ export default function Chat() {
         if (data.messages && Array.isArray(data.messages)) {
           const loaded = data.messages
             .filter((m: { role: string; content: string }) => m.role && m.content)
-            .map((m: { role: string; content: string; taskId?: string }, i: number) => {
-              let taskId = (m as any).taskId || undefined
-              // Backfill: if message has 🔬/✅ content but no taskId,
-              // extract it from the report URL in the content.
-              if (!taskId) {
-                const tidMatch = (m.content || '').match(/\/long_task\/(lt_\w+)\//)
-                if (tidMatch) taskId = tidMatch[1]
-              }
-              return {
-                id: `hist_${i}_${Date.now()}`,
-                role: m.role,
-                content: m.content,
-                taskId,
-                artifacts: [],
-              }
-            })
+            .map((m: { role: string; content: string; taskId?: string }, i: number) => ({
+              id: `hist_${i}_${Date.now()}`,
+              role: m.role,
+              content: m.content,
+              taskId: (m as any).taskId || undefined,
+              artifacts: [],
+            }))
+            // Strip orphan long-task messages (🔬/✅/❌ without taskId).
+            // These were saved before taskId was attached during SSE.
+            // The resume loop below will recreate them with proper taskId,
+            // avoiding duplicates that never update.
+            .filter((m: { taskId?: string; content: string }) =>
+              m.taskId || (!m.content.includes('🔬') && !m.content.includes('✅') && !m.content.includes('❌'))
+            )
           if (loaded.length > 0) {
             setMessages(loaded)
             // Scroll to bottom after loading session messages
@@ -221,9 +219,6 @@ export default function Chat() {
                   .replace('{progress}', progress)
                   .replace('{phase}', phaseLabel)
               : ''
-            // Capture the actual message ID BEFORE setMessages (the closure
-            // captures `m` but we need the ID for polling — it must match
-            // the message that gets created or updated below).
             let pollMsgId = `lt_resume_${tid}`
             setMessages(m => {
               const existingIdx = m.findIndex(msg => msg.taskId === tid)
@@ -231,24 +226,8 @@ export default function Chat() {
                 pollMsgId = m[existingIdx].id
                 return replaceAssistantMessage(m, pollMsgId, progressContent || '🔬 深度分析进行中...')
               }
-              // No taskId match — find an orphan message (🔬/✅/❌ without taskId)
-              // that matches this task's status, and claim it by attaching taskId.
-              const statusMarker = (status?.status === 'completed' || status?.status === 'success') ? '✅'
-                : (status?.status === 'failed' || status?.status === 'error') ? '❌'
-                : '🔬'
-              const orphanIdx = m.findIndex(msg =>
-                msg.role === 'assistant' && !msg.taskId
-                && msg.content.includes(statusMarker)
-              )
-              if (orphanIdx >= 0) {
-                pollMsgId = m[orphanIdx].id
-                return m.map(msg =>
-                  msg.id === pollMsgId
-                    ? { ...msg, taskId: tid, content: progressContent || msg.content }
-                    : msg
-                )
-              }
-              // No orphan message either — create new one
+              // No existing message — create one (orphan messages were already
+              // stripped during load, so we won't get duplicates here)
               return [...m, {
                 id: pollMsgId,
                 role: 'assistant',
