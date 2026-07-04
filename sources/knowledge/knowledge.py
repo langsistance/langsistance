@@ -7,7 +7,7 @@ from openai import OpenAI
 import numpy as np
 from typing import Dict, List, Optional, Tuple, Any
 from pydantic import BaseModel
-from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 from bs4 import BeautifulSoup
 
 from sources.logger import Logger
@@ -188,11 +188,12 @@ def search_knowledge_base(user_id: str, query_embedding: List[float], user_vecto
     if user_id not in user_vector_indices or len(user_vector_indices[user_id]["embeddings"]) == 0:
         return []
 
-    # 计算余弦相似度
-    similarities = cosine_similarity(
-        [query_embedding],
-        user_vector_indices[user_id]["embeddings"]
-    )[0]
+    # 计算余弦相似度 (pure numpy, no sklearn needed)
+    query_vec = np.array(query_embedding)
+    embeds = np.array(user_vector_indices[user_id]["embeddings"])
+    query_norm = np.linalg.norm(query_vec)
+    embed_norms = np.linalg.norm(embeds, axis=1)
+    similarities = np.dot(embeds, query_vec) / (embed_norms * query_norm + 1e-10)
     logger.info(f"similarities: {similarities}")
     # 获取最相似的结果
     results = []
