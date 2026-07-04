@@ -32,6 +32,16 @@ app.conf.update(
     task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,
     broker_connection_retry_on_startup=True,
+    broker_transport_options={
+        # After a worker dies, unacked tasks become visible to other workers
+        # after this many seconds.  Default is 3600 (1 hour) — way too long
+        # for crash recovery.  600 s (10 min) balances quick recovery against
+        # false redelivery if the worker's heartbeat is merely delayed.
+        'visibility_timeout': 600,
+    },
+    # Allow running tasks enough time to reject cleanly during warm shutdown
+    # before Docker sends SIGKILL.
+    worker_shutdown_timeout=25,
 )
 
 

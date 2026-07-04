@@ -41,6 +41,7 @@ services:
   celery:
     container_name: celery
     profiles: ["celery", "full"]
+    stop_grace_period: 30s
     build:
       context: .
       dockerfile: Dockerfile.backend
