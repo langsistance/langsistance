@@ -163,7 +163,7 @@ async def generate_patent_summary(
             async for chunk in llm.astream(messages):
                 if chunk.content:
                     chunks.append(chunk.content)
-        await asyncio.wait_for(_stream(), timeout=30)
+        await asyncio.wait_for(_stream(), timeout=300)
     except asyncio.TimeoutError:
         pass  # Return whatever partial output we got
     text = "".join(chunks).strip()
