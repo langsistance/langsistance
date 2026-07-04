@@ -145,6 +145,9 @@ def create_undetected_chromedriver(service, chrome_options) -> "webdriver.Chrome
 
 def create_driver(headless=False, stealth_mode=True, crx_path="./crx/nopecha.crx", lang="en") -> "webdriver.Chrome":
     """Create a Chrome WebDriver with specified options."""
+    if not _SELENIUM_OK:
+        pretty_print("Selenium not installed — browser disabled.", color="warning")
+        return None
     # Warn if trying to run non-headless in Docker
     if not headless and os.path.exists('/.dockerenv'):
         print("[WARNING] Running non-headless browser in Docker may fail!")
@@ -243,13 +246,17 @@ class Browser:
         self.logger = Logger("browser.log")
         self.screenshot_folder = os.path.join(os.getcwd(), ".screenshots")
         self.tabs = []
-        try:
-            self.driver = driver
-            self.wait = WebDriverWait(self.driver, 10)
-        except Exception as e:
-            raise Exception(f"Failed to initialize browser: {str(e)}")
-        self.setup_tabs()
-        self.patch_browser_fingerprint()
+        self.driver = driver
+        if driver is not None:
+            try:
+                self.wait = WebDriverWait(self.driver, 10)
+            except Exception as e:
+                raise Exception(f"Failed to initialize browser: {str(e)}")
+            self.setup_tabs()
+            self.patch_browser_fingerprint()
+        else:
+            self.wait = None
+            self.logger.info("Browser disabled — selenium not installed")
         if anticaptcha_manual_install:
             self.load_anticatpcha_manually()
     
