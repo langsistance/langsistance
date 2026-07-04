@@ -11,7 +11,7 @@ from sources.agents.agent import Agent
 from sources.agents.code_agent import CoderAgent
 from sources.agents.casual_agent import CasualAgent
 from sources.agents.planner_agent import FileAgent
-from sources.agents.browser_agent import BrowserAgent
+# from sources.agents.browser_agent import BrowserAgent  # BrowserAgent removed
 from sources.language import LanguageUtility
 from sources.utility import pretty_print, animate_thinking
 from sources.logger import Logger
@@ -492,7 +492,7 @@ if __name__ == "__main__":
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     agents = [
         CasualAgent("jarvis", "../prompts/base/casual_agent.txt", None),
-        BrowserAgent("browser", "../prompts/base/planner_agent.txt", None),
+        # BrowserAgent("browser", "../prompts/base/planner_agent.txt", None),  # BrowserAgent removed
         CoderAgent("coder", "../prompts/base/coder_agent.txt", None),
         FileAgent("file", "../prompts/base/coder_agent.txt", None)
     ]

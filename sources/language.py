@@ -1,7 +1,15 @@
 from typing import List, Tuple, Type, Dict
 import re
-import langid
-from transformers import MarianMTModel, MarianTokenizer
+
+_TRANSFORMERS_OK = False
+try:
+    from transformers import MarianMTModel, MarianTokenizer
+    import langid
+    _TRANSFORMERS_OK = True
+except ImportError:
+    MarianMTModel = None
+    MarianTokenizer = None
+    langid = None
 
 from sources.utility import pretty_print, animate_thinking
 from sources.logger import Logger
@@ -14,12 +22,15 @@ class LanguageUtility:
         args:
             supported_language: list of languages for translation, determine which Helsinki-NLP model to load
         """
-        self.translators_tokenizer = None 
+        self.translators_tokenizer = None
         self.translators_model = None
         self.logger = Logger("language.log")
         self.supported_language = supported_language
-        self.load_model()
-    
+        if _TRANSFORMERS_OK:
+            self.load_model()
+        else:
+            self.logger.info("LanguageUtility: transformers not installed, translation disabled")
+
     def load_model(self) -> None:
         animate_thinking("Loading language utility...", color="status")
         self.translators_tokenizer = {lang: MarianTokenizer.from_pretrained(f"Helsinki-NLP/opus-mt-{lang}-en") for lang in self.supported_language if lang != "en"}
@@ -33,6 +44,8 @@ class LanguageUtility:
             text: string to analyze
         Returns: ISO639-1 language code
         """
+        if not _TRANSFORMERS_OK:
+            return "en"  # fallback: assume English
         langid.set_languages(self.supported_language)
         lang, score = langid.classify(text)
         self.logger.info(f"Identified: {text} as {lang} with conf {score}")
@@ -46,6 +59,8 @@ class LanguageUtility:
             origin_lang: ISO language code
         Returns: translated str
         """
+        if not _TRANSFORMERS_OK:
+            return text  # translation disabled
         if origin_lang == "en":
             return text
         if origin_lang not in self.translators_tokenizer:

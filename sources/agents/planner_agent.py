@@ -4,9 +4,10 @@ from sources.utility import pretty_print, animate_thinking
 from sources.agents.agent import Agent
 from sources.agents.code_agent import CoderAgent
 from sources.agents.file_agent import FileAgent
-from sources.agents.browser_agent import BrowserAgent
+# BrowserAgent removed (heavy selenium deps). Speech removed (heavy TTS deps).
+# from sources.agents.browser_agent import BrowserAgent
 from sources.agents.casual_agent import CasualAgent
-from sources.text_to_speech import Speech
+# from sources.text_to_speech import Speech
 from sources.tools.tools import Tools
 from sources.logger import Logger
 from sources.memory import Memory
@@ -25,7 +26,7 @@ class PlannerAgent(Agent):
         self.agents = {
             "coder": CoderAgent(name, "prompts/base/coder_agent.txt", provider, verbose=False),
             "file": FileAgent(name, "prompts/base/file_agent.txt", provider, verbose=False),
-            "web": BrowserAgent(name, "prompts/base/browser_agent.txt", provider, verbose=False, browser=browser),
+            # "web": BrowserAgent(name, "prompts/base/browser_agent.txt", provider, verbose=False, browser=browser),  # BrowserAgent removed
             "casual": CasualAgent(name, "prompts/base/casual_agent.txt", provider, verbose=False)
         }
         self.role = "planification"
