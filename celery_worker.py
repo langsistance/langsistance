@@ -35,16 +35,32 @@ app.conf.update(
 )
 
 
-@app.task(bind=True, max_retries=3, default_retry_delay=30)
+@app.task(bind=True, max_retries=3, default_retry_delay=30, time_limit=900, soft_time_limit=840)
 def execute_patent_analysis(self, task_id: str, params: dict):
     """Batch patent analysis -- 4-phase serial pipeline with checkpointing."""
+    retry_count = self.request.retries
     _pipeline_logger.info(
         f"[task={task_id}] START — "
         f"query={params.get('query', '')[:120]}, "
         f"patent_source={params.get('patent_source', 'cnipa')}, "
         f"session_id={params.get('session_id', '')}, "
-        f"scene_id={params.get('scene_id', '')}"
+        f"scene_id={params.get('scene_id', '')}, "
+        f"retry={retry_count}/{self.max_retries}"
     )
+    # Belt-and-suspenders: if Celery's retry tracking is broken, hard-stop here
+    if retry_count >= self.max_retries:
+        _pipeline_logger.error(
+            f"[task={task_id}] HARD_STOP — retry_count={retry_count} >= {self.max_retries}"
+        )
+        user_id = params.get('user_id', '')
+        if user_id:
+            from sources.long_task.user_queue import complete_user_task
+            try:
+                complete_user_task(str(user_id), task_id)
+            except Exception:
+                pass
+        return {'status': 'failed', 'task_id': task_id,
+                'error': f'Max retries ({self.max_retries}) exceeded'}
     from sources.long_task.status_manager import (
         update_task_status, set_task_completed, set_task_failed,
         save_checkpoint, load_checkpoint,

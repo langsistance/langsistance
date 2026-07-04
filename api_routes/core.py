@@ -1110,6 +1110,12 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                     handler.queue.put_nowait({'type': 'done'})
 
             task = asyncio.create_task(run_pipeline())
+            task.add_done_callback(
+                lambda t: (
+                    app_logger.error(f"SSE background task crashed: {t.exception()}")
+                    if t.exception() and not t.cancelled() else None
+                )
+            )
 
             # Optimize: Batch tokens to reduce serialization overhead
             token_buffer = []
