@@ -26,6 +26,22 @@ def register_long_task_routes(logger, config):
         status = get_task_status(task_id)
         return {"success": True, **status}
 
+    @router.post("/long_task/batch_status")
+    async def batch_task_status(http_request: Request):
+        """Poll status for multiple long-running tasks in one request."""
+        auth_header = http_request.headers.get("Authorization")
+        verify_firebase_token(auth_header)
+        body = await http_request.json()
+        task_ids = body.get("task_ids", []) or []
+        if not isinstance(task_ids, list):
+            task_ids = []
+        # Cap at 20 to prevent abuse
+        task_ids = task_ids[:20]
+        statuses = {}
+        for tid in task_ids:
+            statuses[tid] = get_task_status(tid)
+        return {"success": True, "statuses": statuses}
+
     @router.get("/long_task/{task_id}/report")
     async def download_report(task_id: str, format: str = Query(..., pattern="^(pdf|docx)$"), http_request: Request = None):
         """Download a completed report file for a task."""

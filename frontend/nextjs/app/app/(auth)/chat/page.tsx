@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { queryStream, queryStreamWithFiles, getUserSceneStatus, getSceneKnowledge, pollLongTaskStatus, getLongTaskReportUrl, getSession, saveSessionMessages } from '@/services/api'
+import { queryStream, queryStreamWithFiles, getUserSceneStatus, getSceneKnowledge, pollLongTaskStatus, pollLongTaskBatchStatus, getLongTaskReportUrl, getSession, saveSessionMessages } from '@/services/api'
 import { useI18n } from '@/lib/app-i18n'
 import MarkdownMessage from '@/components/app/MarkdownMessage'
 import { useChatSession } from '@/contexts/ChatContext'
@@ -163,10 +163,13 @@ export default function Chat() {
         }
         setSessionId(sid)
 
-        // Resume polling for any incomplete long tasks
-        for (const tid of longTaskIds) {
+        // Resume polling for any incomplete long tasks — batch fetch all statuses
+        if (longTaskIds.length > 0) {
           try {
-            const status = await pollLongTaskStatus(tid)
+            const batch = await pollLongTaskBatchStatus(longTaskIds)
+            for (const tid of longTaskIds) {
+              const status = batch[tid]
+              if (!status) continue
 
             // Session save happens ~1s after SSE end, but the task may complete
             // minutes later.  The in-memory message transitions to ✅/❌ via
@@ -237,8 +240,9 @@ export default function Chat() {
               }]
             })
             startLongTaskPolling(tid, pollMsgId)
+            }
           } catch {
-            // Task status check failed — skip
+            // Batch status fetch failed — skip resume
           }
         }
       } catch {
@@ -300,7 +304,6 @@ export default function Chat() {
   async function send() {
     const text = input.trim()
     if (!text || streaming) return
-    stopLongTaskPolling() // Stop any in-progress long task polling
     setInput('')
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
 

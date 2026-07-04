@@ -220,6 +220,27 @@ export async function pollLongTaskStatus(taskId: string): Promise<{
   return get(`/long_task/${taskId}/status`)
 }
 
+export async function pollLongTaskBatchStatus(taskIds: string[]): Promise<Record<string, {
+  success: boolean
+  status: string
+  progress?: number
+  current_phase?: string
+  current_step?: string
+  report_files?: { format: string; filename: string; size: number }[]
+  result_summary?: string
+  error_message?: string
+}>> {
+  const headers = await authHeaders()
+  const res = await fetch(`${BASE_URL}/long_task/batch_status`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ task_ids: taskIds }),
+  })
+  if (!res.ok) return {}
+  const data = await res.json()
+  return data.statuses || {}
+}
+
 export function getLongTaskReportUrl(taskId: string, format: 'pdf' | 'docx' = 'pdf'): string {
   return `${BASE_URL}/long_task/${taskId}/report?format=${format}`
 }
