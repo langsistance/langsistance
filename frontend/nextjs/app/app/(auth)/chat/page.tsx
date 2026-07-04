@@ -619,13 +619,19 @@ export default function Chat() {
               : msg
           ))
         } else {
-          setMessages((m) => m.map(msg =>
-            msg.id === assistantId
-              ? { ...msg, taskId, content: t('chat.longTaskProgress')
-                  .replace('{progress}', progress)
-                  .replace('{phase}', phaseLabel) }
-              : msg
-          ))
+          const newContent = t('chat.longTaskProgress')
+            .replace('{progress}', progress)
+            .replace('{phase}', phaseLabel)
+          setMessages((m) => {
+            const found = m.some(msg => msg.id === assistantId)
+            console.log('[poll:update] assistantId=%s found=%s progress=%s newContent=%s',
+              assistantId, found, progress, newContent.slice(0, 50))
+            return m.map(msg =>
+              msg.id === assistantId
+                ? { ...msg, taskId, content: newContent }
+                : msg
+            )
+          })
         }
       } catch {
         // Non-fatal poll error; continue polling
