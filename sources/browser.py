@@ -1,18 +1,24 @@
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException
-from selenium.webdriver.common.action_chains import ActionChains
 from typing import List, Tuple, Type, Dict
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
-from fake_useragent import UserAgent
-from selenium_stealth import stealth
-import undetected_chromedriver as uc
-import chromedriver_autoinstaller
+
+_SELENIUM_OK = False
+try:
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.common.exceptions import TimeoutException, WebDriverException
+    from selenium.webdriver.common.action_chains import ActionChains
+    from fake_useragent import UserAgent
+    from selenium_stealth import stealth
+    import undetected_chromedriver as uc
+    import chromedriver_autoinstaller
+    _SELENIUM_OK = True
+except ImportError:
+    _SELENIUM_OK = False
 import certifi
 import ssl
 import time
@@ -121,7 +127,7 @@ def bypass_ssl() -> str:
     pretty_print("Bypassing SSL verification issues, we strongly advice you update your certifi SSL certificate.", color="warning")
     ssl._create_default_https_context = ssl._create_unverified_context
 
-def create_undetected_chromedriver(service, chrome_options) -> webdriver.Chrome:
+def create_undetected_chromedriver(service, chrome_options) -> "webdriver.Chrome":
     """Create an undetected ChromeDriver instance."""
     try:
         driver = uc.Chrome(service=service, options=chrome_options)
@@ -137,8 +143,11 @@ def create_undetected_chromedriver(service, chrome_options) -> webdriver.Chrome:
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})") 
     return driver
 
-def create_driver(headless=False, stealth_mode=True, crx_path="./crx/nopecha.crx", lang="en") -> webdriver.Chrome:
+def create_driver(headless=False, stealth_mode=True, crx_path="./crx/nopecha.crx", lang="en") -> "webdriver.Chrome":
     """Create a Chrome WebDriver with specified options."""
+    if not _SELENIUM_OK:
+        pretty_print("Selenium not installed — browser disabled.", color="warning")
+        return None
     # Warn if trying to run non-headless in Docker
     if not headless and os.path.exists('/.dockerenv'):
         print("[WARNING] Running non-headless browser in Docker may fail!")
@@ -237,13 +246,17 @@ class Browser:
         self.logger = Logger("browser.log")
         self.screenshot_folder = os.path.join(os.getcwd(), ".screenshots")
         self.tabs = []
-        try:
-            self.driver = driver
-            self.wait = WebDriverWait(self.driver, 10)
-        except Exception as e:
-            raise Exception(f"Failed to initialize browser: {str(e)}")
-        self.setup_tabs()
-        self.patch_browser_fingerprint()
+        self.driver = driver
+        if driver is not None:
+            try:
+                self.wait = WebDriverWait(self.driver, 10)
+            except Exception as e:
+                raise Exception(f"Failed to initialize browser: {str(e)}")
+            self.setup_tabs()
+            self.patch_browser_fingerprint()
+        else:
+            self.wait = None
+            self.logger.info("Browser disabled — selenium not installed")
         if anticaptcha_manual_install:
             self.load_anticatpcha_manually()
     

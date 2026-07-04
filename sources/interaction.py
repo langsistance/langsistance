@@ -1,7 +1,7 @@
 import readline
 from typing import List, Tuple, Type, Dict
 
-from sources.text_to_speech import Speech
+# from sources.text_to_speech import Speech  # Speech removed (heavy TTS deps)
 from sources.utility import pretty_print, animate_thinking
 from sources.router import AgentRouter
 # from sources.speech_to_text import AudioTranscriber, AudioRecorder
@@ -50,10 +50,11 @@ class Interaction:
         return lang
 
     def initialize_tts(self):
-        """Initialize TTS."""
-        if not self.speech:
-            animate_thinking("Initializing text-to-speech...", color="status")
-            self.speech = Speech(enable=self.tts_enabled, language=self.get_spoken_language(), voice_idx=1)
+        """Initialize TTS (disabled to remove heavy TTS deps)."""
+        pass
+        # if not self.speech:
+        #     animate_thinking("Initializing text-to-speech...", color="status")
+        #     self.speech = Speech(enable=self.tts_enabled, language=self.get_spoken_language(), voice_idx=1)
 
     def initialize_stt(self):
         """Initialize STT."""
@@ -66,8 +67,8 @@ class Interaction:
         """Print the current status of agenticSeek."""
         if self.stt_enabled:
             pretty_print(f"Text-to-speech trigger is {self.ai_name}", color="status")
-        if self.tts_enabled:
-            self.speech.speak("Hello, we are online and ready. What can I do for you ?")
+        # if self.tts_enabled:
+        #     self.speech.speak("Hello, we are online and ready. What can I do for you ?")  # Speech removed
         pretty_print("CopiioAI is ready.", color="status")
     
     def find_ai_name(self) -> str:

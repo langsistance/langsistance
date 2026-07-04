@@ -1,4 +1,9 @@
-#kokoro==0.9.4
+# 精简版 requirements.txt — 移除的重依赖:
+#   transformers(~400MB) langid selenium fake_useragent selenium_stealth
+#   librosa soundfile scipy scikit-learn sentencepiece protobuf
+#   ipython playsound3 sacremoses text2emotion pypinyin
+#   chromedriver-autoinstaller undetected-chromedriver
+
 certifi==2025.4.26
 fastapi>=0.115.12
 flask>=3.1.0
@@ -8,43 +13,22 @@ uvicorn>=0.34.0
 pydantic>=2.10.6
 pydantic_core>=2.27.2
 setuptools>=75.6.0
-sacremoses>=0.0.53
 requests>=2.31.0
 numpy>=1.24.4
 colorama>=0.4.6
 python-dotenv>=1.0.0
-playsound3>=1.0.0
-soundfile>=0.13.1
-transformers>=4.46.3
-#torch>=2.4.1
 ollama>=0.4.7
-scipy>=1.9.3
-soundfile>=0.13.1
-protobuf>=3.20.3
 termcolor>=2.4.0
 pypdf>=5.4.0
 pdf2image>=1.17.0
 cryptography>=44.0.0
-scikit-learn>=1.5.0
 Pillow>=11.0
 pytesseract>=0.3.13
-# pytesseract needs tesseract-ocr installed on the system: apt install tesseract-ocr
-ipython>=8.13.0
-librosa>=0.10.2.post1
-selenium>=4.27.1
 markdownify>=1.1.0
-text2emotion>=0.0.5
-#adaptive-classifier>=0.0.10
-langid>=1.1.6
-chromedriver-autoinstaller>=0.6.4
 httpx>=0.27,<0.29
 anyio>=3.5.0,<5
 distro>=1.7.0,<2
 jiter>=0.4.0,<1
-fake_useragent>=2.1.0
-selenium_stealth>=1.0.6
-undetected-chromedriver>=3.5.5
-sentencepiece>=0.2.0
 together>=1.5.0
 tqdm>4
 mcp-use>=1.3.0
@@ -62,7 +46,6 @@ bs4>=0.0.2
 openai
 sniffio
 ordered_set
-pypinyin
 python-docx>=1.1,<2.0
 weasyprint==61.2
 pydyf==0.10.0
