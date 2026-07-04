@@ -601,37 +601,35 @@ export default function Chat() {
         const phaseLabel = data.current_step || data.current_phase || ''
         const progress = data.progress != null ? `[${data.progress}%]` : ''
 
+        // Use taskId to find the message — avoids race with React batching
+        // (assistantId may not exist yet if setMessages hasn't flushed)
+        function findAndUpdate(messages: any[], newContent: string) {
+          const idx = messages.findIndex(msg => msg.taskId === taskId)
+          if (idx >= 0) {
+            return messages.map((msg, i) =>
+              i === idx ? { ...msg, content: newContent } : msg
+            )
+          }
+          // Fallback: try assistantId (initial SSE message)
+          return messages.map(msg =>
+            msg.id === assistantId ? { ...msg, content: newContent } : msg
+          )
+        }
+
         if (data.status === 'completed' || data.status === 'success') {
           stopLongTaskPolling(taskId)
           const files = (data.report_files || [])
             .map((f: { format: string }) => `[${f.format.toUpperCase()}](${getLongTaskReportUrl(taskId, f.format as 'pdf' | 'docx')})`)
             .join(' | ')
-          setMessages((m) => m.map(msg =>
-            msg.id === assistantId
-              ? { ...msg, content: t('chat.longTaskCompleted').replace('{files}', files) }
-              : msg
-          ))
+          setMessages((m) => findAndUpdate(m, t('chat.longTaskCompleted').replace('{files}', files)))
         } else if (data.status === 'failed' || data.status === 'error') {
           stopLongTaskPolling(taskId)
-          setMessages((m) => m.map(msg =>
-            msg.id === assistantId
-              ? { ...msg, content: `${t('chat.longTaskFailed')} ${data.error_message || ''}` }
-              : msg
-          ))
+          setMessages((m) => findAndUpdate(m, `${t('chat.longTaskFailed')} ${data.error_message || ''}`))
         } else {
           const newContent = t('chat.longTaskProgress')
             .replace('{progress}', progress)
             .replace('{phase}', phaseLabel)
-          setMessages((m) => {
-            const found = m.some(msg => msg.id === assistantId)
-            console.log('[poll:update] assistantId=%s found=%s progress=%s newContent=%s',
-              assistantId, found, progress, newContent.slice(0, 50))
-            return m.map(msg =>
-              msg.id === assistantId
-                ? { ...msg, taskId, content: newContent }
-                : msg
-            )
-          })
+          setMessages((m) => findAndUpdate(m, newContent))
         }
       } catch {
         // Non-fatal poll error; continue polling
