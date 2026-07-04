@@ -138,13 +138,22 @@ export default function Chat() {
         if (data.messages && Array.isArray(data.messages)) {
           const loaded = data.messages
             .filter((m: { role: string; content: string }) => m.role && m.content)
-            .map((m: { role: string; content: string; taskId?: string }, i: number) => ({
-              id: `hist_${i}_${Date.now()}`,
-              role: m.role,
-              content: m.content,
-              taskId: (m as any).taskId || undefined,
-              artifacts: [],
-            }))
+            .map((m: { role: string; content: string; taskId?: string }, i: number) => {
+              let taskId = (m as any).taskId || undefined
+              // Backfill: if message has 🔬/✅ content but no taskId,
+              // extract it from the report URL in the content.
+              if (!taskId) {
+                const tidMatch = (m.content || '').match(/\/long_task\/(lt_\w+)\//)
+                if (tidMatch) taskId = tidMatch[1]
+              }
+              return {
+                id: `hist_${i}_${Date.now()}`,
+                role: m.role,
+                content: m.content,
+                taskId,
+                artifacts: [],
+              }
+            })
           if (loaded.length > 0) {
             setMessages(loaded)
             // Scroll to bottom after loading session messages
@@ -157,11 +166,9 @@ export default function Chat() {
         setSessionId(sid)
 
         // Resume polling for any incomplete long tasks
-        console.log('[resume] longTaskIds=%o', longTaskIds)
         for (const tid of longTaskIds) {
           try {
             const status = await pollLongTaskStatus(tid)
-            console.log('[resume] tid=%s status=%s progress=%s', tid, status?.status, status?.progress)
 
             // Session save happens ~1s after SSE end, but the task may complete
             // minutes later.  The in-memory message transitions to ✅/❌ via
@@ -575,7 +582,6 @@ export default function Chat() {
     async function poll() {
       try {
         const data = await pollLongTaskStatus(taskId)
-        console.log('[poll] taskId=%s status=%s progress=%s assistantId=%s', taskId, data?.status, data?.progress, assistantId)
         if (!data || data.status === 'unknown') {
           setMessages((m) => m.map(msg =>
             msg.id === assistantId

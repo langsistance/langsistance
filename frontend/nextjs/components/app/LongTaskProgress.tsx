@@ -160,7 +160,6 @@ function isFileUploadMode(content: string): boolean {
 
 export default function LongTaskProgress({ content, streaming }: Props) {
   const state = parseTaskContent(content)
-  console.log('[LTP] render progress=%d raw=%s', state?.progress || 0, content?.slice(0, 60))
   if (!state) return null
 
   return (
