@@ -623,6 +623,8 @@ input[type="checkbox"] {
   font-size: 13px;
   color: var(--text-secondary);
   margin-top: 2px;
+  white-space: pre-line;
+  line-height: 1.6;
 }
 
 .scene-card-actions {
