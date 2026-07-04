@@ -35,7 +35,7 @@ app.conf.update(
 )
 
 
-@app.task(bind=True, max_retries=3, default_retry_delay=30, time_limit=900, soft_time_limit=840)
+@app.task(bind=True, max_retries=3, default_retry_delay=30, time_limit=3600, soft_time_limit=3540)
 def execute_patent_analysis(self, task_id: str, params: dict):
     """Batch patent analysis -- 4-phase serial pipeline with checkpointing."""
     retry_count = self.request.retries
