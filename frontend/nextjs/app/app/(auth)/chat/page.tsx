@@ -157,9 +157,11 @@ export default function Chat() {
         setSessionId(sid)
 
         // Resume polling for any incomplete long tasks
+        console.log('[resume] longTaskIds=%o', longTaskIds)
         for (const tid of longTaskIds) {
           try {
             const status = await pollLongTaskStatus(tid)
+            console.log('[resume] tid=%s status=%s progress=%s', tid, status?.status, status?.progress)
 
             // Session save happens ~1s after SSE end, but the task may complete
             // minutes later.  The in-memory message transitions to ✅/❌ via
