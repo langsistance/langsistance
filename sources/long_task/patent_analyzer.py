@@ -171,38 +171,58 @@ async def generate_patent_summary(
 def _pdf_to_base64_images(pdf_bytes: bytes) -> list[str]:
     """Render PDF pages as base64 JPEG images for vision LLM input.
 
-    Uses pdf2image at 120 DPI, encodes as JPEG (quality 75) to keep payload
-    size manageable.  Capped at 20 pages — patent specifications rarely need
-    more for LLM comprehension, and vision APIs have image-count limits.
+    Renders one page at a time and immediately frees the PIL Image to keep
+    memory low (critical for 2 GB containers).
     """
     import base64 as _b64
     import io as _io
 
     _DPI = 150
     _JPEG_QUALITY = 75
+    _MAX_PAGES = 20
+
+    try:
+        # Get page count without rendering all pages
+        from pypdf import PdfReader as _PdfReader
+        reader = _PdfReader(_io.BytesIO(pdf_bytes))
+        total_pages = len(reader.pages)
+        reader = None  # free immediately
+    except Exception:
+        total_pages = _MAX_PAGES  # fallback: assume up to MAX_PAGES
+
+    from sources.logger import Logger as _Logger
+    _vlog = _Logger("text_extractor.log")
+    render_pages = min(total_pages, _MAX_PAGES)
+    _vlog.info(
+        f"pdf_to_base64_images — total_pages={total_pages}, "
+        f"rendering={render_pages}, dpi={_DPI}"
+    )
 
     try:
         from pdf2image import convert_from_bytes
 
-        pil_images = convert_from_bytes(pdf_bytes, dpi=_DPI)
-        from sources.logger import Logger as _Logger
-        _vlog = _Logger("text_extractor.log")
-        _vlog.info(
-            f"pdf_to_base64_images_rendered — pages={len(pil_images)}, "
-            f"dpi={_DPI}, format=JPEG"
-        )
         images: list[str] = []
-        for pil_img in pil_images:
+        for page_num in range(1, render_pages + 1):
+            # Render ONE page at a time, free PIL Image immediately after encoding
+            pil_images = convert_from_bytes(
+                pdf_bytes, dpi=_DPI,
+                first_page=page_num, last_page=page_num,
+            )
+            if not pil_images:
+                continue
+            pil_img = pil_images[0]
+            pil_images = None  # free immediately
+
             if pil_img.mode not in ("RGB", "L"):
                 pil_img = pil_img.convert("RGB")
             buf = _io.BytesIO()
             pil_img.save(buf, format="JPEG", quality=_JPEG_QUALITY)
+            pil_img = None  # free immediately
             b64 = _b64.b64encode(buf.getvalue()).decode("ascii")
+            buf = None  # free immediately
             images.append(f"data:image/jpeg;base64,{b64}")
         return images
     except Exception as e:
-        from sources.logger import Logger
-        _vlog = Logger("text_extractor.log")
         _vlog.warning(f"pdf_to_base64_images_failed — {e}")
         return []
 
