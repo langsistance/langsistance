@@ -154,12 +154,18 @@ async def generate_patent_summary(
         f"请给出简洁总结。"
     )
     # Use streaming for free-text output (not complete_json)
+    import asyncio
     llm = provider._get_langchain_llm(streaming=True)
     messages = [("system", system_prompt), ("human", user_content)]
     chunks = []
-    async for chunk in llm.astream(messages):
-        if chunk.content:
-            chunks.append(chunk.content)
+    try:
+        async def _stream():
+            async for chunk in llm.astream(messages):
+                if chunk.content:
+                    chunks.append(chunk.content)
+        await asyncio.wait_for(_stream(), timeout=30)
+    except asyncio.TimeoutError:
+        pass  # Return whatever partial output we got
     text = "".join(chunks).strip()
     if "</think>" in text:
         text = text[text.rfind("</think>") + len("</think>"):].strip()
