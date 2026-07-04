@@ -1,18 +1,24 @@
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException
-from selenium.webdriver.common.action_chains import ActionChains
 from typing import List, Tuple, Type, Dict
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
-from fake_useragent import UserAgent
-from selenium_stealth import stealth
-import undetected_chromedriver as uc
-import chromedriver_autoinstaller
+
+_SELENIUM_OK = False
+try:
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.common.exceptions import TimeoutException, WebDriverException
+    from selenium.webdriver.common.action_chains import ActionChains
+    from fake_useragent import UserAgent
+    from selenium_stealth import stealth
+    import undetected_chromedriver as uc
+    import chromedriver_autoinstaller
+    _SELENIUM_OK = True
+except ImportError:
+    _SELENIUM_OK = False
 import certifi
 import ssl
 import time
