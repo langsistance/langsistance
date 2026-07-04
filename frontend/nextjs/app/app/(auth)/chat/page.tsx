@@ -575,6 +575,7 @@ export default function Chat() {
     async function poll() {
       try {
         const data = await pollLongTaskStatus(taskId)
+        console.log('[poll] taskId=%s status=%s progress=%s assistantId=%s', taskId, data?.status, data?.progress, assistantId)
         if (!data || data.status === 'unknown') {
           setMessages((m) => m.map(msg =>
             msg.id === assistantId
