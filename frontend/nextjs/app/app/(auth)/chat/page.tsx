@@ -231,7 +231,24 @@ export default function Chat() {
                 pollMsgId = m[existingIdx].id
                 return replaceAssistantMessage(m, pollMsgId, progressContent || '🔬 深度分析进行中...')
               }
-              // No existing progress message — add one tagged with taskId
+              // No taskId match — find an orphan message (🔬/✅/❌ without taskId)
+              // that matches this task's status, and claim it by attaching taskId.
+              const statusMarker = (status?.status === 'completed' || status?.status === 'success') ? '✅'
+                : (status?.status === 'failed' || status?.status === 'error') ? '❌'
+                : '🔬'
+              const orphanIdx = m.findIndex(msg =>
+                msg.role === 'assistant' && !msg.taskId
+                && msg.content.includes(statusMarker)
+              )
+              if (orphanIdx >= 0) {
+                pollMsgId = m[orphanIdx].id
+                return m.map(msg =>
+                  msg.id === pollMsgId
+                    ? { ...msg, taskId: tid, content: progressContent || msg.content }
+                    : msg
+                )
+              }
+              // No orphan message either — create new one
               return [...m, {
                 id: pollMsgId,
                 role: 'assistant',
