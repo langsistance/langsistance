@@ -810,6 +810,7 @@ input[type="checkbox"] {
   padding: 4px 0;
   border-bottom: 1px solid #f8f8f8;
   line-height: 1.5;
+  white-space: pre-line;
 }
 
 .scene-hint-item:last-child {
@@ -1271,6 +1272,7 @@ input[type="checkbox"] {
   border-radius: 6px;
   line-height: 1.5;
   transition: background 0.15s;
+  white-space: pre-line;
 }
 
 .scene-hint-item:hover {
