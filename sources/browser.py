@@ -127,7 +127,7 @@ def bypass_ssl() -> str:
     pretty_print("Bypassing SSL verification issues, we strongly advice you update your certifi SSL certificate.", color="warning")
     ssl._create_default_https_context = ssl._create_unverified_context
 
-def create_undetected_chromedriver(service, chrome_options) -> webdriver.Chrome:
+def create_undetected_chromedriver(service, chrome_options) -> "webdriver.Chrome":
     """Create an undetected ChromeDriver instance."""
     try:
         driver = uc.Chrome(service=service, options=chrome_options)
@@ -143,7 +143,7 @@ def create_undetected_chromedriver(service, chrome_options) -> webdriver.Chrome:
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})") 
     return driver
 
-def create_driver(headless=False, stealth_mode=True, crx_path="./crx/nopecha.crx", lang="en") -> webdriver.Chrome:
+def create_driver(headless=False, stealth_mode=True, crx_path="./crx/nopecha.crx", lang="en") -> "webdriver.Chrome":
     """Create a Chrome WebDriver with specified options."""
     # Warn if trying to run non-headless in Docker
     if not headless and os.path.exists('/.dockerenv'):
