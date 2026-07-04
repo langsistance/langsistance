@@ -248,12 +248,12 @@ class PlannerAgent(Agent):
         self.logger.info(f"Next agent needs: {task_needs}.\n Match previous agent result: {res}")
         return res
 
-    async def process(self, user_id: str, goal: str, query_id: str, speech_module: Speech) -> Tuple[str, str]:
+    async def process(self, user_id: str, goal: str, query_id: str, speech_module=None) -> Tuple[str, str]:
         """
         Process the goal by dividing it into tasks and assigning them to agents.
         Args:
             goal (str): The goal to be achieved (user prompt).
-            speech_module (Speech): The speech module for text-to-speech.
+            speech_module: The speech module for text-to-speech (removed, always None).
         Returns:
             Tuple[str, str]: The result of the agent process and empty reasoning string.
         """
