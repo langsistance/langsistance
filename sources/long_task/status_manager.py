@@ -19,20 +19,20 @@ def _checkpoint_key(task_id: str) -> str:
 
 
 def update_task_status(task_id: str, phase: str, progress: int,
-                       step_msg: str, **extra) -> None:
+                       step_msg: str, status: str = 'running', **extra) -> None:
     """Write current task status to Redis."""
     import time
     r = _get_redis()
-    status = {
+    payload = {
         'task_id': task_id,
-        'status': 'running',
+        'status': status,
         'current_phase': phase,
         'progress': progress,
         'current_step': step_msg,
         'last_update': time.time(),
         **extra,
     }
-    r.set(_status_key(task_id), json.dumps(status, ensure_ascii=False),
+    r.set(_status_key(task_id), json.dumps(payload, ensure_ascii=False),
           ex=TASK_STATUS_TTL)
 
 

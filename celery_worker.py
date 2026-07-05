@@ -724,7 +724,7 @@ async def _run_pipeline(
             from sources.long_task.status_manager import update_task_status as _uts
             _uts(task_id, 'paused', progress_pct(i, total),
                  f'已暂停（{len(table_rows)}/{total}），点击继续可恢复',
-                 table_rows=table_rows)
+                 status='paused', table_rows=table_rows)
             # Release user lock and dispatch next queued task
             user_id = params.get('user_id', '')
             if user_id:
