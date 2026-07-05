@@ -219,24 +219,22 @@ export default function Chat() {
 
             const phaseLabel = status.current_step || status.current_phase || ''
             const progress = status.progress != null ? `[${status.progress}%]` : ''
-            const progressContent = (progress || phaseLabel)
+            const progressContent = ((progress || phaseLabel)
               ? t('chat.longTaskProgress')
                   .replace('{progress}', progress)
                   .replace('{phase}', phaseLabel)
-              : ''
+              : '🔬 深度分析进行中...') + ` 任务ID: ${tid}`
             let pollMsgId = `lt_resume_${tid}`
             setMessages(m => {
               const existingIdx = m.findIndex(msg => msg.taskId === tid)
               if (existingIdx >= 0) {
                 pollMsgId = m[existingIdx].id
-                return replaceAssistantMessage(m, pollMsgId, progressContent || '🔬 深度分析进行中...')
+                return replaceAssistantMessage(m, pollMsgId, progressContent)
               }
-              // No existing message — create one (orphan messages were already
-              // stripped during load, so we won't get duplicates here)
               return [...m, {
                 id: pollMsgId,
                 role: 'assistant',
-                content: progressContent || '🔬 深度分析进行中...',
+                content: progressContent,
                 artifacts: [],
                 taskId: tid,
               }]
@@ -396,11 +394,12 @@ export default function Chat() {
               const taskId = String(event.task_id ?? '')
               const sid = String(event.session_id ?? '')
               const isQueued = String(event.status ?? '') === 'queued'
-              const initContent = isQueued
+              const initContent = (isQueued
                 ? '🔬 深度分析已排队，将在当前任务完成后自动开始...'
                 : t('chat.longTaskProgress')
                     .replace('{progress}', '[0%]')
                     .replace('{phase}', '正在准备专利分析...')
+              ) + ` 任务ID: ${taskId}`
               setMessages((m) => {
                 // Dedup: remove any stale task messages with the same taskId
                 const cleaned = m.filter((msg: { taskId?: string }) => msg.taskId !== taskId)
@@ -606,7 +605,8 @@ export default function Chat() {
               msg.taskId === taskId
                 ? { ...msg, content: t('chat.longTaskProgress')
                     .replace('{progress}', '[0%]')
-                    .replace('{phase}', '正在准备专利分析...') }
+                    .replace('{phase}', '正在准备专利分析...')
+                    + ` 任务ID: ${taskId}` }
                 : msg
             ))
             continue
@@ -615,7 +615,7 @@ export default function Chat() {
           if (data.status === 'queued') {
             setMessages((m) => m.map(msg =>
               msg.taskId === taskId
-                ? { ...msg, content: '🔬 深度分析排队中，将在当前任务完成后自动开始...' }
+                ? { ...msg, content: `🔬 深度分析排队中，将在当前任务完成后自动开始... 任务ID: ${taskId}` }
                 : msg
             ))
             continue
@@ -646,14 +646,14 @@ export default function Chat() {
           } else if (data.status === 'paused') {
             // Don't stop polling — the task may be resumed later
             const pausedLabel = data.current_step || `已暂停（进度 ${data.progress || 0}%）`
-            setMessages((m) => findAndUpdate(m, `⏸ ${pausedLabel}`))
+            setMessages((m) => findAndUpdate(m, `⏸ ${pausedLabel} 任务ID: ${taskId}`))
           } else if (data.status === 'cancelling') {
             // Backend is processing the stop request — show progress until cancelled
             const pct = data.progress != null ? `[${data.progress}%]` : ''
-            setMessages((m) => findAndUpdate(m, `⏹ 正在停止... ${pct}`))
+            setMessages((m) => findAndUpdate(m, `⏹ 正在停止... ${pct} 任务ID: ${taskId}`))
           } else if (data.status === 'cancelled') {
             stopLongTaskPolling(taskId)
-            setMessages((m) => findAndUpdate(m, '⏹ 任务已取消'))
+            setMessages((m) => findAndUpdate(m, `⏹ 任务已取消 任务ID: ${taskId}`))
           } else if (data.status === 'failed' || data.status === 'error') {
             stopLongTaskPolling(taskId)
             setMessages((m) => findAndUpdate(m, `${t('chat.longTaskFailed')} ${data.error_message || ''}`))
@@ -661,6 +661,7 @@ export default function Chat() {
             const newContent = t('chat.longTaskProgress')
               .replace('{progress}', progress)
               .replace('{phase}', phaseLabel)
+              + ` 任务ID: ${taskId}`
             setMessages((m) => findAndUpdate(m, newContent))
           }
         }
