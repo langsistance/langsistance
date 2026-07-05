@@ -639,9 +639,17 @@ async def _run_pipeline(
                 )
                 patent_ids = patent_ids[:source_max]
             total = len(patent_ids)
-            pending = patent_ids
-            # New search results — discard checkpoint from any previous run
-            table_rows = []
+            # Only reset state for fresh runs — when resuming from checkpoint,
+            # pending and table_rows were already restored above.
+            if not (checkpoint and checkpoint.get('pending')):
+                pending = patent_ids
+                table_rows = []
+            else:
+                _pipeline_logger.info(
+                    f"[task={task_id}] CHECKPOINT_RESUME_SCENE — "
+                    f"keeping checkpoint state: table_rows={len(table_rows)}, "
+                    f"pending={len(pending)}"
+                )
             update_task_status(task_id, 'searching_patents', 5,
                                f'检索到 {len(patent_ids)} 个专利，开始分析',
                                patent_ids=patent_ids)
