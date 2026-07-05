@@ -1,0 +1,10 @@
+# Prevent browser caching of RSC payloads (*.txt).
+# These are only meant for Next.js router's internal fetch() calls;
+# a stale cached copy can leak raw RSC wire format to the user
+# after network interruptions.
+/*.txt
+  Cache-Control: no-cache, no-store, must-revalidate
+
+# Ensure HTML pages are served with the correct charset
+/*.html
+  Content-Type: text/html; charset=utf-8
