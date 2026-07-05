@@ -287,6 +287,13 @@ async def _run_pipeline(
 
     # ---- Crash recovery / resume: load checkpoint ----
     checkpoint = load_checkpoint(task_id)
+    _pipeline_logger.info(
+        f"[task={task_id}] CHECKPOINT_LOAD — "
+        f"found={checkpoint is not None}, "
+        f"has_pending={bool(checkpoint and checkpoint.get('pending'))}, "
+        f"completed_rows={len(checkpoint.get('completed_rows', [])) if checkpoint else 0}, "
+        f"pending_count={len(checkpoint.get('pending', [])) if checkpoint and checkpoint.get('pending') else 0}"
+    )
     resume_columns = None
     if checkpoint and checkpoint.get('pending'):
         table_rows = checkpoint.get('completed_rows', [])
@@ -573,6 +580,12 @@ async def _run_pipeline(
             if not (checkpoint and checkpoint.get('pending')):
                 pending = patent_ids
                 table_rows = []
+            else:
+                _pipeline_logger.info(
+                    f"[task={task_id}] CHECKPOINT_RESUME — "
+                    f"keeping checkpoint state: table_rows={len(table_rows)}, "
+                    f"pending={len(pending)}"
+                )
 
     # ==== Phase 0: Search patents via scene tools (if no patent_ids provided) ====
     if not patent_ids and scene_candidates:
