@@ -209,7 +209,7 @@ export default function MarkdownMessage({ content, artifacts = [], streaming, tr
           <span className="assistant-waiting-scan" aria-hidden="true" />
         </div>
       )}
-      {(content.includes('🔬') || content.includes('✅') || content.includes('❌') || /\[\d+%\]/.test(content)) ? (
+      {(content.includes('🔬') || content.includes('✅') || content.includes('❌') || content.includes('⏸') || content.includes('⏹') || /\[\d+%\]/.test(content)) ? (
         <LongTaskProgress content={content} streaming={streaming} />
       ) : (
         <div dangerouslySetInnerHTML={{ __html: html || '▋' }} />
