@@ -285,11 +285,19 @@ async def _run_pipeline(
 ) -> dict:
     """Internal async pipeline orchestrator."""
 
-    # ---- Crash recovery: load checkpoint ----
+    # ---- Crash recovery / resume: load checkpoint ----
     checkpoint = load_checkpoint(task_id)
+    resume_columns = None
     if checkpoint and checkpoint.get('pending'):
         table_rows = checkpoint.get('completed_rows', [])
         pending = checkpoint['pending']
+        # Restore columns from checkpoint (only when resuming a paused task)
+        if checkpoint.get('columns'):
+            resume_columns = checkpoint['columns']
+        elif table_rows:
+            # Fallback: extract columns from first completed row
+            first = table_rows[0]
+            resume_columns = [k for k in first.keys() if not k.startswith('_')]
     else:
         table_rows = []
         pending = patent_ids
@@ -633,27 +641,35 @@ async def _run_pipeline(
                     'error': 'No patents found matching the search criteria'}
 
     # ==== Phase 1: Generate columns (Flash) ====
-    update_task_status(task_id, 'generating_columns', 5,
-                       f'正在生成分析框架（{total} 个专利）...')
-    _pipeline_logger.info(
-        f"[task={task_id}] PHASE1 generate_table_columns — "
-        f"query={params['query'][:100]}, patent_count={total}, "
-        f"provider={flash_provider.model if hasattr(flash_provider, 'model') else 'flash'}"
-    )
-    columns = await generate_table_columns(
-        query=params['query'],
-        patent_count=total,
-        provider=flash_provider,
-    )
-    _pipeline_logger.info(
-        f"[task={task_id}] PHASE1 columns_generated — "
-        f"column_count={len(columns)}, columns={columns}"
-    )
-    update_task_status(task_id, 'generating_columns', 5,
-                       f'分析维度：{" | ".join(columns[1:4])}...',
-                       table_columns=columns)
-    # Update MySQL long_tasks table after phase 1
-    _update_mysql_progress(task_id, 'generating_columns', 5)
+    if resume_columns:
+        # Resuming a paused task — reuse columns from checkpoint
+        columns = resume_columns
+        _pipeline_logger.info(
+            f"[task={task_id}] PHASE1 skipped — resuming with {len(columns)} "
+            f"columns from checkpoint: {columns}"
+        )
+    else:
+        update_task_status(task_id, 'generating_columns', 5,
+                           f'正在生成分析框架（{total} 个专利）...')
+        _pipeline_logger.info(
+            f"[task={task_id}] PHASE1 generate_table_columns — "
+            f"query={params['query'][:100]}, patent_count={total}, "
+            f"provider={flash_provider.model if hasattr(flash_provider, 'model') else 'flash'}"
+        )
+        columns = await generate_table_columns(
+            query=params['query'],
+            patent_count=total,
+            provider=flash_provider,
+        )
+        _pipeline_logger.info(
+            f"[task={task_id}] PHASE1 columns_generated — "
+            f"column_count={len(columns)}, columns={columns}"
+        )
+        update_task_status(task_id, 'generating_columns', 5,
+                           f'分析维度：{" | ".join(columns[1:4])}...',
+                           table_columns=columns)
+        # Update MySQL long_tasks table after phase 1
+        _update_mysql_progress(task_id, 'generating_columns', 5)
 
     # ==== Phase 2: Per-patent download -> analyze -> summarize ====
     _pipeline_logger.info(
@@ -662,6 +678,102 @@ async def _run_pipeline(
     )
     for i, patent_id in enumerate(pending):
         patent_index = len(table_rows) + 1
+
+        # ── Pause / Stop checkpoint ──────────────────────────────────────
+        from sources.long_task.status_manager import (
+            is_task_paused, is_task_stopped, set_task_cancelled,
+        )
+        if is_task_stopped(task_id):
+            _pipeline_logger.info(
+                f"[task={task_id}] STOPPED_BY_USER — "
+                f"completed={len(table_rows)}/{total}"
+            )
+            set_task_cancelled(task_id)
+            user_id = params.get('user_id', '')
+            if user_id:
+                try:
+                    from sources.long_task.user_queue import complete_user_task
+                    complete_user_task(str(user_id), task_id)
+                except Exception:
+                    pass
+            # Clean up uploaded files
+            if patent_file_refs:
+                import shutil as _shutil
+                upload_dir = os.path.dirname(patent_file_refs[0]['path'])
+                try:
+                    _shutil.rmtree(upload_dir, ignore_errors=True)
+                except Exception:
+                    pass
+            return {'status': 'cancelled', 'task_id': task_id}
+
+        if is_task_paused(task_id):
+            _pipeline_logger.info(
+                f"[task={task_id}] PAUSED_BY_USER — "
+                f"completed={len(table_rows)}/{total}"
+            )
+            # Save checkpoint so we can resume from here
+            save_checkpoint(task_id, {
+                'completed': [r.get('专利号', '') for r in table_rows if not r.get('_failed')],
+                'current': patent_id,
+                'pending': pending[i:],
+                'completed_rows': table_rows,
+                'failed': [r.get('专利号', '') for r in table_rows if r.get('_failed')],
+                'columns': columns,
+            })
+            # Update status to 'paused' (frontend sees this)
+            from sources.long_task.status_manager import update_task_status as _uts
+            _uts(task_id, 'paused', progress_pct(i, total),
+                 f'已暂停（{len(table_rows)}/{total}），点击继续可恢复',
+                 table_rows=table_rows)
+            # Release user lock and dispatch next queued task
+            user_id = params.get('user_id', '')
+            if user_id:
+                try:
+                    from sources.long_task.user_queue import complete_user_task as _c
+                    next_id = _c(str(user_id), task_id)
+                    if next_id:
+                        # Dispatch next task from MySQL
+                        import json as _json_dispatch
+                        from sources.knowledge.knowledge import get_db_connection as _gdc_d
+                        conn_d = _gdc_d()
+                        try:
+                            with conn_d.cursor() as cur_d:
+                                cur_d.execute(
+                                    """SELECT input_params, session_id, scene_id
+                                       FROM long_tasks WHERE task_id = %s""",
+                                    (next_id,),
+                                )
+                                row_d = cur_d.fetchone()
+                            if row_d:
+                                ip = row_d.get('input_params')
+                                sp = _json_dispatch.loads(ip) if isinstance(ip, str) else ip
+                                np = {
+                                    'query': sp.get('query', ''),
+                                    'patent_ids': sp.get('patent_ids', []),
+                                    'patent_source': sp.get('patent_source', 'auto'),
+                                    'session_id': row_d.get('session_id') or '',
+                                    'scene_id': row_d.get('scene_id'),
+                                    'conversation_history': sp.get('conversation_history', []),
+                                    'patent_file_refs': sp.get('patent_file_refs', []),
+                                    'user_id': str(user_id),
+                                }
+                                if sp.get('patent_texts'):
+                                    np['patent_texts'] = sp['patent_texts']
+                                execute_patent_analysis.delay(
+                                    task_id=next_id, params=np,
+                                )
+                                _pipeline_logger.info(
+                                    f"[task={task_id}] QUEUE_DISPATCHED_AFTER_PAUSE — "
+                                    f"next_task_id={next_id}"
+                                )
+                        finally:
+                            conn_d.close()
+                except Exception as e:
+                    _pipeline_logger.warning(
+                        f"[task={task_id}] PAUSE_DISPATCH_FAILED — {e}"
+                    )
+            return {'status': 'paused', 'task_id': task_id}
+
         try:
             update_task_status(task_id, 'analyzing',
                                progress_pct(i, total),
@@ -827,6 +939,7 @@ async def _run_pipeline(
             'pending': pending[i+1:],
             'completed_rows': table_rows,
             'failed': [r.get('专利号', patent_id) for r in table_rows if r.get('_failed')],
+            'columns': columns,
         })
 
         update_task_status(task_id, 'analyzing',

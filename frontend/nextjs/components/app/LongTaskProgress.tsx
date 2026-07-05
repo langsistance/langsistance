@@ -1,12 +1,14 @@
 'use client'
 
+import { useState } from 'react'
+
 interface Props {
   content: string
   streaming: boolean
 }
 
 interface TaskState {
-  phase: 'submitted' | 'running' | 'completed' | 'failed'
+  phase: 'submitted' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'
   taskId: string
   progress: number
   stepLabel: string
@@ -22,11 +24,12 @@ function hasProgressMarker(content: string): boolean {
 function parseTaskContent(content: string): TaskState | null {
   if (!content) return null
 
-  // Detect long task content — explicit markers OR progress percentage pattern
   const isLongTask =
     content.includes('🔬') ||
     content.includes('✅') ||
     content.includes('❌') ||
+    content.includes('⏸') ||
+    content.includes('⏹') ||
     hasProgressMarker(content)
   if (!isLongTask) return null
 
@@ -47,6 +50,28 @@ function parseTaskContent(content: string): TaskState | null {
   // Extract step label
   const labelMatch = content.match(/\]\s*(.+?)(?:\.{2,})?$/)
   let stepLabel = labelMatch ? labelMatch[1].trim() : ''
+
+  // Paused state
+  if (content.includes('⏸') || content.includes('已暂停')) {
+    return {
+      phase: 'paused',
+      taskId,
+      progress,
+      stepLabel,
+      message: content,
+    }
+  }
+
+  // Cancelled state
+  if (content.includes('⏹') || content.includes('已取消') || content.includes('已停止')) {
+    return {
+      phase: 'cancelled',
+      taskId,
+      progress: 0,
+      stepLabel: '',
+      message: content,
+    }
+  }
 
   // Completed state
   if (content.includes('✅')) {
@@ -83,7 +108,7 @@ function parseTaskContent(content: string): TaskState | null {
     return { phase: 'submitted', taskId, progress: 0, stepLabel: '', message: content }
   }
 
-  // Running: has 🔬 marker or progress percentage (taskId may be absent from polling updates)
+  // Running: has 🔬 marker or progress percentage
   if (content.includes('🔬') || hasProgressMarker(content)) {
     return { phase: 'running', taskId, progress: progress > 0 ? progress : 5, stepLabel, message: content }
   }
@@ -143,8 +168,6 @@ const PHASES = [
   { key: 'exporting', label: '文件导出' },
 ]
 
-// Keywords used to match backend status messages to phases for active highlighting.
-// The backend sends Chinese status messages; we check if any keyword appears in stepLabel.
 const PHASE_MATCH_KEYWORDS: Record<string, string[]> = {
   extracting_text: ['文件解析', '解析上传'],
   searching_patents: ['检索'],
@@ -158,20 +181,52 @@ function isFileUploadMode(content: string): boolean {
   return content.includes('上传文件') || content.includes('extracting_text')
 }
 
+async function callLongTaskApi(taskId: string, action: 'pause' | 'resume' | 'stop'): Promise<boolean> {
+  try {
+    const { getValidToken } = await import('@/lib/auth-client')
+    const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'https://api.copiioai.com'
+    const token = await getValidToken()
+    if (!token) return false
+    const res = await fetch(`${API_BASE}/long_task/${taskId}/${action}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    })
+    const data = await res.json()
+    return data.success === true
+  } catch {
+    return false
+  }
+}
+
 export default function LongTaskProgress({ content, streaming }: Props) {
   const state = parseTaskContent(content)
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
+
   if (!state) return null
+
+  async function handleAction(action: 'pause' | 'resume' | 'stop') {
+    if (!state?.taskId) return
+    setActionLoading(action)
+    await callLongTaskApi(state.taskId, action)
+    setActionLoading(null)
+  }
 
   return (
     <div className="lt-progress-card">
       {/* Header */}
       <div className="lt-progress-header">
-        <div className="lt-progress-pulse" data-active={state.phase === 'running' || state.phase === 'submitted'} />
+        <div className="lt-progress-pulse" data-active={
+          state.phase === 'running' || state.phase === 'submitted'
+        } />
         <span className="lt-progress-title">
           {state.phase === 'completed'
             ? '深度分析完成'
             : state.phase === 'failed'
             ? '分析失败'
+            : state.phase === 'cancelled'
+            ? '分析已取消'
+            : state.phase === 'paused'
+            ? '分析已暂停'
             : state.phase === 'submitted'
             ? '深度分析已提交'
             : '深度分析进行中'}
@@ -194,11 +249,23 @@ export default function LongTaskProgress({ content, streaming }: Props) {
         </div>
       )}
 
+      {/* Paused progress bar (frozen at pause point) */}
+      {state.phase === 'paused' && (
+        <div className="lt-progress-bar-wrap" style={{ opacity: 0.6 }}>
+          <div className="lt-progress-bar-track">
+            <div
+              className="lt-progress-bar-fill paused"
+              style={{ width: `${Math.max(state.progress, 2)}%` }}
+            />
+          </div>
+          <span className="lt-progress-pct">{state.progress}%</span>
+        </div>
+      )}
+
       {/* Phase indicators */}
-      {(state.phase === 'running' || state.phase === 'submitted') && (
+      {(state.phase === 'running' || state.phase === 'submitted' || state.phase === 'paused') && (
         <div className="lt-phases">
           {PHASES.filter(p => !p.fileUploadOnly || isFileUploadMode(content)).map((p) => {
-            // Determine which phases are active/completed based on progress
             let status: 'done' | 'active' | 'pending' = 'pending'
             if (p.key === 'extracting_text' && state.progress >= 20) status = 'done'
             else if (p.key === 'extracting_text' && state.progress >= 0) status = 'active'
@@ -208,7 +275,6 @@ export default function LongTaskProgress({ content, streaming }: Props) {
             else if (p.key === 'generating_report' && state.progress >= 80) status = state.progress < 90 ? 'active' : 'done'
             else if (p.key === 'exporting' && state.progress >= 92) status = 'active'
 
-            // Highlight current based on step label keywords
             const keywords = PHASE_MATCH_KEYWORDS[p.key] || [p.label]
             if (keywords.some(kw => state.stepLabel.includes(kw)) && status !== 'done') status = 'active'
 
@@ -227,8 +293,71 @@ export default function LongTaskProgress({ content, streaming }: Props) {
       )}
 
       {/* Current step */}
-      {state.stepLabel && state.phase === 'running' && (
+      {state.stepLabel && (state.phase === 'running' || state.phase === 'paused') && (
         <p className="lt-current-step">{state.stepLabel}</p>
+      )}
+
+      {/* Action buttons */}
+      {state.taskId && (
+        <div className="lt-actions">
+          {/* Running: pause + stop */}
+          {state.phase === 'running' && (
+            <>
+              <button
+                className="lt-btn lt-btn-pause"
+                onClick={() => handleAction('pause')}
+                disabled={actionLoading !== null || streaming}
+              >
+                {actionLoading === 'pause' ? (
+                  <span className="lt-btn-spinner" />
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                    <rect x="6" y="4" width="4" height="16" rx="1"/>
+                    <rect x="14" y="4" width="4" height="16" rx="1"/>
+                  </svg>
+                )}
+                <span>暂停</span>
+              </button>
+              <button
+                className="lt-btn lt-btn-stop"
+                onClick={() => handleAction('stop')}
+                disabled={actionLoading !== null || streaming}
+              >
+                {actionLoading === 'stop' ? (
+                  <span className="lt-btn-spinner" />
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                    <rect x="5" y="5" width="14" height="14" rx="1"/>
+                  </svg>
+                )}
+                <span>停止</span>
+              </button>
+            </>
+          )}
+
+          {/* Paused: resume */}
+          {state.phase === 'paused' && (
+            <button
+              className="lt-btn lt-btn-resume"
+              onClick={() => handleAction('resume')}
+              disabled={actionLoading !== null}
+            >
+              {actionLoading === 'resume' ? (
+                <span className="lt-btn-spinner" />
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                  <polygon points="7,4 20,12 7,20"/>
+                </svg>
+              )}
+              <span>继续</span>
+            </button>
+          )}
+
+          {/* Cancelled: no actions, just info */}
+          {state.phase === 'cancelled' && (
+            <span className="lt-cancelled-label">此任务已永久停止</span>
+          )}
+        </div>
       )}
 
       {/* Completed: download buttons */}

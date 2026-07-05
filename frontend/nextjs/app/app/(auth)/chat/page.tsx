@@ -643,6 +643,17 @@ export default function Chat() {
               .map((f: { format: string }) => `[${f.format.toUpperCase()}](${getLongTaskReportUrl(taskId, f.format as 'pdf' | 'docx')})`)
               .join(' | ')
             setMessages((m) => findAndUpdate(m, t('chat.longTaskCompleted').replace('{files}', files)))
+          } else if (data.status === 'paused') {
+            // Don't stop polling — the task may be resumed later
+            const pausedLabel = data.current_step || `已暂停（进度 ${data.progress || 0}%）`
+            setMessages((m) => findAndUpdate(m, `⏸ ${pausedLabel}`))
+          } else if (data.status === 'cancelling') {
+            // Backend is processing the stop request — show progress until cancelled
+            const pct = data.progress != null ? `[${data.progress}%]` : ''
+            setMessages((m) => findAndUpdate(m, `⏹ 正在停止... ${pct}`))
+          } else if (data.status === 'cancelled') {
+            stopLongTaskPolling(taskId)
+            setMessages((m) => findAndUpdate(m, '⏹ 任务已取消'))
           } else if (data.status === 'failed' || data.status === 'error') {
             stopLongTaskPolling(taskId)
             setMessages((m) => findAndUpdate(m, `${t('chat.longTaskFailed')} ${data.error_message || ''}`))

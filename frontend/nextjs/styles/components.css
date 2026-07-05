@@ -1114,6 +1114,87 @@ input[type="checkbox"] {
   border: 1px solid rgba(220,38,38,0.1);
 }
 
+/* ── Long Task Action Buttons (pause / resume / stop) ───────────────────────── */
+
+.lt-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.lt-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  color: #374151;
+  background: #F9FAFB;
+  border-color: #E5E7EB;
+}
+
+.lt-btn:hover:not(:disabled) { background: #F3F4F6; }
+.lt-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.lt-btn-pause {
+  color: #D97706;
+  background: rgba(217,119,6,0.06);
+  border-color: rgba(217,119,6,0.15);
+}
+.lt-btn-pause:hover:not(:disabled) {
+  background: rgba(217,119,6,0.12);
+  border-color: rgba(217,119,6,0.3);
+}
+
+.lt-btn-stop {
+  color: #DC2626;
+  background: rgba(220,38,38,0.06);
+  border-color: rgba(220,38,38,0.15);
+}
+.lt-btn-stop:hover:not(:disabled) {
+  background: rgba(220,38,38,0.12);
+  border-color: rgba(220,38,38,0.3);
+}
+
+.lt-btn-resume {
+  color: #059669;
+  background: rgba(5,150,105,0.06);
+  border-color: rgba(5,150,105,0.15);
+}
+.lt-btn-resume:hover:not(:disabled) {
+  background: rgba(5,150,105,0.12);
+  border-color: rgba(5,150,105,0.3);
+}
+
+.lt-btn-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: lt-spin 0.6s linear infinite;
+  display: inline-block;
+}
+
+@keyframes lt-spin {
+  to { transform: rotate(360deg); }
+}
+
+.lt-cancelled-label {
+  font-size: 12px;
+  color: #9CA3AF;
+  font-style: italic;
+}
+
+.lt-progress-bar-fill.paused {
+  background: linear-gradient(90deg, #D97706, #F59E0B);
+}
+
 /* ── Redesigned Capabilities Section ─────────────────────────────────────── */
 
 .scene-hint {

@@ -82,3 +82,77 @@ def set_task_failed(task_id: str, error: str) -> None:
     status['error_message'] = error
     r.set(_status_key(task_id), json.dumps(status, ensure_ascii=False),
           ex=TASK_STATUS_TTL)
+
+
+# ── Pause / Resume ──────────────────────────────────────────────────────────
+
+PAUSE_FLAG_TTL = 86400  # 24 h
+
+
+def _pause_key(task_id: str) -> str:
+    return f"{TASK_STATUS_PREFIX}:{task_id}:paused"
+
+
+def _stop_key(task_id: str) -> str:
+    return f"{TASK_STATUS_PREFIX}:{task_id}:stopped"
+
+
+def is_task_paused(task_id: str) -> bool:
+    """Check whether a pause has been requested for *task_id*."""
+    r = _get_redis()
+    return r.exists(_pause_key(task_id)) > 0
+
+
+def request_task_pause(task_id: str) -> None:
+    """Signal the running task to pause at its next checkpoint."""
+    import time
+    r = _get_redis()
+    r.set(_pause_key(task_id), '1', ex=PAUSE_FLAG_TTL)
+    # Update status so the frontend sees the transition immediately
+    raw = r.get(_status_key(task_id))
+    status = json.loads(raw) if raw else {}
+    status['status'] = 'paused'
+    status['last_update'] = time.time()
+    r.set(_status_key(task_id), json.dumps(status, ensure_ascii=False),
+          ex=TASK_STATUS_TTL)
+
+
+def clear_task_pause(task_id: str) -> None:
+    """Clear the pause flag (used on resume)."""
+    r = _get_redis()
+    r.delete(_pause_key(task_id))
+
+
+def is_task_stopped(task_id: str) -> bool:
+    """Check whether a stop has been requested for *task_id*."""
+    r = _get_redis()
+    return r.exists(_stop_key(task_id)) > 0
+
+
+def request_task_stop(task_id: str) -> None:
+    """Signal the running task to stop at its next checkpoint."""
+    import time
+    r = _get_redis()
+    r.set(_stop_key(task_id), '1', ex=PAUSE_FLAG_TTL)
+    # Update status so the frontend sees the transition immediately
+    raw = r.get(_status_key(task_id))
+    status = json.loads(raw) if raw else {}
+    status['status'] = 'cancelling'
+    status['last_update'] = time.time()
+    r.set(_status_key(task_id), json.dumps(status, ensure_ascii=False),
+          ex=TASK_STATUS_TTL)
+
+
+def set_task_cancelled(task_id: str) -> None:
+    """Mark task as cancelled and clean up its Redis keys."""
+    r = _get_redis()
+    raw = r.get(_status_key(task_id))
+    status = json.loads(raw) if raw else {}
+    status['status'] = 'cancelled'
+    status['progress'] = 0
+    r.set(_status_key(task_id), json.dumps(status, ensure_ascii=False),
+          ex=TASK_STATUS_TTL)
+    # Clean up pause/stop flags and checkpoint
+    r.delete(_pause_key(task_id))
+    r.delete(_stop_key(task_id))
+    r.delete(_checkpoint_key(task_id))
