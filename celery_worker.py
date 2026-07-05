@@ -1020,13 +1020,14 @@ async def _run_pipeline(
                         )
                         row = cur.fetchone()
                     if row:
-                        stored = _json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                        input_params = row.get('input_params')
+                        stored = _json.loads(input_params) if isinstance(input_params, str) else input_params
                         next_params = {
                             'query': stored.get('query', ''),
                             'patent_ids': stored.get('patent_ids', []),
                             'patent_source': stored.get('patent_source', 'auto'),
-                            'session_id': row[1] or '',
-                            'scene_id': row[2],
+                            'session_id': row.get('session_id') or '',
+                            'scene_id': row.get('scene_id'),
                             'conversation_history': stored.get('conversation_history', []),
                             'patent_file_refs': stored.get('patent_file_refs', []),
                             'user_id': str(user_id),
