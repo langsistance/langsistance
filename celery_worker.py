@@ -745,7 +745,7 @@ async def _run_pipeline(
             })
             # Update status to 'paused' (frontend sees this)
             from sources.long_task.status_manager import update_task_status as _uts
-            _uts(task_id, 'paused', progress_pct(i, total),
+            _uts(task_id, 'paused', progress_pct(len(table_rows) + i, total),
                  f'已暂停（{len(table_rows)}/{total}），点击继续可恢复',
                  status='paused', table_rows=table_rows)
             # Release user lock and dispatch next queued task
@@ -798,8 +798,10 @@ async def _run_pipeline(
             return {'status': 'paused', 'task_id': task_id}
 
         try:
+            # Use patent_index-based progress so resumed tasks show correct %
+            completed_before = len(table_rows)
             update_task_status(task_id, 'analyzing',
-                               progress_pct(i, total),
+                               progress_pct(completed_before + i, total),
                                f'正在下载专利文件（{patent_index}/{total}）...',
                                table_rows=table_rows)
 
@@ -832,7 +834,7 @@ async def _run_pipeline(
             )
 
             update_task_status(task_id, 'analyzing',
-                               progress_pct(i, total),
+                               progress_pct(completed_before + i, total),
                                f'正在分析（{patent_index}/{total}）：{patent_id}',
                                table_rows=table_rows)
 
@@ -966,7 +968,7 @@ async def _run_pipeline(
         })
 
         update_task_status(task_id, 'analyzing',
-                           progress_pct(i + 1, total),
+                           progress_pct(completed_before + i + 1, total),
                            f'已完成 {len(table_rows)}/{total} 个专利分析',
                            table_rows=table_rows)
     # Clean up temp upload directory after Phase 2 (vision fallback may have read files)
