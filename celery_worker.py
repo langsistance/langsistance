@@ -33,11 +33,20 @@ app.conf.update(
     worker_prefetch_multiplier=1,
     broker_connection_retry_on_startup=True,
     broker_transport_options={
-        # After a worker dies, unacked tasks become visible to other workers
-        # after this many seconds.  Default is 3600 (1 hour) — way too long
-        # for crash recovery.  600 s (10 min) balances quick recovery against
-        # false redelivery if the worker's heartbeat is merely delayed.
-        'visibility_timeout': 600,
+        # After a worker dies HARD (kill -9 / power loss), unacked tasks
+        # become visible to other workers after this many seconds.
+        #
+        # MUST be >= time_limit (3600 s) to prevent dual execution.
+        # With task_acks_late=True, the task is NOT acknowledged until it
+        # completes.  If visibility_timeout < actual runtime, Redis will
+        # redeliver the task to another worker while the first worker is
+        # still running — causing TWO workers to execute the same task.
+        #
+        # Graceful shutdown (docker stop / SIGTERM) is handled by
+        # worker_shutdown_timeout + stop_grace_period — the worker
+        # rejects unacked tasks within 25 s, so they return to the
+        # queue immediately.  visibility_timeout is only for hard crashes.
+        'visibility_timeout': 7200,
     },
     # Allow running tasks enough time to reject cleanly during warm shutdown
     # before Docker sends SIGKILL.
@@ -552,6 +561,8 @@ async def _run_pipeline(
         if patent_ids:
             total = len(patent_ids)
             pending = patent_ids
+            # New batch discovered — discard checkpoint from any previous run
+            table_rows = []
 
     # ==== Phase 0: Search patents via scene tools (if no patent_ids provided) ====
     if not patent_ids and scene_candidates:
@@ -606,6 +617,8 @@ async def _run_pipeline(
                 patent_ids = patent_ids[:source_max]
             total = len(patent_ids)
             pending = patent_ids
+            # New search results — discard checkpoint from any previous run
+            table_rows = []
             update_task_status(task_id, 'searching_patents', 5,
                                f'检索到 {len(patent_ids)} 个专利，开始分析',
                                patent_ids=patent_ids)
