@@ -1043,8 +1043,12 @@ async def _run_pipeline(
                 finally:
                     conn.close()
         except Exception as e:
+            import traceback
             _pipeline_logger.warning(
-                f"[task={task_id}] QUEUE_DISPATCH_FAILED — {e}"
+                f"[task={task_id}] QUEUE_DISPATCH_FAILED — {type(e).__name__}: {e}"
+            )
+            _pipeline_logger.warning(
+                f"[task={task_id}] QUEUE_DISPATCH_TRACEBACK —\n{traceback.format_exc()}"
             )
 
     return {'status': 'completed', 'task_id': task_id}
