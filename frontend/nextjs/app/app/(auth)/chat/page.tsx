@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { queryStream, queryStreamWithFiles, getUserSceneStatus, getSceneKnowledge, pollLongTaskStatus, pollLongTaskBatchStatus, getLongTaskReportUrl, getSession, saveSessionMessages } from '@/services/api'
+import { queryStream, queryStreamWithFiles, getUserSceneStatus, getSceneKnowledge, pollLongTaskBatchStatus, getLongTaskReportUrl, getSession, saveSessionMessages } from '@/services/api'
 import { useI18n } from '@/lib/app-i18n'
 import MarkdownMessage from '@/components/app/MarkdownMessage'
 import { useChatSession } from '@/contexts/ChatContext'
@@ -71,7 +71,9 @@ export default function Chat() {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
-  const pollTimersRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map())
+  // Batch polling: one global timer → one POST /batch_status for all active tasks
+  const activeTasksRef = useRef<Map<string, string>>(new Map())       // taskId → assistantId
+  const globalPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const isNearBottomRef = useRef(true)
   const [transientStatus, setTransientStatus] = useState('')
   const [enabledScenes, setEnabledScenes] = useState<any[]>([])
@@ -563,85 +565,109 @@ export default function Chat() {
 
   function stopLongTaskPolling(taskId?: string) {
     if (taskId) {
-      const timer = pollTimersRef.current.get(taskId)
-      if (timer) {
-        clearInterval(timer)
-        pollTimersRef.current.delete(taskId)
+      activeTasksRef.current.delete(taskId)
+      // If no more active tasks, stop the global poll timer
+      if (activeTasksRef.current.size === 0 && globalPollTimerRef.current) {
+        clearInterval(globalPollTimerRef.current)
+        globalPollTimerRef.current = null
       }
     } else {
-      pollTimersRef.current.forEach(timer => clearInterval(timer))
-      pollTimersRef.current.clear()
+      // Stop all polling
+      activeTasksRef.current.clear()
+      if (globalPollTimerRef.current) {
+        clearInterval(globalPollTimerRef.current)
+        globalPollTimerRef.current = null
+      }
     }
   }
 
-  function startLongTaskPolling(taskId: string, assistantId: string) {
-    // Stop any existing poll for this taskId
-    stopLongTaskPolling(taskId)
+  // Shared batch poll loop — fires one POST /batch_status for all active tasks
+  function ensureGlobalPollLoop() {
+    if (globalPollTimerRef.current) return // already running
 
-    async function poll() {
+    async function pollAll() {
+      const activeIds = Array.from(activeTasksRef.current.keys())
+      if (activeIds.length === 0) {
+        // Nothing to poll — stop the loop
+        if (globalPollTimerRef.current) {
+          clearInterval(globalPollTimerRef.current)
+          globalPollTimerRef.current = null
+        }
+        return
+      }
+
       try {
-        const data = await pollLongTaskStatus(taskId)
-        if (!data || data.status === 'unknown') {
-          setMessages((m) => m.map(msg =>
-            msg.id === assistantId
-              ? { ...msg, taskId, content: t('chat.longTaskProgress')
-                  .replace('{progress}', '[0%]')
-                  .replace('{phase}', '正在准备专利分析...') }
-              : msg
-          ))
-          return
-        }
+        const batch = await pollLongTaskBatchStatus(activeIds)
 
-        if (data.status === 'queued') {
-          setMessages((m) => m.map(msg =>
-            msg.id === assistantId
-              ? { ...msg, content: '🔬 深度分析排队中，将在当前任务完成后自动开始...' }
-              : msg
-          ))
-          return
-        }
+        for (const [taskId, assistantId] of activeTasksRef.current) {
+          const data = batch[taskId]
+          if (!data || data.status === 'unknown') {
+            setMessages((m) => m.map(msg =>
+              msg.taskId === taskId
+                ? { ...msg, content: t('chat.longTaskProgress')
+                    .replace('{progress}', '[0%]')
+                    .replace('{phase}', '正在准备专利分析...') }
+                : msg
+            ))
+            continue
+          }
 
-        const phaseLabel = data.current_step || data.current_phase || ''
-        const progress = data.progress != null ? `[${data.progress}%]` : ''
+          if (data.status === 'queued') {
+            setMessages((m) => m.map(msg =>
+              msg.taskId === taskId
+                ? { ...msg, content: '🔬 深度分析排队中，将在当前任务完成后自动开始...' }
+                : msg
+            ))
+            continue
+          }
 
-        // Use taskId to find the message — avoids race with React batching
-        // (assistantId may not exist yet if setMessages hasn't flushed)
-        function findAndUpdate(messages: any[], newContent: string) {
-          const idx = messages.findIndex(msg => msg.taskId === taskId)
-          if (idx >= 0) {
-            return messages.map((msg, i) =>
-              i === idx ? { ...msg, content: newContent } : msg
+          const phaseLabel = data.current_step || data.current_phase || ''
+          const progress = data.progress != null ? `[${data.progress}%]` : ''
+
+          function findAndUpdate(messages: any[], newContent: string) {
+            const idx = messages.findIndex(msg => msg.taskId === taskId)
+            if (idx >= 0) {
+              return messages.map((msg, i) =>
+                i === idx ? { ...msg, content: newContent } : msg
+              )
+            }
+            // Fallback: try assistantId
+            return messages.map(msg =>
+              msg.id === assistantId ? { ...msg, content: newContent } : msg
             )
           }
-          // Fallback: try assistantId (initial SSE message)
-          return messages.map(msg =>
-            msg.id === assistantId ? { ...msg, content: newContent } : msg
-          )
-        }
 
-        if (data.status === 'completed' || data.status === 'success') {
-          stopLongTaskPolling(taskId)
-          const files = (data.report_files || [])
-            .map((f: { format: string }) => `[${f.format.toUpperCase()}](${getLongTaskReportUrl(taskId, f.format as 'pdf' | 'docx')})`)
-            .join(' | ')
-          setMessages((m) => findAndUpdate(m, t('chat.longTaskCompleted').replace('{files}', files)))
-        } else if (data.status === 'failed' || data.status === 'error') {
-          stopLongTaskPolling(taskId)
-          setMessages((m) => findAndUpdate(m, `${t('chat.longTaskFailed')} ${data.error_message || ''}`))
-        } else {
-          const newContent = t('chat.longTaskProgress')
-            .replace('{progress}', progress)
-            .replace('{phase}', phaseLabel)
-          setMessages((m) => findAndUpdate(m, newContent))
+          if (data.status === 'completed' || data.status === 'success') {
+            stopLongTaskPolling(taskId)
+            const files = (data.report_files || [])
+              .map((f: { format: string }) => `[${f.format.toUpperCase()}](${getLongTaskReportUrl(taskId, f.format as 'pdf' | 'docx')})`)
+              .join(' | ')
+            setMessages((m) => findAndUpdate(m, t('chat.longTaskCompleted').replace('{files}', files)))
+          } else if (data.status === 'failed' || data.status === 'error') {
+            stopLongTaskPolling(taskId)
+            setMessages((m) => findAndUpdate(m, `${t('chat.longTaskFailed')} ${data.error_message || ''}`))
+          } else {
+            const newContent = t('chat.longTaskProgress')
+              .replace('{progress}', progress)
+              .replace('{phase}', phaseLabel)
+            setMessages((m) => findAndUpdate(m, newContent))
+          }
         }
       } catch {
-        // Non-fatal poll error; continue polling
+        // Non-fatal batch poll error; continue polling
       }
     }
 
     // Poll immediately, then every 3s
-    poll()
-    pollTimersRef.current.set(taskId, setInterval(poll, 3000))
+    pollAll()
+    globalPollTimerRef.current = setInterval(pollAll, 3000)
+  }
+
+  function startLongTaskPolling(taskId: string, assistantId: string) {
+    // Register this task in the active set
+    activeTasksRef.current.set(taskId, assistantId)
+    // Ensure the single global poll loop is running
+    ensureGlobalPollLoop()
   }
 
   // Cleanup poll timer on unmount
