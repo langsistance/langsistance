@@ -262,7 +262,7 @@ export default function LongTaskProgress({ content, streaming }: Props) {
         </div>
       )}
 
-      {/* Phase indicators */}
+      {/* Phase indicators + inline action buttons */}
       {(state.phase === 'running' || state.phase === 'submitted' || state.phase === 'paused') && (
         <div className="lt-phases">
           {PHASES.filter(p => !p.fileUploadOnly || isFileUploadMode(content)).map((p) => {
@@ -289,6 +289,82 @@ export default function LongTaskProgress({ content, streaming }: Props) {
               </div>
             )
           })}
+
+          {/* Inline icon-only action buttons — like video player controls */}
+          {state.taskId && (
+            <>
+              {/* Running: pause + stop */}
+              {state.phase === 'running' && (
+                <>
+                  <span className="lt-phase-sep" />
+                  <button
+                    className="lt-phase-action lt-phase-action-pause"
+                    onClick={() => handleAction('pause')}
+                    disabled={actionLoading !== null || streaming}
+                    title="暂停"
+                  >
+                    {actionLoading === 'pause' ? (
+                      <span className="lt-btn-spinner" />
+                    ) : (
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                        <rect x="6" y="4" width="4" height="16" rx="1"/>
+                        <rect x="14" y="4" width="4" height="16" rx="1"/>
+                      </svg>
+                    )}
+                  </button>
+                  <button
+                    className="lt-phase-action lt-phase-action-stop"
+                    onClick={() => handleAction('stop')}
+                    disabled={actionLoading !== null || streaming}
+                    title="停止"
+                  >
+                    {actionLoading === 'stop' ? (
+                      <span className="lt-btn-spinner" />
+                    ) : (
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                        <rect x="5" y="5" width="14" height="14" rx="1"/>
+                      </svg>
+                    )}
+                  </button>
+                </>
+              )}
+
+              {/* Paused: play + stop */}
+              {state.phase === 'paused' && (
+                <>
+                  <span className="lt-phase-sep" />
+                  <button
+                    className="lt-phase-action lt-phase-action-resume"
+                    onClick={() => handleAction('resume')}
+                    disabled={actionLoading !== null}
+                    title="继续"
+                  >
+                    {actionLoading === 'resume' ? (
+                      <span className="lt-btn-spinner" />
+                    ) : (
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                        <polygon points="7,4 20,12 7,20"/>
+                      </svg>
+                    )}
+                  </button>
+                  <button
+                    className="lt-phase-action lt-phase-action-stop"
+                    onClick={() => handleAction('stop')}
+                    disabled={actionLoading !== null}
+                    title="停止"
+                  >
+                    {actionLoading === 'stop' ? (
+                      <span className="lt-btn-spinner" />
+                    ) : (
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                        <rect x="5" y="5" width="14" height="14" rx="1"/>
+                      </svg>
+                    )}
+                  </button>
+                </>
+              )}
+            </>
+          )}
         </div>
       )}
 
@@ -297,67 +373,9 @@ export default function LongTaskProgress({ content, streaming }: Props) {
         <p className="lt-current-step">{state.stepLabel}</p>
       )}
 
-      {/* Action buttons */}
-      {state.taskId && (
-        <div className="lt-actions">
-          {/* Running: pause + stop */}
-          {state.phase === 'running' && (
-            <>
-              <button
-                className="lt-btn lt-btn-pause"
-                onClick={() => handleAction('pause')}
-                disabled={actionLoading !== null || streaming}
-              >
-                {actionLoading === 'pause' ? (
-                  <span className="lt-btn-spinner" />
-                ) : (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                    <rect x="6" y="4" width="4" height="16" rx="1"/>
-                    <rect x="14" y="4" width="4" height="16" rx="1"/>
-                  </svg>
-                )}
-                <span>暂停</span>
-              </button>
-              <button
-                className="lt-btn lt-btn-stop"
-                onClick={() => handleAction('stop')}
-                disabled={actionLoading !== null || streaming}
-              >
-                {actionLoading === 'stop' ? (
-                  <span className="lt-btn-spinner" />
-                ) : (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                    <rect x="5" y="5" width="14" height="14" rx="1"/>
-                  </svg>
-                )}
-                <span>停止</span>
-              </button>
-            </>
-          )}
-
-          {/* Paused: resume */}
-          {state.phase === 'paused' && (
-            <button
-              className="lt-btn lt-btn-resume"
-              onClick={() => handleAction('resume')}
-              disabled={actionLoading !== null}
-            >
-              {actionLoading === 'resume' ? (
-                <span className="lt-btn-spinner" />
-              ) : (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                  <polygon points="7,4 20,12 7,20"/>
-                </svg>
-              )}
-              <span>继续</span>
-            </button>
-          )}
-
-          {/* Cancelled: no actions, just info */}
-          {state.phase === 'cancelled' && (
-            <span className="lt-cancelled-label">此任务已永久停止</span>
-          )}
-        </div>
+      {/* Cancelled: info label */}
+      {state.phase === 'cancelled' && state.taskId && (
+        <p className="lt-cancelled-label">此任务已永久停止</p>
       )}
 
       {/* Completed: download buttons */}
