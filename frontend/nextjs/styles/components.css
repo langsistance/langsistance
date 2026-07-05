@@ -1121,7 +1121,7 @@ input[type="checkbox"] {
   height: 18px;
   background: #E5E7EB;
   border-radius: 1px;
-  margin: 0 2px;
+  margin: 0 2px 0 auto;
   align-self: center;
 }
 
@@ -1131,19 +1131,16 @@ input[type="checkbox"] {
   justify-content: center;
   width: 28px;
   height: 28px;
-  border: 1px solid transparent;
+  border: 1px solid;
   border-radius: 50%;
   cursor: pointer;
   transition: all 0.15s ease;
-  background: rgba(0,0,0,0.03);
-  color: #9CA3AF;
   padding: 0;
   flex-shrink: 0;
 }
 
 .lt-phase-action:hover:not(:disabled) {
-  background: #F3F4F6;
-  color: #374151;
+  transform: scale(1.1);
 }
 
 .lt-phase-action:disabled {
@@ -1151,22 +1148,34 @@ input[type="checkbox"] {
   cursor: not-allowed;
 }
 
-.lt-phase-action-pause:hover:not(:disabled) {
+.lt-phase-action-pause {
   color: #D97706;
-  background: rgba(217,119,6,0.1);
+  background: rgba(217,119,6,0.08);
   border-color: rgba(217,119,6,0.2);
 }
-
-.lt-phase-action-resume:hover:not(:disabled) {
-  color: #059669;
-  background: rgba(5,150,105,0.1);
-  border-color: rgba(5,150,105,0.2);
+.lt-phase-action-pause:hover:not(:disabled) {
+  background: rgba(217,119,6,0.16);
+  border-color: rgba(217,119,6,0.35);
 }
 
-.lt-phase-action-stop:hover:not(:disabled) {
+.lt-phase-action-resume {
+  color: #059669;
+  background: rgba(5,150,105,0.08);
+  border-color: rgba(5,150,105,0.2);
+}
+.lt-phase-action-resume:hover:not(:disabled) {
+  background: rgba(5,150,105,0.16);
+  border-color: rgba(5,150,105,0.35);
+}
+
+.lt-phase-action-stop {
   color: #DC2626;
-  background: rgba(220,38,38,0.1);
+  background: rgba(220,38,38,0.08);
   border-color: rgba(220,38,38,0.2);
+}
+.lt-phase-action-stop:hover:not(:disabled) {
+  background: rgba(220,38,38,0.16);
+  border-color: rgba(220,38,38,0.35);
 }
 
 .lt-cancelled-label {
