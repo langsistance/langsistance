@@ -568,9 +568,11 @@ async def _run_pipeline(
 
         if patent_ids:
             total = len(patent_ids)
-            pending = patent_ids
-            # New batch discovered — discard checkpoint from any previous run
-            table_rows = []
+            # Only reset state for fresh runs — when resuming from checkpoint,
+            # pending and table_rows were already restored above.
+            if not (checkpoint and checkpoint.get('pending')):
+                pending = patent_ids
+                table_rows = []
 
     # ==== Phase 0: Search patents via scene tools (if no patent_ids provided) ====
     if not patent_ids and scene_candidates:
