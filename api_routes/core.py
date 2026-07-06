@@ -115,6 +115,19 @@ def _detect_patent_source(
     cnipa_keywords = ["cnipa", "中国专利", "中国国家知识产权", "国家知识产权局",
                       "chinese patent", "china patent",
                       "zldsj"]
+    # Chinese company names → infer cnipa
+    cn_company_keywords = [
+        "华为", "小米", "oppo", "vivo", "腾讯", "阿里巴巴", "百度",
+        "比亚迪", "宁德时代", "中兴", "大疆", "字节跳动", "中芯国际",
+        "京东方", "格力", "美的", "海尔", "联想", "蔚来", "小鹏", "理想",
+        "寒武纪", "地平线", "紫光", "长江存储", "长鑫",
+    ]
+    # US company names → infer uspto
+    us_company_keywords = [
+        "apple", "google", "microsoft", "tesla", "intel", "amd",
+        "nvidia", "qualcomm", "ibm", "meta", "amazon", "broadcom",
+        "micron", "cisco", "oracle", "hp", "dell",
+    ]
     if any(kw in combined_lower for kw in uspto_keywords):
         source = "uspto"
         if app_logger:
@@ -124,6 +137,18 @@ def _detect_patent_source(
         source = "cnipa"
         if app_logger:
             app_logger.info(f"patent_source: text_keywords → cnipa")
+        return source
+
+    # Company name inference (lower priority than explicit patent office keywords)
+    if any(kw in combined_lower for kw in us_company_keywords):
+        source = "uspto"
+        if app_logger:
+            app_logger.info(f"patent_source: us_company → uspto")
+        return source
+    if any(kw in combined_lower for kw in cn_company_keywords):
+        source = "cnipa"
+        if app_logger:
+            app_logger.info(f"patent_source: cn_company → cnipa")
         return source
 
     # ── 2. Scene tools (fallback) ──
@@ -219,6 +244,11 @@ async def _classify_long_task_async(
         "- 如果对话提到 CNIPA、中国专利、国家知识产权局 → cnipa\n"
         "- 纯8位数字ID → uspto\n"
         "- 20XX开头的长数字ID → cnipa\n"
+        "- 如果用户提到了中国公司（如华为、小米、OPPO、vivo、腾讯、阿里巴巴、百度、\n"
+        "  比亚迪、宁德时代、中兴、大疆、字节跳动、中芯国际、京东方等），且没有明确\n"
+        "  提到美国专利 → cnipa\n"
+        "- 如果用户提到了美国公司（如Apple、Google、Microsoft、Tesla、Intel、\n"
+        "  AMD、NVIDIA、Qualcomm、IBM等），且没有明确提到中国专利 → uspto\n"
         "- 不确定 → unknown\n\n"
         "## 输出JSON\n"
         '{"scenario": "direct_ids"|"conversation_refs", '
