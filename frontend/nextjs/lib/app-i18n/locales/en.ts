@@ -151,6 +151,41 @@ export default {
     longTaskFailed: '❌ Deep research task failed.',
   },
 
+  // Sidebar
+  sidebar: {
+    analysisHistory: 'Analysis History',
+    defaultSessionTitle: 'Patent Analysis',
+  },
+
+  // Deep analysis task card
+  longTask: {
+    // Phase labels
+    phaseExtractingText: 'Extracting Text',
+    phaseSearchingPatents: 'Searching Patents',
+    phaseGeneratingColumns: 'Analysis Framework',
+    phaseAnalyzing: 'Patent Analysis',
+    phaseGeneratingReport: 'Writing Report',
+    phaseExporting: 'Exporting Files',
+
+    // Card titles
+    titleCompleted: 'Analysis Complete',
+    titleFailed: 'Analysis Failed',
+    titleCancelled: 'Analysis Cancelled',
+    titlePaused: 'Analysis Paused',
+    titleSubmitted: 'Analysis Submitted',
+    titleRunning: 'Analysis In Progress',
+
+    // Action button tooltips
+    actionPause: 'Pause',
+    actionResume: 'Resume',
+    actionStop: 'Stop',
+
+    // Status labels
+    cancelledLabel: 'This task has been permanently stopped',
+    downloadLabel: 'Download {format}',
+    submittedMessage: 'Analysis is running in background, you can continue the conversation...',
+  },
+
   // Knowledge management
   knowledge: {
     title: 'Knowledge Base',

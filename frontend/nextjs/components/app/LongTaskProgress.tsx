@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useI18n } from '@/lib/app-i18n'
 
 interface Props {
   content: string
@@ -159,13 +160,22 @@ const PHASE_ICONS: Record<string, JSX.Element> = {
   ),
 }
 
+const PHASE_LABEL_KEYS: Record<string, string> = {
+  extracting_text: 'longTask.phaseExtractingText',
+  searching_patents: 'longTask.phaseSearchingPatents',
+  generating_columns: 'longTask.phaseGeneratingColumns',
+  analyzing: 'longTask.phaseAnalyzing',
+  generating_report: 'longTask.phaseGeneratingReport',
+  exporting: 'longTask.phaseExporting',
+}
+
 const PHASES = [
-  { key: 'extracting_text', label: '文件解析', fileUploadOnly: true },
-  { key: 'searching_patents', label: '专利检索' },
-  { key: 'generating_columns', label: '分析框架' },
-  { key: 'analyzing', label: '专利分析' },
-  { key: 'generating_report', label: '报告撰写' },
-  { key: 'exporting', label: '文件导出' },
+  { key: 'extracting_text', fileUploadOnly: true },
+  { key: 'searching_patents' },
+  { key: 'generating_columns' },
+  { key: 'analyzing' },
+  { key: 'generating_report' },
+  { key: 'exporting' },
 ]
 
 const PHASE_MATCH_KEYWORDS: Record<string, string[]> = {
@@ -199,6 +209,7 @@ async function callLongTaskApi(taskId: string, action: 'pause' | 'resume' | 'sto
 }
 
 export default function LongTaskProgress({ content, streaming }: Props) {
+  const { t } = useI18n()
   const state = parseTaskContent(content)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
 
@@ -220,16 +231,16 @@ export default function LongTaskProgress({ content, streaming }: Props) {
         } />
         <span className="lt-progress-title">
           {state.phase === 'completed'
-            ? '深度分析完成'
+            ? t('longTask.titleCompleted')
             : state.phase === 'failed'
-            ? '分析失败'
+            ? t('longTask.titleFailed')
             : state.phase === 'cancelled'
-            ? '分析已取消'
+            ? t('longTask.titleCancelled')
             : state.phase === 'paused'
-            ? '分析已暂停'
+            ? t('longTask.titlePaused')
             : state.phase === 'submitted'
-            ? '深度分析已提交'
-            : '深度分析进行中'}
+            ? t('longTask.titleSubmitted')
+            : t('longTask.titleRunning')}
         </span>
         {state.taskId && (
           <span className="lt-progress-id">{state.taskId}</span>
@@ -275,17 +286,18 @@ export default function LongTaskProgress({ content, streaming }: Props) {
             else if (p.key === 'generating_report' && state.progress >= 80) status = state.progress < 90 ? 'active' : 'done'
             else if (p.key === 'exporting' && state.progress >= 92) status = 'active'
 
-            const keywords = PHASE_MATCH_KEYWORDS[p.key] || [p.label]
+            const phaseLabel = t(PHASE_LABEL_KEYS[p.key])
+            const keywords = PHASE_MATCH_KEYWORDS[p.key] || [phaseLabel]
             if (keywords.some(kw => state.stepLabel.includes(kw)) && status !== 'done') status = 'active'
 
             return (
               <div
                 key={p.key}
                 className={`lt-phase-dot ${status}`}
-                title={p.label}
+                title={phaseLabel}
               >
                 <span className="lt-phase-icon">{PHASE_ICONS[p.key] || null}</span>
-                <span className="lt-phase-label">{p.label}</span>
+                <span className="lt-phase-label">{phaseLabel}</span>
               </div>
             )
           })}
@@ -301,7 +313,7 @@ export default function LongTaskProgress({ content, streaming }: Props) {
                     className="lt-phase-action lt-phase-action-pause"
                     onClick={() => handleAction('pause')}
                     disabled={actionLoading !== null || streaming}
-                    title="暂停"
+                    title={t('longTask.actionPause')}
                   >
                     {actionLoading === 'pause' ? (
                       <span className="lt-btn-spinner" />
@@ -316,7 +328,7 @@ export default function LongTaskProgress({ content, streaming }: Props) {
                     className="lt-phase-action lt-phase-action-stop"
                     onClick={() => handleAction('stop')}
                     disabled={actionLoading !== null || streaming}
-                    title="停止"
+                    title={t('longTask.actionStop')}
                   >
                     {actionLoading === 'stop' ? (
                       <span className="lt-btn-spinner" />
@@ -337,7 +349,7 @@ export default function LongTaskProgress({ content, streaming }: Props) {
                     className="lt-phase-action lt-phase-action-resume"
                     onClick={() => handleAction('resume')}
                     disabled={actionLoading !== null}
-                    title="继续"
+                    title={t('longTask.actionResume')}
                   >
                     {actionLoading === 'resume' ? (
                       <span className="lt-btn-spinner" />
@@ -351,7 +363,7 @@ export default function LongTaskProgress({ content, streaming }: Props) {
                     className="lt-phase-action lt-phase-action-stop"
                     onClick={() => handleAction('stop')}
                     disabled={actionLoading !== null}
-                    title="停止"
+                    title={t('longTask.actionStop')}
                   >
                     {actionLoading === 'stop' ? (
                       <span className="lt-btn-spinner" />
@@ -375,7 +387,7 @@ export default function LongTaskProgress({ content, streaming }: Props) {
 
       {/* Cancelled: info label */}
       {state.phase === 'cancelled' && state.taskId && (
-        <p className="lt-cancelled-label">此任务已永久停止</p>
+        <p className="lt-cancelled-label">{t('longTask.cancelledLabel')}</p>
       )}
 
       {/* Completed: download buttons */}
@@ -398,7 +410,7 @@ export default function LongTaskProgress({ content, streaming }: Props) {
                 </svg>
               </span>
               <span className="lt-dl-label">
-                下载 {link.label}
+                {t('longTask.downloadLabel', { format: link.label })}
               </span>
               <svg className="lt-dl-arrow" viewBox="0 0 16 16" fill="none" strokeWidth="2" strokeLinecap="round">
                 <path d="M8 3v8M4 8l4 4 4-4" />
@@ -415,7 +427,7 @@ export default function LongTaskProgress({ content, streaming }: Props) {
 
       {/* Submitted: waiting message */}
       {state.phase === 'submitted' && (
-        <p className="lt-current-step">正在后台执行分析任务，您可以继续对话...</p>
+        <p className="lt-current-step">{t('longTask.submittedMessage')}</p>
       )}
     </div>
   )

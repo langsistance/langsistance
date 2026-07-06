@@ -32,7 +32,7 @@ export default function SceneCard({ scene, onToggle }: SceneCardProps) {
   useEffect(() => {
     if (expanded && knowledgeItems.length === 0) {
       setLoading(true)
-      getSceneKnowledge(scene.id)
+      getSceneKnowledge(scene.id, lang)
         .then((res) => {
           setKnowledgeItems(res.knowledge || [])
         })

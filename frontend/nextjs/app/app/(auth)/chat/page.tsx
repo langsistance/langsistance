@@ -49,7 +49,7 @@ function UserCopyButton({ content }: { content: string }) {
 }
 
 export default function Chat() {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const {
     messages,
     setMessages,
@@ -81,7 +81,7 @@ export default function Chat() {
   const [sceneDeepResearch, setSceneDeepResearch] = useState<{name: string, desc: string}[]>([])
 
   useEffect(() => {
-    getUserSceneStatus()
+    getUserSceneStatus(lang)
       .then(async (res) => {
         const subscribed = (res.scenes || []).filter((s: any) => s.subscribed)
         setEnabledScenes(subscribed)
@@ -89,7 +89,7 @@ export default function Chat() {
         const deepResearch: {name: string, desc: string}[] = []
         for (const scene of subscribed) {
           try {
-            const kr = await getSceneKnowledge(scene.id)
+            const kr = await getSceneKnowledge(scene.id, lang)
             const items = kr.knowledge || []
             items.forEach((item: any) => {
               const example = {

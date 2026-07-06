@@ -3,6 +3,8 @@ import os
 
 DEFAULT_PROVIDER_FAMILY = 'deepseek'
 DEFAULT_MAX_PATENTS = 20
+DEFAULT_MAX_PATENTS_CNIPA = 10
+DEFAULT_MAX_PATENTS_USPTO = 50
 DEFAULT_VISION_PROVIDER = 'minimax'
 DEFAULT_VISION_MODEL = 'MiniMax-M3'
 
@@ -23,6 +25,8 @@ def get_long_task_config(config_path: str = 'config.ini') -> dict:
 
     provider_family = DEFAULT_PROVIDER_FAMILY
     max_patents = DEFAULT_MAX_PATENTS
+    max_patents_cnipa = DEFAULT_MAX_PATENTS_CNIPA
+    max_patents_uspto = DEFAULT_MAX_PATENTS_USPTO
     vision_provider = DEFAULT_VISION_PROVIDER
     vision_model = DEFAULT_VISION_MODEL
 
@@ -31,6 +35,10 @@ def get_long_task_config(config_path: str = 'config.ini') -> dict:
                                   fallback=DEFAULT_PROVIDER_FAMILY)
         max_patents = cfg.getint('LONG_TASK', 'max_patents',
                                  fallback=DEFAULT_MAX_PATENTS)
+        max_patents_cnipa = cfg.getint('LONG_TASK', 'max_patents_cnipa',
+                                        fallback=DEFAULT_MAX_PATENTS_CNIPA)
+        max_patents_uspto = cfg.getint('LONG_TASK', 'max_patents_uspto',
+                                        fallback=DEFAULT_MAX_PATENTS_USPTO)
         vision_provider = cfg.get('LONG_TASK', 'vision_provider',
                                   fallback=DEFAULT_VISION_PROVIDER)
         vision_model = cfg.get('LONG_TASK', 'vision_model',
@@ -42,6 +50,8 @@ def get_long_task_config(config_path: str = 'config.ini') -> dict:
     return {
         'provider_family': provider_family,
         'max_patents': max_patents,
+        'max_patents_cnipa': max_patents_cnipa,
+        'max_patents_uspto': max_patents_uspto,
         'vision_enabled': vision_enabled,
         'vision_provider': vision_provider,
         'vision_model': vision_model,

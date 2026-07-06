@@ -151,6 +151,41 @@ export default {
     longTaskFailed: '❌ 深度研究任务执行失败。',
   },
 
+  // 侧边栏
+  sidebar: {
+    analysisHistory: '分析历史',
+    defaultSessionTitle: '专利分析',
+  },
+
+  // 深度分析任务卡片
+  longTask: {
+    // Phase labels
+    phaseExtractingText: '文件解析',
+    phaseSearchingPatents: '专利检索',
+    phaseGeneratingColumns: '分析框架',
+    phaseAnalyzing: '专利分析',
+    phaseGeneratingReport: '报告撰写',
+    phaseExporting: '文件导出',
+
+    // Card titles
+    titleCompleted: '深度分析完成',
+    titleFailed: '分析失败',
+    titleCancelled: '分析已取消',
+    titlePaused: '分析已暂停',
+    titleSubmitted: '深度分析已提交',
+    titleRunning: '深度分析进行中',
+
+    // Action button tooltips
+    actionPause: '暂停',
+    actionResume: '继续',
+    actionStop: '停止',
+
+    // Status labels
+    cancelledLabel: '此任务已永久停止',
+    downloadLabel: '下载 {format}',
+    submittedMessage: '正在后台执行分析任务，您可以继续对话...',
+  },
+
   // 知识管理
   knowledge: {
     title: '知识库',

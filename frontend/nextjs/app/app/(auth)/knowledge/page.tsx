@@ -362,7 +362,7 @@ export default function Knowledge() {
   // 场景订阅状态
   const [scenes, setScenes] = useState<any[]>([])
   useEffect(() => {
-    getUserSceneStatus()
+    getUserSceneStatus(lang)
       .then((res) => setScenes(res.scenes || []))
       .catch(() => {})
   }, [])

@@ -15,7 +15,7 @@ export default function SceneOnboardingModal() {
   useEffect(() => {
     if (typeof window === 'undefined') return
 
-    getUserSceneStatus()
+    getUserSceneStatus(lang)
       .then((res) => {
         // 已 onboarded → 不显示弹窗，无闪烁
         if (res.onboarded) {

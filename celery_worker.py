@@ -102,6 +102,8 @@ def execute_patent_analysis(self, task_id: str, params: dict):
     ltc = get_long_task_config()
     model_family = ltc['provider_family']
     max_patents = ltc['max_patents']
+    max_patents_cnipa = ltc.get('max_patents_cnipa', 10)
+    max_patents_uspto = ltc.get('max_patents_uspto', 50)
     vision_enabled = ltc.get('vision_enabled', True)
 
     # ---- Input dedup + source-based truncation ----
@@ -118,7 +120,10 @@ def execute_patent_analysis(self, task_id: str, params: dict):
                 f"all {len(patent_ids)} IDs are 8-digit, "
                 f"overriding patent_source to 'uspto'"
             )
-    source_max = _get_max_patents_for_source(params.get('patent_source', ''), max_patents)
+    source_max = _get_max_patents_for_source(
+        params.get('patent_source', ''), max_patents,
+        max_patents_cnipa, max_patents_uspto,
+    )
     patent_ids = patent_ids[:source_max]
     total = len(patent_ids)
 
@@ -175,6 +180,8 @@ def execute_patent_analysis(self, task_id: str, params: dict):
                 patent_ids=patent_ids,
                 total=total,
                 max_patents=max_patents,
+                max_patents_cnipa=max_patents_cnipa,
+                max_patents_uspto=max_patents_uspto,
                 flash_provider=flash_provider,
                 pro_provider=pro_provider,
                 vision_provider=vision_provider if vision_enabled else None,
@@ -282,6 +289,8 @@ async def _run_pipeline(
     generate_report_outline,
     generate_report_section,
     create_storage,
+    max_patents_cnipa: int = 10,
+    max_patents_uspto: int = 50,
 ) -> dict:
     """Internal async pipeline orchestrator."""
 
@@ -396,6 +405,7 @@ async def _run_pipeline(
             f"scene_candidates_count={len(scene_candidates) if scene_candidates else 0}"
         )
     id_url_map = {}          # patent_id → document_url from search results
+    id_pid_map = {}          # patent_id → pid from CNIPA search results
 
     # ==== Phase 0-prep: Extract patent IDs from query + conversation via LLM ====
     if not is_file_upload_mode and not is_direct_id_mode and not patent_ids:
@@ -564,7 +574,10 @@ async def _run_pipeline(
                     )
                     patent_source = 'uspto'
                 params['patent_source'] = patent_source
-            source_max = _get_max_patents_for_source(patent_source, max_patents)
+            source_max = _get_max_patents_for_source(
+                patent_source, max_patents,
+                max_patents_cnipa, max_patents_uspto,
+            )
             patent_ids = patent_ids[:source_max]
             _pipeline_logger.info(
                 f"[task={task_id}] PHASE0 llm_extracted_patent_ids — "
@@ -616,12 +629,15 @@ async def _run_pipeline(
             raw_items = result.get('raw_items', []) or []
             patent_ids = extract_patent_ids(raw_items)
             id_url_map = extract_patent_id_url_map(raw_items)
+            from sources.long_task.scene_tools import extract_patent_id_pid_map
+            id_pid_map = extract_patent_id_pid_map(raw_items)
             _pipeline_logger.info(
                 f"[task={task_id}] PHASE0 search_result — "
                 f"raw_items_count={len(raw_items)}, "
                 f"patent_ids_found={len(patent_ids)}, "
                 f"patent_ids={patent_ids[:10]}{'...' if len(patent_ids) > 10 else ''}, "
-                f"id_url_map_size={len(id_url_map)}"
+                f"id_url_map_size={len(id_url_map)}, "
+                f"id_pid_map_size={len(id_pid_map)}"
             )
             params['patent_source'] = _infer_source_from_tool(
                 selected['tool'], params.get('patent_source', 'cnipa'),
@@ -629,6 +645,7 @@ async def _run_pipeline(
         if patent_ids:
             source_max = _get_max_patents_for_source(
                 params.get('patent_source', 'cnipa'), max_patents,
+                max_patents_cnipa, max_patents_uspto,
             )
             if len(patent_ids) > source_max:
                 _pipeline_logger.info(
@@ -823,6 +840,7 @@ async def _run_pipeline(
                     flash_provider=flash_provider,
                     download_patent_document=download_patent_document,
                     id_url_map=id_url_map,
+                    id_pid_map=id_pid_map,
                 )
 
             _pipeline_logger.info(
@@ -1195,15 +1213,21 @@ async def _run_pipeline(
 
 # ── Phase 0 helpers ─────────────────────────────────────────────────────────
 
-def _get_max_patents_for_source(patent_source: str, default_max: int) -> int:
+def _get_max_patents_for_source(
+    patent_source: str,
+    default_max: int,
+    max_cnipa: int = 10,
+    max_uspto: int = 50,
+) -> int:
     """Return the per-source patent count cap.
 
-    CNIPA (China) → max 10, USPTO (US) → max 50.
-    Unknown / other → conservative 10.
+    CNIPA (China) → configurable (default 10).
+    USPTO (US) → configurable (default 50).
+    Unknown / other → conservative CNIPA limit.
     """
     if patent_source == 'uspto':
-        return min(default_max, 50)
-    return min(default_max, 10)
+        return min(default_max, max_uspto)
+    return min(default_max, max_cnipa)
 
 
 def _infer_source_from_tool(tool_info, default: str = 'cnipa') -> str:
@@ -1223,6 +1247,7 @@ async def _download_patent_via_scene_or_fallback(
     flash_provider,
     download_patent_document,
     id_url_map: dict | None = None,
+    id_pid_map: dict | None = None,
 ) -> tuple[str | None, bytes | None]:
     """Download patent text via scene tool, direct USPTO API, or fallback.
 
@@ -1233,6 +1258,7 @@ async def _download_patent_via_scene_or_fallback(
     """
     doc_url = (id_url_map or {}).get(patent_id, '')
     patent_source = params.get('patent_source', 'cnipa')
+    pid = (id_pid_map or {}).get(patent_id, '')
 
     # ── Step 1: Try scene tool download ──
     if scene_candidates:
@@ -1241,6 +1267,8 @@ async def _download_patent_via_scene_or_fallback(
         context = f'patent_id={patent_id}'
         if doc_url:
             context += f', document_url={doc_url}'
+        if pid:
+            context += f', pid={pid}'
 
         selected = await select_tool(
             'download patent document',

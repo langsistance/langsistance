@@ -7,13 +7,28 @@ type Locale = typeof en
 const LOCALES: Record<string, Locale> = { en, zh }
 const STORAGE_KEY = 'apiforge-language'
 
+function detectBrowserLang(): string {
+  try {
+    const nav = window.navigator
+    // navigator.language: 'zh-CN', 'en-US', 'ja', etc.
+    // navigator.languages: ordered list of user preferences, e.g. ['zh-CN', 'en']
+    const langs = [nav.language, ...(nav.languages || [])]
+    for (const raw of langs) {
+      if (!raw) continue
+      const prefix = raw.split('-')[0].toLowerCase()
+      if (LOCALES[prefix]) return prefix
+    }
+  } catch {}
+  return 'zh'
+}
+
 function getInitialLang(): string {
   if (typeof window === 'undefined') return 'zh'
   try {
     const saved = localStorage.getItem(STORAGE_KEY)
     if (saved && LOCALES[saved]) return saved
   } catch {}
-  return 'zh'
+  return detectBrowserLang()
 }
 
 interface I18nContextValue {

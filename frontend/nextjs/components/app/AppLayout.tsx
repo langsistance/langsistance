@@ -87,7 +87,7 @@ function getInitialDevMode() {
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth()
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -225,7 +225,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                     <circle cx="12" cy="12" r="10" />
                     <polyline points="12 6 12 12 16 14" />
                   </svg>
-                  分析历史
+                  {t('sidebar.analysisHistory')}
                 </span>
                 <span className="session-count">{sessions.length}</span>
                 <svg
@@ -245,10 +245,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                       onClick={() => selectSession(s.session_id)}
                     >
                         <div className="session-item-main">
-                          <span className="session-item-title">{s.title || '专利分析'}</span>
+                          <span className="session-item-title">{s.title || t('sidebar.defaultSessionTitle')}</span>
                           <span className="session-item-time">
                             {s.update_time
-                              ? new Date(s.update_time).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                              ? new Date(s.update_time).toLocaleDateString(lang === 'en' ? 'en-US' : 'zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
                               : ''}
                           </span>
                         </div>

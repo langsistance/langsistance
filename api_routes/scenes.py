@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Scene (场景包) management API routes."""
 
-from fastapi import APIRouter, Request
+from typing import Optional
+
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from .models import (
@@ -21,8 +23,42 @@ logger = Logger("backend.log")
 router = APIRouter()
 
 
+def _pick_lang(text: str, lang: str) -> str:
+    """Parse bilingual ``zh:中文|en:English`` description and return *lang* part.
+
+    Returns the original text unchanged when no pipe separator is found
+    (backward compatible with single-language data).
+    """
+    if not text or '|' not in text:
+        return text or ''
+    prefix = f'{lang}:'
+    for part in text.split('|'):
+        part = part.strip()
+        if part.startswith(prefix):
+            return part[len(prefix):]
+    # Fallback: return the first segment (likely the original Chinese)
+    first = text.split('|')[0].strip()
+    if ':' in first:
+        return first.split(':', 1)[1].strip()
+    return first
+
+
+def _localize_scene(scene_dict: dict, lang: str) -> dict:
+    """Apply bilingual parsing to scene name + description."""
+    scene_dict['name'] = _pick_lang(scene_dict.get('name', ''), lang)
+    scene_dict['description'] = _pick_lang(scene_dict.get('description', ''), lang)
+    return scene_dict
+
+
+def _localize_knowledge(item_dict: dict, lang: str) -> dict:
+    """Apply bilingual parsing to knowledge question + description."""
+    item_dict['question'] = _pick_lang(item_dict.get('question', ''), lang)
+    item_dict['description'] = _pick_lang(item_dict.get('description', ''), lang)
+    return item_dict
+
+
 @router.get("/scenes/available", response_model=SceneListResponse)
-async def list_available_scenes():
+async def list_available_scenes(lang: str = Query("zh")):
     """列出所有场景，包含每个场景下的知识数量。"""
     connection = None
     try:
@@ -40,12 +76,14 @@ async def list_available_scenes():
 
             scenes = []
             for row in rows:
-                scenes.append(SceneItem(
-                    id=row["id"],
-                    name=row["name"],
-                    description=row["description"] or "",
-                    knowledge_count=row["knowledge_count"],
-                ))
+                scene_dict = {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "description": row["description"] or "",
+                    "knowledge_count": row["knowledge_count"],
+                }
+                _localize_scene(scene_dict, lang)
+                scenes.append(SceneItem(**scene_dict))
 
             return JSONResponse(
                 status_code=200,
@@ -67,7 +105,7 @@ async def list_available_scenes():
 
 
 @router.get("/scenes/{scene_id}/knowledge", response_model=SceneKnowledgeResponse)
-async def get_scene_knowledge(scene_id: int):
+async def get_scene_knowledge(scene_id: int, lang: str = Query("zh")):
     """获取场景下所有知识的 question + description（不含 answer）。"""
     connection = None
     try:
@@ -81,15 +119,16 @@ async def get_scene_knowledge(scene_id: int):
             """, (scene_id,))
             rows = cursor.fetchall()
 
-            items = [
-                SceneKnowledgeItem(
-                    id=row["id"],
-                    question=row["question"],
-                    description=row["description"] or "",
-                    type=row.get("type", 1),
-                )
-                for row in rows
-            ]
+            items = []
+            for row in rows:
+                item_dict = {
+                    "id": row["id"],
+                    "question": row["question"],
+                    "description": row["description"] or "",
+                    "type": row.get("type", 1),
+                }
+                _localize_knowledge(item_dict, lang)
+                items.append(SceneKnowledgeItem(**item_dict))
 
             return JSONResponse(
                 status_code=200,
@@ -112,7 +151,7 @@ async def get_scene_knowledge(scene_id: int):
 
 @router.get("/user/scenes", response_model=UserSceneStatusResponse)
 @router.get("/user/scenes/status", response_model=UserSceneStatusResponse)
-async def get_user_scenes(http_request: Request):
+async def get_user_scenes(http_request: Request, lang: str = Query("zh")):
     """获取当前用户订阅的场景及订阅状态。"""
     auth_header = http_request.headers.get("Authorization")
     user = verify_firebase_token(auth_header)
@@ -149,13 +188,15 @@ async def get_user_scenes(http_request: Request):
 
             scenes = []
             for row in rows:
-                scenes.append(UserSceneStatusItem(
-                    id=row["id"],
-                    name=row["name"],
-                    description=row["description"] or "",
-                    subscribed=row["id"] in subscribed_ids,
-                    knowledge_count=row["knowledge_count"],
-                ))
+                scene_dict = {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "description": row["description"] or "",
+                    "subscribed": row["id"] in subscribed_ids,
+                    "knowledge_count": row["knowledge_count"],
+                }
+                _localize_scene(scene_dict, lang)
+                scenes.append(UserSceneStatusItem(**scene_dict))
 
             return JSONResponse(
                 status_code=200,

@@ -69,11 +69,11 @@ export const cancelKnowledgeShare = (body: unknown): ApiResult => post('/cancel_
 
 // ── Scene API ────────────────────────────────────────────────────────────
 
-export const getAvailableScenes = (): ApiResult => get('/scenes/available')
-export const getSceneKnowledge = (sceneId: number): ApiResult =>
-  get(`/scenes/${sceneId}/knowledge`)
-export const getUserScenes = (): ApiResult => get('/user/scenes')
-export const getUserSceneStatus = (): ApiResult => get('/user/scenes/status')
+export const getAvailableScenes = (lang: string = 'zh'): ApiResult => get('/scenes/available', { lang })
+export const getSceneKnowledge = (sceneId: number, lang: string = 'zh'): ApiResult =>
+  get(`/scenes/${sceneId}/knowledge`, { lang })
+export const getUserScenes = (lang: string = 'zh'): ApiResult => get('/user/scenes', { lang })
+export const getUserSceneStatus = (lang: string = 'zh'): ApiResult => get('/user/scenes/status', { lang })
 export const updateUserScenes = (sceneIds: number[]): ApiResult =>
   post('/user/scenes', { scene_ids: sceneIds })
 export const markOnboarded = (): ApiResult => post('/user/onboarded', {})

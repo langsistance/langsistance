@@ -311,6 +311,39 @@ def extract_patent_id_url_map(
     return id_url_map
 
 
+def extract_patent_id_pid_map(
+    items: List[Dict[str, Any]],
+) -> Dict[str, str]:
+    """Extract patent_id → pid mapping from CNIPA search results.
+
+    The ``pid`` field is the DI platform's internal primary key,
+    required by CNIPA patent download tools to fetch specifications.
+    Returns an empty dict for non-CNIPA results.
+    """
+    id_pid_map: Dict[str, str] = {}
+    for item in (items or []):
+        if not isinstance(item, dict):
+            continue
+        patent_id = str(
+            item.get("patent_id") or ""
+            or item.get("patentNumber") or ""
+            or item.get("applicationNumberText") or ""
+            or item.get("application_number") or ""
+            or item.get("申请号") or ""
+        )
+        if not patent_id:
+            continue
+        pid = str(
+            item.get("pid") or ""
+            or item.get("patentId") or ""
+            or item.get("id") or ""
+            or item.get("internalId") or ""
+        )
+        if pid:
+            id_pid_map[patent_id] = pid
+    return id_pid_map
+
+
 def extract_document_text(result: Dict[str, Any]) -> Optional[str]:
     """Extract patent document text from a download tool result.
 
