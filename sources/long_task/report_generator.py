@@ -43,32 +43,47 @@ async def generate_report_section(section: dict, query: str, columns: list[str],
     heading = section.get('heading', '')
     description = section.get('description', '')
 
-    # Build a compact summary of the table data for context
-    data_summary_lines = []
+    # Build a per-patent summary with all columns for accurate citation.
+    # Each patent is prefixed with **[patent_id]** so the LLM can cite it.
+    patent_entries: list[str] = []
     for r in table_rows[:20]:
+        pid = r.get('patent_id', r.get('专利号', '?'))
         if r.get('_failed'):
-            data_summary_lines.append(f"{r.get('patent_id', '?')}: 分析失败")
+            patent_entries.append(f"- {pid}: 分析失败")
             continue
-        parts = [f"{r.get('patent_id', '?')}:"]
-        for col in columns[1:4]:
-            val = r.get(col, '')
+        parts = [f"**[{pid}]**"]
+        for col in columns:
+            if col in ('patent_id', '专利号'):
+                continue
+            val = str(r.get(col, '')).strip()
             if val:
-                parts.append(f"{col}={str(val)[:60]}")
-        data_summary_lines.append("  ".join(parts))
-    data_summary = "\n".join(data_summary_lines[:20])
+                parts.append(f"  - {col}: {val}")
+        patent_entries.append("\n".join(parts))
+    data_summary = "\n\n".join(patent_entries[:20])
 
     system_prompt = (
         "你是一个专利分析报告撰写专家。根据给定的分析数据，撰写一个报告章节。"
-        "用中文，具体有依据。直接输出 Markdown 格式的章节内容，不要输出 JSON。"
+        "用中文，具体有依据。直接输出 Markdown 格式的章节内容，不要输出 JSON。\n\n"
+        "CRITICAL 引用规则：\n"
+        "1. 报告中提到的每一个技术点、技术问题、技术方案、技术效果，都必须在后面"
+        "用 **[专利号]** 标注来源专利。例如：\n"
+        "   - 采用碳纤维复合材料实现轻量化 **[202310123456.7]**\n"
+        "   - 该技术方案被多个专利采用 **[202310123456.7]** **[18331482]**\n"
+        "2. 每个段落至少引用 1-2 个专利号。如果一个观点来自多个专利，全部列出。\n"
+        "3. 不要虚构专利号，只引用数据摘要中给出的专利号。\n"
+        "4. 引用格式统一用 **[]** 包裹专利号，紧跟在被引用的内容后面。"
     )
     user_content = f"""用户问题：{query}
 本章标题：{heading}
 本章说明：{description}
 
-分析数据摘要：
+各专利分析结果（每个专利的 **[专利号]** 标注了来源标识，引用时必须使用）：
 {data_summary}
 
-请撰写"{heading}"章节内容（Markdown 格式，300-600 字）："""
+请撰写"{heading}"章节内容。要求：
+- 每个技术点引用来源专利，用 **[专利号]** 格式标注
+- Markdown 格式，400-800 字
+- 具体有依据，不编造："""
 
     # Use streaming to collect free-text Markdown (not JSON)
     llm = provider._get_langchain_llm(streaming=True)
