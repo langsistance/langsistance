@@ -608,10 +608,12 @@ async def _run_pipeline(
             extract_patent_ids,
             extract_patent_id_url_map,
         )
+        patent_source = params.get('patent_source', 'cnipa')
         update_task_status(task_id, 'searching_patents', 0,
                            f'已发现 {len(scene_candidates)} 个场景工具，正在选择检索方案...')
         selected = await select_tool(
-            'search patents', params['query'],
+            'search patents',
+            f"专利来源: {patent_source}\n用户查询: {params['query']}",
             scene_candidates, flash_provider,
         )
         _pipeline_logger.info(
@@ -1264,7 +1266,7 @@ async def _download_patent_via_scene_or_fallback(
     if scene_candidates:
         from sources.long_task.scene_tools import select_tool, execute_tool
 
-        context = f'patent_id={patent_id}'
+        context = f'专利来源: {patent_source}\npatent_id={patent_id}'
         if doc_url:
             context += f', document_url={doc_url}'
         if pid:
