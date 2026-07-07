@@ -103,8 +103,9 @@ PRIORITY_1_RULES: dict[str, dict] = {
         ],
     },
     "amendment": {
-        "codes": set(),
+        "codes": {"CLM", "WCLM"},  # Claims & Withdrawn Claims — essential for amendment tracking
         "descriptions": [
+            "claims",
             "amendment",
             "preliminary amendment",
             "after final amendment",
@@ -125,6 +126,13 @@ PRIORITY_1_RULES: dict[str, dict] = {
 }
 
 PRIORITY_2_RULES: dict[str, dict] = {
+    "specification": {
+        "codes": {"SPEC"},
+        "descriptions": [
+            "specification",
+            "spec",
+        ],
+    },
     "ids": {
         "codes": {"IDS"},
         "descriptions": [
@@ -134,13 +142,13 @@ PRIORITY_2_RULES: dict[str, dict] = {
         ],
     },
     "interview_summary": {
-        "codes": set(),
+        "codes": {"EXIN", "INTVW"},
         "descriptions": [
             "interview summary",
             "examiner interview",
             "interview agenda",
             "interview record",
-            "summar",
+            "intervie",
         ],
     },
     "appeal": {
@@ -213,7 +221,36 @@ PRIORITY_3_SKIP_DESCRIPTIONS: list[str] = [
     "authorization",
     "transmittal",
     "abstract",
+    "bibliographic",
+    "letter",
+    "fee payment",
+    "issue notification",
+    "notice of informal",
+    "notice to file corrected",
+    " applicant ",
 ]
+
+# Additional document CODES that are never useful for prosecution analysis.
+# These are administrative forms, bibliographic sheets, etc.
+PRIORITY_3_SKIP_CODES: set[str] = {
+    "BIB",         # Bibliographic data sheet
+    "LET",         # Transmittal letter
+    "N417.PYMT",   # Fee payment form
+    "IIFW",        # Issue fee worksheet
+    "SRFW",        # Fee worksheet
+    "SRNT",        # Notice/transmittal
+    "1449",        # Form 1449
+    "892",         # Notice of references (listed in OA anyway)
+    "FOR",         # Foreign reference (listed in OA/IDS)
+    "REF.OTHER",   # Other references (listed in IDS)
+    "ABST",        # Abstract
+    "DRW",         # Drawings
+    "PTO.1449",    # Form PTO-1449
+    "P.PAMPHLET",  # Patent pamphlet (reference)
+    "P.N.101.CONV",# Conversion form
+    "371P",        # Form 371
+    "SCORE",       # Search scorecard
+}
 
 
 # ── Classification ─────────────────────────────────────────────────────────────
@@ -287,8 +324,8 @@ def _classify_single_document(doc: dict) -> ProsecutionDoc | None:
                 raw_doc=doc,
             )
 
-    # Check priority 3 skip rules
-    if _matches_any_description(desc, PRIORITY_3_SKIP_DESCRIPTIONS):
+    # Check priority 3 skip rules (by description OR by code)
+    if _matches_any_description(desc, PRIORITY_3_SKIP_DESCRIPTIONS) or code.upper() in PRIORITY_3_SKIP_CODES:
         return ProsecutionDoc(
             category="administrative",
             priority=3,
