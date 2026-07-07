@@ -1213,6 +1213,372 @@ async def _run_pipeline(
     return {'status': 'completed', 'task_id': task_id}
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Prosecution History Analysis Task (single patent)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.task(bind=True, max_retries=2, default_retry_delay=30, time_limit=1800, soft_time_limit=1770)
+def execute_prosecution_analysis(self, task_id: str, params: dict):
+    """Analyze the prosecution history of a SINGLE USPTO patent application.
+
+    Downloads Office Actions, Applicant Responses, Amendments, and Notice of
+    Allowance from the USPTO Documents API, then uses AI to produce a
+    comprehensive prosecution history report.
+
+    Simpler than the batch pipeline: no Phase 0 search, no Phase 1 columns,
+    no per-patent iteration.  Single patent, single report.
+    """
+    import asyncio
+    import os as _os
+    from sources.long_task.status_manager import (
+        update_task_status, set_task_completed, set_task_failed,
+    )
+    from sources.long_task.config import get_long_task_config, get_prosecution_config
+    from sources.long_task.prosecution_downloader import (
+        classify_prosecution_documents,
+        download_prosecution_documents,
+        group_documents_by_category,
+    )
+    from sources.long_task.prosecution_analyzer import generate_prosecution_report
+    from sources.long_task.storage import create_storage
+    from sources.llm_provider import Provider
+
+    patent_id = str(params.get('patent_id', '')).strip()
+    query = params.get('query', '')
+    lang = params.get('lang', 'zh')
+    session_id = params.get('session_id', '')
+    user_id = params.get('user_id', '')
+
+    _pipeline_logger.info(
+        f"[task={task_id}] PROSECUTION_START — "
+        f"patent_id={patent_id}, "
+        f"query={query[:120]}, "
+        f"lang={lang}, "
+        f"session_id={session_id}"
+    )
+
+    if not patent_id:
+        _pipeline_logger.error(f"[task={task_id}] PROSECUTION no patent_id provided")
+        set_task_failed(task_id, "No patent application number provided")
+        _update_mysql_progress(task_id, 'failed', 0)
+        return {'status': 'failed', 'task_id': task_id, 'error': 'No patent_id'}
+
+    # ── Provider setup ──
+    ltc = get_long_task_config()
+    model_family = ltc['provider_family']
+
+    if model_family == 'minimax':
+        flash_provider = Provider(
+            provider_name='minimax', model='MiniMax-M2.7-highspeed',
+            server_address='', is_local=False,
+        )
+        pro_provider = Provider(
+            provider_name='minimax', model='MiniMax-M3',
+            server_address='', is_local=False,
+        )
+    else:
+        flash_provider = Provider(
+            provider_name='deepseek', model='deepseek-chat',
+            server_address='', is_local=False,
+        )
+        pro_provider = Provider(
+            provider_name='deepseek', model='deepseek-reasoner',
+            server_address='', is_local=False,
+        )
+
+    ptc = get_prosecution_config()
+    include_priority_2 = ptc.get('include_priority_2', True)
+
+    # ── Run pipeline ──
+    async def _run():
+        # Phase A: Download document list from USPTO API
+        update_task_status(task_id, 'downloading', 5,
+                           '正在获取USPTO文件列表...')
+        app_number = ''.join(c for c in patent_id if c.isdigit())
+        if not app_number or len(app_number) < 8:
+            set_task_failed(task_id, f"Invalid patent application number: {patent_id}")
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id,
+                    'error': f'Invalid patent_id: {patent_id}'}
+
+        headers = {'Accept': 'application/json'}
+        uspto_key = _os.getenv('USPTO_API_KEY', '')
+        if uspto_key:
+            headers['X-API-Key'] = uspto_key
+
+        doc_list_url = (
+            f"https://api.uspto.gov/api/v1/patent/applications/"
+            f"{app_number}/documents"
+        )
+        _pipeline_logger.info(
+            f"[task={task_id}] PROSECUTION fetching doc list — url={doc_list_url}"
+        )
+        resp = await _uspto_get_with_retry(doc_list_url, headers, timeout=20)
+        if resp.status_code != 200:
+            _pipeline_logger.error(
+                f"[task={task_id}] PROSECUTION doc_list_failed — status={resp.status_code}"
+            )
+            set_task_failed(task_id, f"USPTO API returned HTTP {resp.status_code}")
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id,
+                    'error': f'USPTO API status {resp.status_code}'}
+
+        doc_list = resp.json() if resp.text else {}
+        documents = (
+            doc_list.get('documentBag', [])
+            if isinstance(doc_list, dict)
+            else []
+        )
+        _pipeline_logger.info(
+            f"[task={task_id}] PROSECUTION doc_list — total={len(documents)}"
+        )
+
+        if not documents:
+            if lang == 'zh':
+                msg = f"USPTO未返回专利申请 {app_number} 的任何文件。可能原因：申请号不存在、无权访问、或尚未公开。"
+            else:
+                msg = f"USPTO returned no documents for application {app_number}. The application may not exist, may not be accessible, or may not yet be published."
+            set_task_failed(task_id, msg)
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
+        # Phase B: Classify documents by priority
+        update_task_status(task_id, 'classifying', 10,
+                           '正在分类审查文件...')
+        manifest = classify_prosecution_documents(documents)
+        docs_to_download = manifest.must_download.copy()
+        if include_priority_2:
+            docs_to_download.extend(manifest.recommended)
+        # Keep skipped for logging only
+
+        _pipeline_logger.info(
+            f"[task={task_id}] PROSECUTION classified — "
+            f"must={len(manifest.must_download)}, "
+            f"recommended={len(manifest.recommended)}, "
+            f"skipped={len(manifest.skipped)}, "
+            f"to_download={len(docs_to_download)}"
+        )
+
+        if not docs_to_download:
+            if lang == 'zh':
+                msg = "未找到可分析的审查文件（无 Office Action、Response 或 Amendment）。可能该专利尚未进入实质审查阶段。"
+            else:
+                msg = "No analyzable prosecution documents found (no Office Actions, Responses, or Amendments). The patent may not have entered substantive examination."
+            set_task_failed(task_id, msg)
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
+        # Phase C: Download filtered documents
+        update_task_status(task_id, 'downloading', 20,
+                           f'正在下载 {len(docs_to_download)} 个审查文件...'
+                           if lang == 'zh'
+                           else f'Downloading {len(docs_to_download)} prosecution documents...')
+
+        # We use _uspto_get_with_retry as the fetch function for downloads.
+        # Wrap it to match the FetchFunc signature: (url, headers, timeout) -> response
+        async def _fetch_prosecution(url: str, hdrs: dict, timeout: int):
+            return await _uspto_get_with_retry(url, hdrs, timeout)
+
+        docs_to_download = await download_prosecution_documents(
+            docs_to_download, _fetch_prosecution, app_number, headers,
+        )
+        docs_with_text = [d for d in docs_to_download if d.text]
+        _pipeline_logger.info(
+            f"[task={task_id}] PROSECUTION downloaded — "
+            f"with_text={len(docs_with_text)}/{len(docs_to_download)}"
+        )
+
+        if not docs_with_text:
+            if lang == 'zh':
+                msg = "所有审查文件下载后文本提取失败。文件可能是扫描件或加密PDF。"
+            else:
+                msg = "Text extraction failed for all downloaded prosecution documents. Files may be scanned images or encrypted PDFs."
+            set_task_failed(task_id, msg)
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
+        # Phase D: Generate report
+        update_task_status(task_id, 'generating_report', 40,
+                           '正在分析审查文件...'
+                           if lang == 'zh'
+                           else 'Analyzing prosecution documents...')
+
+        docs_by_category = group_documents_by_category(docs_with_text)
+        report_text = await generate_prosecution_report(
+            docs_by_category=docs_by_category,
+            query=query,
+            patent_id=patent_id,
+            flash_provider=flash_provider,
+            pro_provider=pro_provider,
+            lang=lang,
+        )
+        _pipeline_logger.info(
+            f"[task={task_id}] PROSECUTION report — chars={len(report_text)}"
+        )
+        update_task_status(task_id, 'generating_report', 85,
+                           '报告撰写完成' if lang == 'zh' else 'Report writing complete',
+                           result_summary=report_text)
+        _update_mysql_progress(task_id, 'generating_report', 85)
+
+        # Phase E: Export files
+        from sources.long_task.storage import get_storage_config
+
+        storage_cfg = get_storage_config()
+        try:
+            storage = create_storage(storage_cfg)
+        except Exception as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] PROSECUTION storage_init FAILED — {e}, falling back to local"
+            )
+            storage = create_storage({'report_storage_backend': 'local'})
+
+        report_files = []
+        local_storage = None
+
+        def _get_local_storage():
+            nonlocal local_storage
+            if local_storage is None:
+                from sources.long_task.storage import create_storage as _create
+                local_storage = _create({'report_storage_backend': 'local'})
+            return local_storage
+
+        # ── DOCX ──
+        update_task_status(task_id, 'exporting', 90,
+                           '正在生成 Word 文件...'
+                           if lang == 'zh'
+                           else 'Generating Word document...')
+        # export_docx_async expects table_rows + columns; prosecution reports
+        # have no analysis table, so pass empty lists.
+        docx_bytes = await export_docx_async(report_text, [], [])
+        try:
+            await storage.put(task_id, 'report.docx', docx_bytes)
+            _pipeline_logger.info(
+                f"[task={task_id}] PROSECUTION docx — size={len(docx_bytes)}"
+            )
+            report_files.append({
+                'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes),
+            })
+        except Exception as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] PROSECUTION docx upload FAILED — {e}"
+            )
+            try:
+                await _get_local_storage().put(task_id, 'report.docx', docx_bytes)
+                report_files.append({
+                    'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes),
+                })
+            except Exception as e2:
+                _pipeline_logger.error(
+                    f"[task={task_id}] PROSECUTION docx local ALSO FAILED — {e2}"
+                )
+
+        # ── PDF ──
+        update_task_status(task_id, 'exporting', 95,
+                           '正在生成 PDF 文件...'
+                           if lang == 'zh'
+                           else 'Generating PDF document...')
+        pdf_bytes = await export_pdf_async(docx_bytes)
+        try:
+            await storage.put(task_id, 'report.pdf', pdf_bytes)
+            _pipeline_logger.info(
+                f"[task={task_id}] PROSECUTION pdf — size={len(pdf_bytes)}"
+            )
+            report_files.append({
+                'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes),
+            })
+        except Exception as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] PROSECUTION pdf upload FAILED — {e}"
+            )
+            try:
+                await _get_local_storage().put(task_id, 'report.pdf', pdf_bytes)
+                report_files.append({
+                    'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes),
+                })
+            except Exception as e2:
+                _pipeline_logger.error(
+                    f"[task={task_id}] PROSECUTION pdf local ALSO FAILED — {e2}"
+                )
+
+        # ── Complete ──
+        _pipeline_logger.info(
+            f"[task={task_id}] PROSECUTION COMPLETED — "
+            f"patent_id={patent_id}, "
+            f"docs_downloaded={len(docs_with_text)}, "
+            f"report_chars={len(report_text)}, "
+            f"report_files={[f['format'] for f in report_files]}"
+        )
+        _update_mysql_progress(task_id, 'exporting', 100)
+        set_task_completed(task_id, report_files)
+
+        if user_id:
+            from sources.long_task.user_queue import complete_user_task
+            try:
+                next_task_id = complete_user_task(str(user_id), task_id)
+                if next_task_id:
+                    import json as _json
+                    from sources.knowledge.knowledge import get_db_connection as _gdc
+                    conn = _gdc()
+                    try:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """SELECT input_params, session_id, scene_id, task_type
+                                   FROM long_tasks WHERE task_id = %s""",
+                                (next_task_id,),
+                            )
+                            row = cur.fetchone()
+                        if row:
+                            input_params = row.get('input_params')
+                            stored = _json.loads(input_params) if isinstance(input_params, str) else input_params
+                            next_task_type = row.get('task_type', 'patent_analysis')
+                            next_params = {
+                                'query': stored.get('query', ''),
+                                'patent_ids': stored.get('patent_ids', []),
+                                'patent_source': stored.get('patent_source', 'auto'),
+                                'session_id': row.get('session_id') or '',
+                                'scene_id': row.get('scene_id'),
+                                'conversation_history': stored.get('conversation_history', []),
+                                'patent_file_refs': stored.get('patent_file_refs', []),
+                                'user_id': str(user_id),
+                            }
+                            if stored.get('patent_texts'):
+                                next_params['patent_texts'] = stored['patent_texts']
+                            if next_task_type == 'prosecution_analysis':
+                                next_params['patent_id'] = stored.get('patent_id', '')
+                                next_params['lang'] = stored.get('lang', 'zh')
+                                execute_prosecution_analysis.delay(
+                                    task_id=next_task_id, params=next_params,
+                                )
+                            else:
+                                execute_patent_analysis.delay(
+                                    task_id=next_task_id, params=next_params,
+                                )
+                            _pipeline_logger.info(
+                                f"[task={task_id}] PROSECUTION QUEUE_DISPATCHED — "
+                                f"next_task_id={next_task_id}, type={next_task_type}"
+                            )
+                    finally:
+                        conn.close()
+            except Exception as e:
+                import traceback
+                _pipeline_logger.warning(
+                    f"[task={task_id}] PROSECUTION QUEUE_DISPATCH_FAILED — "
+                    f"{type(e).__name__}: {e}"
+                )
+                _pipeline_logger.warning(
+                    f"[task={task_id}] PROSECUTION QUEUE_DISPATCH_TRACEBACK —\n{traceback.format_exc()}"
+                )
+
+        return {'status': 'completed', 'task_id': task_id}
+
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(_run())
+    finally:
+        loop.close()
+
+
 # ── Phase 0 helpers ─────────────────────────────────────────────────────────
 
 def _get_max_patents_for_source(

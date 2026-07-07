@@ -56,3 +56,35 @@ def get_long_task_config(config_path: str = 'config.ini') -> dict:
         'vision_provider': vision_provider,
         'vision_model': vision_model,
     }
+
+
+# ── Prosecution analysis config ───────────────────────────────────────────────
+
+DEFAULT_PROSECUTION_MAX_PAGES_PER_DOC = 100
+DEFAULT_PROSECUTION_INCLUDE_PRIORITY_2 = True
+
+
+def get_prosecution_config(config_path: str = 'config.ini') -> dict:
+    """Read [PROSECUTION] section from config file.
+
+    Returns:
+        dict with keys:
+            max_pages_per_doc (int)  — max pages to download per document (0 = unlimited)
+            include_priority_2 (bool) — whether to include IDS, Interview Summary etc.
+    """
+    cfg = configparser.ConfigParser()
+    cfg.read(config_path)
+
+    max_pages_per_doc = DEFAULT_PROSECUTION_MAX_PAGES_PER_DOC
+    include_priority_2 = DEFAULT_PROSECUTION_INCLUDE_PRIORITY_2
+
+    if cfg.has_section('PROSECUTION'):
+        max_pages_per_doc = cfg.getint('PROSECUTION', 'max_pages_per_doc',
+                                        fallback=DEFAULT_PROSECUTION_MAX_PAGES_PER_DOC)
+        include_priority_2 = cfg.getboolean('PROSECUTION', 'include_priority_2',
+                                             fallback=DEFAULT_PROSECUTION_INCLUDE_PRIORITY_2)
+
+    return {
+        'max_pages_per_doc': max_pages_per_doc,
+        'include_priority_2': include_priority_2,
+    }
