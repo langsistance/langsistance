@@ -89,6 +89,83 @@ def get_scene_knowledge_tools(scene_id: int) -> List[Dict[str, Any]]:
             )
         candidates.append(entry)
 
+    # ── Recursively include knowledge referenced by workflows ──────────────
+    # Workflows (type=2) in the scene may reference knowledge items whose
+    # scene_id is NULL.  These referenced items should still be available
+    # as selectable tools in the pipeline (e.g. patent_download via 284).
+    _seen_ids = {c["knowledge_id"] for c in candidates}
+    _wf_step_ids: set[int] = set()
+    for c in candidates:
+        if c["knowledge_type"] == 2 and c["knowledge_params"]:
+            try:
+                _spec = __import__('json').loads(c["knowledge_params"])
+                for _step in _spec.get("steps", []):
+                    _sid = _step.get("knowledge_id")
+                    if _sid and int(_sid) not in _seen_ids:
+                        _wf_step_ids.add(int(_sid))
+            except Exception:
+                pass
+
+    if _wf_step_ids:
+        conn2 = get_db_connection()
+        try:
+            with conn2.cursor() as cur2:
+                _placeholders = ",".join(["%s"] * len(_wf_step_ids))
+                cur2.execute(
+                    f"""SELECT
+                           k.id          AS knowledge_id,
+                           k.question    AS knowledge_question,
+                           k.description AS knowledge_description,
+                           k.answer      AS knowledge_answer,
+                           k.`type`      AS knowledge_type,
+                           k.params      AS knowledge_params,
+                           t.id          AS tool_id,
+                           t.title       AS tool_title,
+                           t.description AS tool_description,
+                           t.url         AS tool_url,
+                           t.push        AS tool_push,
+                           t.params      AS tool_params,
+                           t.timeout     AS tool_timeout
+                       FROM knowledge k
+                       LEFT JOIN tools t
+                         ON k.tool_id = t.id AND t.status = 1
+                       WHERE k.status = 1
+                         AND k.id IN ({_placeholders})
+                       ORDER BY k.update_time DESC""",
+                    tuple(_wf_step_ids),
+                )
+                for row in cur2.fetchall():
+                    entry = {
+                        "knowledge_id": row["knowledge_id"],
+                        "knowledge_question": row["knowledge_question"],
+                        "knowledge_description": row["knowledge_description"] or "",
+                        "knowledge_answer": row["knowledge_answer"] or "",
+                        "knowledge_type": row["knowledge_type"],
+                        "knowledge_params": row["knowledge_params"] or "",
+                        "tool_id": row["tool_id"],
+                        "tool_title": row["tool_title"] or "",
+                        "tool_description": row["tool_description"] or "",
+                        "tool_url": row["tool_url"] or "",
+                        "tool_push": row["tool_push"],
+                        "tool_params": row["tool_params"] or "",
+                        "tool_timeout": row["tool_timeout"],
+                    }
+                    if row["tool_id"]:
+                        entry["_tool_item"] = ToolItem(
+                            id=row["tool_id"],
+                            user_id="",
+                            title=row["tool_title"] or "",
+                            description=row["tool_description"] or "",
+                            push=row["tool_push"],
+                            url=row["tool_url"] or "",
+                            status=True,
+                            timeout=row["tool_timeout"] or 30,
+                            params=row["tool_params"] or "",
+                        )
+                    candidates.append(entry)
+        finally:
+            conn2.close()
+
     return candidates
 
 
