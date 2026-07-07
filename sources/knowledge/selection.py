@@ -77,9 +77,12 @@ def build_routing_candidate_payload(candidates: Iterable[KnowledgeToolCandidate]
         if k_type == 3:
             # Give the routing LLM a strong hint about when to select this
             item["long_task_hint"] = (
-                "Select this when the user asks to filter, screen, analyze, "
-                "compare, or generate a report from previous search results. "
-                "This is for follow-up / refinement queries on existing data."
+                "Select this when the user asks to search for, filter, screen, "
+                "analyze, compare, or generate a report about patents. "
+                "This handles BOTH first-time search queries (e.g. 'find patents "
+                "by company/keyword and analyze them') AND follow-up queries on "
+                "existing results. If the user mentions a company name, keyword, "
+                "or patent number and wants analysis, this is the right choice."
             )
 
         if tool:
