@@ -1181,6 +1181,15 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
 
     ptc = get_prosecution_config()
     include_priority_2 = ptc.get('include_priority_2', True)
+    vision_enabled = ltc.get('vision_enabled', True)
+    vision_provider = None
+    if vision_enabled:
+        vision_cfg_provider = ltc.get('vision_provider', DEFAULT_VISION_PROVIDER)
+        vision_cfg_model = ltc.get('vision_model', DEFAULT_VISION_MODEL)
+        vision_provider = Provider(
+            provider_name=vision_cfg_provider, model=vision_cfg_model,
+            server_address='', is_local=False,
+        )
 
     # ── Run pipeline ──
     async def _run():
@@ -1966,9 +1975,17 @@ async def _extract_text_via_vision(
         Extracted text, or None on failure.
     """
     try:
+        import asyncio
         from sources.long_task.patent_analyzer import _pdf_to_base64_images
 
-        images = _pdf_to_base64_images(pdf_bytes, dpi=150, max_pages=max_pages)
+        # Run CPU-bound PDF→image conversion in thread to avoid blocking event loop
+        loop = asyncio.get_running_loop()
+        images = await loop.run_in_executor(
+            None, _pdf_to_base64_images, pdf_bytes,
+        )
+        # Limit pages to control cost
+        if len(images) > max_pages:
+            images = images[:max_pages]
         if not images:
             _pipeline_logger.warning(
                 f"[vision] no_images — desc={doc_description[:60]}"
