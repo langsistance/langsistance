@@ -14,10 +14,11 @@ batch patent analysis pipeline:
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
-_logger = logging.getLogger(__name__)
+from sources.logger import Logger
+
+_logger = Logger("prosecution_analyzer.log")
 
 
 # ── Bilingual labels ──────────────────────────────────────────────────────────

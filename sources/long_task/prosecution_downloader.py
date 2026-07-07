@@ -9,18 +9,18 @@ with celery_worker.py (which provides rate-limited USPTO HTTP functions).
 
 from __future__ import annotations
 
-import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Awaitable
 
 from sources.dynamic_tool_params import _extract_first_url
+from sources.logger import Logger
 from sources.long_task.text_extractor import (
     extract_text_from_binary,
     get_download_url_from_doc,
 )
 
-_logger = logging.getLogger(__name__)
+_logger = Logger("prosecution_downloader.log")
 
 
 # ── Data classes ──────────────────────────────────────────────────────────────

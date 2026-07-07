@@ -1249,7 +1249,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
     user_id = params.get('user_id', '')
 
     _pipeline_logger.info(
-        f"[task={task_id}] PROSECUTION_START — "
+        f"[task={task_id}] START — "
         f"patent_id={patent_id}, "
         f"query={query[:120]}, "
         f"lang={lang}, "
@@ -1290,8 +1290,10 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
 
     # ── Run pipeline ──
     async def _run():
-        # Phase A: Download document list from USPTO API
-        update_task_status(task_id, 'downloading', 5,
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 0: Fetch USPTO document list + classify by priority
+        # ═════════════════════════════════════════════════════════════════
+        update_task_status(task_id, 'preparing', 1,
                            '正在获取USPTO文件列表...')
         app_number = ''.join(c for c in patent_id if c.isdigit())
         if not app_number or len(app_number) < 8:
@@ -1310,12 +1312,13 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             f"{app_number}/documents"
         )
         _pipeline_logger.info(
-            f"[task={task_id}] PROSECUTION fetching doc list — url={doc_list_url}"
+            f"[task={task_id}] PHASE0 fetch_doc_list — "
+            f"patent_id={patent_id}, url={doc_list_url}"
         )
         resp = await _uspto_get_with_retry(doc_list_url, headers, timeout=20)
         if resp.status_code != 200:
             _pipeline_logger.error(
-                f"[task={task_id}] PROSECUTION doc_list_failed — status={resp.status_code}"
+                f"[task={task_id}] PHASE0 doc_list_failed — status={resp.status_code}"
             )
             set_task_failed(task_id, f"USPTO API returned HTTP {resp.status_code}")
             _update_mysql_progress(task_id, 'failed', 0)
@@ -1328,10 +1331,6 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             if isinstance(doc_list, dict)
             else []
         )
-        _pipeline_logger.info(
-            f"[task={task_id}] PROSECUTION doc_list — total={len(documents)}"
-        )
-
         if not documents:
             if lang == 'zh':
                 msg = f"USPTO未返回专利申请 {app_number} 的任何文件。可能原因：申请号不存在、无权访问、或尚未公开。"
@@ -1341,18 +1340,16 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             _update_mysql_progress(task_id, 'failed', 0)
             return {'status': 'failed', 'task_id': task_id, 'error': msg}
 
-        # Phase B: Classify documents by priority
-        update_task_status(task_id, 'classifying', 10,
-                           '正在分类审查文件...')
+        # Classify documents by priority (deterministic, no LLM)
         manifest = classify_prosecution_documents(documents)
         docs_to_download = manifest.must_download.copy()
         if include_priority_2:
             docs_to_download.extend(manifest.recommended)
-        # Keep skipped for logging only
 
         _pipeline_logger.info(
-            f"[task={task_id}] PROSECUTION classified — "
-            f"must={len(manifest.must_download)}, "
+            f"[task={task_id}] PHASE0 classified — "
+            f"total_in_bag={len(documents)}, "
+            f"must_download={len(manifest.must_download)}, "
             f"recommended={len(manifest.recommended)}, "
             f"skipped={len(manifest.skipped)}, "
             f"to_download={len(docs_to_download)}"
@@ -1367,100 +1364,9 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             _update_mysql_progress(task_id, 'failed', 0)
             return {'status': 'failed', 'task_id': task_id, 'error': msg}
 
-        # Phase C: Download filtered documents (with pipeline-logged progress)
-        total_dl = len(docs_to_download)
-        update_task_status(task_id, 'downloading', 20,
-                           f'正在下载 {total_dl} 个审查文件...'
-                           if lang == 'zh'
-                           else f'Downloading {total_dl} prosecution documents...')
-
-        async def _fetch_prosecution(url: str, hdrs: dict, timeout: int):
-            return await _uspto_get_with_retry(url, hdrs, timeout)
-
-        # Download one-by-one with pipeline-logged progress every 10 docs
-        _dl_ok = 0
-        for _i, _doc in enumerate(docs_to_download):
-            await download_single_document(_doc, _fetch_prosecution, app_number, headers)
-            if _doc.text:
-                _dl_ok += 1
-            # Log progress every 10 documents or on last one
-            if (_i + 1) % 10 == 0 or _i == total_dl - 1:
-                update_task_status(
-                    task_id, 'downloading',
-                    20 + int((_i + 1) / max(total_dl, 1) * 15),
-                    f'下载审查文件 {_i + 1}/{total_dl}（已提取文本 {_dl_ok} 个）...'
-                    if lang == 'zh'
-                    else f'Downloaded {_i + 1}/{total_dl} ({_dl_ok} with text)...'
-                )
-                _pipeline_logger.info(
-                    f"[task={task_id}] PROSECUTION dl_progress — "
-                    f"{_i + 1}/{total_dl}, ok={_dl_ok}, "
-                    f"fmt={_doc.file_format}, cat={_doc.category}, "
-                    f"code={_doc.document_code}"
-                )
-        docs_with_text = [d for d in docs_to_download if d.text]
-        _pipeline_logger.info(
-            f"[task={task_id}] PROSECUTION downloaded — "
-            f"with_text={len(docs_with_text)}/{total_dl}"
-        )
-
-        # ── Vision fallback: for priority-1 docs with binary but no text ──
-        _p1_no_text = [
-            d for d in docs_to_download
-            if d.priority == 1 and d.binary and not d.text
-        ]
-        if _p1_no_text and vision_enabled:
-            _pipeline_logger.info(
-                f"[task={task_id}] PROSECUTION vision_fallback — "
-                f"p1_no_text={len(_p1_no_text)}"
-            )
-            for _i, _doc in enumerate(_p1_no_text):
-                update_task_status(task_id, 'downloading', 20 + int((_i + 1) / max(len(_p1_no_text), 1) * 15),
-                                   f'OCR识别审查文件 {_i + 1}/{len(_p1_no_text)}...'
-                                   if lang == 'zh'
-                                   else f'OCR processing document {_i + 1}/{len(_p1_no_text)}...')
-                try:
-                    _text = await _extract_text_via_vision(
-                        _doc.binary, _doc.description, vision_provider,
-                    )
-                    if _text and len(_text.strip()) > 50:
-                        _doc.text = _text.strip()
-                        _pipeline_logger.info(
-                            f"[task={task_id}] PROSECUTION vision_ok — "
-                            f"code={_doc.document_code}, "
-                            f"fmt={_doc.file_format}, chars={len(_doc.text)}, "
-                            f"desc={_doc.description[:40]}"
-                        )
-                    else:
-                        _pipeline_logger.warning(
-                            f"[task={task_id}] PROSECUTION vision_empty — "
-                            f"code={_doc.document_code}, desc={_doc.description[:40]}"
-                        )
-                except Exception as _e:
-                    _pipeline_logger.warning(
-                        f"[task={task_id}] PROSECUTION vision_error — "
-                        f"code={_doc.document_code}, error={type(_e).__name__}: {_e}"
-                    )
-
-        docs_with_text = [d for d in docs_to_download if d.text]
-        _pipeline_logger.info(
-            f"[task={task_id}] PROSECUTION final — "
-            f"with_text={len(docs_with_text)}/{len(docs_to_download)} "
-            f"(after vision: +{sum(1 for d in _p1_no_text if d.text)} from vision)"
-        )
-
-        if not docs_with_text:
-            if lang == 'zh':
-                msg = "所有审查文件下载后文本提取失败。文件可能是扫描件或加密PDF。"
-            else:
-                msg = "Text extraction failed for all downloaded prosecution documents. Files may be scanned images or encrypted PDFs."
-            set_task_failed(task_id, msg)
-            _update_mysql_progress(task_id, 'failed', 0)
-            return {'status': 'failed', 'task_id': task_id, 'error': msg}
-
-        # ═══════════════════════════════════════════════════════════════
-        # Phase D: Per-document analysis → build table
-        # ═══════════════════════════════════════════════════════════════
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 1: Generate table columns (Flash LLM)
+        # ═════════════════════════════════════════════════════════════════
         from sources.long_task.prosecution_analyzer import (
             generate_table_columns,
             analyze_single_document,
@@ -1469,37 +1375,124 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             generate_prosecution_report as gen_report,
         )
 
-        # Phase D1: Generate table columns
-        update_task_status(task_id, 'analyzing', 40,
-                           '正在确定分析维度...'
-                           if lang == 'zh'
-                           else 'Determining analysis dimensions...')
+        update_task_status(task_id, 'generating_columns', 5,
+                           f'正在生成分析框架（{len(docs_to_download)} 个审查文件）...')
+        _pipeline_logger.info(
+            f"[task={task_id}] PHASE1 generate_table_columns — "
+            f"query={query[:100]}, doc_count={len(docs_to_download)}, "
+            f"provider={flash_provider.model if hasattr(flash_provider, 'model') else 'flash'}"
+        )
         columns = await generate_table_columns(
-            query=query, doc_count=len(docs_with_text),
+            query=query, doc_count=len(docs_to_download),
             provider=flash_provider, lang=lang,
         )
         _pipeline_logger.info(
-            f"[task={task_id}] PROSECUTION columns — {columns}"
+            f"[task={task_id}] PHASE1 columns_generated — "
+            f"column_count={len(columns)}, columns={columns}"
         )
+        update_task_status(task_id, 'generating_columns', 5,
+                           f'分析维度：{" | ".join(columns[1:4])}...',
+                           table_columns=columns)
+        _update_mysql_progress(task_id, 'generating_columns', 5)
 
-        # Phase D2: Analyze each document → fill table rows
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 2: Per-document download → analyze → summarize
+        # ═════════════════════════════════════════════════════════════════
+        total_dl = len(docs_to_download)
+        _pipeline_logger.info(
+            f"[task={task_id}] PHASE2 START — "
+            f"pending_count={total_dl}, total={total_dl}"
+        )
+        update_task_status(task_id, 'downloading', 5,
+                           f'正在下载审查文件（0/{total_dl}）...'
+                           if lang == 'zh'
+                           else f'Downloading documents (0/{total_dl})...')
+
+        async def _fetch_prosecution(url: str, hdrs: dict, timeout: int):
+            return await _uspto_get_with_retry(url, hdrs, timeout)
+
         table_rows: list[dict] = []
-        total_docs = len(docs_with_text)
-        for idx, doc in enumerate(docs_with_text):
-            pct = 40 + int((idx + 1) / max(total_docs, 1) * 30)
-            doc_label = doc.description[:40] if doc.description else doc.document_code
+        _dl_ok = 0
+        for _i, _doc in enumerate(docs_to_download):
+            doc_index = _i + 1
+
+            # ── Download ──
             update_task_status(
-                task_id, 'analyzing', pct,
-                f'正在分析审查文件 {idx + 1}/{total_docs}: {doc_label}...'
+                task_id, 'downloading',
+                progress_pct(0, total_dl) + int(doc_index / max(total_dl, 1) * 10),
+                f'正在下载审查文件（{doc_index}/{total_dl}）...'
                 if lang == 'zh'
-                else f'Analyzing document {idx + 1}/{total_docs}: {doc_label}...'
+                else f'Downloading document {doc_index}/{total_dl}...',
+                table_rows=table_rows,
+            )
+            await download_single_document(_doc, _fetch_prosecution, app_number, headers)
+            if _doc.text:
+                _dl_ok += 1
+
+            # Log every document
+            _pipeline_logger.info(
+                f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] download_done — "
+                f"code={_doc.document_code}, "
+                f"fmt={_doc.file_format}, "
+                f"text_length={len(_doc.text) if _doc.text else 0}, "
+                f"binary_cached={_doc.binary is not None}, "
+                f"binary_len={len(_doc.binary) if _doc.binary else 0}, "
+                f"desc={_doc.description[:60]}"
+            )
+
+            # ── Vision fallback for scanned PDFs ──
+            if _doc.priority == 1 and _doc.binary and not _doc.text and vision_enabled:
+                update_task_status(
+                    task_id, 'downloading',
+                    progress_pct(0, total_dl) + int(doc_index / max(total_dl, 1) * 10),
+                    f'正在OCR识别（{doc_index}/{total_dl}）...'
+                    if lang == 'zh'
+                    else f'OCR processing {doc_index}/{total_dl}...',
+                    table_rows=table_rows,
+                )
+                try:
+                    _text = await _extract_text_via_vision(
+                        _doc.binary, _doc.description, vision_provider,
+                    )
+                    if _text and len(_text.strip()) > 50:
+                        _doc.text = _text.strip()
+                        _pipeline_logger.info(
+                            f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] vision_ok — "
+                            f"code={_doc.document_code}, chars={len(_doc.text)}"
+                        )
+                except Exception as _e:
+                    _pipeline_logger.warning(
+                        f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] vision_error — "
+                        f"code={_doc.document_code}, error={type(_e).__name__}: {_e}"
+                    )
+
+            # ── Skip analysis if no text after download + vision ──
+            if not _doc.text or len(_doc.text.strip()) < 50:
+                _pipeline_logger.warning(
+                    f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] no_text — "
+                    f"code={_doc.document_code}, skipping analysis"
+                )
+                row = build_failed_row(_doc.document_code, "text extraction failed", columns, lang)
+                row["_failed"] = True
+                row["_summary"] = ""
+                table_rows.append(row)
+                continue
+
+            # ── Analyze ──
+            update_task_status(
+                task_id, 'analyzing',
+                progress_pct(len(table_rows), total_dl),
+                f'正在分析（{doc_index}/{total_dl}）：{_doc.description[:40]}'
+                if lang == 'zh'
+                else f'Analyzing {doc_index}/{total_dl}: {_doc.description[:40]}',
+                table_rows=table_rows,
             )
             try:
                 row = await analyze_single_document(
-                    doc_text=doc.text,
-                    doc_code=doc.document_code,
-                    doc_desc=doc.description,
-                    doc_category=doc.category,
+                    doc_text=_doc.text,
+                    doc_code=_doc.document_code,
+                    doc_desc=_doc.description,
+                    doc_category=_doc.category,
                     columns=columns,
                     query=query,
                     provider=pro_provider,
@@ -1507,43 +1500,69 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                 )
             except Exception as e:
                 _pipeline_logger.warning(
-                    f"[task={task_id}] PROSECUTION analyze_error — "
-                    f"code={doc.document_code}, error={type(e).__name__}: {e}"
+                    f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] analyze_error — "
+                    f"code={_doc.document_code}, error={type(e).__name__}: {e}"
                 )
-                row = build_failed_row(doc.document_code, str(e), columns, lang)
+                row = build_failed_row(_doc.document_code, str(e), columns, lang)
                 row["_failed"] = True
 
-            # Generate summary for this document
+            _pipeline_logger.info(
+                f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] analyze_done — "
+                f"code={_doc.document_code}, "
+                f"row_keys={list(row.keys()) if row else 'None'}"
+            )
+
+            # ── Summarize ──
             try:
                 summary = await generate_document_summary(
-                    doc_text=doc.text, row=row, query=query,
+                    doc_text=_doc.text, row=row, query=query,
                     provider=pro_provider, lang=lang,
                 )
             except Exception as e:
                 _pipeline_logger.warning(
-                    f"[task={task_id}] PROSECUTION summary_error — "
-                    f"code={doc.document_code}: {e}"
+                    f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] summary_error — "
+                    f"code={_doc.document_code}: {e}"
                 )
                 summary = ""
             row["_summary"] = summary
             table_rows.append(row)
 
             _pipeline_logger.info(
-                f"[task={task_id}] PROSECUTION row [{idx + 1}/{total_docs}] — "
-                f"code={doc.document_code}, cols={len(row)}, "
-                f"summary_chars={len(summary)}"
+                f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] summary_done — "
+                f"code={_doc.document_code}, summary_chars={len(summary)}"
             )
 
+        docs_with_text = [d for d in docs_to_download if d.text]
         _pipeline_logger.info(
-            f"[task={task_id}] PROSECUTION table — "
-            f"rows={len(table_rows)}, columns={columns}"
+            f"[task={task_id}] PHASE2 COMPLETE — "
+            f"downloaded={_dl_ok}/{total_dl}, "
+            f"with_text={len(docs_with_text)}/{total_dl}, "
+            f"table_rows={len(table_rows)}, "
+            f"failed_rows={sum(1 for r in table_rows if r.get('_failed'))}"
         )
 
-        # Phase D3: Generate full report (exec summary + sections + table)
-        update_task_status(task_id, 'generating_report', 75,
-                           '正在撰写报告...'
+        if not table_rows:
+            if lang == 'zh':
+                msg = "所有审查文件处理失败。文件可能是扫描件或加密PDF。"
+            else:
+                msg = "All prosecution documents failed processing. Files may be scanned images or encrypted PDFs."
+            set_task_failed(task_id, msg)
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 3: Generate report (Pro, dynamic outline + sections)
+        # ═════════════════════════════════════════════════════════════════
+        _pipeline_logger.info(
+            f"[task={task_id}] PHASE3 generate_report — "
+            f"columns={columns}, table_rows_count={len(table_rows)}, "
+            f"provider={pro_provider.model if hasattr(pro_provider, 'model') else 'pro'}"
+        )
+        update_task_status(task_id, 'generating_report', 80,
+                           '正在撰写执行摘要...'
                            if lang == 'zh'
-                           else 'Writing report...')
+                           else 'Writing executive summary...')
+
         report_text = await gen_report(
             table_rows=table_rows,
             columns=columns,
@@ -1554,22 +1573,29 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             lang=lang,
         )
         _pipeline_logger.info(
-            f"[task={task_id}] PROSECUTION report — chars={len(report_text)}"
+            f"[task={task_id}] PHASE3 report_generated — "
+            f"total_chars={len(report_text)}"
         )
-        update_task_status(task_id, 'generating_report', 88,
+        update_task_status(task_id, 'generating_report', 90,
                            '报告撰写完成' if lang == 'zh' else 'Report writing complete',
                            result_summary=report_text)
-        _update_mysql_progress(task_id, 'generating_report', 88)
+        _update_mysql_progress(task_id, 'generating_report', 90)
 
-        # Phase E: Export files
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 4: Export files (DOCX + PDF)
+        # ═════════════════════════════════════════════════════════════════
         from sources.long_task.storage import get_storage_config
 
         storage_cfg = get_storage_config()
+        _pipeline_logger.info(
+            f"[task={task_id}] PHASE4 export — "
+            f"storage_backend={storage_cfg.get('report_storage_backend', 'local')}"
+        )
         try:
             storage = create_storage(storage_cfg)
         except Exception as e:
             _pipeline_logger.error(
-                f"[task={task_id}] PROSECUTION storage_init FAILED — {e}, falling back to local"
+                f"[task={task_id}] PHASE4 storage_init FAILED — {e}, falling back to local"
             )
             storage = create_storage({'report_storage_backend': 'local'})
 
@@ -1584,7 +1610,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             return local_storage
 
         # ── DOCX (with table) ──
-        update_task_status(task_id, 'exporting', 93,
+        update_task_status(task_id, 'exporting', 90,
                            '正在生成 Word 文件...'
                            if lang == 'zh'
                            else 'Generating Word document...')
@@ -1592,58 +1618,64 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         try:
             await storage.put(task_id, 'report.docx', docx_bytes)
             _pipeline_logger.info(
-                f"[task={task_id}] PROSECUTION docx — size={len(docx_bytes)}"
+                f"[task={task_id}] PHASE4 docx — size_bytes={len(docx_bytes)}"
             )
             report_files.append({
                 'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes),
             })
         except Exception as e:
             _pipeline_logger.error(
-                f"[task={task_id}] PROSECUTION docx upload FAILED — {e}"
+                f"[task={task_id}] PHASE4 docx upload FAILED — {e}, falling back to local"
             )
             try:
                 await _get_local_storage().put(task_id, 'report.docx', docx_bytes)
+                _pipeline_logger.info(
+                    f"[task={task_id}] PHASE4 docx — local fallback OK, size_bytes={len(docx_bytes)}"
+                )
                 report_files.append({
                     'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes),
                 })
             except Exception as e2:
                 _pipeline_logger.error(
-                    f"[task={task_id}] PROSECUTION docx local ALSO FAILED — {e2}"
+                    f"[task={task_id}] PHASE4 docx local fallback ALSO FAILED — {e2}"
                 )
 
         # ── PDF ──
-        update_task_status(task_id, 'exporting', 97,
-                           '正在生成 PDF 文件...'
+        update_task_status(task_id, 'exporting', 95,
+                           '正在从 Word 生成 PDF 文件...'
                            if lang == 'zh'
-                           else 'Generating PDF document...')
+                           else 'Converting DOCX to PDF...')
         pdf_bytes = await export_pdf_async(docx_bytes)
         try:
             await storage.put(task_id, 'report.pdf', pdf_bytes)
             _pipeline_logger.info(
-                f"[task={task_id}] PROSECUTION pdf — size={len(pdf_bytes)}"
+                f"[task={task_id}] PHASE4 pdf — size_bytes={len(pdf_bytes)}"
             )
             report_files.append({
                 'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes),
             })
         except Exception as e:
             _pipeline_logger.error(
-                f"[task={task_id}] PROSECUTION pdf upload FAILED — {e}"
+                f"[task={task_id}] PHASE4 pdf upload FAILED — {e}, falling back to local"
             )
             try:
                 await _get_local_storage().put(task_id, 'report.pdf', pdf_bytes)
+                _pipeline_logger.info(
+                    f"[task={task_id}] PHASE4 pdf — local fallback OK, size_bytes={len(pdf_bytes)}"
+                )
                 report_files.append({
                     'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes),
                 })
             except Exception as e2:
                 _pipeline_logger.error(
-                    f"[task={task_id}] PROSECUTION pdf local ALSO FAILED — {e2}"
+                    f"[task={task_id}] PHASE4 pdf local fallback ALSO FAILED — {e2}"
                 )
 
         # ── Complete ──
         _pipeline_logger.info(
-            f"[task={task_id}] PROSECUTION COMPLETED — "
+            f"[task={task_id}] COMPLETED — "
             f"patent_id={patent_id}, "
-            f"docs_downloaded={len(docs_with_text)}, "
+            f"docs_analyzed={len(table_rows)}, "
             f"report_chars={len(report_text)}, "
             f"report_files={[f['format'] for f in report_files]}"
         )
@@ -1693,7 +1725,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                                     task_id=next_task_id, params=next_params,
                                 )
                             _pipeline_logger.info(
-                                f"[task={task_id}] PROSECUTION QUEUE_DISPATCHED — "
+                                f"[task={task_id}] QUEUE_DISPATCHED — "
                                 f"next_task_id={next_task_id}, type={next_task_type}"
                             )
                     finally:
@@ -1701,11 +1733,11 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             except Exception as e:
                 import traceback
                 _pipeline_logger.warning(
-                    f"[task={task_id}] PROSECUTION QUEUE_DISPATCH_FAILED — "
+                    f"[task={task_id}] QUEUE_DISPATCH_FAILED — "
                     f"{type(e).__name__}: {e}"
                 )
                 _pipeline_logger.warning(
-                    f"[task={task_id}] PROSECUTION QUEUE_DISPATCH_TRACEBACK —\n{traceback.format_exc()}"
+                    f"[task={task_id}] QUEUE_DISPATCH_TRACEBACK —\n{traceback.format_exc()}"
                 )
 
         return {'status': 'completed', 'task_id': task_id}
