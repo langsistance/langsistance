@@ -1238,9 +1238,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
     from sources.long_task.prosecution_downloader import (
         classify_prosecution_documents,
         download_prosecution_documents,
-        group_documents_by_category,
     )
-    from sources.long_task.prosecution_analyzer import generate_prosecution_report
     from sources.long_task.storage import create_storage
     from sources.llm_provider import Provider
 
@@ -1389,6 +1387,51 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             f"with_text={len(docs_with_text)}/{len(docs_to_download)}"
         )
 
+        # ── Vision fallback: for priority-1 docs with binary but no text ──
+        _p1_no_text = [
+            d for d in docs_to_download
+            if d.priority == 1 and d.binary and not d.text
+        ]
+        if _p1_no_text and vision_enabled:
+            _pipeline_logger.info(
+                f"[task={task_id}] PROSECUTION vision_fallback — "
+                f"p1_no_text={len(_p1_no_text)}"
+            )
+            for _i, _doc in enumerate(_p1_no_text):
+                update_task_status(task_id, 'downloading', 20 + int((_i + 1) / max(len(_p1_no_text), 1) * 15),
+                                   f'OCR识别审查文件 {_i + 1}/{len(_p1_no_text)}...'
+                                   if lang == 'zh'
+                                   else f'OCR processing document {_i + 1}/{len(_p1_no_text)}...')
+                try:
+                    _text = await _extract_text_via_vision(
+                        _doc.binary, _doc.description, vision_provider,
+                    )
+                    if _text and len(_text.strip()) > 50:
+                        _doc.text = _text.strip()
+                        _pipeline_logger.info(
+                            f"[task={task_id}] PROSECUTION vision_ok — "
+                            f"code={_doc.document_code}, "
+                            f"fmt={_doc.file_format}, chars={len(_doc.text)}, "
+                            f"desc={_doc.description[:40]}"
+                        )
+                    else:
+                        _pipeline_logger.warning(
+                            f"[task={task_id}] PROSECUTION vision_empty — "
+                            f"code={_doc.document_code}, desc={_doc.description[:40]}"
+                        )
+                except Exception as _e:
+                    _pipeline_logger.warning(
+                        f"[task={task_id}] PROSECUTION vision_error — "
+                        f"code={_doc.document_code}, error={type(_e).__name__}: {_e}"
+                    )
+
+        docs_with_text = [d for d in docs_to_download if d.text]
+        _pipeline_logger.info(
+            f"[task={task_id}] PROSECUTION final — "
+            f"with_text={len(docs_with_text)}/{len(docs_to_download)} "
+            f"(after vision: +{sum(1 for d in _p1_no_text if d.text)} from vision)"
+        )
+
         if not docs_with_text:
             if lang == 'zh':
                 msg = "所有审查文件下载后文本提取失败。文件可能是扫描件或加密PDF。"
@@ -1398,15 +1441,95 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             _update_mysql_progress(task_id, 'failed', 0)
             return {'status': 'failed', 'task_id': task_id, 'error': msg}
 
-        # Phase D: Generate report
-        update_task_status(task_id, 'generating_report', 40,
-                           '正在分析审查文件...'
-                           if lang == 'zh'
-                           else 'Analyzing prosecution documents...')
+        # ═══════════════════════════════════════════════════════════════
+        # Phase D: Per-document analysis → build table
+        # ═══════════════════════════════════════════════════════════════
+        from sources.long_task.prosecution_analyzer import (
+            generate_table_columns,
+            analyze_single_document,
+            generate_document_summary,
+            build_failed_row,
+            generate_prosecution_report as gen_report,
+        )
 
-        docs_by_category = group_documents_by_category(docs_with_text)
-        report_text = await generate_prosecution_report(
-            docs_by_category=docs_by_category,
+        # Phase D1: Generate table columns
+        update_task_status(task_id, 'analyzing', 40,
+                           '正在确定分析维度...'
+                           if lang == 'zh'
+                           else 'Determining analysis dimensions...')
+        columns = await generate_table_columns(
+            query=query, doc_count=len(docs_with_text),
+            provider=flash_provider, lang=lang,
+        )
+        _pipeline_logger.info(
+            f"[task={task_id}] PROSECUTION columns — {columns}"
+        )
+
+        # Phase D2: Analyze each document → fill table rows
+        table_rows: list[dict] = []
+        total_docs = len(docs_with_text)
+        for idx, doc in enumerate(docs_with_text):
+            pct = 40 + int((idx + 1) / max(total_docs, 1) * 30)
+            doc_label = doc.description[:40] if doc.description else doc.document_code
+            update_task_status(
+                task_id, 'analyzing', pct,
+                f'正在分析审查文件 {idx + 1}/{total_docs}: {doc_label}...'
+                if lang == 'zh'
+                else f'Analyzing document {idx + 1}/{total_docs}: {doc_label}...'
+            )
+            try:
+                row = await analyze_single_document(
+                    doc_text=doc.text,
+                    doc_code=doc.document_code,
+                    doc_desc=doc.description,
+                    doc_category=doc.category,
+                    columns=columns,
+                    query=query,
+                    provider=pro_provider,
+                    lang=lang,
+                )
+            except Exception as e:
+                _pipeline_logger.warning(
+                    f"[task={task_id}] PROSECUTION analyze_error — "
+                    f"code={doc.document_code}, error={type(e).__name__}: {e}"
+                )
+                row = build_failed_row(doc.document_code, str(e), columns, lang)
+                row["_failed"] = True
+
+            # Generate summary for this document
+            try:
+                summary = await generate_document_summary(
+                    doc_text=doc.text, row=row, query=query,
+                    provider=pro_provider, lang=lang,
+                )
+            except Exception as e:
+                _pipeline_logger.warning(
+                    f"[task={task_id}] PROSECUTION summary_error — "
+                    f"code={doc.document_code}: {e}"
+                )
+                summary = ""
+            row["_summary"] = summary
+            table_rows.append(row)
+
+            _pipeline_logger.info(
+                f"[task={task_id}] PROSECUTION row [{idx + 1}/{total_docs}] — "
+                f"code={doc.document_code}, cols={len(row)}, "
+                f"summary_chars={len(summary)}"
+            )
+
+        _pipeline_logger.info(
+            f"[task={task_id}] PROSECUTION table — "
+            f"rows={len(table_rows)}, columns={columns}"
+        )
+
+        # Phase D3: Generate full report (exec summary + sections + table)
+        update_task_status(task_id, 'generating_report', 75,
+                           '正在撰写报告...'
+                           if lang == 'zh'
+                           else 'Writing report...')
+        report_text = await gen_report(
+            table_rows=table_rows,
+            columns=columns,
             query=query,
             patent_id=patent_id,
             flash_provider=flash_provider,
@@ -1416,10 +1539,10 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         _pipeline_logger.info(
             f"[task={task_id}] PROSECUTION report — chars={len(report_text)}"
         )
-        update_task_status(task_id, 'generating_report', 85,
+        update_task_status(task_id, 'generating_report', 88,
                            '报告撰写完成' if lang == 'zh' else 'Report writing complete',
                            result_summary=report_text)
-        _update_mysql_progress(task_id, 'generating_report', 85)
+        _update_mysql_progress(task_id, 'generating_report', 88)
 
         # Phase E: Export files
         from sources.long_task.storage import get_storage_config
@@ -1443,14 +1566,12 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                 local_storage = _create({'report_storage_backend': 'local'})
             return local_storage
 
-        # ── DOCX ──
-        update_task_status(task_id, 'exporting', 90,
+        # ── DOCX (with table) ──
+        update_task_status(task_id, 'exporting', 93,
                            '正在生成 Word 文件...'
                            if lang == 'zh'
                            else 'Generating Word document...')
-        # export_docx_async expects table_rows + columns; prosecution reports
-        # have no analysis table, so pass empty lists.
-        docx_bytes = await export_docx_async(report_text, [], [])
+        docx_bytes = await export_docx_async(report_text, table_rows, columns)
         try:
             await storage.put(task_id, 'report.docx', docx_bytes)
             _pipeline_logger.info(
@@ -1474,7 +1595,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                 )
 
         # ── PDF ──
-        update_task_status(task_id, 'exporting', 95,
+        update_task_status(task_id, 'exporting', 97,
                            '正在生成 PDF 文件...'
                            if lang == 'zh'
                            else 'Generating PDF document...')
@@ -1905,6 +2026,98 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
             f"[download] uspto_direct_error — patent_id={patent_id}, error={e}"
         )
         return (None, None)
+
+
+# ── Vision extraction for scanned prosecution documents ───────────────────────
+
+
+async def _extract_text_via_vision(
+    pdf_bytes: bytes,
+    doc_description: str,
+    vision_provider,
+    max_pages: int = 3,
+) -> str | None:
+    """Use vision LLM to extract text from a scanned/imaged PDF.
+
+    Converts the first few pages to JPEG images and sends them to a vision
+    model for OCR-like text extraction.  Only the first max_pages pages are
+    processed to keep cost reasonable.
+
+    Args:
+        pdf_bytes: Raw PDF file bytes.
+        doc_description: Human-readable document description for the prompt.
+        vision_provider: Provider instance with OpenAI-compatible vision API.
+        max_pages: Max pages to process (default 3).
+
+    Returns:
+        Extracted text, or None on failure.
+    """
+    try:
+        from sources.long_task.patent_analyzer import _pdf_to_base64_images
+
+        images = _pdf_to_base64_images(pdf_bytes, dpi=150, max_pages=max_pages)
+        if not images:
+            _pipeline_logger.warning(
+                f"[vision] no_images — desc={doc_description[:60]}"
+            )
+            return None
+
+        _pipeline_logger.info(
+            f"[vision] processing — desc={doc_description[:60]}, "
+            f"pages={len(images)}"
+        )
+
+        client = vision_provider._get_raw_openai_client()
+        model = vision_provider.model
+
+        system_prompt = (
+            "You are an OCR assistant. Extract ALL text from these patent "
+            "prosecution document page images. Output the text verbatim — "
+            "do not summarize, do not add commentary. Preserve section "
+            "headings, numbered paragraphs, and claim language exactly as "
+            "they appear."
+        )
+
+        user_content = [
+            {
+                "type": "text",
+                "text": (
+                    f"Extract all text from this USPTO document: "
+                    f"\"{doc_description}\". "
+                    f"Output the full text verbatim."
+                ),
+            },
+        ]
+        for img in images:
+            user_content.append({
+                "type": "image_url",
+                "image_url": {"url": img, "detail": "high"},
+            })
+
+        import openai
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            max_tokens=4096,
+            temperature=0.0,
+        )
+        text = response.choices[0].message.content or ""
+        _pipeline_logger.info(
+            f"[vision] done — desc={doc_description[:60]}, "
+            f"chars={len(text)}"
+        )
+        return text.strip() if text.strip() else None
+
+    except Exception as e:
+        _pipeline_logger.warning(
+            f"[vision] error — desc={doc_description[:60]}, "
+            f"error={type(e).__name__}: {e}"
+        )
+        return None
+
 
 
 def _guess_format_from_url(url: str) -> str:

@@ -38,6 +38,7 @@ class ProsecutionDoc:
     download_url: str = ""
     text: str = ""  # populated after download
     binary: bytes | None = None  # raw bytes for vision/OCR fallback
+    file_format: str = ""  # 'DOCX' | 'PDF' | 'XML' | 'UNKNOWN' — set after download
     raw_doc: dict | None = None  # original USPTO documentBag entry
 
 
@@ -394,6 +395,18 @@ def group_documents_by_category(
 FetchFunc = Callable[[str, dict, int], Awaitable[Any]]
 
 
+def _guess_format_from_url(url: str) -> str:
+    """Guess the file format from a download URL."""
+    url_lower = url.lower()
+    if url_lower.endswith('.docx') or 'ms_word' in url_lower:
+        return 'DOCX'
+    if url_lower.endswith('.xml') or 'xmlarchive' in url_lower:
+        return 'XML'
+    if url_lower.endswith('.pdf'):
+        return 'PDF'
+    return 'UNKNOWN'
+
+
 async def download_single_document(
     doc: ProsecutionDoc,
     fetch_func: FetchFunc,
@@ -402,97 +415,108 @@ async def download_single_document(
 ) -> ProsecutionDoc:
     """Download and extract text from a single prosecution document.
 
-    Uses the provided fetch_func for HTTP requests (to reuse rate-limited
-    USPTO client from celery_worker.py).
-
-    Args:
-        doc: The document to download (must have download_url set).
-        fetch_func: Async function (url, headers, timeout) -> response with
-                    .status_code, .text, .content, .headers attributes.
-        app_number: USPTO application number (for logging).
-        headers: HTTP headers for the request.
-
     Returns:
-        The same ProsecutionDoc with .text populated (or empty string on failure).
+        The same ProsecutionDoc with .text, .binary, and .file_format populated.
     """
     if not doc.download_url and doc.raw_doc:
-        # Try to extract URL from raw document
         doc.download_url = get_download_url_from_doc(doc.raw_doc) or ""
 
     if not doc.download_url:
         _logger.warning(
-            f"[prosecution] no_download_url — code={doc.document_code}, "
+            f"[prosecution] result=no_url — code={doc.document_code}, "
             f"desc={doc.description[:60]}"
         )
         return doc
 
     url = doc.download_url
-    _logger.info(
-        f"[prosecution] downloading — category={doc.category}, "
-        f"code={doc.document_code}, desc={doc.description[:60]}, "
-        f"url={url[:100]}"
-    )
+    doc.file_format = _guess_format_from_url(url)
 
     try:
-        # Follow redirects (max 2 hops, same as _download_uspto_spec_with_redirect)
         for _hop in range(2):
             resp = await fetch_func(url, headers, 30)
             if resp.status_code != 200:
                 _logger.warning(
-                    f"[prosecution] download_failed — "
-                    f"status={resp.status_code}, url={url[:100]}"
+                    f"[prosecution] result=http_{resp.status_code} — "
+                    f"fmt={doc.file_format}, category={doc.category}, "
+                    f"code={doc.document_code}, desc={doc.description[:50]}"
                 )
                 return doc
 
             content_type = resp.headers.get("Content-Type", "").lower()
-            content = resp.text or ""
 
-            # If binary, extract text
+            # Binary response — extract text
             if content_type and not any(
                 t in content_type for t in ("text/", "json", "xml", "html")
             ):
+                # If Content-Type suggests a different format than URL, update
+                if not doc.file_format or doc.file_format == 'UNKNOWN':
+                    if 'pdf' in content_type:
+                        doc.file_format = 'PDF'
+                    elif 'word' in content_type or 'msword' in content_type:
+                        doc.file_format = 'DOCX'
+
                 extracted = extract_text_from_binary(
                     resp.content, content_type, url, skip_pdf_extraction=False
                 )
                 if extracted and len(extracted.strip()) > 50:
                     doc.text = extracted.strip()
                     _logger.info(
-                        f"[prosecution] download_ok — "
-                        f"category={doc.category}, chars={len(doc.text)}"
+                        f"[prosecution] result=ok — "
+                        f"fmt={doc.file_format}, category={doc.category}, "
+                        f"code={doc.document_code}, chars={len(doc.text)}, "
+                        f"desc={doc.description[:40]}"
                     )
                     return doc
-                # Text extraction failed — preserve binary for vision/OCR fallback
+
+                # Text extraction failed (likely scanned PDF)
                 doc.binary = resp.content
                 _logger.warning(
-                    f"[prosecution] extraction_failed — "
-                    f"category={doc.category}, desc={doc.description[:60]}, "
-                    f"binary_cached={len(resp.content)}"
+                    f"[prosecution] result=no_text — "
+                    f"fmt={doc.file_format}, category={doc.category}, "
+                    f"code={doc.document_code}, "
+                    f"binary_size={len(resp.content)}, "
+                    f"desc={doc.description[:40]}"
                 )
                 return doc
 
-            # Check for redirect URL in text response
+            # Text-like response — check for redirect
+            content = resp.text or ""
             redirect_url = _extract_first_url(content.strip())
             if redirect_url and redirect_url != url:
                 _logger.info(
                     f"[prosecution] redirect — "
-                    f"from={url[:80]} -> to={redirect_url[:80]}"
+                    f"from={url[:60]} -> to={redirect_url[:60]}"
                 )
                 url = redirect_url
                 continue
 
-            # Text response — this IS the content
+            # Text response IS the content
             if len(content.strip()) > 50:
                 doc.text = content.strip()
+                if not doc.file_format or doc.file_format == 'UNKNOWN':
+                    doc.file_format = 'TEXT'
                 _logger.info(
-                    f"[prosecution] download_ok_text — "
-                    f"category={doc.category}, chars={len(doc.text)}"
+                    f"[prosecution] result=ok_text — "
+                    f"fmt={doc.file_format}, category={doc.category}, "
+                    f"code={doc.document_code}, chars={len(doc.text)}, "
+                    f"desc={doc.description[:40]}"
                 )
+                return doc
+
+            # Content too short
+            _logger.warning(
+                f"[prosecution] result=empty — "
+                f"fmt={doc.file_format}, category={doc.category}, "
+                f"code={doc.document_code}, len={len(content.strip())}, "
+                f"desc={doc.description[:40]}"
+            )
             return doc
 
     except Exception as e:
         _logger.warning(
-            f"[prosecution] download_error — "
-            f"category={doc.category}, desc={doc.description[:60]}, "
+            f"[prosecution] result=error — "
+            f"fmt={doc.file_format}, category={doc.category}, "
+            f"code={doc.document_code}, "
             f"error={type(e).__name__}: {e}"
         )
         return doc
@@ -509,16 +533,7 @@ async def download_prosecution_documents(
     """Download text for a list of classified prosecution documents.
 
     Downloads each document sequentially (respecting USPTO rate limits)
-    and populates the .text field on each ProsecutionDoc.
-
-    Args:
-        docs: Classified documents to download.
-        fetch_func: Async HTTP fetch function with rate limiting.
-        app_number: USPTO application number.
-        headers: HTTP headers (X-API-Key etc.).
-
-    Returns:
-        The same list with .text populated on successfully downloaded docs.
+    and logs a detailed summary by result type and format.
     """
     if headers is None:
         headers = {"Accept": "application/json"}
@@ -527,15 +542,42 @@ async def download_prosecution_documents(
             headers["X-API-Key"] = uspto_key
 
     for i, doc in enumerate(docs):
-        _logger.info(
-            f"[prosecution] download [{i + 1}/{len(docs)}] — "
-            f"category={doc.category}, code={doc.document_code}"
-        )
         await download_single_document(doc, fetch_func, app_number, headers)
 
-    succeeded = sum(1 for d in docs if d.text)
+    # ── Detailed summary ──
+    ok = [d for d in docs if d.text]
+    no_text = [d for d in docs if not d.text and d.binary]
+    http_fail = [d for d in docs if not d.text and not d.binary and d.download_url]
+    no_url = [d for d in docs if not d.download_url]
+
     _logger.info(
-        f"[prosecution] download_complete — "
-        f"succeeded={succeeded}/{len(docs)}"
+        f"[prosecution] download_summary — "
+        f"total={len(docs)}, "
+        f"ok={len(ok)}, "
+        f"no_text_likely_scanned={len(no_text)}, "
+        f"http_error={len(http_fail)}, "
+        f"no_url={len(no_url)}"
     )
+
+    # Per-format breakdown
+    from collections import Counter
+    ok_fmts = Counter(d.file_format for d in ok)
+    fail_fmts = Counter(d.file_format for d in no_text)
+    _logger.info(
+        f"[prosecution] format_ok — {dict(ok_fmts)}"
+    )
+    _logger.info(
+        f"[prosecution] format_no_text — {dict(fail_fmts)}"
+    )
+
+    # List the 5 most valuable failures for diagnostics
+    if no_text:
+        _logger.info(
+            f"[prosecution] top_no_text_samples — " +
+            " | ".join(
+                f"fmt={d.file_format},cat={d.category},code={d.document_code},desc={d.description[:40]}"
+                for d in no_text[:5]
+            )
+        )
+
     return docs
