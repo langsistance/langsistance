@@ -1128,7 +1128,10 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
     from sources.long_task.status_manager import (
         update_task_status, set_task_completed, set_task_failed,
     )
-    from sources.long_task.config import get_long_task_config, get_prosecution_config
+    from sources.long_task.config import (
+        get_long_task_config, get_prosecution_config,
+        DEFAULT_VISION_PROVIDER, DEFAULT_VISION_MODEL,
+    )
     from sources.long_task.prosecution_downloader import (
         classify_prosecution_documents,
         download_single_document,
