@@ -1358,6 +1358,11 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                 f"desc={_doc.description[:60]}"
             )
 
+            # ── Stop check after download ──
+            _result = _handle_task_stop(task_id, user_id, _completed, total_dl)
+            if _result:
+                return _result
+
             # ── Vision fallback for scanned PDFs ──
             if _doc.priority == 1 and _doc.binary and not _doc.text and vision_enabled:
                 update_task_status(
@@ -1396,6 +1401,11 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                 table_rows.append(row)
                 continue
 
+            # ── Stop check before analysis ──
+            _result = _handle_task_stop(task_id, user_id, _completed, total_dl)
+            if _result:
+                return _result
+
             # ── Analyze ──
             update_task_status(
                 task_id, 'analyzing',
@@ -1429,6 +1439,11 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                 f"code={_doc.document_code}, "
                 f"row_keys={list(row.keys()) if row else 'None'}"
             )
+
+            # ── Stop check before summary ──
+            _result = _handle_task_stop(task_id, user_id, _completed, total_dl)
+            if _result:
+                return _result
 
             # ── Summarize ──
             try:
@@ -1618,6 +1633,23 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
     loop = asyncio.new_event_loop()
     try:
         return loop.run_until_complete(_run())
+    except Exception as e:
+        import traceback
+        _pipeline_logger.error(
+            f"[task={task_id}] UNHANDLED_ERROR — "
+            f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
+        )
+        # Safety net: release user lock so queued tasks can proceed
+        if user_id:
+            try:
+                from sources.long_task.user_queue import complete_user_task
+                complete_user_task(str(user_id), task_id)
+            except Exception:
+                pass
+        set_task_failed(task_id, f"{type(e).__name__}: {e}")
+        _update_mysql_progress(task_id, 'failed', 0)
+        return {'status': 'failed', 'task_id': task_id,
+                'error': f'{type(e).__name__}: {e}'}
     finally:
         loop.close()
 
