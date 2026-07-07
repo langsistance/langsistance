@@ -323,11 +323,15 @@ async def generate_executive_summary(
         system_prompt = (
             "你是一个USPTO专利审查分析专家。根据审查文件分析结果，"
             "撰写一份精简的执行摘要（Executive Summary）。\n\n"
-            "要求：\n"
+            "CRITICAL 格式要求：\n"
+            "- 使用 Markdown 但保持简洁：**粗体**可以用，但禁止使用 --- 分隔线、"
+            "禁止使用 ─── 装饰线、禁止使用装饰性符号\n"
+            "- 章节标题用 ### 格式\n"
+            "- 列表用 - 开头，不要用特殊符号（如 ）\n"
             "- 1-2页，结构化呈现\n"
             "- 涵盖：审查过程概述、关键拒绝理由、申请人核心争辩、Claim主要修改、最终授权原因\n"
             "- 让读者5分钟内掌握整个审查过程的全貌\n"
-            "- Markdown格式，不要输出JSON\n"
+            "- 不要输出JSON\n"
             "- 每个关键发现注明来源文件类型"
         )
         user_content = (
@@ -340,12 +344,16 @@ async def generate_executive_summary(
         system_prompt = (
             "You are a USPTO patent prosecution analysis expert. "
             "Write a concise Executive Summary based on the document analysis.\n\n"
-            "Requirements:\n"
+            "CRITICAL formatting rules:\n"
+            "- Use Markdown but keep it clean: **bold** is OK, but NO horizontal rules "
+            "(---), NO decorative separators, NO special bullet characters\n"
+            "- Section headings use ### format\n"
+            "- Lists use plain - prefix, not special symbols\n"
             "- 1-2 pages, structured\n"
             "- Cover: prosecution overview, key rejections, applicant's core arguments, "
             "main claim amendments, reasons for allowance\n"
             "- Reader should grasp the entire prosecution in 5 minutes\n"
-            "- Markdown format, do NOT output JSON\n"
+            "- Do NOT output JSON\n"
             "- Cite document types for key findings"
         )
         user_content = (
