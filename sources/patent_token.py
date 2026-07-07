@@ -178,6 +178,23 @@ def load_tokens() -> Optional[PatentTokenStore]:
     # 必须有 access_token 才能继续
     if not access_token:
         logger.info("No access_token found in Redis")
+        # If refresh_token is still available, return a partial store so the
+        # caller (ensure_valid_access_token) can attempt a refresh.
+        # Without this, the refresh_token is silently lost when Redis expires
+        # the access_token key (7-day TTL) while the refresh_token key (30-day
+        # TTL) is still valid.
+        if refresh_token and refresh_exp_str:
+            refresh_expires_at = float(refresh_exp_str)
+            if time.time() < refresh_expires_at:
+                logger.info(
+                    "Refresh token still valid, returning partial store for refresh"
+                )
+                return PatentTokenStore(
+                    access_token="",  # empty — caller must refresh
+                    refresh_token=refresh_token,
+                    access_expires_at=0,  # already expired
+                    refresh_expires_at=refresh_expires_at,
+                )
         return None
 
     access_expires_at = float(access_exp_str) if access_exp_str else 0.0
@@ -257,8 +274,17 @@ def ensure_valid_access_token() -> Optional[str]:
         logger.info("No patent tokens available in Redis")
         return None
 
-    # 没有过期时间信息，保守返回 access_token（不做刷新判定）
-    if store.access_expires_at <= 0:
+    # access_token 为空（Redis key 已过期但 refresh_token 仍在）
+    # → 直接走刷新流程
+    if not store.access_token:
+        logger.info("Patent access_token missing (Redis key expired), attempting refresh")
+        if store.is_refresh_expired:
+            logger.warning("Patent refresh_token also expired, cannot refresh")
+            return None
+        # Fall through to refresh logic below
+
+    # 没有过期时间信息且 access_token 存在，保守返回（不做刷新判定）
+    elif store.access_expires_at <= 0:
         logger.info("Patent access_token expiry unknown, returning as-is")
         return store.access_token
 
