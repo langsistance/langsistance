@@ -1237,7 +1237,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
     from sources.long_task.config import get_long_task_config, get_prosecution_config
     from sources.long_task.prosecution_downloader import (
         classify_prosecution_documents,
-        download_prosecution_documents,
+        download_single_document,
     )
     from sources.long_task.storage import create_storage
     from sources.llm_provider import Provider
@@ -1367,24 +1367,41 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             _update_mysql_progress(task_id, 'failed', 0)
             return {'status': 'failed', 'task_id': task_id, 'error': msg}
 
-        # Phase C: Download filtered documents
+        # Phase C: Download filtered documents (with pipeline-logged progress)
+        total_dl = len(docs_to_download)
         update_task_status(task_id, 'downloading', 20,
-                           f'正在下载 {len(docs_to_download)} 个审查文件...'
+                           f'正在下载 {total_dl} 个审查文件...'
                            if lang == 'zh'
-                           else f'Downloading {len(docs_to_download)} prosecution documents...')
+                           else f'Downloading {total_dl} prosecution documents...')
 
-        # We use _uspto_get_with_retry as the fetch function for downloads.
-        # Wrap it to match the FetchFunc signature: (url, headers, timeout) -> response
         async def _fetch_prosecution(url: str, hdrs: dict, timeout: int):
             return await _uspto_get_with_retry(url, hdrs, timeout)
 
-        docs_to_download = await download_prosecution_documents(
-            docs_to_download, _fetch_prosecution, app_number, headers,
-        )
+        # Download one-by-one with pipeline-logged progress every 10 docs
+        _dl_ok = 0
+        for _i, _doc in enumerate(docs_to_download):
+            await download_single_document(_doc, _fetch_prosecution, app_number, headers)
+            if _doc.text:
+                _dl_ok += 1
+            # Log progress every 10 documents or on last one
+            if (_i + 1) % 10 == 0 or _i == total_dl - 1:
+                update_task_status(
+                    task_id, 'downloading',
+                    20 + int((_i + 1) / max(total_dl, 1) * 15),
+                    f'下载审查文件 {_i + 1}/{total_dl}（已提取文本 {_dl_ok} 个）...'
+                    if lang == 'zh'
+                    else f'Downloaded {_i + 1}/{total_dl} ({_dl_ok} with text)...'
+                )
+                _pipeline_logger.info(
+                    f"[task={task_id}] PROSECUTION dl_progress — "
+                    f"{_i + 1}/{total_dl}, ok={_dl_ok}, "
+                    f"fmt={_doc.file_format}, cat={_doc.category}, "
+                    f"code={_doc.document_code}"
+                )
         docs_with_text = [d for d in docs_to_download if d.text]
         _pipeline_logger.info(
             f"[task={task_id}] PROSECUTION downloaded — "
-            f"with_text={len(docs_with_text)}/{len(docs_to_download)}"
+            f"with_text={len(docs_with_text)}/{total_dl}"
         )
 
         # ── Vision fallback: for priority-1 docs with binary but no text ──
