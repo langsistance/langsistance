@@ -1338,9 +1338,9 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                 return _result
 
             # ── Download ──
+            _pct = progress_pct(len(table_rows), total_dl)
             update_task_status(
-                task_id, 'downloading',
-                progress_pct(0, total_dl) + int(doc_index / max(total_dl, 1) * 10),
+                task_id, 'downloading', _pct,
                 f'正在下载审查文件（{doc_index}/{total_dl}）...'
                 if lang == 'zh'
                 else f'Downloading document {doc_index}/{total_dl}...',
@@ -1369,8 +1369,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             # ── Vision fallback for scanned PDFs ──
             if _doc.priority == 1 and _doc.binary and not _doc.text and vision_enabled:
                 update_task_status(
-                    task_id, 'downloading',
-                    progress_pct(0, total_dl) + int(doc_index / max(total_dl, 1) * 10),
+                    task_id, 'downloading', _pct,
                     f'正在OCR识别（{doc_index}/{total_dl}）...'
                     if lang == 'zh'
                     else f'OCR processing {doc_index}/{total_dl}...',
