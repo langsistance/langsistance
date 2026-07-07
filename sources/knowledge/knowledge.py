@@ -194,7 +194,6 @@ def search_knowledge_base(user_id: str, query_embedding: List[float], user_vecto
     query_norm = np.linalg.norm(query_vec)
     embed_norms = np.linalg.norm(embeds, axis=1)
     similarities = np.dot(embeds, query_vec) / (embed_norms * query_norm + 1e-10)
-    logger.info(f"similarities: {similarities}")
     # 获取最相似的结果
     results = []
     for i, similarity in enumerate(similarities):
@@ -219,7 +218,7 @@ def search_knowledge_base(user_id: str, query_embedding: List[float], user_vecto
             }
             results.append(result_item)
 
-    logger.info(f"results: {results}")
+    logger.info(f"Found {len(results)} knowledge items for user: {user_id}")
     # 按相似度排序并返回前top_k个结果
     results.sort(key=lambda x: x["similarity"], reverse=True)
     return results[:top_k]
@@ -466,21 +465,25 @@ def get_knowledge_tool_candidates(
 
         # ── vector search for normal (type 1/2) items ──────────────────────
         query_embedding = get_embedding(question)
-        logger.info(f"Generated embedding for question: {question}")
 
         redis_conn = get_redis_connection()
         knowledge_embeddings = {}
+        _missing_embeddings = []
         for knowledge in normal_items:
             knowledge_id = knowledge.id
             redis_key = f"knowledge_embedding_{knowledge_id}"
             embedding_str = redis_conn.get(redis_key)
-            logger.info(f"embedding key is {redis_key}")
             if embedding_str:
                 embedding = eval(embedding_str)
                 knowledge_embeddings[knowledge_id] = embedding
-                logger.info(f"Retrieved embedding for knowledge ID: {knowledge_id}")
             else:
-                logger.warning(f"No embedding found in Redis for knowledge ID: {knowledge_id}")
+                _missing_embeddings.append(knowledge_id)
+        if _missing_embeddings:
+            logger.warning(
+                f"No embedding in Redis for {len(_missing_embeddings)} "
+                f"knowledge IDs: {_missing_embeddings[:10]}"
+                f"{'...' if len(_missing_embeddings) > 10 else ''}"
+            )
 
         if knowledge_embeddings:
             embeddings_list = []
@@ -493,7 +496,6 @@ def get_knowledge_tool_candidates(
 
             if embeddings_list:
                 temp_user_vector_indices = get_user_vector_indices(user_id, embeddings_list, knowledge_items)
-                logger.info(f"temp_user_vector_indices:{temp_user_vector_indices}")
                 search_results = search_knowledge_base(
                     user_id,
                     query_embedding,
@@ -501,7 +503,10 @@ def get_knowledge_tool_candidates(
                     top_k,
                     similarity_threshold
                 )
-                logger.info(f"search_results:{search_results}")
+                logger.info(
+                    f"search_results: {len(search_results)} items, "
+                    f"top={search_results[0]['id'] if search_results else 'none'}"
+                )
                 if user_id in temp_user_vector_indices:
                     del temp_user_vector_indices[user_id]
 
@@ -598,7 +603,6 @@ def _get_knowledge_tool_legacy(user_id: str, question: str, top_k: int = 3,
     try:
         # 1. 计算问题的embedding
         query_embedding = get_embedding(question)
-        logger.info(f"Generated embedding for question: {question}")
 
         # 2. 从MySQL查询该用户的所有有效知识记录
         knowledge_results = get_user_knowledge(user_id)
@@ -647,7 +651,6 @@ def _get_knowledge_tool_legacy(user_id: str, question: str, top_k: int = 3,
 
         # 构建临时的向量索引用于搜索
         temp_user_vector_indices = get_user_vector_indices(user_id, embeddings_list, knowledge_items)
-        logger.info(f"temp_user_vector_indices:{temp_user_vector_indices}")
         # 5. 使用search_knowledge_base方法找出最接近的知识
         search_results = search_knowledge_base(
             user_id,  # 使用临时用户ID
@@ -656,7 +659,10 @@ def _get_knowledge_tool_legacy(user_id: str, question: str, top_k: int = 3,
             top_k,
             similarity_threshold
         )
-        logger.info(f"search_results:{search_results}")
+        logger.info(
+            f"search_results: {len(search_results)} items, "
+            f"top={search_results[0]['id'] if search_results else 'none'}"
+        )
         # 清理临时向量索引
         if user_id in temp_user_vector_indices:
             del temp_user_vector_indices[user_id]
