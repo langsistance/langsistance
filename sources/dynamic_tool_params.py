@@ -293,9 +293,15 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
     if _is_zldjs_api_url(url):
         resp_body = ""
         try:
-            resp_body = response.text[:10000] if response.text else "(empty)"
+            raw = response.text if response.text else ""
         except Exception:
-            resp_body = "(unable to decode response body)"
+            raw = ""
+        if not raw:
+            resp_body = "(empty)"
+        elif len(raw) > 50000:
+            resp_body = raw[:50000] + f"\n...(truncated, total {len(raw)} chars)"
+        else:
+            resp_body = raw
         logger.info(
             f"[ZLDJS RESPONSE] status={response.status_code}\n"
             f"  headers: {json.dumps(dict(response.headers), ensure_ascii=False)}\n"

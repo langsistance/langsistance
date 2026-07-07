@@ -298,6 +298,9 @@ def extract_patent_id_url_map(
             or item.get("applicationNumberText")
             or item.get("application_number")
             or item.get("申请号")
+            or item.get("ano")      # CNIPA application number (e.g. CN200310100178.5)
+            or item.get("pno")      # CNIPA patent number (e.g. CN100539509C)
+            or item.get("ans")      # CNIPA application serial (e.g. CN102003000100178)
         )
         if not pid:
             continue
@@ -334,6 +337,9 @@ def extract_patent_id_pid_map(
             or item.get("applicationNumberText") or ""
             or item.get("application_number") or ""
             or item.get("申请号") or ""
+            or item.get("ano") or ""      # CNIPA application number
+            or item.get("pno") or ""      # CNIPA patent number
+            or item.get("ans") or ""      # CNIPA application serial
         )
         if not patent_id:
             continue
