@@ -1,6 +1,8 @@
 from langchain_core.callbacks.base import AsyncCallbackHandler
 import asyncio
 import base64
+import sys
+import traceback
 
 
 ARTIFACT_CHUNK_BYTES = 32768
