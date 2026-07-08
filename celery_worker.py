@@ -95,6 +95,7 @@ def execute_patent_analysis(self, task_id: str, params: dict):
     )
     from sources.long_task.report_generator import (
         generate_report_outline, generate_report_section,
+        generate_executive_summary,
     )
     from sources.long_task.storage import create_storage
     from sources.llm_provider import Provider
@@ -197,6 +198,7 @@ def execute_patent_analysis(self, task_id: str, params: dict):
                 build_failed_row=build_failed_row,
                 generate_report_outline=generate_report_outline,
                 generate_report_section=generate_report_section,
+                generate_executive_summary=generate_executive_summary,
                 create_storage=create_storage,
             ))
             _pipeline_logger.info(
@@ -288,6 +290,7 @@ async def _run_pipeline(
     build_failed_row,
     generate_report_outline,
     generate_report_section,
+    generate_executive_summary,
     create_storage,
     max_patents_cnipa: int = 10,
     max_patents_uspto: int = 50,
@@ -946,12 +949,37 @@ async def _run_pipeline(
         f"columns={columns}, table_rows_count={len(table_rows)}, "
         f"provider={pro_provider.model if hasattr(pro_provider, 'model') else 'pro'}"
     )
+
+    # ── Executive Summary ──
+    batch_lang = params.get('lang', 'zh')
+    update_task_status(task_id, 'generating_report', 76,
+                       '正在撰写执行摘要...')
+    try:
+        exec_summary = await generate_executive_summary(
+            table_rows=table_rows,
+            columns=columns,
+            query=params['query'],
+            provider=pro_provider,
+            lang=batch_lang,
+        )
+        _pipeline_logger.info(
+            f"[task={task_id}] PHASE3 exec_summary — "
+            f"length={len(exec_summary)}"
+        )
+    except Exception as e:
+        _pipeline_logger.error(
+            f"[task={task_id}] PHASE3 exec_summary FAILED — {e}"
+        )
+        exec_summary = None
+
+    # ── Outline ──
     update_task_status(task_id, 'generating_report', 80,
                        '正在规划报告结构...')
     try:
         outline = await generate_report_outline(
             query=params['query'], columns=columns,
             table_rows=table_rows, provider=pro_provider,
+            lang=batch_lang,
         )
     except Exception as e:
         _pipeline_logger.error(
@@ -979,6 +1007,7 @@ async def _run_pipeline(
                 section=section, query=params['query'],
                 columns=columns, table_rows=table_rows,
                 provider=pro_provider,
+                lang=batch_lang,
             )
         except Exception as e:
             _pipeline_logger.error(
@@ -991,10 +1020,20 @@ async def _run_pipeline(
             f"heading={section['heading']}, text_length={len(text)}"
         )
 
-    report_text = f"# {outline.get('title', '专利分析报告')}\n\n" + "\n\n".join(report_parts)
+    # ── Assemble report ──
+    exec_section = (
+        f"## 执行摘要\n\n{exec_summary}\n\n"
+        if exec_summary else ""
+    )
+    report_text = (
+        f"# {outline.get('title', '专利分析报告')}\n\n"
+        + exec_section
+        + "\n\n".join(report_parts)
+    )
     _pipeline_logger.info(
         f"[task={task_id}] PHASE3 report_text — "
-        f"total_length={len(report_text)}, sections_written={len(report_parts)}"
+        f"total_length={len(report_text)}, sections_written={len(report_parts)}, "
+        f"has_exec_summary={exec_summary is not None}"
     )
     update_task_status(task_id, 'generating_report', 90,
                        '报告撰写完成', result_summary=report_text)
