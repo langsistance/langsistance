@@ -25,6 +25,20 @@ _agent_pool_lock = asyncio.Lock()
 AGENT_POOL_MAX_SIZE = 3  # reduced from 10 for 2C2G memory budget
 AGENT_POOL_MAX_IDLE_TIME = 300  # 5 minutes
 
+
+def _register_long_task_for_recovery(
+    user_id: int | str,
+    query_id: str | None,
+    task_id: str,
+    session_id: str,
+    queue_status: str,
+) -> None:
+    """Record query_id → task mapping so the client can recover after SSE timeout."""
+    if not query_id:
+        return
+    from sources.long_task.status_manager import register_query_task
+    register_query_task(str(user_id), query_id, task_id, session_id, queue_status)
+
 # Token cache with TTL
 _token_cache = {}
 _token_cache_lock = asyncio.Lock()
@@ -837,6 +851,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                          "patent_analysis",
                          json.dumps({
                              "query": query,
+                             "query_id": query_id,
                              "patent_ids": patent_ids,
                              "patent_source": patent_source,
                              "patent_file_refs": patent_file_refs,
@@ -891,6 +906,10 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                 event_type = "long_task_created"
                 event_status = "queued"
                 conn.close()
+
+            _register_long_task_for_recovery(
+                local_user_id, query_id, task_id, session_id, event_status,
+            )
 
             # Return SSE with long_task_created
             async def generate_sse():
@@ -1080,6 +1099,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                      'prosecution_analysis' if scenario == 'prosecution' else 'patent_analysis',
                                      json.dumps({
                                          'query': request.query,
+                                         'query_id': request.query_id,
                                          **({'patent_id': patent_ids[0]} if scenario == 'prosecution' and patent_ids else {'patent_id': ''}),
                                          **({'patent_ids': patent_ids} if scenario != 'prosecution' else {}),
                                          'patent_source': patent_source,
@@ -1149,6 +1169,10 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                 )
                                 conn.commit()
                             conn.close()
+
+                        _register_long_task_for_recovery(
+                            local_user_id, request.query_id, task_id, session_id, queue_result,
+                        )
 
                         if is_prosecution:
                             status_msg = (
@@ -1258,7 +1282,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                 token_json = json.dumps(combined)
                                 yield f"data:{token_json}\n\n"
                                 token_buffer.clear()
-                            yield f"data:{json.dumps({'type': 'long_task_created', 'task_id': event.get('task_id'), 'session_id': event.get('session_id')})}\n\n"
+                            yield f"data:{json.dumps({'type': 'long_task_created', 'task_id': event.get('task_id'), 'session_id': event.get('session_id'), 'status': event.get('status')})}\n\n"
                             current_time = asyncio.get_event_loop().time()
                             last_flush_time = current_time
                             last_stream_time = current_time

@@ -189,6 +189,49 @@ class ThrottledSummaryUpdater:
         )
 
 
+# ── Query → task recovery (SSE disconnect) ───────────────────────────────────
+
+QUERY_TASK_TTL = 3600  # 1 hour
+
+
+def _query_task_key(user_id: str, query_id: str) -> str:
+    return f"{TASK_STATUS_PREFIX}:query:{user_id}:{query_id}"
+
+
+def register_query_task(
+    user_id: str,
+    query_id: str,
+    task_id: str,
+    session_id: str,
+    queue_status: str = 'running',
+) -> None:
+    """Map a client query_id to a long task for post-disconnect recovery."""
+    import time
+    r = _get_redis()
+    payload = {
+        'task_id': task_id,
+        'session_id': session_id,
+        'status': queue_status,
+        'registered_at': time.time(),
+    }
+    r.set(
+        _query_task_key(str(user_id), query_id),
+        json.dumps(payload, ensure_ascii=False),
+        ex=QUERY_TASK_TTL,
+    )
+
+
+def lookup_query_task(user_id: str, query_id: str) -> dict | None:
+    """Return task metadata registered for *query_id*, if any."""
+    r = _get_redis()
+    raw = r.get(_query_task_key(str(user_id), query_id))
+    if not raw:
+        return None
+    if isinstance(raw, bytes):
+        raw = raw.decode()
+    return json.loads(raw)
+
+
 def set_task_cancelled(task_id: str) -> None:
     """Mark task as cancelled and clean up its Redis keys."""
     r = _get_redis()

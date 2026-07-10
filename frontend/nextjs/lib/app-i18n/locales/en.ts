@@ -138,6 +138,8 @@ export default {
     },
     processingWithTime: '⏳ Processing... (elapsed {seconds} seconds)',
     queryFailed: 'Query failed',
+    queryRecovering: '⏳ Connection interrupted — checking if your background task was submitted...',
+    queryFailedWithHint: '⚠️ Connection interrupted — could not confirm task status.\n\nIf analysis is already running in the background, please wait and check progress in your chat history. Do not resubmit the same question.',
     toolQueryFailed: '❌ Tool query failed: {error}\n\nTrying other methods...',
     directQueryFailed: 'Direct query failed',
     toolDataObtained: '📊 Tool data obtained, analyzing...',

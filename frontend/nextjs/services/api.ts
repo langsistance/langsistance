@@ -244,3 +244,30 @@ export async function pollLongTaskBatchStatus(taskIds: string[]): Promise<Record
 export function getLongTaskReportUrl(taskId: string, format: 'pdf' | 'docx' = 'pdf'): string {
   return `${BASE_URL}/long_task/${taskId}/report?format=${format}`
 }
+
+export async function recoverLongTaskByQueryId(queryId: string): Promise<{
+  success: boolean
+  found: boolean
+  task_id?: string
+  session_id?: string
+  status?: string
+}> {
+  const headers = await authHeaders()
+  const res = await fetch(
+    `${BASE_URL}/long_task/recover?query_id=${encodeURIComponent(queryId)}`,
+    { headers },
+  )
+  if (!res.ok) return { success: false, found: false }
+  return res.json()
+}
+
+export async function getLongTaskUserQueue(): Promise<{
+  success: boolean
+  running_task_id?: string | null
+  queue_length?: number
+}> {
+  const headers = await authHeaders()
+  const res = await fetch(`${BASE_URL}/long_task/user_queue`, { headers })
+  if (!res.ok) return { success: false }
+  return res.json()
+}

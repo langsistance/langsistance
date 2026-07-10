@@ -8,7 +8,7 @@ Endpoints:
 
 from fastapi import APIRouter, Query, HTTPException, Request
 from fastapi.responses import Response
-from sources.long_task.status_manager import get_task_status
+from sources.long_task.status_manager import get_task_status, lookup_query_task
 from sources.long_task.storage import create_storage, get_storage_config, LocalReportStorage
 from sources.user.passport import verify_firebase_token
 
@@ -52,9 +52,73 @@ def _dispatch_from_mysql(user_id: str, task_id: str, logger) -> None:
         conn.close()
 
 
+def _lookup_task_by_query_id_mysql(user_id: int, query_id: str) -> dict | None:
+    """Fallback when Redis mapping expired but MySQL still has the task."""
+    import json as _json
+    from sources.knowledge.knowledge import get_db_connection
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT task_id, session_id, status, input_params
+                   FROM long_tasks
+                   WHERE user_id = %s
+                     AND create_time >= NOW() - INTERVAL 2 HOUR
+                   ORDER BY create_time DESC
+                   LIMIT 30""",
+                (user_id,),
+            )
+            rows = cur.fetchall() or []
+        for row in rows:
+            params = row.get('input_params')
+            if isinstance(params, str):
+                try:
+                    params = _json.loads(params)
+                except _json.JSONDecodeError:
+                    continue
+            if isinstance(params, dict) and params.get('query_id') == query_id:
+                status = row.get('status') or 'pending'
+                queue_status = 'queued' if status == 'queued' else 'running'
+                return {
+                    'task_id': row['task_id'],
+                    'session_id': row.get('session_id') or '',
+                    'status': queue_status,
+                }
+    except Exception:
+        return None
+    finally:
+        conn.close()
+    return None
+
+
 def register_long_task_routes(logger, config):
     """Register long task polling and download routes with dependency injection."""
     router = APIRouter()
+
+    @router.get("/long_task/recover")
+    async def recover_long_task(
+        query_id: str = Query(..., min_length=1),
+        http_request: Request = None,
+    ):
+        """Recover a long task after SSE disconnect using the client query_id."""
+        auth_header = http_request.headers.get("Authorization")
+        user = verify_firebase_token(auth_header)
+        user_id = int(user['uid'])
+        hit = lookup_query_task(str(user_id), query_id)
+        if not hit:
+            hit = _lookup_task_by_query_id_mysql(user_id, query_id)
+        if hit:
+            return {"success": True, "found": True, **hit}
+        return {"success": True, "found": False}
+
+    @router.get("/long_task/user_queue")
+    async def user_queue_status(http_request: Request):
+        """Return the current user's long-task queue (running + queued count)."""
+        auth_header = http_request.headers.get("Authorization")
+        user = verify_firebase_token(auth_header)
+        from sources.long_task.user_queue import get_user_queue_status
+        status = get_user_queue_status(str(user['uid']))
+        return {"success": True, **status}
 
     @router.get("/long_task/{task_id}/status")
     async def task_status(task_id: str, http_request: Request):

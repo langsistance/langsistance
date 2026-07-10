@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { queryStream, queryStreamWithFiles, getUserSceneStatus, getSceneKnowledge, pollLongTaskBatchStatus, getLongTaskReportUrl, getSession, saveSessionMessages } from '@/services/api'
+import { pollRecoverLongTask } from '@/lib/longTaskRecovery'
 import { useI18n } from '@/lib/app-i18n'
 import MarkdownMessage from '@/components/app/MarkdownMessage'
 import { useChatSession } from '@/contexts/ChatContext'
@@ -74,6 +75,7 @@ export default function Chat() {
   // Batch polling: one global timer → one POST /batch_status for all active tasks
   const activeTasksRef = useRef<Map<string, string>>(new Map())       // taskId → assistantId
   const globalPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const longTaskReceivedRef = useRef(false)
   const isNearBottomRef = useRef(true)
   const [transientStatus, setTransientStatus] = useState('')
   const [enabledScenes, setEnabledScenes] = useState<any[]>([])
@@ -319,6 +321,7 @@ export default function Chat() {
 
     const queryId = createChatId()
     setTransientStatus('')
+    longTaskReceivedRef.current = false
 
     const userMsg = createChatMessage('user', text)
     const assistant = createChatMessage('assistant', '')
@@ -401,6 +404,7 @@ export default function Chat() {
               continue
             }
             if (event.type === 'long_task_created') {
+              longTaskReceivedRef.current = true
               const taskId = String(event.task_id ?? '')
               const sid = String(event.session_id ?? '')
               const isQueued = String(event.status ?? '') === 'queued'
@@ -459,14 +463,57 @@ export default function Chat() {
         }
       }
     } catch (err) {
-      if ((err as Error).name !== 'AbortError') {
+      if ((err as Error).name !== 'AbortError' && !longTaskReceivedRef.current) {
+        // SSE may have timed out after the backend already created a long task
         setMessages((m) =>
           m.map((msg) =>
             msg.id === assistantId
-              ? { ...msg, content: t('chat.queryFailed') }
+              ? { ...msg, content: t('chat.queryRecovering') }
               : msg
           )
         )
+
+        const recovered = await pollRecoverLongTask(queryId)
+        if (recovered) {
+          longTaskReceivedRef.current = true
+          const isQueued = recovered.status === 'queued'
+          const initContent = (isQueued
+            ? '🔬 深度分析已排队，将在当前任务完成后自动开始...'
+            : t('chat.longTaskProgress')
+                .replace('{progress}', '[0%]')
+                .replace('{phase}', '正在准备专利分析...')
+          ) + ` 任务ID: ${recovered.taskId}`
+
+          setMessages((m) => {
+            const cleaned = m.filter((msg) => msg.taskId !== recovered.taskId)
+            const updated = replaceAssistantMessage(cleaned, assistantId, initContent)
+            return updated.map((msg) =>
+              msg.id === assistantId ? { ...msg, taskId: recovered.taskId } : msg
+            )
+          })
+
+          const sid = recovered.sessionId
+          if (!sessionId && sid) {
+            setSessionId(sid)
+            const url = new URL(window.location.href)
+            url.searchParams.set('session_id', sid)
+            window.history.replaceState({}, '', url.toString())
+            saveSessionMessages(sid, [
+              { role: userMsg.role, content: userMsg.content },
+              { role: assistant.role, content: initContent },
+            ]).catch(() => {})
+          }
+
+          startLongTaskPolling(recovered.taskId, assistantId)
+        } else {
+          setMessages((m) =>
+            m.map((msg) =>
+              msg.id === assistantId
+                ? { ...msg, content: t('chat.queryFailedWithHint') }
+                : msg
+            )
+          )
+        }
       }
     } finally {
       setTransientStatus('')
