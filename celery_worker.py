@@ -276,6 +276,14 @@ def _update_mysql_progress(task_id: str, current_phase: str, progress: int, resu
             conn.close()
     except Exception:
         pass  # Non-fatal: MySQL update failure should not break the pipeline
+
+async def _run_pipeline(
+    task_id: str,
+    params: dict,
+    patent_ids: list,
+    total: int,
+    max_patents: int,
+    flash_provider,
     pro_provider,
     vision_provider,
     update_task_status,
