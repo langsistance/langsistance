@@ -184,6 +184,8 @@ export default {
     cancelledLabel: '此任务已永久停止',
     downloadLabel: '下载 {format}',
     submittedMessage: '正在后台执行分析任务，您可以继续对话...',
+    summaryTitle: '报告摘要',
+    summaryStreaming: '撰写中',
   },
 
   // 知识管理

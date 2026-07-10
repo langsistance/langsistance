@@ -1203,6 +1203,70 @@ input[type="checkbox"] {
   background: linear-gradient(90deg, #D97706, #F59E0B);
 }
 
+.lt-summary {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(16,163,127,0.12);
+}
+
+.lt-summary-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.lt-summary-title {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.lt-summary-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #10A37F;
+  background: rgba(16,163,127,0.1);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.lt-summary-body {
+  max-height: 420px;
+  overflow-y: auto;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text-primary);
+}
+
+.lt-summary-body h1,
+.lt-summary-body h2,
+.lt-summary-body h3 {
+  font-size: 15px;
+  font-weight: 650;
+  margin: 14px 0 8px;
+}
+
+.lt-summary-body p,
+.lt-summary-body li {
+  margin: 0 0 8px;
+}
+
+.lt-summary-streaming .lt-summary-body {
+  max-height: 360px;
+}
+
+.lt-summary-cursor {
+  display: inline-block;
+  margin-top: 4px;
+  color: #10A37F;
+  animation: lt-blink 1s step-end infinite;
+}
+
+@keyframes lt-blink {
+  50% { opacity: 0; }
+}
+
 /* ── Redesigned Capabilities Section ─────────────────────────────────────── */
 
 .scene-hint {

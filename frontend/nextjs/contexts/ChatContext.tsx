@@ -19,6 +19,7 @@ export interface ChatMessage {
   content: string
   artifacts?: ChatArtifact[]
   taskId?: string  // long task ID for progress tracking across save/load
+  resultSummary?: string  // long task report markdown preview
 }
 
 interface ChatContextValue {

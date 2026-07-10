@@ -1,5 +1,6 @@
 {
   "enabledPlugins": {
-    "compound-engineering@compound-engineering-plugin": true
+    "compound-engineering@compound-engineering-plugin": true,
+    "superpowers@superpowers-marketplace": true
   }
 }

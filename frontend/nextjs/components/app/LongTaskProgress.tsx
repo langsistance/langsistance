@@ -1,10 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useI18n } from '@/lib/app-i18n'
+import { renderMarkdownToHtml } from '@/lib/markdownRender'
 
 interface Props {
   content: string
+  resultSummary?: string
   streaming: boolean
 }
 
@@ -208,10 +210,20 @@ async function callLongTaskApi(taskId: string, action: 'pause' | 'resume' | 'sto
   }
 }
 
-export default function LongTaskProgress({ content, streaming }: Props) {
+export default function LongTaskProgress({ content, resultSummary, streaming }: Props) {
   const { t } = useI18n()
   const state = parseTaskContent(content)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
+  const summaryHtml = useMemo(
+    () => (resultSummary ? renderMarkdownToHtml(resultSummary) : ''),
+    [resultSummary],
+  )
+  const summaryStreaming = Boolean(
+    resultSummary
+    && (state?.phase === 'running' || state?.phase === 'paused')
+    && state.progress >= 76
+    && state.progress < 100,
+  )
 
   if (!state) return null
 
@@ -383,6 +395,23 @@ export default function LongTaskProgress({ content, streaming }: Props) {
       {/* Current step */}
       {state.stepLabel && (state.phase === 'running' || state.phase === 'paused') && (
         <p className="lt-current-step">{state.stepLabel}</p>
+      )}
+
+      {/* Report summary preview (streamed during Phase 3, shown before downloads) */}
+      {resultSummary && (
+        <div className={`lt-summary${summaryStreaming ? ' lt-summary-streaming' : ''}`}>
+          <div className="lt-summary-header">
+            <span className="lt-summary-title">{t('longTask.summaryTitle')}</span>
+            {summaryStreaming && (
+              <span className="lt-summary-badge">{t('longTask.summaryStreaming')}</span>
+            )}
+          </div>
+          <div
+            className="lt-summary-body chat-markdown"
+            dangerouslySetInnerHTML={{ __html: summaryHtml }}
+          />
+          {summaryStreaming && <span className="lt-summary-cursor" aria-hidden="true">▋</span>}
+        </div>
       )}
 
       {/* Cancelled: info label */}

@@ -185,14 +185,17 @@ export default function Chat() {
                 .join(' | ')
               setMessages(m => {
                 const idx = m.findIndex(msg => msg.taskId === tid)
+                const nextContent = t('chat.longTaskCompleted').replace('{files}', files)
                 if (idx >= 0) {
-                  return replaceAssistantMessage(m, m[idx].id,
-                    t('chat.longTaskCompleted').replace('{files}', files))
+                  return m.map((msg, i) => i === idx
+                    ? { ...msg, content: nextContent, resultSummary: status.result_summary || msg.resultSummary }
+                    : msg)
                 }
                 return [...m, {
                   id: `lt_resume_${tid}`, role: 'assistant',
-                  content: t('chat.longTaskCompleted').replace('{files}', files),
+                  content: nextContent,
                   artifacts: [], taskId: tid,
+                  resultSummary: status.result_summary,
                 }]
               })
               continue
@@ -229,7 +232,13 @@ export default function Chat() {
               const existingIdx = m.findIndex(msg => msg.taskId === tid)
               if (existingIdx >= 0) {
                 pollMsgId = m[existingIdx].id
-                return replaceAssistantMessage(m, pollMsgId, progressContent)
+                return m.map((msg, i) => i === existingIdx
+                  ? {
+                      ...msg,
+                      content: progressContent,
+                      resultSummary: status.result_summary || msg.resultSummary,
+                    }
+                  : msg)
               }
               return [...m, {
                 id: pollMsgId,
@@ -237,6 +246,7 @@ export default function Chat() {
                 content: progressContent,
                 artifacts: [],
                 taskId: tid,
+                resultSummary: status.result_summary,
               }]
             })
             startLongTaskPolling(tid, pollMsgId)
@@ -624,16 +634,28 @@ export default function Chat() {
           const phaseLabel = data.current_step || data.current_phase || ''
           const progress = data.progress != null ? `[${data.progress}%]` : ''
 
-          function findAndUpdate(messages: any[], newContent: string) {
+          function findAndUpdate(messages: any[], newContent: string, summary?: string) {
             const idx = messages.findIndex(msg => msg.taskId === taskId)
             if (idx >= 0) {
               return messages.map((msg, i) =>
-                i === idx ? { ...msg, content: newContent } : msg
+                i === idx
+                  ? {
+                      ...msg,
+                      content: newContent,
+                      resultSummary: summary ?? msg.resultSummary,
+                    }
+                  : msg
               )
             }
             // Fallback: try assistantId
             return messages.map(msg =>
-              msg.id === assistantId ? { ...msg, content: newContent } : msg
+              msg.id === assistantId
+                ? {
+                    ...msg,
+                    content: newContent,
+                    resultSummary: summary ?? msg.resultSummary,
+                  }
+                : msg
             )
           }
 
@@ -642,27 +664,43 @@ export default function Chat() {
             const files = (data.report_files || [])
               .map((f: { format: string }) => `[${f.format.toUpperCase()}](${getLongTaskReportUrl(taskId, f.format as 'pdf' | 'docx')})`)
               .join(' | ')
-            setMessages((m) => findAndUpdate(m, t('chat.longTaskCompleted').replace('{files}', files)))
+            setMessages((m) => findAndUpdate(
+              m,
+              t('chat.longTaskCompleted').replace('{files}', files),
+              data.result_summary,
+            ))
           } else if (data.status === 'paused') {
             // Don't stop polling — the task may be resumed later
             const pausedLabel = data.current_step || `已暂停（进度 ${data.progress || 0}%）`
-            setMessages((m) => findAndUpdate(m, `⏸ ${pausedLabel} 任务ID: ${taskId}`))
+            setMessages((m) => findAndUpdate(
+              m,
+              `⏸ ${pausedLabel} 任务ID: ${taskId}`,
+              data.result_summary,
+            ))
           } else if (data.status === 'cancelling') {
             // Backend is processing the stop request — show progress until cancelled
             const pct = data.progress != null ? `[${data.progress}%]` : ''
-            setMessages((m) => findAndUpdate(m, `⏹ 正在停止... ${pct} 任务ID: ${taskId}`))
+            setMessages((m) => findAndUpdate(
+              m,
+              `⏹ 正在停止... ${pct} 任务ID: ${taskId}`,
+              data.result_summary,
+            ))
           } else if (data.status === 'cancelled') {
             stopLongTaskPolling(taskId)
             setMessages((m) => findAndUpdate(m, `⏹ 任务已取消 任务ID: ${taskId}`))
           } else if (data.status === 'failed' || data.status === 'error') {
             stopLongTaskPolling(taskId)
-            setMessages((m) => findAndUpdate(m, `${t('chat.longTaskFailed')} ${data.error_message || ''}`))
+            setMessages((m) => findAndUpdate(
+              m,
+              `${t('chat.longTaskFailed')} ${data.error_message || ''}`,
+              data.result_summary,
+            ))
           } else {
             const newContent = t('chat.longTaskProgress')
               .replace('{progress}', progress)
               .replace('{phase}', phaseLabel)
               + ` 任务ID: ${taskId}`
-            setMessages((m) => findAndUpdate(m, newContent))
+            setMessages((m) => findAndUpdate(m, newContent, data.result_summary))
           }
         }
       } catch {
@@ -670,9 +708,9 @@ export default function Chat() {
       }
     }
 
-    // Poll immediately, then every 3s
+    // Poll immediately, then every 1.5s (faster during report summary streaming)
     pollAll()
-    globalPollTimerRef.current = setInterval(pollAll, 3000)
+    globalPollTimerRef.current = setInterval(pollAll, 1500)
   }
 
   function startLongTaskPolling(taskId: string, assistantId: string) {
@@ -748,6 +786,7 @@ export default function Chat() {
                 <MarkdownMessage
                   content={msg.content}
                   artifacts={msg.artifacts || []}
+                  resultSummary={msg.resultSummary}
                   streaming={streaming && streamingId === msg.id}
                   transientStatus={streaming && streamingId === msg.id ? transientStatus : ''}
                 />
