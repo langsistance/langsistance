@@ -7,6 +7,7 @@ import { pollRecoverLongTask } from '@/lib/longTaskRecovery'
 import { useI18n } from '@/lib/app-i18n'
 import MarkdownMessage from '@/components/app/MarkdownMessage'
 import { useChatSession } from '@/contexts/ChatContext'
+import type { ChatMessage } from '@/contexts/ChatContext'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import {
   addAssistantArtifactChunk,
@@ -486,8 +487,8 @@ export default function Chat() {
 
           setMessages((m) => {
             const cleaned = m.filter((msg) => msg.taskId !== recovered.taskId)
-            const updated = replaceAssistantMessage(cleaned, assistantId, initContent)
-            return updated.map((msg) =>
+            const updated = replaceAssistantMessage(cleaned, assistantId, initContent) as ChatMessage[]
+            return updated.map((msg: ChatMessage) =>
               msg.id === assistantId ? { ...msg, taskId: recovered.taskId } : msg
             )
           })
