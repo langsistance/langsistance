@@ -299,6 +299,7 @@ async def generate_executive_summary(
     patent_id: str,
     provider: Any,
     lang: str = "zh",
+    on_chunk: Any | None = None,
 ) -> str:
     """Phase 3a: Generate a concise executive summary (1-2 pages).
 
@@ -386,9 +387,13 @@ async def generate_executive_summary(
         async for chunk in llm.astream(messages):
             if chunk.content:
                 chunks.append(chunk.content)
+                if on_chunk:
+                    on_chunk("".join(chunks))
         text = "".join(chunks).strip()
         if "</think>" in text:
             text = text[text.rfind("</think>") + len("</think>"):].strip()
+            if on_chunk:
+                on_chunk(text)
         return text or _fallback_text("executive_summary", lang)
     except Exception as e:
         _logger.warning(f"[prosecution] executive_summary_failed: {e}")
@@ -498,6 +503,7 @@ async def generate_report_section(
     columns: list[str],
     provider: Any,
     lang: str = "zh",
+    on_chunk: Any | None = None,
 ) -> str:
     """Phase 3c: Write a single report section via streaming.
 
@@ -590,9 +596,13 @@ async def generate_report_section(
         async for chunk in llm.astream(messages):
             if chunk.content:
                 chunks.append(chunk.content)
+                if on_chunk:
+                    on_chunk("".join(chunks))
         text = "".join(chunks).strip()
         if "</think>" in text:
             text = text[text.rfind("</think>") + len("</think>"):].strip()
+            if on_chunk:
+                on_chunk(text)
         return text or _fallback_text("section", lang, heading)
     except Exception as e:
         _logger.warning(f"[prosecution] section_failed — heading={heading}: {e}")
@@ -626,6 +636,7 @@ async def generate_prosecution_report(
     flash_provider: Any,
     pro_provider: Any,
     lang: str = "zh",
+    summary_updater: Any | None = None,
 ) -> str:
     """Generate the full prosecution history report.
 
@@ -648,6 +659,21 @@ async def generate_prosecution_report(
     """
     title_template = _REPORT_TITLES.get(lang, _REPORT_TITLES["en"])
     title = title_template.format(patent_id=patent_id)
+    exec_heading = '执行摘要' if lang == 'zh' else 'Executive Summary'
+
+    def _assemble_report(
+        exec_summary: str | None,
+        completed_parts: list[str],
+        current_heading: str | None = None,
+        current_text: str = '',
+    ) -> str:
+        parts = [f"# {title}\n\n"]
+        if exec_summary:
+            parts.append(f"## {exec_heading}\n\n{exec_summary}\n\n")
+        parts.extend(completed_parts)
+        if current_heading and current_text:
+            parts.append(f"## {current_heading}\n\n{current_text}")
+        return "".join(parts)
 
     _logger.info(
         f"[prosecution] report_start — patent_id={patent_id}, "
@@ -656,9 +682,25 @@ async def generate_prosecution_report(
 
     # ── Executive Summary ──
     _logger.info("[prosecution] generating executive_summary")
+
+    def _exec_chunk(partial: str) -> None:
+        if summary_updater:
+            summary_updater.push(
+                _assemble_report(partial, []),
+                step_msg='正在撰写执行摘要...' if lang == 'zh' else 'Writing executive summary...',
+            )
+
     exec_summary = await generate_executive_summary(
         table_rows, columns, query, patent_id, pro_provider, lang,
+        on_chunk=_exec_chunk if summary_updater else None,
     )
+    if summary_updater:
+        summary_updater.push(
+            _assemble_report(exec_summary, []),
+            progress=78,
+            step_msg='正在撰写执行摘要...' if lang == 'zh' else 'Writing executive summary...',
+            force=True,
+        )
 
     # ── Report outline ──
     _logger.info("[prosecution] generating outline")
@@ -671,13 +713,43 @@ async def generate_prosecution_report(
     report_parts = []
     for idx, section in enumerate(sections):
         heading = section.get("heading", f"Section {idx + 1}")
+        sec_pct = 80 + int((idx + 1) / max(len(sections), 1) * 10)
+        step_msg = (
+            f'正在撰写：{heading}' if lang == 'zh'
+            else f'Writing: {heading}'
+        )
+        if summary_updater:
+            summary_updater.progress = sec_pct
+            summary_updater.step_msg = step_msg
+
+        def _section_chunk(partial: str, _heading=heading) -> None:
+            if summary_updater:
+                summary_updater.push(
+                    _assemble_report(
+                        exec_summary,
+                        report_parts,
+                        current_heading=_heading,
+                        current_text=partial,
+                    ),
+                    step_msg=step_msg,
+                )
+
         _logger.info(
             f"[prosecution] section [{idx + 1}/{len(sections)}] — {heading}"
         )
         text = await generate_report_section(
             section, query, table_rows, columns, pro_provider, lang,
+            on_chunk=_section_chunk if summary_updater else None,
         )
-        report_parts.append(f"## {heading}\n\n{text}")
+        section_md = f"## {heading}\n\n{text}"
+        report_parts.append(section_md)
+        if summary_updater:
+            summary_updater.push(
+                _assemble_report(exec_summary, report_parts),
+                progress=sec_pct,
+                step_msg=step_msg,
+                force=True,
+            )
 
     # ── Build analysis table ──
     table_md = _build_markdown_table(table_rows, columns, lang)

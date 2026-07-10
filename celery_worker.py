@@ -950,10 +950,38 @@ async def _run_pipeline(
         f"provider={pro_provider.model if hasattr(pro_provider, 'model') else 'pro'}"
     )
 
-    # ── Executive Summary ──
+    from sources.long_task.status_manager import ThrottledSummaryUpdater
     batch_lang = params.get('lang', 'zh')
+    summary_updater = ThrottledSummaryUpdater(
+        task_id, progress=76, step_msg='正在撰写执行摘要...',
+    )
+    report_title = '专利分析报告' if batch_lang == 'zh' else 'Patent Analysis Report'
+
+    def _assemble_report(
+        exec_summary: str | None,
+        completed_parts: list[str],
+        current_heading: str | None = None,
+        current_text: str = '',
+    ) -> str:
+        parts = [f"# {report_title}\n\n"]
+        if exec_summary:
+            exec_heading = '执行摘要' if batch_lang == 'zh' else 'Executive Summary'
+            parts.append(f"## {exec_heading}\n\n{exec_summary}\n\n")
+        parts.extend(completed_parts)
+        if current_heading and current_text:
+            parts.append(f"## {current_heading}\n\n{current_text}")
+        return "".join(parts)
+
+    # ── Executive Summary ──
     update_task_status(task_id, 'generating_report', 76,
                        '正在撰写执行摘要...')
+
+    def _exec_chunk(partial: str) -> None:
+        summary_updater.push(
+            _assemble_report(partial, []),
+            step_msg='正在撰写执行摘要...',
+        )
+
     try:
         exec_summary = await generate_executive_summary(
             table_rows=table_rows,
@@ -961,10 +989,17 @@ async def _run_pipeline(
             query=params['query'],
             provider=pro_provider,
             lang=batch_lang,
+            on_chunk=_exec_chunk,
         )
         _pipeline_logger.info(
             f"[task={task_id}] PHASE3 exec_summary — "
             f"length={len(exec_summary)}"
+        )
+        summary_updater.push(
+            _assemble_report(exec_summary, []),
+            progress=78,
+            step_msg='正在撰写执行摘要...',
+            force=True,
         )
     except Exception as e:
         _pipeline_logger.error(
@@ -989,6 +1024,7 @@ async def _run_pipeline(
             'title': '专利分析报告',
             'sections': [{'heading': '分析结果', 'description': ''}],
         }
+    report_title = outline.get('title', report_title)
     _pipeline_logger.info(
         f"[task={task_id}] PHASE3 outline — "
         f"title={outline.get('title', '')}, "
@@ -1000,21 +1036,43 @@ async def _run_pipeline(
     sections = outline.get('sections', [{'heading': '分析结果', 'description': ''}])
     for idx, section in enumerate(sections):
         sec_pct = 80 + int((idx + 1) / len(sections) * 10)
-        update_task_status(task_id, 'generating_report', sec_pct,
-                           f'正在撰写：{section["heading"]}')
+        step_msg = f'正在撰写：{section["heading"]}'
+        update_task_status(task_id, 'generating_report', sec_pct, step_msg)
+        summary_updater.progress = sec_pct
+        summary_updater.step_msg = step_msg
+
+        def _section_chunk(partial: str, _heading=section['heading']) -> None:
+            summary_updater.push(
+                _assemble_report(
+                    exec_summary,
+                    report_parts,
+                    current_heading=_heading,
+                    current_text=partial,
+                ),
+                step_msg=step_msg,
+            )
+
         try:
             text = await generate_report_section(
                 section=section, query=params['query'],
                 columns=columns, table_rows=table_rows,
                 provider=pro_provider,
                 lang=batch_lang,
+                on_chunk=_section_chunk,
             )
         except Exception as e:
             _pipeline_logger.error(
                 f"[task={task_id}] PHASE3 section[{idx+1}/{len(sections)}] FAILED — {e}"
             )
             text = f"（{section['heading']} 生成失败）"
-        report_parts.append(f"## {section['heading']}\n\n{text}")
+        section_md = f"## {section['heading']}\n\n{text}"
+        report_parts.append(section_md)
+        summary_updater.push(
+            _assemble_report(exec_summary, report_parts),
+            progress=sec_pct,
+            step_msg=step_msg,
+            force=True,
+        )
         _pipeline_logger.info(
             f"[task={task_id}] PHASE3 section[{idx+1}/{len(sections)}] — "
             f"heading={section['heading']}, text_length={len(text)}"
@@ -1537,6 +1595,13 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                            if lang == 'zh'
                            else 'Writing executive summary...')
 
+        from sources.long_task.status_manager import ThrottledSummaryUpdater
+        summary_updater = ThrottledSummaryUpdater(
+            task_id,
+            progress=80,
+            step_msg='正在撰写执行摘要...' if lang == 'zh' else 'Writing executive summary...',
+        )
+
         report_text = await gen_report(
             table_rows=table_rows,
             columns=columns,
@@ -1545,6 +1610,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             flash_provider=flash_provider,
             pro_provider=pro_provider,
             lang=lang,
+            summary_updater=summary_updater,
         )
         _pipeline_logger.info(
             f"[task={task_id}] PHASE3 report_generated — "

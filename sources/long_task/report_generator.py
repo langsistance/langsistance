@@ -32,6 +32,7 @@ async def generate_executive_summary(
     query: str,
     provider: Any,
     lang: str = "zh",
+    on_chunk: Any | None = None,
 ) -> str:
     """Generate a question-driven executive summary at the top of the batch patent report.
 
@@ -125,9 +126,13 @@ async def generate_executive_summary(
         async for chunk in llm.astream(messages):
             if chunk.content:
                 chunks.append(chunk.content)
+                if on_chunk:
+                    on_chunk("".join(chunks))
         text = "".join(chunks).strip()
         if "</think>" in text:
             text = text[text.rfind("</think>") + len("</think>"):].strip()
+            if on_chunk:
+                on_chunk(text)
         return text or (
             "（执行摘要生成失败）" if lang == "zh"
             else "(Executive summary generation failed)"
@@ -236,6 +241,7 @@ async def generate_report_section(
     table_rows: list[dict],
     provider: Any,
     lang: str = "zh",
+    on_chunk: Any | None = None,
 ) -> str:
     """Write a single report section via streaming LLM call.
 
@@ -340,10 +346,14 @@ async def generate_report_section(
     async for chunk in llm.astream(messages):
         if chunk.content:
             chunks.append(chunk.content)
+            if on_chunk:
+                on_chunk("".join(chunks))
     text = "".join(chunks).strip()
     # Strip <think> block if present
     if "</think>" in text:
         text = text[text.rfind("</think>") + len("</think>"):].strip()
+        if on_chunk:
+            on_chunk(text)
     return text or (
         f"（{heading} 生成失败）" if lang == "zh"
         else f"({heading} generation failed)"

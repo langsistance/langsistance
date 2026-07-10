@@ -143,6 +143,52 @@ def request_task_stop(task_id: str) -> None:
           ex=TASK_STATUS_TTL)
 
 
+class ThrottledSummaryUpdater:
+    """Push partial result_summary to Redis without flooding on every LLM token."""
+
+    __slots__ = ('task_id', 'phase', 'progress', 'step_msg', '_last_ts', '_interval')
+
+    def __init__(
+        self,
+        task_id: str,
+        phase: str = 'generating_report',
+        progress: int = 76,
+        step_msg: str = '',
+        interval: float = 0.8,
+    ):
+        self.task_id = task_id
+        self.phase = phase
+        self.progress = progress
+        self.step_msg = step_msg
+        self._last_ts = 0.0
+        self._interval = interval
+
+    def push(
+        self,
+        summary: str,
+        *,
+        progress: int | None = None,
+        step_msg: str | None = None,
+        force: bool = False,
+    ) -> None:
+        import time
+        now = time.time()
+        if not force and now - self._last_ts < self._interval:
+            return
+        self._last_ts = now
+        if progress is not None:
+            self.progress = progress
+        if step_msg is not None:
+            self.step_msg = step_msg
+        update_task_status(
+            self.task_id,
+            self.phase,
+            self.progress,
+            self.step_msg,
+            result_summary=summary,
+        )
+
+
 def set_task_cancelled(task_id: str) -> None:
     """Mark task as cancelled and clean up its Redis keys."""
     r = _get_redis()
