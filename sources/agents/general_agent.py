@@ -46,7 +46,7 @@ MAX_MARKDOWN_VALUE_CHARS = 500
 MAX_ITEM_CHARS_FOR_LLM = int(os.getenv("GENERAL_AGENT_MAX_ITEM_CHARS", "15000"))
 MAX_VALUE_CHARS_THRESHOLD = int(os.getenv("GENERAL_AGENT_MAX_VALUE_CHARS", "10000"))
 SMALL_LIST_THRESHOLD = int(os.getenv("GENERAL_AGENT_SMALL_LIST_THRESHOLD", "3"))
-
+USE_LARGE_LIST_SUMMARY = True  # 设为 False 切回逐条批处理模式
 
 def _is_long_task_knowledge(knowledge_item) -> bool:
     """Check if knowledge item represents a long task (type=3)."""
@@ -74,7 +74,7 @@ def _prune_item_for_llm(item, max_item_chars=MAX_ITEM_CHARS_FOR_LLM, max_value_c
     """Recursively prune *item* so it fits within *max_item_chars*.
 
     Rules (applied depth-first):
-    1. If the whole item serialised is ≤ max_item_chars, return it unchanged.
+    1. If the whole item serialised is 鈮?max_item_chars, return it unchanged.
     2. For a dict: iterate over keys.  For each value:
        - If the value is a **list** and its JSON size exceeds max_value_chars,
          drop the key entirely (the array is too large).
@@ -86,7 +86,7 @@ def _prune_item_for_llm(item, max_item_chars=MAX_ITEM_CHARS_FOR_LLM, max_value_c
     4. Scalars (str / int / float / bool / None) are truncated when over
        max_value_chars, otherwise kept.
 
-    The function returns a **new** object — the input is never mutated.
+    The function returns a **new** object 鈥?the input is never mutated.
     """
     # Fast path: the item already fits.
     if _json_len([item]) <= max_item_chars:
@@ -146,7 +146,28 @@ def _format_markdown_value(value) -> str:
         return f"{text[:MAX_MARKDOWN_VALUE_CHARS]}... [truncated {hidden_count} chars]"
     return text
 
-# 定义参数模型
+
+LARGE_LIST_SUMMARY_MAX_VALUE_CHARS = 5000
+
+
+def _prune_for_summary(items: list, max_value_chars: int = None) -> list:
+    """Return a copy of items with keys whose string value exceeds max_value_chars removed."""
+    if max_value_chars is None:
+        max_value_chars = LARGE_LIST_SUMMARY_MAX_VALUE_CHARS
+    result = []
+    for item in items:
+        if not isinstance(item, dict):
+            result.append(item)
+            continue
+        pruned = {}
+        for k, v in item.items():
+            if isinstance(v, str) and len(v) > max_value_chars:
+                continue
+            pruned[k] = v
+        result.append(pruned)
+    return result
+
+# 瀹氫箟鍙傛暟妯″瀷
 class DynamicToolFunction(BaseModel):
     user_id: str = Field(description="user id")
     query_id: str = Field(description="query id")
@@ -415,14 +436,14 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         knowledge_item, tool_info = self.knowledgeTool
         self.logger.info(f"knowledge item:{knowledge_item} - tool:{tool_info}")
 
-        # 获取美国东部时区的当前时间
+        # 鑾峰彇缇庡浗涓滈儴鏃跺尯鐨勫綋鍓嶆椂闂?
         eastern_tz = ZoneInfo("America/New_York")
         eastern_time = datetime.now(eastern_tz)
 
-        # 格式化为字符串（包含时区信息）
+        # 鏍煎紡鍖栦负瀛楃涓诧紙鍖呭惈鏃跺尯淇℃伅锛?
         time_str = eastern_time.strftime("%Y-%m-%d %H:%M:%S %Z")
 
-        # 获取knowledge item的answer作为上下文
+        # 鑾峰彇knowledge item鐨刟nswer浣滀负涓婁笅鏂?
         context = ""
         if knowledge_item and hasattr(knowledge_item, 'answer') and knowledge_item.answer:
             context = f"""
@@ -457,7 +478,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         else:
             tool_description = tool_title
 
-        # 解析工具参数信息
+        # 瑙ｆ瀽宸ュ叿鍙傛暟淇℃伅
         tool_params_info = ""
         if tool_info.params:
             try:
@@ -502,14 +523,14 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         knowledge_item, tool_info = self.knowledgeTool
         self.logger.info(f"knowledge item:{knowledge_item} - tool:{tool_info}")
 
-        # 获取美国东部时区的当前时间
+        # 鑾峰彇缇庡浗涓滈儴鏃跺尯鐨勫綋鍓嶆椂闂?
         eastern_tz = ZoneInfo("America/New_York")
         eastern_time = datetime.now(eastern_tz)
 
-        # 格式化为字符串（包含时区信息）
+        # 鏍煎紡鍖栦负瀛楃涓诧紙鍖呭惈鏃跺尯淇℃伅锛?
         time_str = eastern_time.strftime("%Y-%m-%d %H:%M:%S %Z")
 
-        # 获取knowledge item的answer作为上下文
+        # 鑾峰彇knowledge item鐨刟nswer浣滀负涓婁笅鏂?
         context = ""
         if knowledge_item and hasattr(knowledge_item, 'answer') and knowledge_item.answer:
             context = f"""
@@ -664,7 +685,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         - ... (if the tool result is a long JSON list, show a summary with count statistics instead)
 
         ### Details
-        [Organized detailed content — if the tool result is a long JSON list, show a summary with count statistics]
+        [Organized detailed content 鈥?if the tool result is a long JSON list, show a summary with count statistics]
 
         [Display images inline where relevant]
         ![Image Description](image_URL)
@@ -691,12 +712,12 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         """Select and return the appropriate system prompt based on push mode."""
         _, tool_info = self.knowledgeTool
 
-        # 根据tool_info.push的值选择不同系统提示词
+        # 鏍规嵁tool_info.push鐨勫€奸€夋嫨涓嶅悓绯荤粺鎻愮ず璇?
         if not tool_info:
             return self.generate_fixed_system_prompt()
 
         if tool_info.push == 1:
-            if tool_data and tool_data.strip():  # 判断tool_data是否非空
+            if tool_data and tool_data.strip():  # 鍒ゆ柇tool_data鏄惁闈炵┖
                 return self.generate_frontend_tool_direct_system_prompt(tool_data)
             else:
                 return self.generate_template_system_prompt()
@@ -708,7 +729,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         elif tool_info.push == 3:
             return self.generate_frontend_tool_direct_system_prompt(tool_data)
         else:
-            # 默认情况下固定的系统提示词
+            # 榛樿鎯呭喌涓嬪浐瀹氱殑绯荤粺鎻愮ず璇?
             return self.generate_template_system_prompt()
 
 
@@ -728,7 +749,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         # self.logger.info(f"generate_frontend_tool_direct_system_prompt - tool_data: {tool_data}")
 
         try:
-            # 获取knowledge item的answer作为上下文
+            # 鑾峰彇knowledge item鐨刟nswer浣滀负涓婁笅鏂?
             knowledge_item, _ = self.knowledgeTool
             context = ""
             if knowledge_item and hasattr(knowledge_item, 'answer') and knowledge_item.answer:
@@ -740,15 +761,15 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
             Use this context to better understand the task and provide more accurate responses.
             """
 
-            # 解析 tool_data 内容
+            # 瑙ｆ瀽 tool_data 鍐呭
             if "text/html" in tool_data:
-                # 如果是 HTML 内容，使用公用方法清理文本
+                # 濡傛灉鏄?HTML 鍐呭锛屼娇鐢ㄥ叕鐢ㄦ柟娉曟竻鐞嗘枃鏈?
                 result_str = clean_html_text(tool_data)
             else:
-                # 尝试将 tool_data 解析为 JSON
+                # 灏濊瘯灏?tool_data 瑙ｆ瀽涓?JSON
                 try:
                     result_data = json.loads(tool_data)
-                    # 如果结果是一个 list，提取 raw_items 以供后续批处理
+                    # 濡傛灉缁撴灉鏄竴涓?list锛屾彁鍙?raw_items 浠ヤ緵鍚庣画鎵瑰鐞?
                     if isinstance(result_data, list) and result_data:
                         raw_items = result_data
                     elif isinstance(result_data, dict):
@@ -763,12 +784,12 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
                         self._pending_raw_items = raw_items
                         result_str = (
                             f"The query returned {len(raw_items)} items. "
-                            f"Please write a brief 2–3 sentence summary of what was found. "
-                            f"The complete list will be analyzed and displayed item by item automatically — "
+                            f"Please write a brief 2鈥? sentence summary of what was found. "
+                            f"The complete list will be analyzed and displayed item by item automatically 鈥?"
                             f"do NOT enumerate the items yourself."
                         )
                     elif isinstance(result_data, dict):
-                        # dict 包装为单元素列表，走 Phase 2 忠实输出
+                        # dict 鍖呰涓哄崟鍏冪礌鍒楄〃锛岃蛋 Phase 2 蹇犲疄杈撳嚭
                         pruned = _prune_item_for_llm(result_data)
                         self._pending_raw_items = [pruned]
                         result_str = (
@@ -780,13 +801,13 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
                     else:
                         result_str = json.dumps(result_data, ensure_ascii=False, indent=2)
                 except json.JSONDecodeError:
-                    # 如果不是有效的 JSON，则直接使用原始内容
+                    # 濡傛灉涓嶆槸鏈夋晥鐨?JSON锛屽垯鐩存帴浣跨敤鍘熷鍐呭
                     result_str = tool_data
 
-            # 获取格式化指南
+            # 鑾峰彇鏍煎紡鍖栨寚鍗?
             formatting_guide = self._get_markdown_formatting_guide()
 
-            # 构造系统提示词
+            # 鏋勯€犵郴缁熸彁绀鸿瘝
             system_prompt = f"""
 Act as a self-contained intelligent assistant. Follow these instructions strictly:
 {context}
@@ -837,12 +858,12 @@ Begin your response now:
 
     def generate_backend_tool_direct_system_prompt(self) -> str:
         """Make the HTTP request from tool_info, embed the result in the system prompt, and return it."""
-        # 获取工具信息
+        # 鑾峰彇宸ュ叿淇℃伅
         knowledge_item, tool_info = self.knowledgeTool
         self.logger.info(f"generate_tool_direct_system_prompt - tool:{tool_info}")
 
         try:
-            # 获取knowledge item的answer作为上下文
+            # 鑾峰彇knowledge item鐨刟nswer浣滀负涓婁笅鏂?
             context = ""
             if knowledge_item and hasattr(knowledge_item, 'answer') and knowledge_item.answer:
                 context = f"""
@@ -853,16 +874,16 @@ Begin your response now:
             Use this context to better understand the task and provide more accurate responses.
             """
 
-            # 从 tool_info 中提取 URL 和参数模板
+            # 浠?tool_info 涓彁鍙?URL 鍜屽弬鏁版ā鏉?
             url = tool_info.url
             params_data = _coerce_json_object(tool_info.params, "tool_info.params")
             url = _append_path_to_url(url, params_data.get("path", ""))
 
-            # 获取 HTTP 方法和 Content-Type
+            # 鑾峰彇 HTTP 鏂规硶鍜?Content-Type
             method = params_data.get("method", "GET").upper()
             content_type = params_data.get("Content-Type", "application/json")
 
-            # 准备请求头
+            # 鍑嗗璇锋眰澶?
             headers = {
                 "Content-Type": content_type
             }
@@ -872,10 +893,10 @@ Begin your response now:
             if isinstance(user_headers, dict):
                 headers.update(user_headers)
 
-            # 添加时间戳参数绕过 CDN 缓存
+            # 娣诲姞鏃堕棿鎴冲弬鏁扮粫杩?CDN 缂撳瓨
             cache_bust_params = {"_t": str(int(time.time() * 1000))}
 
-            # 发起 HTTP 请求
+            # 鍙戣捣 HTTP 璇锋眰
             if method not in {"GET", "POST", "PUT", "DELETE", "PATCH"}:
                 raise ValueError(f"Unsupported HTTP method: {method}")
             request_kwargs = {
@@ -886,22 +907,22 @@ Begin your response now:
                 request_kwargs["json"] = {}
             response = outbound_http.request(method, url, purpose="backend_tool_direct", **request_kwargs)
 
-            # 处理响应结果
+            # 澶勭悊鍝嶅簲缁撴灉
             if response.status_code == 200:
 
                 content_type = response.headers.get("Content-Type", "").lower()
 
                 if "text/html" in content_type:
-                    # 使用BeautifulSoup移除HTML标签
+                    # 浣跨敤BeautifulSoup绉婚櫎HTML鏍囩
                     result_str = BeautifulSoup(response.content, "html.parser").get_text()
                 elif "application/xml" in content_type or "text/xml" in content_type:
-                    # 处理XML格式响应
+                    # 澶勭悊XML鏍煎紡鍝嶅簲
                     try:
-                        # 使用BeautifulSoup解析XML并提取文本内容
+                        # 浣跨敤BeautifulSoup瑙ｆ瀽XML骞舵彁鍙栨枃鏈唴瀹?
                         soup = BeautifulSoup(response.content, "xml")
-                        # 移除XML标签，只保留文本内容
+                        # 绉婚櫎XML鏍囩锛屽彧淇濈暀鏂囨湰鍐呭
                         result_str = soup.get_text()
-                        # 如果XML解析失败或内容为空，使用原始内容
+                        # 濡傛灉XML瑙ｆ瀽澶辫触鎴栧唴瀹逛负绌猴紝浣跨敤鍘熷鍐呭
                         if not result_str.strip():
                             result_str = response.text
                     except Exception as xml_e:
@@ -924,12 +945,12 @@ Begin your response now:
                             self._pending_raw_items = raw_items
                             result_str = (
                                 f"The query returned {len(raw_items)} items. "
-                                f"Please write a brief 2–3 sentence summary of what was found. "
-                                f"The complete list will be analyzed and displayed item by item automatically — "
+                                f"Please write a brief 2鈥? sentence summary of what was found. "
+                                f"The complete list will be analyzed and displayed item by item automatically 鈥?"
                                 f"do NOT enumerate the items yourself."
                             )
                         elif isinstance(result_data, dict):
-                            # dict 包装为单元素列表，走 Phase 2 忠实输出
+                            # dict 鍖呰涓哄崟鍏冪礌鍒楄〃锛岃蛋 Phase 2 蹇犲疄杈撳嚭
                             pruned = _prune_item_for_llm(result_data)
                             self._pending_raw_items = [pruned]
                             result_str = (
@@ -941,15 +962,15 @@ Begin your response now:
                         else:
                             result_str = json.dumps(result_data, ensure_ascii=False, indent=2)
                     except json.JSONDecodeError:
-                        # 如果JSON解析失败，使用原始响应内容
+                        # 濡傛灉JSON瑙ｆ瀽澶辫触锛屼娇鐢ㄥ師濮嬪搷搴斿唴瀹?
                         result_str = response.text if response.text else "Empty response"
             else:
                 result_str = f"Request failed, status code: {response.status_code}"
 
-            # 获取格式化指南
+            # 鑾峰彇鏍煎紡鍖栨寚鍗?
             formatting_guide = self._get_markdown_formatting_guide()
 
-            # 构造系统提示词
+            # 鏋勯€犵郴缁熸彁绀鸿瘝
             system_prompt = f"""
 Act as a self-contained intelligent assistant. Follow these instructions strictly:
 {context}
@@ -1001,52 +1022,52 @@ Begin your response now:
     async def get_dynamic_tools(self) -> list:
         try:
             tools = {}
-            # 如果有知识库中的工具信息，则动态构建MCP工具
+            # 濡傛灉鏈夌煡璇嗗簱涓殑宸ュ叿淇℃伅锛屽垯鍔ㄦ€佹瀯寤篗CP宸ュ叿
             if hasattr(self, 'knowledgeTool') and self.knowledgeTool:
-                # 获取工具信息
+                # 鑾峰彇宸ュ叿淇℃伅
                 knowledge_item, tool_info = self.knowledgeTool
 
                 if tool_info:
 
-                    # 动态创建工具函数
+                    # 鍔ㄦ€佸垱寤哄伐鍏峰嚱鏁?
                     def dynamic_frontend_tool_function(user_id: str, query_id: str, params: str):
                         self.logger.info(f"dynamic_frontend_tool_function user id is {user_id} - query id is {query_id} - param is {params}")
                         try:
-                            # 连接Redis
+                            # 杩炴帴Redis
                             redis_conn = get_redis_connection()
 
-                            # 构造Redis键
+                            # 鏋勯€燫edis閿?
                             redis_key = f"tool_request_{query_id}_{user_id}"
 
                             # param_dict = {"origin_params": json.loads(tool_info.params)}
                             # if params:
-                            #     # 将参数转换为JSON并存储到Redis
+                            #     # 灏嗗弬鏁拌浆鎹负JSON骞跺瓨鍌ㄥ埌Redis
                             #     param_dict["llm_params"] = params
 
                             params_json = json.dumps(params)
 
                             redis_conn.set(redis_key, params_json, ex=1200)
 
-                            # 轮询读取tool_response_{query_id}
+                            # 杞璇诲彇tool_response_{query_id}
                             response_key = f"tool_response_{query_id}_{user_id}"
-                            timeout = 300  # 5分钟超时
-                            interval = 1  # 每秒查询一次
+                            timeout = 300  # 5鍒嗛挓瓒呮椂
+                            interval = 1  # 姣忕鏌ヨ涓€娆?
                             elapsed = 0
 
                             while elapsed < timeout:
                                 response_value = redis_conn.get(response_key)
 
                                 if response_value is not None:
-                                    # 成功获取到响应值
+                                    # 鎴愬姛鑾峰彇鍒板搷搴斿€?
                                     return response_value
-                                # 等待1秒后再次尝试
+                                # 绛夊緟1绉掑悗鍐嶆灏濊瘯
                                 time.sleep(interval)
                                 elapsed += interval
 
-                            # 超时未获取到响应值
+                            # 瓒呮椂鏈幏鍙栧埌鍝嶅簲鍊?
                             return None
                         except Exception as e:
-                            # 如果Redis操作失败，记录日志但仍继续执行工具
+                            # 濡傛灉Redis鎿嶄綔澶辫触锛岃褰曟棩蹇椾絾浠嶇户缁墽琛屽伐鍏?
                             self.logger.error(f"Failed to write to Redis: {str(e)}")
                             return None
 
@@ -1065,7 +1086,7 @@ Begin your response now:
                             )
                         data = tool_result.get("data")
                         if isinstance(data, dict):
-                            # dict 包装为单元素列表，走 Phase 2 忠实输出
+                            # dict 鍖呰涓哄崟鍏冪礌鍒楄〃锛岃蛋 Phase 2 蹇犲疄杈撳嚭
                             pruned = _prune_item_for_llm(data)
                             self._pending_raw_items = [pruned]
                             return (
@@ -1077,10 +1098,10 @@ Begin your response now:
                         if isinstance(data, list):
                             return json.dumps(data, ensure_ascii=False, indent=2)
                         return data
-                        # 从tool_info中获取URL
+                        # 浠巘ool_info涓幏鍙朥RL
                         url = tool_info.url
 
-                        # 解析参数JSON
+                        # 瑙ｆ瀽鍙傛暟JSON
                         params_data = _coerce_json_object(tool_info.params, "tool_info.params")
                         user_params = _coerce_json_object(params, "LLM tool params")
                         url = _append_path_to_url(
@@ -1088,12 +1109,12 @@ Begin your response now:
                             user_params.get("path", params_data.get("path", ""))
                         )
 
-                        # 获取HTTP方法和Content-Type
+                        # 鑾峰彇HTTP鏂规硶鍜孋ontent-Type
                         method = params_data.get("method", "GET").upper()
                         content_type = params_data.get("Content-Type", "application/json")
 
                         # Prepare HTTP headers from server-side tool_info.params only.
-                        # Never use LLM-provided header values — the LLM only sees
+                        # Never use LLM-provided header values 鈥?the LLM only sees
                         # sanitised (****) placeholders and must not control auth headers.
                         headers = {
                             "Content-Type": content_type
@@ -1105,7 +1126,7 @@ Begin your response now:
                         request_params = user_params.get("query")
                         request_body = user_params.get("body")
 
-                        # 添加时间戳参数绕过 CDN 缓存
+                        # 娣诲姞鏃堕棿鎴冲弬鏁扮粫杩?CDN 缂撳瓨
                         if request_params is None:
                             request_params = {}
                         request_params["_t"] = str(int(time.time() * 1000))
@@ -1120,19 +1141,19 @@ Begin your response now:
                             request_kwargs["json"] = request_body
                         response = outbound_http.request(method, url, purpose="backend_tool", **request_kwargs)
 
-                        # 打印 response 信息
+                        # 鎵撳嵃 response 淇℃伅
                         self.logger.info(f"Response status code: {response.status_code}")
                         self.logger.info(f"Response headers: {response.headers}")
                         # self.logger.info(f"Response content: {response.text}")
-                        # 处理响应结果
+                        # 澶勭悊鍝嶅簲缁撴灉
                         if response.status_code == 200:
                             content_type = response.headers.get("Content-Type", "").lower()
 
                             if "text/html" in content_type:
-                                # HTML 内容，使用 BeautifulSoup 清理
+                                # HTML 鍐呭锛屼娇鐢?BeautifulSoup 娓呯悊
                                 result = BeautifulSoup(response.content, "html.parser").get_text()
                             elif "application/xml" in content_type or "text/xml" in content_type:
-                                # XML 内容，尝试解析并提取文本
+                                # XML 鍐呭锛屽皾璇曡В鏋愬苟鎻愬彇鏂囨湰
                                 try:
                                     soup = BeautifulSoup(response.content, "xml")
                                     result = soup.get_text()
@@ -1142,7 +1163,7 @@ Begin your response now:
                                     self.logger.warning(f"XML parsing failed: {str(xml_e)}, using raw content")
                                     result = response.text
                             else:
-                                # JSON 或其他格式
+                                # JSON 鎴栧叾浠栨牸寮?
                                 try:
                                     result_data = response.json() if response.content else None
                                     if isinstance(result_data, (dict, list)):
@@ -1163,8 +1184,8 @@ Begin your response now:
                                             self._pending_raw_items = raw_items
                                             result = (
                                                 f"The query returned {list_count} items. "
-                                                f"Please write a brief 2–3 sentence summary of what was found. "
-                                                f"The complete list will be analyzed and displayed item by item automatically — "
+                                                f"Please write a brief 2鈥? sentence summary of what was found. "
+                                                f"The complete list will be analyzed and displayed item by item automatically 鈥?"
                                                 f"do NOT enumerate the items yourself."
                                             )
                                         else:
@@ -1172,29 +1193,29 @@ Begin your response now:
                                     else:
                                         result = result_data
                                 except json.JSONDecodeError:
-                                    # JSON 解析失败，返回原始文本
+                                    # JSON 瑙ｆ瀽澶辫触锛岃繑鍥炲師濮嬫枃鏈?
                                     result = response.text if response.text else None
                         else:
-                            # 请求失败，返回错误信息
+                            # 璇锋眰澶辫触锛岃繑鍥為敊璇俊鎭?
                             result = f"Request failed, status code: {response.status_code}"
 
                         return result
 
-                    # 清理工具名称以符合API要求
+                    # 娓呯悊宸ュ叿鍚嶇О浠ョ鍚圓PI瑕佹眰
                     tool_name = tool_info.title if tool_info.title else "dynamic_knowledge_tool"
-                    # 只保留字母、数字、下划线和连字符
+                    # 鍙繚鐣欏瓧姣嶃€佹暟瀛椼€佷笅鍒掔嚎鍜岃繛瀛楃
                     cleaned_tool_name = re.sub(r'[^a-zA-Z0-9_-]', '_', tool_name)
-                    # 确保名称不为空
+                    # 纭繚鍚嶇О涓嶄负绌?
                     if not cleaned_tool_name or cleaned_tool_name.strip() == "":
                         cleaned_tool_name = "dynamic_knowledge_tool"
 
-                    # 根据tool_info.push的值选择不同的工具函数
+                    # 鏍规嵁tool_info.push鐨勫€奸€夋嫨涓嶅悓鐨勫伐鍏峰嚱鏁?
                     if tool_info.push == 1 or tool_info.push == 3:
                         tool_func = dynamic_frontend_tool_function
                     elif tool_info.push == 2:
                         tool_func = dynamic_backend_tool_function
                     else:
-                        # 默认情况下使用前端工具函数
+                        # 榛樿鎯呭喌涓嬩娇鐢ㄥ墠绔伐鍏峰嚱鏁?
                         tool_func = dynamic_frontend_tool_function
 
                     args_schema = (
@@ -1210,13 +1231,13 @@ Begin your response now:
                         args_schema=args_schema
                     )
 
-                    # 合并动态工具
+                    # 鍚堝苟鍔ㄦ€佸伐鍏?
                     tools = [dynamic_tool]
                 else:
-                    # 如果没有动态工具信息，使用默认配置
+                    # 濡傛灉娌℃湁鍔ㄦ€佸伐鍏蜂俊鎭紝浣跨敤榛樿閰嶇疆
                     tools = None
             else:
-                # 如果没有动态工具信息，使用默认配置
+                # 濡傛灉娌℃湁鍔ㄦ€佸伐鍏蜂俊鎭紝浣跨敤榛樿閰嶇疆
                 tools = None
 
             self.logger.info(f"tools{tools}")
@@ -1231,10 +1252,10 @@ Begin your response now:
             return []
 
         tools = []
-        # 根据tool_info.push的值选择不同系统提示词
+        # 鏍规嵁tool_info.push鐨勫€奸€夋嫨涓嶅悓绯荤粺鎻愮ず璇?
         if tool_info.push == 1:
             # If tool_data is already provided, the system prompt contains the
-            # pre-fetched result. Do NOT give the LLM a LangChain tool —
+            # pre-fetched result. Do NOT give the LLM a LangChain tool 鈥?
             # it would call the tool, receive a ToolMessage, and ignore the
             # pre-formatted list we placed in the system prompt.
             if tool_data and tool_data.strip():
@@ -1251,7 +1272,7 @@ Begin your response now:
         elif tool_info.push == 3:
             return tools
         else:
-            # 默认情况下固定的系统提示词
+            # 榛樿鎯呭喌涓嬪浐瀹氱殑绯荤粺鎻愮ず璇?
             return await self.get_dynamic_tools()
 
     async def process(self, user_id, prompt, query_id, speech_module, push_filter=None) -> str | tuple[str, str]:
@@ -1297,9 +1318,9 @@ Begin your response now:
         self._last_user_prompt = prompt
         self._last_query_id = query_id
         if callback_handler:
-            await _emit_status(callback_handler, "正在分析您的问题...")
+            await _emit_status(callback_handler, "姝ｅ湪鍒嗘瀽鎮ㄧ殑闂...")
         # Pass conversation history so the LLM routing knowledge selection
-        # can understand what "这3条" or "from the results above" refers to.
+        # can understand what "杩?鏉? or "from the results above" refers to.
         conv_history = self.memory.get()
         self.knowledgeTool = await select_knowledge_tool_with_llm(
             user_id,
@@ -1315,24 +1336,24 @@ Begin your response now:
         )
         # Long task detection: type=3 knowledge triggers async Celery pipeline
         if _is_long_task_knowledge(knowledge_item):
-            self.logger.info("Long task detected — returning long_task intent")
+            self.logger.info("Long task detected 鈥?returning long_task intent")
             if callback_handler:
                 try:
                     await asyncio.wait_for(
-                        _emit_status(callback_handler, "正在启动批量专利分析任务..."),
+                        _emit_status(callback_handler, "姝ｅ湪鍚姩鎵归噺涓撳埄鍒嗘瀽浠诲姟..."),
                         timeout=5.0,
                     )
                 except Exception:
                     pass
-            # Return special marker — caller (run_pipeline) handles submission
+            # Return special marker 鈥?caller (run_pipeline) handles submission
             self._long_task_intent = _build_long_task_intent(knowledge_item, tool_info)
             return self._long_task_intent
         if is_workflow_knowledge(knowledge_item):
             if callback_handler:
                 await callback_handler.on_llm_new_token(
-                    f"已匹配组合知识：{knowledge_item.question}\n\n"
+                    f"宸插尮閰嶇粍鍚堢煡璇嗭細{knowledge_item.question}\n\n"
                 )
-                await _emit_status(callback_handler, "正在执行组合知识流程...")
+                await _emit_status(callback_handler, "姝ｅ湪鎵ц缁勫悎鐭ヨ瘑娴佺▼...")
             workflow_result = await WorkflowExecutor(
                 self.llm,
                 status_callback=_status_callback_for(callback_handler),
@@ -1348,7 +1369,7 @@ Begin your response now:
         user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
         system_prompt = self.generate_system_prompt(tool_data)
         # Keep prior conversation context so follow-up queries referencing
-        # previous results (e.g. "从这3条中筛选出...") can be understood.
+        # previous results (e.g. "浠庤繖3鏉′腑绛涢€夊嚭...") can be understood.
         prior = self.memory.get()
         if len(prior) > 6:
             # Keep first message + last 5 messages to bound context window
@@ -1375,27 +1396,27 @@ Begin your response now:
                 "Synthesize ALL results into a single coherent, complete report.\n\n"
                 "CRITICAL RULES:\n"
                 "1. Do NOT structure your answer by data source or query step. "
-                "Present the information as one unified document — the reader must not "
+                "Present the information as one unified document 鈥?the reader must not "
                 "be able to tell which piece of data came from which query.\n"
-                "2. Merge duplicate information across sources — if the same fact appears "
+                "2. Merge duplicate information across sources 鈥?if the same fact appears "
                 "in multiple results, present it once.\n"
-                "3. ALL meaningful data must be preserved — do NOT summarize, abbreviate, "
+                "3. ALL meaningful data must be preserved 鈥?do NOT summarize, abbreviate, "
                 "or skip any field with a real value. This is the most important rule.\n"
                 "4. Group related information logically: titles and abstracts together, "
                 "dates together, people and organizations together, legal/classification "
                 "together, documents and references together.\n"
                 "5. Filter noise: skip API wrapper fields (errorCode, errorDesc, page, "
-                "page_row, total, sort_column), empty values, '0'/'否' placeholder values, "
+                "page_row, total, sort_column), empty values, '0'/'鍚? placeholder values, "
                 "and internal system IDs (pid).\n"
                 "6. Present as a reader-friendly document with clear section headings. "
                 "Use comparison tables when comparing multiple records with shared fields.\n"
                 "7. Do NOT add any meta-commentary such as 'based on the query results' or "
-                "'here is the synthesized report' — just output the content directly.\n"
-                "8. MANDATORY — EVERY document URL, image URL, and external link found "
+                "'here is the synthesized report' 鈥?just output the content directly.\n"
+                "8. MANDATORY 鈥?EVERY document URL, image URL, and external link found "
                 "in the source data MUST appear verbatim in your output. Even if two URLs "
                 "look similar, include BOTH if they point to different resources. "
                 "Use descriptive link text: [Title](URL) for documents, "
-                "![Description](URL) for images. This rule overrides rule #2 — never "
+                "![Description](URL) for images. This rule overrides rule #2 鈥?never "
                 "merge or skip URLs."
             )
             # Include raw_items from each step so links/images are not lost
@@ -1492,7 +1513,7 @@ Begin your response now:
         system_prompt: str,
         callback_handler,
     ) -> None:
-        """Process items one by one: LLM → markdown on failure."""
+        """Process items one by one: LLM 鈫?markdown on failure."""
         for item_index, item in enumerate(batch, start=1):
             item_batch = [item]
             await self._stream_formatter_or_markdown(
@@ -1543,7 +1564,7 @@ Begin your response now:
             }
             await on_status(message, **metadata)
 
-        # ── 小列表快速路径：跳过过滤，专用 prompt 一次性忠实输出 ──
+        # 鈹€鈹€ 灏忓垪琛ㄥ揩閫熻矾寰勶細璺宠繃杩囨护锛屼笓鐢?prompt 涓€娆℃€у繝瀹炶緭鍑?鈹€鈹€
         if original_total <= SMALL_LIST_THRESHOLD:
             self.logger.info(
                 f"[SMALL-LIST] ({original_total} items), "
@@ -1561,7 +1582,7 @@ Begin your response now:
             batch_json = json.dumps(pruned, ensure_ascii=False, indent=2, default=str)
 
             if len(batch_json) <= MAX_BATCH_JSON_CHARS_FOR_LLM:
-                # 从第一条 item 提取所有字段名，生成强制输出模板
+                # 浠庣涓€鏉?item 鎻愬彇鎵€鏈夊瓧娈靛悕锛岀敓鎴愬己鍒惰緭鍑烘ā鏉?
                 first_keys = list(pruned[0].keys()) if pruned else []
                 field_checklist = "\n".join(
                     f"- {k}" for k in first_keys
@@ -1572,32 +1593,32 @@ Begin your response now:
                     "Your output must be readable, well-structured, and free of jargon.\n\n"
                     "CRITICAL RULES:\n\n"
                     "1. TRANSLATE field codes into clear Chinese labels. "
-                    "For example: 'apc'→'申请人', 'ad'→'申请日', 'pdt'→'专利类型', "
-                    "'pk'→'文献种类', 'pns'→'专利号', 'lsscn'→'法律状态'. "
+                    "For example: 'apc'鈫?鐢宠浜?, 'ad'鈫?鐢宠鏃?, 'pdt'鈫?涓撳埄绫诲瀷', "
+                    "'pk'鈫?鏂囩尞绉嶇被', 'pns'鈫?涓撳埄鍙?, 'lsscn'鈫?娉曞緥鐘舵€?. "
                     "Use your knowledge to interpret every code.\n\n"
-                    "2. FILTER noise: skip fields whose value is empty, '0', '否', "
+                    "2. FILTER noise: skip fields whose value is empty, '0', '鍚?, "
                     "or clearly an internal system ID (like 'pid'). "
                     "Also skip the top-level API wrapper fields (errorCode, errorDesc, "
-                    "page_row, page, total, sort_column) — they are not part of the data.\n\n"
+                    "page_row, page, total, sort_column) 鈥?they are not part of the data.\n\n"
                     "3. GROUP related fields logically: "
                     "titles together, abstracts together, dates together, "
                     "people & organizations together, legal/classification together.\n\n"
                     "4. PRESENT as a reader-friendly document with clear section headings, "
                     "NOT as a flat key-value dump. Use comparison tables when comparing "
                     "multiple records with shared fields.\n\n"
-                    "5. ALL meaningful data must be preserved — do not summarize, "
+                    "5. ALL meaningful data must be preserved 鈥?do not summarize, "
                     "abbreviate, or skip any non-noise field. If a field has a real value, "
                     "it belongs in the output.\n\n"
                     "6. Every URL must be copied exactly and verbatim. "
                     "Image URLs MUST use ![description](URL) syntax.\n\n"
-                    "7. Do NOT add a concluding summary — let the data speak for itself."
+                    "7. Do NOT add a concluding summary 鈥?let the data speak for itself."
                 )
                 faithful_user_content = (
                     f"Here are {len(pruned)} data item(s) to present for non-technical readers. "
                     f"Translate all field codes into plain Chinese labels. "
                     f"Group related information logically. "
                     f"Skip empty/noise fields. Keep ALL meaningful data.\n\n"
-                    f"Reference — all fields present in the data:\n"
+                    f"Reference 鈥?all fields present in the data:\n"
                     f"{field_checklist}\n\n"
                     f"{url_checklist}"
                     f"{batch_json}"
@@ -1634,7 +1655,7 @@ Begin your response now:
                 if artifacts:
                     await on_artifacts(artifacts)
             return
-        # ── 大列表：走原有的过滤 + 批量格式化路径 ──
+        # 鈹€鈹€ 澶у垪琛細璧板師鏈夌殑杩囨护 + 鎵归噺鏍煎紡鍖栬矾寰?鈹€鈹€
 
         filter_result = await filter_tool_result_items(
             raw_items,
@@ -1648,6 +1669,53 @@ Begin your response now:
         # Save the original (filtered but un-pruned) items for Excel / CSV
         # export.  The pruning below only affects the LLM input path.
         items_for_export = list(pending)
+
+        # ── 大列表摘要模式：剔除超长字段后做整体总结，跳过逐条批处理 ──
+        if USE_LARGE_LIST_SUMMARY:
+            summary_items = _prune_for_summary(pending)
+            heading = f"## Results — Summary ({len(pending)} items)"
+            await callback_handler.on_llm_new_token(
+                f"\n\n---\n\n{heading}\n\n"
+            )
+
+            summary_system_prompt = (
+                "You are a professional data analyst. Create a concise, well-structured summary of the data items below. "
+                "Group similar items, highlight key patterns or trends, and present information clearly for non-technical readers. "
+                "Use Markdown formatting — including tables where appropriate. Keep it under 600 words. "
+                "Do NOT list every item individually; synthesize and summarize. "
+                "Focus on: what the data shows overall, key differences between items, any notable outliers."
+            )
+
+            try:
+                await self.llm.stream_simple(
+                    system_prompt=summary_system_prompt,
+                    user_content=json.dumps(summary_items, ensure_ascii=False, indent=2, default=str),
+                    callback_handler=callback_handler,
+                )
+            except Exception as exc:
+                self.logger.warning(
+                    f"large-list summary LLM failed: {exc}"
+                )
+                await callback_handler.on_llm_new_token(
+                    "\n\n*Summary generation failed. Please download the data file below.*"
+                )
+
+            await callback_handler.on_llm_new_token(
+                "\n\n> \U0001f4e5 For complete data, please download the Excel or CSV file below.\n\n"
+            )
+
+            on_artifacts = getattr(callback_handler, "on_artifacts", None)
+            if on_artifacts:
+                artifacts = build_result_artifacts(
+                    items_for_export,
+                    query_id=getattr(self, "_last_query_id", None),
+                    original_count=original_total,
+                    filter_applied=True,
+                )
+                if artifacts:
+                    await on_artifacts(artifacts)
+            return
+
 
         # Prune each item so that no single element exceeds 15 000 chars.
         # Oversized arrays (> 10 000 chars) are dropped; oversized dicts are
@@ -1709,7 +1777,7 @@ Begin your response now:
             workflow_result = getattr(self, "_workflow_result", None)
             if workflow_result is not None:
                 self._workflow_result = None
-                await _emit_status(callback_handler, "正在整理结果...")
+                await _emit_status(callback_handler, "姝ｅ湪鏁寸悊缁撴灉...")
                 output_mode = getattr(workflow_result, "output_mode", "last")
                 raw_items = getattr(workflow_result, "raw_items", None)
                 if output_mode == "all":
@@ -1721,7 +1789,7 @@ Begin your response now:
                 return
 
             await self.llm.openai_invoke(agent, self.memory.get(), callback_handler)
-            # LangGraph agents don't call on_agent_finish — inject batch analysis here,
+            # LangGraph agents don't call on_agent_finish 鈥?inject batch analysis here,
             # after all LLM tokens have been streamed but before core.py sends 'end'.
             pending = getattr(self, '_pending_raw_items', None)
             if pending:
