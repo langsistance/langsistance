@@ -202,8 +202,6 @@ export default function Chat() {
                   resultSummary: status.result_summary,
                 }]
               })
-              // Persist summary immediately — messages.length unchanged so save effect won't fire
-              if (status.result_summary) persistCurrentMessages()
               continue
             }
             if (status && (status.status === 'failed' || status.status === 'error')) {
@@ -255,8 +253,6 @@ export default function Chat() {
                 resultSummary: status.result_summary,
               }]
             })
-            // Persist summary immediately
-              if (status.result_summary) persistCurrentMessages()
             startLongTaskPolling(tid, pollMsgId)
             }
           } catch {
@@ -271,21 +267,10 @@ export default function Chat() {
     return () => { cancelled = true }
   }, [searchParams, sessionId, setMessages, setSessionId])
 
+  const messagesHash = JSON.stringify(messages.map(m => ({ role: m.role, content: m.content, taskId: (m as any).taskId, resultSummary: (m as any).resultSummary })))
   // Save session after streaming completes — but ONLY if a session already exists
   // (session is created only when a long task is triggered)
   const pendingSaveRef = useRef(false)
-  const messagesRef = useRef(messages)
-  useEffect(() => { messagesRef.current = messages }, [messages])
-
-  // Persist current messages to session (used by polling handlers where messages.length unchanged)
-  function persistCurrentMessages() {
-    if (!sessionId) return
-    setTimeout(() => {
-      const toSave = messagesRef.current.map((m: any) => ({ role: m.role, content: m.content, ...(m.taskId ? { taskId: m.taskId } : {}), ...(m.resultSummary ? { resultSummary: m.resultSummary } : {}) }))
-      console.log('[persistCurrentMessages] saving', toSave.length, 'msgs, with summaries:', toSave.filter((x: any) => x.resultSummary).length)
-      saveSessionMessages(sessionId, toSave).catch(() => {})
-    }, 300)
-  }
   useEffect(() => {
     if (streaming || messages.length === 0) return
     if (!sessionId) return  // No session yet = no long task ever triggered
@@ -308,7 +293,7 @@ export default function Chat() {
     }, 1000)
 
     return () => { clearTimeout(timer); pendingSaveRef.current = false }
-  }, [streaming, messages.length, sessionId])
+  }, [streaming, messagesHash, sessionId])
 
   // Track whether the user is scrolled near the bottom of the chat.
   useEffect(() => {
@@ -768,8 +753,6 @@ export default function Chat() {
               + ` 任务ID: ${taskId}`
             setMessages((m) => findAndUpdate(m, newContent, data.result_summary))
           }
-          // Persist summary immediately
-          if (data.result_summary) persistCurrentMessages()
         }
       } catch {
         // Non-fatal batch poll error; continue polling
