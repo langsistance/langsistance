@@ -280,8 +280,11 @@ export default function Chat() {
   // Persist current messages to session (used by polling handlers where messages.length unchanged)
   function persistCurrentMessages() {
     if (!sessionId) return
-    const toSave = messagesRef.current.map((m: any) => ({ role: m.role, content: m.content, ...(m.taskId ? { taskId: m.taskId } : {}), ...(m.resultSummary ? { resultSummary: m.resultSummary } : {}) }))
-    setTimeout(() => { saveSessionMessages(sessionId, toSave) }, 200)
+    setTimeout(() => {
+      const toSave = messagesRef.current.map((m: any) => ({ role: m.role, content: m.content, ...(m.taskId ? { taskId: m.taskId } : {}), ...(m.resultSummary ? { resultSummary: m.resultSummary } : {}) }))
+      console.log('[persistCurrentMessages] saving', toSave.length, 'msgs, with summaries:', toSave.filter((x: any) => x.resultSummary).length)
+      saveSessionMessages(sessionId, toSave).catch(() => {})
+    }, 300)
   }
   useEffect(() => {
     if (streaming || messages.length === 0) return
