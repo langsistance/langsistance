@@ -282,8 +282,8 @@ export default function Chat() {
           role: m.role,
           content: m.content,
           ...(m.taskId ? { taskId: m.taskId } : {}),
-              ...(m.resultSummary ? { resultSummary: m.resultSummary } : {}),
-              ...(m.resultSummary ? { resultSummary: m.resultSummary } : {}),
+          ...(m.resultSummary ? { resultSummary: m.resultSummary } : {}),
+        }))
         await saveSessionMessages(sessionId, toSave)
       } catch {
         // Non-critical
