@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useState, useEffect } from 'react'
 import { useI18n } from '@/lib/app-i18n'
@@ -77,7 +77,7 @@ export default function SceneCard({ scene, onToggle }: SceneCardProps) {
           </p>
           <ul className="scene-card-examples">
             {displayItems.map((item) => (
-              <li key={item.id} className="scene-card-example-item">
+              <li key={item.id} className="scene-card-example-item" title={item.question || item.description || ""}>
                 {item.question || item.description}
               </li>
             ))}
