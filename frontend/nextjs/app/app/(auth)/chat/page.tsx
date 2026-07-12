@@ -203,7 +203,7 @@ export default function Chat() {
                 }]
               })
               // Persist summary immediately — messages.length unchanged so save effect won't fire
-              if (status.result_summary) { setTimeout(() => saveSessionMessages(sessionId!, messagesRef.current.map((m: { role: string; content: string; taskId?: string; resultSummary?: string }) => ({ role: m.role, content: m.content, ...(m.taskId ? { taskId: m.taskId } : {}), ...(m.resultSummary ? { resultSummary: m.resultSummary } : {}) })), 200) }
+              if (status.result_summary) persistCurrentMessages()
               continue
             }
             if (status && (status.status === 'failed' || status.status === 'error')) {
@@ -256,7 +256,7 @@ export default function Chat() {
               }]
             })
             // Persist summary immediately
-            if (status.result_summary) { setTimeout(() => saveSessionMessages(sessionId!, messagesRef.current.map((m: { role: string; content: string; taskId?: string; resultSummary?: string }) => ({ role: m.role, content: m.content, ...(m.taskId ? { taskId: m.taskId } : {}), ...(m.resultSummary ? { resultSummary: m.resultSummary } : {}) })), 200) }
+              if (status.result_summary) persistCurrentMessages()
             startLongTaskPolling(tid, pollMsgId)
             }
           } catch {
@@ -276,6 +276,13 @@ export default function Chat() {
   const pendingSaveRef = useRef(false)
   const messagesRef = useRef(messages)
   useEffect(() => { messagesRef.current = messages }, [messages])
+
+  // Persist current messages to session (used by polling handlers where messages.length unchanged)
+  function persistCurrentMessages() {
+    if (!sessionId) return
+    const toSave = messagesRef.current.map((m: any) => ({ role: m.role, content: m.content, ...(m.taskId ? { taskId: m.taskId } : {}), ...(m.resultSummary ? { resultSummary: m.resultSummary } : {}) }))
+    setTimeout(() => { saveSessionMessages(sessionId, toSave) }, 200)
+  }
   useEffect(() => {
     if (streaming || messages.length === 0) return
     if (!sessionId) return  // No session yet = no long task ever triggered
@@ -759,7 +766,7 @@ export default function Chat() {
             setMessages((m) => findAndUpdate(m, newContent, data.result_summary))
           }
           // Persist summary immediately
-          if (data.result_summary) { setTimeout(() => saveSessionMessages(sessionId!, messagesRef.current.map((m: { role: string; content: string; taskId?: string; resultSummary?: string }) => ({ role: m.role, content: m.content, ...(m.taskId ? { taskId: m.taskId } : {}), ...(m.resultSummary ? { resultSummary: m.resultSummary } : {}) })), 200) }
+          if (data.result_summary) persistCurrentMessages()
         }
       } catch {
         // Non-fatal batch poll error; continue polling
