@@ -33,7 +33,7 @@ def _register_long_task_for_recovery(
     session_id: str,
     queue_status: str,
 ) -> None:
-    """Record query_id → task mapping so the client can recover after SSE timeout."""
+    """Record query_id 鈫?task mapping so the client can recover after SSE timeout."""
     if not query_id:
         return
     from sources.long_task.status_manager import register_query_task
@@ -109,34 +109,34 @@ def _detect_patent_source(
 ) -> str:
     """Detect patent source (uspto/cnipa) from conversation context and scene tools.
 
-    Detection order (text keywords take priority — scene tools only provide fallback):
-      1. Conversation / query text keywords (most reliable — what user is searching)
+    Detection order (text keywords take priority 鈥?scene tools only provide fallback):
+      1. Conversation / query text keywords (most reliable 鈥?what user is searching)
       2. Scene tools URL heuristics (fallback)
       3. Default: let the pipeline auto-detect via patent ID format
     """
     conv_history = conv_history or []
 
-    # ── Build combined text ──
+    # 鈹€鈹€ Build combined text 鈹€鈹€
     combined = query + " " + " ".join(
         m.get("content", "") for m in (conv_history or [])
         if isinstance(m, dict)
     )
     combined_lower = combined.lower()
 
-    # ── 1. Text keywords (primary — user intent) ──
-    uspto_keywords = ["uspto", "美国专利", "美国专利商标局", "united states patent",
+    # 鈹€鈹€ 1. Text keywords (primary 鈥?user intent) 鈹€鈹€
+    uspto_keywords = ["uspto", "缇庡浗涓撳埄", "缇庡浗涓撳埄鍟嗘爣灞€", "united states patent",
                       "us patent", "us application"]
-    cnipa_keywords = ["cnipa", "中国专利", "中国国家知识产权", "国家知识产权局",
+    cnipa_keywords = ["cnipa", "涓浗涓撳埄", "涓浗鍥藉鐭ヨ瘑浜ф潈", "鍥藉鐭ヨ瘑浜ф潈灞€",
                       "chinese patent", "china patent",
                       "zldsj"]
-    # Chinese company names → infer cnipa
+    # Chinese company names 鈫?infer cnipa
     cn_company_keywords = [
-        "华为", "小米", "oppo", "vivo", "腾讯", "阿里巴巴", "百度",
-        "比亚迪", "宁德时代", "中兴", "大疆", "字节跳动", "中芯国际",
-        "京东方", "格力", "美的", "海尔", "联想", "蔚来", "小鹏", "理想",
-        "寒武纪", "地平线", "紫光", "长江存储", "长鑫",
+        "鍗庝负", "灏忕背", "oppo", "vivo", "鑵捐", "闃块噷宸村反", "鐧惧害",
+        "姣斾簹杩?, "瀹佸痉鏃朵唬", "涓叴", "澶х枂", "瀛楄妭璺冲姩", "涓姱鍥介檯",
+        "浜笢鏂?, "鏍煎姏", "缇庣殑", "娴峰皵", "鑱旀兂", "钄氭潵", "灏忛箯", "鐞嗘兂",
+        "瀵掓绾?, "鍦板钩绾?, "绱厜", "闀挎睙瀛樺偍", "闀块懌",
     ]
-    # US company names → infer uspto
+    # US company names 鈫?infer uspto
     us_company_keywords = [
         "apple", "google", "microsoft", "tesla", "intel", "amd",
         "nvidia", "qualcomm", "ibm", "meta", "amazon", "broadcom",
@@ -145,27 +145,27 @@ def _detect_patent_source(
     if any(kw in combined_lower for kw in uspto_keywords):
         source = "uspto"
         if app_logger:
-            app_logger.info(f"patent_source: text_keywords → uspto")
+            app_logger.info(f"patent_source: text_keywords 鈫?uspto")
         return source
     if any(kw in combined_lower for kw in cnipa_keywords):
         source = "cnipa"
         if app_logger:
-            app_logger.info(f"patent_source: text_keywords → cnipa")
+            app_logger.info(f"patent_source: text_keywords 鈫?cnipa")
         return source
 
     # Company name inference (lower priority than explicit patent office keywords)
     if any(kw in combined_lower for kw in us_company_keywords):
         source = "uspto"
         if app_logger:
-            app_logger.info(f"patent_source: us_company → uspto")
+            app_logger.info(f"patent_source: us_company 鈫?uspto")
         return source
     if any(kw in combined_lower for kw in cn_company_keywords):
         source = "cnipa"
         if app_logger:
-            app_logger.info(f"patent_source: cn_company → cnipa")
+            app_logger.info(f"patent_source: cn_company 鈫?cnipa")
         return source
 
-    # ── 2. Scene tools (fallback) ──
+    # 鈹€鈹€ 2. Scene tools (fallback) 鈹€鈹€
     if scene_id:
         try:
             from sources.long_task.scene_tools import get_scene_knowledge_tools
@@ -184,15 +184,15 @@ def _detect_patent_source(
             if app_logger:
                 app_logger.info(
                     f"patent_source: scene_id={scene_id}, "
-                    f"tool_urls={urls[:3]}, → {source}"
+                    f"tool_urls={urls[:3]}, 鈫?{source}"
                 )
             return source
         except Exception:
             pass
 
-    # ── 3. Default ──
+    # 鈹€鈹€ 3. Default 鈹€鈹€
     if app_logger:
-        app_logger.info(f"patent_source: no signal found → auto")
+        app_logger.info(f"patent_source: no signal found 鈫?auto")
     return "auto"
 
 
@@ -200,13 +200,13 @@ def _detect_query_language(query: str) -> str:
     """Detect the language of a user query for report generation.
 
     Uses CJK character ratio: if >15% of characters are CJK Unified
-    Ideographs (U+4E00–U+9FFF), returns 'zh'; otherwise 'en'.
+    Ideographs (U+4E00鈥揢+9FFF), returns 'zh'; otherwise 'en'.
 
     This is a GLOBAL PRINCIPLE: report language matches query language.
     """
     if not query:
         return 'zh'
-    cjk_count = sum(1 for c in query if '一' <= c <= '鿿')
+    cjk_count = sum(1 for c in query if '涓€' <= c <= '榭?)
     alpha_count = sum(1 for c in query if c.isalpha())
     total = cjk_count + alpha_count
     if total == 0:
@@ -249,58 +249,58 @@ async def _classify_long_task_async(
             )
 
     system_prompt = (
-        "你是一个专利分析任务分类器。分析用户查询 + 对话历史，判断场景、提取专利ID、识别来源。\n\n"
-        "## 核心原则\n"
-        "专利ID的来源取决于用户的意图：\n"
-        "- 如果用户提问中包含了明确的专利号 → 从提问中提取ID\n"
-        "- 如果用户提问的意思是「基于之前的结果继续操作」→ 从历史中提取ID\n"
-        "- 如果用户提问是一个全新的、独立的话题（与历史无关）→ 不提取任何ID，"
-        "patent_ids 返回空数组，系统会自动触发搜索模式\n\n"
-        "## 四种场景\n"
-        "1. prosecution — 用户要分析**单个**专利的审查历史（审查过程、Office Action、"
-        "答辩、Claim修改、授权原因等）。\n"
-        "   关键词：审查历史、审查过程、审查意见、Office Action、prosecution、"
-        "答辩、答复、claim修改、授权原因、OA回复、rejection、allowance\n"
-        "   - patent_ids 中只提取 **1个** 专利号\n"
-        "   - patent_source 必须是 uspto（审查历史分析仅支持USPTO）\n"
-        "   例：「帮我分析一下专利 17429113 的审查历史」→ scenario: prosecution\n"
-        "   例：「分析专利申请 18331482 的 Office Action 和答辩过程」→ scenario: prosecution\n"
-        "   例：「Analyze the prosecution history of patent 17429113」→ scenario: prosecution\n"
-        "2. direct_ids — 用户提问本身包含专利申请号，或者用户提出了一个全新独立的问题。\n"
-        "   - 如果提问中有专利号 → patent_ids 从提问中提取\n"
-        "   - 如果提问中没有专利号（如「帮我看看特斯拉的自动驾驶专利」）→ patent_ids 返回 []\n"
-        "   例：「分析专利申请 17429113, 18012525, 18331482」→ patent_ids: [\"17429113\", ...]\n"
-        "   例：「帮我看看特斯拉近期的专利在自动驾驶领域有什么新进展」→ patent_ids: []\n"
-        "3. conversation_refs — 用户的问题是针对历史对话中出现的专利结果的追问，"
-        "不看历史对话就无法确定要分析哪些专利。\n"
-        "   - patent_ids 从历史对话中提取\n"
-        "   例：（历史对话返回了3个专利）用户：「从这3条中筛选出橡胶垫圈相关专利」\n"
-        "   例：（历史对话返回了专利列表）用户：「上述专利里哪些已授权」\n"
-        "   例：（历史对话返回了专利结果）用户：「帮我分析第一个专利」\n\n"
-        "## 专利ID格式\n"
-        "- USPTO（美国）: 纯8位数字，如 17429113, 18331482\n"
-        "- CNIPA（中国）: 20XX + 8~9位数字，可选 .校验位，如 202310123456.7\n\n"
-        "## 专利来源判断\n"
-        "- 如果对话提到 USPTO、美国专利、美国专利商标局 → uspto\n"
-        "- 如果对话提到 CNIPA、中国专利、国家知识产权局 → cnipa\n"
-        "- 纯8位数字ID → uspto\n"
-        "- 20XX开头的长数字ID → cnipa\n"
-        "- 如果用户提到了中国公司（如华为、小米、OPPO、vivo、腾讯、阿里巴巴、百度、\n"
-        "  比亚迪、宁德时代、中兴、大疆、字节跳动、中芯国际、京东方等），且没有明确\n"
-        "  提到美国专利 → cnipa\n"
-        "- 如果用户提到了美国公司（如Apple、Google、Microsoft、Tesla、Intel、\n"
-        "  AMD、NVIDIA、Qualcomm、IBM等），且没有明确提到中国专利 → uspto\n"
-        "- 不确定 → unknown\n\n"
-        "## 输出JSON\n"
+        "浣犳槸涓€涓笓鍒╁垎鏋愪换鍔″垎绫诲櫒銆傚垎鏋愮敤鎴锋煡璇?+ 瀵硅瘽鍘嗗彶锛屽垽鏂満鏅€佹彁鍙栦笓鍒㊣D銆佽瘑鍒潵婧愩€俓n\n"
+        "## 鏍稿績鍘熷垯\n"
+        "涓撳埄ID鐨勬潵婧愬彇鍐充簬鐢ㄦ埛鐨勬剰鍥撅細\n"
+        "- 濡傛灉鐢ㄦ埛鎻愰棶涓寘鍚簡鏄庣‘鐨勪笓鍒╁彿 鈫?浠庢彁闂腑鎻愬彇ID\n"
+        "- 濡傛灉鐢ㄦ埛鎻愰棶鐨勬剰鎬濇槸銆屽熀浜庝箣鍓嶇殑缁撴灉缁х画鎿嶄綔銆嶁啋 浠庡巻鍙蹭腑鎻愬彇ID\n"
+        "- 濡傛灉鐢ㄦ埛鎻愰棶鏄竴涓叏鏂扮殑銆佺嫭绔嬬殑璇濋锛堜笌鍘嗗彶鏃犲叧锛夆啋 涓嶆彁鍙栦换浣旾D锛?
+        "patent_ids 杩斿洖绌烘暟缁勶紝绯荤粺浼氳嚜鍔ㄨЕ鍙戞悳绱㈡ā寮廫n\n"
+        "## 鍥涚鍦烘櫙\n"
+        "1. prosecution 鈥?鐢ㄦ埛瑕佸垎鏋?*鍗曚釜**涓撳埄鐨勫鏌ュ巻鍙诧紙瀹℃煡杩囩▼銆丱ffice Action銆?
+        "绛旇京銆丆laim淇敼銆佹巿鏉冨師鍥犵瓑锛夈€俓n"
+        "   鍏抽敭璇嶏細瀹℃煡鍘嗗彶銆佸鏌ヨ繃绋嬨€佸鏌ユ剰瑙併€丱ffice Action銆乸rosecution銆?
+        "绛旇京銆佺瓟澶嶃€乧laim淇敼銆佹巿鏉冨師鍥犮€丱A鍥炲銆乺ejection銆乤llowance\n"
+        "   - patent_ids 涓彧鎻愬彇 **1涓?* 涓撳埄鍙穃n"
+        "   - patent_source 蹇呴』鏄?uspto锛堝鏌ュ巻鍙插垎鏋愪粎鏀寔USPTO锛塡n"
+        "   渚嬶細銆屽府鎴戝垎鏋愪竴涓嬩笓鍒?17429113 鐨勫鏌ュ巻鍙层€嶁啋 scenario: prosecution\n"
+        "   渚嬶細銆屽垎鏋愪笓鍒╃敵璇?18331482 鐨?Office Action 鍜岀瓟杈╄繃绋嬨€嶁啋 scenario: prosecution\n"
+        "   渚嬶細銆孉nalyze the prosecution history of patent 17429113銆嶁啋 scenario: prosecution\n"
+        "2. direct_ids 鈥?鐢ㄦ埛鎻愰棶鏈韩鍖呭惈涓撳埄鐢宠鍙凤紝鎴栬€呯敤鎴锋彁鍑轰簡涓€涓叏鏂扮嫭绔嬬殑闂銆俓n"
+        "   - 濡傛灉鎻愰棶涓湁涓撳埄鍙?鈫?patent_ids 浠庢彁闂腑鎻愬彇\n"
+        "   - 濡傛灉鎻愰棶涓病鏈変笓鍒╁彿锛堝銆屽府鎴戠湅鐪嬬壒鏂媺鐨勮嚜鍔ㄩ┚椹朵笓鍒┿€嶏級鈫?patent_ids 杩斿洖 []\n"
+        "   渚嬶細銆屽垎鏋愪笓鍒╃敵璇?17429113, 18012525, 18331482銆嶁啋 patent_ids: [\"17429113\", ...]\n"
+        "   渚嬶細銆屽府鎴戠湅鐪嬬壒鏂媺杩戞湡鐨勪笓鍒╁湪鑷姩椹鹃┒棰嗗煙鏈変粈涔堟柊杩涘睍銆嶁啋 patent_ids: []\n"
+        "3. conversation_refs 鈥?鐢ㄦ埛鐨勯棶棰樻槸閽堝鍘嗗彶瀵硅瘽涓嚭鐜扮殑涓撳埄缁撴灉鐨勮拷闂紝"
+        "涓嶇湅鍘嗗彶瀵硅瘽灏辨棤娉曠‘瀹氳鍒嗘瀽鍝簺涓撳埄銆俓n"
+        "   - patent_ids 浠庡巻鍙插璇濅腑鎻愬彇\n"
+        "   渚嬶細锛堝巻鍙插璇濊繑鍥炰簡3涓笓鍒╋級鐢ㄦ埛锛氥€屼粠杩?鏉′腑绛涢€夊嚭姗¤兌鍨湀鐩稿叧涓撳埄銆峔n"
+        "   渚嬶細锛堝巻鍙插璇濊繑鍥炰簡涓撳埄鍒楄〃锛夌敤鎴凤細銆屼笂杩颁笓鍒╅噷鍝簺宸叉巿鏉冦€峔n"
+        "   渚嬶細锛堝巻鍙插璇濊繑鍥炰簡涓撳埄缁撴灉锛夌敤鎴凤細銆屽府鎴戝垎鏋愮涓€涓笓鍒┿€峔n\n"
+        "## 涓撳埄ID鏍煎紡\n"
+        "- USPTO锛堢編鍥斤級: 绾?浣嶆暟瀛楋紝濡?17429113, 18331482\n"
+        "- CNIPA锛堜腑鍥斤級: 20XX + 8~9浣嶆暟瀛楋紝鍙€?.鏍￠獙浣嶏紝濡?202310123456.7\n\n"
+        "## 涓撳埄鏉ユ簮鍒ゆ柇\n"
+        "- 濡傛灉瀵硅瘽鎻愬埌 USPTO銆佺編鍥戒笓鍒┿€佺編鍥戒笓鍒╁晢鏍囧眬 鈫?uspto\n"
+        "- 濡傛灉瀵硅瘽鎻愬埌 CNIPA銆佷腑鍥戒笓鍒┿€佸浗瀹剁煡璇嗕骇鏉冨眬 鈫?cnipa\n"
+        "- 绾?浣嶆暟瀛桰D 鈫?uspto\n"
+        "- 20XX寮€澶寸殑闀挎暟瀛桰D 鈫?cnipa\n"
+        "- 濡傛灉鐢ㄦ埛鎻愬埌浜嗕腑鍥藉叕鍙革紙濡傚崕涓恒€佸皬绫炽€丱PPO銆乿ivo銆佽吘璁€侀樋閲屽反宸淬€佺櫨搴︺€乗n"
+        "  姣斾簹杩€佸畞寰锋椂浠ｃ€佷腑鍏淬€佸ぇ鐤嗐€佸瓧鑺傝烦鍔ㄣ€佷腑鑺浗闄呫€佷含涓滄柟绛夛級锛屼笖娌℃湁鏄庣‘\n"
+        "  鎻愬埌缇庡浗涓撳埄 鈫?cnipa\n"
+        "- 濡傛灉鐢ㄦ埛鎻愬埌浜嗙編鍥藉叕鍙革紙濡侫pple銆丟oogle銆丮icrosoft銆乀esla銆両ntel銆乗n"
+        "  AMD銆丯VIDIA銆丵ualcomm銆両BM绛夛級锛屼笖娌℃湁鏄庣‘鎻愬埌涓浗涓撳埄 鈫?uspto\n"
+        "- 涓嶇‘瀹?鈫?unknown\n\n"
+        "## 杈撳嚭JSON\n"
         '{"scenario": "prosecution"|"direct_ids"|"conversation_refs", '
         '"patent_ids": ["id1","id2"], '
         '"patent_source": "uspto"|"cnipa"|"unknown", '
-        '"reasoning": "简要说明"}'
+        '"reasoning": "绠€瑕佽鏄?}'
     )
 
     user_text = (
-        f"用户当前提问：{query}\n\n"
-        f"对话历史：\n" + "\n".join(conv_summary) if conv_summary else "(无历史对话)"
+        f"鐢ㄦ埛褰撳墠鎻愰棶锛歿query}\n\n"
+        f"瀵硅瘽鍘嗗彶锛歕n" + "\n".join(conv_summary) if conv_summary else "(鏃犲巻鍙插璇?"
     )
 
     try:
@@ -342,11 +342,11 @@ def _prepare_long_task_inputs(
     """Prepare patent analysis inputs, optionally enriched by LLM classification.
 
     Three scenarios:
-      1. "conversation_refs" — query is a FOLLOW-UP about previous results.
+      1. "conversation_refs" 鈥?query is a FOLLOW-UP about previous results.
          IDs come from conversation history (LLM extracts them).
-      2. "direct_ids" — query ITSELF contains patent application IDs.
+      2. "direct_ids" 鈥?query ITSELF contains patent application IDs.
          Self-contained question. IDs come from query.
-      3. "file_upload" — user uploaded patent specification files.
+      3. "file_upload" 鈥?user uploaded patent specification files.
 
     When ``llm_result`` is provided (from ``_classify_long_task_async``),
     scenario and patent_source from the LLM are used directly.
@@ -360,7 +360,7 @@ def _prepare_long_task_inputs(
     conv_history = conv_history or []
     patent_file_refs = patent_file_refs or []
 
-    # ── Scenario 3: file upload (unambiguous, no LLM needed) ──
+    # 鈹€鈹€ Scenario 3: file upload (unambiguous, no LLM needed) 鈹€鈹€
     if patent_file_refs:
         patent_ids = [
             ref.get("filename", "").rsplit(".", 1)[0]
@@ -374,7 +374,7 @@ def _prepare_long_task_inputs(
         )
         if app_logger:
             app_logger.info(
-                f"Long task scenario=file_upload — "
+                f"Long task scenario=file_upload 鈥?"
                 f"files={len(patent_file_refs)}, ids={patent_ids[:5]}, "
                 f"patent_source={patent_source}"
             )
@@ -385,7 +385,7 @@ def _prepare_long_task_inputs(
             "patent_texts": None,
         }
 
-    # ── Regex sweep on full text (always run — catches IDs LLM might miss) ──
+    # 鈹€鈹€ Regex sweep on full text (always run 鈥?catches IDs LLM might miss) 鈹€鈹€
     text_sources = [query or ""]
     for msg in conv_history:
         if isinstance(msg, dict):
@@ -397,7 +397,7 @@ def _prepare_long_task_inputs(
     cnipa_matches = _patent_id_re.findall(r'\b(20[12]\d{8,9}(?:\.\d)?)\b', combined_text)
     regex_ids = list(dict.fromkeys(uspto_matches + cnipa_matches))
 
-    # ── Use LLM result if available ──
+    # 鈹€鈹€ Use LLM result if available 鈹€鈹€
     if llm_result and llm_result.get("scenario") != "unknown":
         scenario = llm_result["scenario"]
         patent_source = llm_result.get("patent_source", "auto")
@@ -405,7 +405,7 @@ def _prepare_long_task_inputs(
 
         # For direct_ids: trust the LLM's patent_ids exactly as returned.
         # If it returned an empty list, the query has no IDs and should
-        # fall through to search mode — do NOT backfill from regex on
+        # fall through to search mode 鈥?do NOT backfill from regex on
         # history (which would pick up unrelated 8-digit numbers).
         # For conversation_refs: fall back to regex if LLM returned no IDs.
         if scenario == "direct_ids":
@@ -429,7 +429,7 @@ def _prepare_long_task_inputs(
         else:
             patent_texts = None
     else:
-        # ── Fallback: regex + keyword detection (no LLM available) ──
+        # 鈹€鈹€ Fallback: regex + keyword detection (no LLM available) 鈹€鈹€
         patent_ids = list(dict.fromkeys(regex_ids))
         patent_texts = {}
         for msg in conv_history:
@@ -449,8 +449,8 @@ def _prepare_long_task_inputs(
         query_cnipa = _patent_id_re.findall(r'\b(20[12]\d{8,9}(?:\.\d)?)\b', query or "")
         query_has_ids = bool(query_uspto or query_cnipa)
 
-        followup_keywords = ["这", "上述", "前面", "以上", "从中", "其中", "筛选", "过滤",
-                            "挑出", "选出", "哪些", "哪个", "这几个", "那几个"]
+        followup_keywords = ["杩?, "涓婅堪", "鍓嶉潰", "浠ヤ笂", "浠庝腑", "鍏朵腑", "绛涢€?, "杩囨护",
+                            "鎸戝嚭", "閫夊嚭", "鍝簺", "鍝釜", "杩欏嚑涓?, "閭ｅ嚑涓?]
         query_is_followup = any(kw in (query or "") for kw in followup_keywords)
 
         scenario = "direct_ids" if (query_has_ids and not query_is_followup) else "conversation_refs"
@@ -461,7 +461,7 @@ def _prepare_long_task_inputs(
 
     if app_logger:
         app_logger.info(
-            f"Long task scenario={scenario} — "
+            f"Long task scenario={scenario} 鈥?"
             f"patent_ids_count={len(patent_ids)}, "
             f"patent_source={patent_source}, "
             f"patent_ids={patent_ids[:10]}{'...' if len(patent_ids) > 10 else ''}"
@@ -476,7 +476,7 @@ def _prepare_long_task_inputs(
 
 
 def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, config_ref, is_generating_flag, think_wrapper_func, create_agent_func):
-    """注册核心路由并传递所需的依赖"""
+    """娉ㄥ唽鏍稿績璺敱骞朵紶閫掓墍闇€鐨勪緷璧?""
 
     @router.get("/latest_answer")
     async def get_latest_answer():
@@ -520,7 +520,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
         if not allowed:
             return JSONResponse(status_code=429, content="Daily API usage limit exceeded (100/day)")
 
-        # 如果没有提供 query_id，自动生成一个
+        # 濡傛灉娌℃湁鎻愪緵 query_id锛岃嚜鍔ㄧ敓鎴愪竴涓?
         if not request.query_id:
             request.query_id = str(uuid.uuid4())
 
@@ -541,7 +541,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
 
         try:
             # is_generating = True  # Uncomment if needed
-            # 调用 think_wrapper_func 来处理查询
+            # 璋冪敤 think_wrapper_func 鏉ュ鐞嗘煡璇?
             success = await think_wrapper_func(user_id, interaction_ref, request.query, request.query_id)
 
             if not success:
@@ -582,7 +582,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
 
         except Exception as e:
             app_logger.error(f"An error occurred: {str(e)}")
-            # sys.exit(1)  # 不应该在路由中退出应用
+            # sys.exit(1)  # 涓嶅簲璇ュ湪璺敱涓€€鍑哄簲鐢?
             return JSONResponse(status_code=500, content={"error": "Internal server error"})
         finally:
             app_logger.info("Processing finished")
@@ -603,7 +603,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
 
     @router.post("/find_knowledge_tool")
     async def find_knowledge_tool(request: QuestionRequest, http_request: Request):
-        """根据用户问题查找最相关的知识及其对应的工具"""
+        """鏍规嵁鐢ㄦ埛闂鏌ユ壘鏈€鐩稿叧鐨勭煡璇嗗強鍏跺搴旂殑宸ュ叿"""
         auth_header = http_request.headers.get("Authorization")
         user = verify_firebase_token(auth_header)
 
@@ -613,7 +613,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
         track_event("knowledge:find", user_id=str(user_id), query_text=request.question)
 
         try:
-            # 参数校验
+            # 鍙傛暟鏍￠獙
 
             if not request.question:
                 return JSONResponse(
@@ -624,7 +624,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                     }
                 )
 
-            # 调用knowledge.py中的方法获取知识项和工具信息
+            # 璋冪敤knowledge.py涓殑鏂规硶鑾峰彇鐭ヨ瘑椤瑰拰宸ュ叿淇℃伅
             knowledge_item, tool_info = get_knowledge_tool(
                 user_id,
                 request.question,
@@ -642,7 +642,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                     }
                 )
 
-            # 构建返回的知识记录对象
+            # 鏋勫缓杩斿洖鐨勭煡璇嗚褰曞璞?
             knowledge_response = {
                 "userId": knowledge_item.user_id,
                 "question": knowledge_item.question,
@@ -661,12 +661,12 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
             }
 
             if tool_info:
-                # 检查tool_info的push字段
+                # 妫€鏌ool_info鐨刾ush瀛楁
                 if tool_info.push == 2:
-                    # 如果push为2，返回空对象
+                    # 濡傛灉push涓?锛岃繑鍥炵┖瀵硅薄
                     tool_response = {}
                 else:
-                    # 如果push不为2，保持原有逻辑
+                    # 濡傛灉push涓嶄负2锛屼繚鎸佸師鏈夐€昏緫
                     tool_response = {
                         "id": tool_info.id,
                         "title": tool_info.title,
@@ -767,7 +767,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
             )
 
             # Save files to disk for async processing by Celery worker.
-            # Text extraction (esp. OCR) can take minutes — we must not block the HTTP response.
+            # Text extraction (esp. OCR) can take minutes 鈥?we must not block the HTTP response.
             task_id = f"lt_{uuid.uuid4().hex[:12]}"
             local_user_id = int(user_id)
 
@@ -791,7 +791,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                 f"[user={user_id}] File upload: saved {len(patent_file_refs)} files to {upload_dir}"
             )
 
-            # ── Session reuse for file upload path ──
+            # 鈹€鈹€ Session reuse for file upload path 鈹€鈹€
             from sources.knowledge.knowledge import get_db_connection
 
             # Detect patent source from query + conversation context
@@ -889,7 +889,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                 event_status = "running"
                 conn.close()
             else:
-                # Queued — update MySQL status, worker will pick it up later
+                # Queued 鈥?update MySQL status, worker will pick it up later
                 conn.ping(reconnect=True)
                 with conn.cursor() as cur:
                     cur.execute(
@@ -947,11 +947,11 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
     async def process_query_stream(http_request: Request):
         content_type = http_request.headers.get("content-type", "")
 
-        # ── Multipart file-upload path ──
+        # 鈹€鈹€ Multipart file-upload path 鈹€鈹€
         if "multipart/form-data" in content_type:
             return await _handle_file_upload_query(http_request)
 
-        # ── JSON path (existing) ──
+        # 鈹€鈹€ JSON path (existing) 鈹€鈹€
         body = await http_request.json()
         request = QueryRequest(**body)
 
@@ -975,7 +975,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
         if not allowed:
             return JSONResponse(status_code=429, content={"error": "Daily API usage limit exceeded (100/day)"})
 
-        # 如果没有提供 query_id，自动生成一个
+        # 濡傛灉娌℃湁鎻愪緵 query_id锛岃嚜鍔ㄧ敓鎴愪竴涓?
         if not request.query_id:
             app_logger.warning("query id is none.")
             return JSONResponse(status_code=400, content={"error": "query_id is required"})
@@ -1025,7 +1025,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         matched_knowledge = openai_agent.get('knowledge', {})
                         scene_id = getattr(matched_knowledge, 'scene_id', None) if matched_knowledge else None
 
-                        # ── LLM: classify scenario → extract IDs → detect source ──
+                        # 鈹€鈹€ LLM: classify scenario 鈫?extract IDs 鈫?detect source 鈹€鈹€
                         llm_result = await _classify_long_task_async(
                             query=request.query,
                             conv_history=conv_history,
@@ -1044,7 +1044,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         patent_texts = inputs["patent_texts"] or {}
                         scenario = inputs["scenario"]
 
-                        # ── Session reuse: if the client already has a session, append to it ──
+                        # 鈹€鈹€ Session reuse: if the client already has a session, append to it 鈹€鈹€
                         reused_session = False
                         session_id = request.session_id.strip() if request.session_id else ""
                         app_logger.info(
@@ -1153,7 +1153,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                         query_text=request.query)
                             conn.close()
                         else:
-                            # Queued — update MySQL, Celery will pick it up when dequeued
+                            # Queued 鈥?update MySQL, Celery will pick it up when dequeued
                             app_logger.info(f"Long task: queued (user already has running task)")
                             track_event("long_task:queued", user_id=str(local_user_id),
                                         task_id=task_id,
@@ -1176,13 +1176,13 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
 
                         if is_prosecution:
                             status_msg = (
-                                '专利审查历史分析任务已提交' if queue_result == 'running'
-                                else '专利审查历史分析任务已排队，将在当前任务完成后自动开始'
+                                '涓撳埄瀹℃煡鍘嗗彶鍒嗘瀽浠诲姟宸叉彁浜? if queue_result == 'running'
+                                else '涓撳埄瀹℃煡鍘嗗彶鍒嗘瀽浠诲姟宸叉帓闃燂紝灏嗗湪褰撳墠浠诲姟瀹屾垚鍚庤嚜鍔ㄥ紑濮?
                             )
                         else:
                             status_msg = (
-                                '批量专利分析任务已提交' if queue_result == 'running'
-                                else '批量专利分析任务已排队，将在当前任务完成后自动开始'
+                                '鎵归噺涓撳埄鍒嗘瀽浠诲姟宸叉彁浜? if queue_result == 'running'
+                                else '鎵归噺涓撳埄鍒嗘瀽浠诲姟宸叉帓闃燂紝灏嗗湪褰撳墠浠诲姟瀹屾垚鍚庤嚜鍔ㄥ紑濮?
                             )
                         await queue.put({
                             'type': 'status',
@@ -1202,7 +1202,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         app_logger.error(f"Long task setup failed: {str(e)}")
                         import traceback
                         app_logger.error(traceback.format_exc())
-                        await queue.put({'type': 'error', 'message': f'批量分析任务启动失败: {str(e)}'})
+                        await queue.put({'type': 'error', 'message': f'鎵归噺鍒嗘瀽浠诲姟鍚姩澶辫触: {str(e)}'})
                         await queue.put({'type': 'end'})
                         return
 
@@ -1288,7 +1288,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                             last_stream_time = current_time
 
                         elif event['type'] == 'long_task_intent':
-                            # Intermediate event from invoke_agent — process if needed
+                            # Intermediate event from invoke_agent 鈥?process if needed
                             continue
 
                         elif event['type'] == 'end':
@@ -1352,20 +1352,20 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
 
     @router.get("/copiioai_statistics")
     async def get_statistics():
-        """获取今日知识创建和用户提问统计"""
+        """鑾峰彇浠婃棩鐭ヨ瘑鍒涘缓鍜岀敤鎴锋彁闂粺璁?""
         from datetime import datetime
 
-        # Mock 数据
+        # Mock 鏁版嵁
         today = datetime.now().strftime("%Y-%m-%d")
 
         stats = {
             "date": today,
-            "knowledge_created": 42,  # 今日创建的知识数量
-            "knowledge_shared": 41,  # 今日创建的知识数量
-            "user_questions": 156,  # 今日用户提问次数
-            "active_users": 23,  # 今日活跃用户数
-            "knowledge_tools_used": 18,  # 今日知识工具使用次数
-            "success_rate": "92.3%"  # 成功率
+            "knowledge_created": 42,  # 浠婃棩鍒涘缓鐨勭煡璇嗘暟閲?
+            "knowledge_shared": 41,  # 浠婃棩鍒涘缓鐨勭煡璇嗘暟閲?
+            "user_questions": 156,  # 浠婃棩鐢ㄦ埛鎻愰棶娆℃暟
+            "active_users": 23,  # 浠婃棩娲昏穬鐢ㄦ埛鏁?
+            "knowledge_tools_used": 18,  # 浠婃棩鐭ヨ瘑宸ュ叿浣跨敤娆℃暟
+            "success_rate": "92.3%"  # 鎴愬姛鐜?
         }
 
         return JSONResponse(status_code=200, content=stats)

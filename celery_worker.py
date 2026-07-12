@@ -137,7 +137,7 @@ def execute_patent_analysis(self, task_id: str, params: dict):
 
     # ── Immediate progress update so frontend shows feedback right away ──
     update_task_status(task_id, 'preparing', 1,
-                       f'正在准备专利分析（{total} 个专利）...')
+                       _t('preparing', batch_lang, total=total))
 
     # ---- Provider setup ----
     if model_family == 'minimax':
@@ -341,7 +341,7 @@ async def _run_pipeline(
             f"{total_files} uploaded files"
         )
         update_task_status(task_id, 'extracting_text', 0,
-                           f'正在解析上传文件（0/{total_files}）...')
+                           _t('extracting_file', batch_lang, current=0, total=total_files))
 
         from sources.long_task.text_extractor import extract_text_from_binary
 
@@ -350,7 +350,7 @@ async def _run_pipeline(
             update_task_status(
                 task_id, 'extracting_text',
                 5 + int((idx / total_files) * 15),
-                f'正在解析：{ref["filename"]}（{idx+1}/{total_files}）...',
+                _t('extracting_by_name', batch_lang, name=ref['filename'], current=idx+1, total=total_files),
             )
 
             # Per-page OCR progress callback (updates Redis)
@@ -361,7 +361,7 @@ async def _run_pipeline(
                 file_pct = 5 + int(((idx + current / total) / total_files) * 15)
                 update_task_status(
                     task_id, 'extracting_text', file_pct,
-                    f'OCR识别：{ref["filename"]}（{current}/{total}页）...',
+                    _t('ocr_page', batch_lang, name=ref['filename'], current=current, total=total),
                 )
 
             try:
@@ -960,6 +960,48 @@ async def _run_pipeline(
 
     from sources.long_task.status_manager import ThrottledSummaryUpdater
     batch_lang = params.get('lang', 'zh')
+
+# ── Status message translations ──
+_STATUS_MSGS = {
+    "zh": {
+        "preparing": "正在准备专利分析（{total} 个专利）...",
+        "extracting_file": "正在解析上传文件（{current}/{total}）...",
+        "extracting_by_name": "正在解析：{name}（{current}/{total}）...",
+        "ocr_page": "OCR识别：{name}（{current}/{total}页）...",
+        "tool_select": "已发现 {count} 个场景工具，正在选择检索方案...",
+        "tool_search": "正在检索专利：{reason}",
+        "searching": "正在搜索 {focus} 的相关专利（USPTO）...",
+        "searching_page": "正在搜索 {focus} 的相关专利（第{page}页）...",
+        "searching_resolve": "正在获取第{page}页专利详情（{resolved}/{on_page}）...",
+        "analyzing": "正在分析第 {current}/{total} 个专利...",
+        "analyzing_progress": "分析进度: {current}/{total}",
+        "generating_word": "正在生成 Word 文件...",
+        "generating_pdf": "正在从 Word 生成 PDF 文件...",
+        "fetching_uspto": "正在获取USPTO文件列表...",
+    },
+    "en": {
+        "preparing": "Preparing patent analysis ({total} patents)...",
+        "extracting_file": "Parsing uploaded files ({current}/{total})...",
+        "extracting_by_name": "Parsing: {name} ({current}/{total})...",
+        "ocr_page": "OCR: {name} (page {current}/{total})...",
+        "tool_select": "Found {count} scene tools, selecting search strategy...",
+        "tool_search": "Searching patents: {reason}",
+        "searching": "Searching {focus} patents (USPTO)...",
+        "searching_page": "Searching {focus} patents (page {page})...",
+        "searching_resolve": "Fetching patent details page {page} ({resolved}/{on_page})...",
+        "analyzing": "Analyzing patent {current}/{total}...",
+        "analyzing_progress": "Analysis progress: {current}/{total}",
+        "generating_word": "Generating Word document...",
+        "generating_pdf": "Converting DOCX to PDF...",
+        "fetching_uspto": "Fetching USPTO file list...",
+    },
+}
+
+def _t(key, lang="zh", **kwargs):
+    msgs = _STATUS_MSGS.get(lang, _STATUS_MSGS["zh"])
+    msg = msgs.get(key, key)
+    return msg.format(**kwargs) if kwargs else msg
+
     summary_updater = ThrottledSummaryUpdater(
         task_id, progress=76, step_msg='正在撰写执行摘要...',
     )
@@ -1132,7 +1174,7 @@ async def _run_pipeline(
         return local_storage
 
     # ── Generate and upload DOCX ──
-    update_task_status(task_id, 'exporting', 90, '正在生成 Word 文件...')
+    update_task_status(task_id, 'exporting', 90, _t('generating_word', batch_lang))
     docx_bytes = await export_docx_async(report_text, table_rows, columns)
     try:
         await storage.put(task_id, 'report.docx', docx_bytes)
@@ -1156,7 +1198,7 @@ async def _run_pipeline(
             )
 
     # ── Generate and upload PDF ──
-    update_task_status(task_id, 'exporting', 95, '正在从 Word 生成 PDF 文件...')
+    update_task_status(task_id, 'exporting', 95, _t('generating_pdf', batch_lang))
     pdf_bytes = await export_pdf_async(docx_bytes)
     try:
         await storage.put(task_id, 'report.pdf', pdf_bytes)
@@ -1305,7 +1347,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         # Phase 0: Fetch USPTO document list + classify by priority
         # ═════════════════════════════════════════════════════════════════
         update_task_status(task_id, 'preparing', 1,
-                           '正在获取USPTO文件列表...')
+                           _t('fetching_uspto', lang))
         app_number = ''.join(c for c in patent_id if c.isdigit())
         if not app_number or len(app_number) < 8:
             set_task_failed(task_id, f"Invalid patent application number: {patent_id}")
@@ -1658,10 +1700,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             return local_storage
 
         # ── DOCX (with table) ──
-        update_task_status(task_id, 'exporting', 90,
-                           '正在生成 Word 文件...'
-                           if lang == 'zh'
-                           else 'Generating Word document...')
+        update_task_status(task_id, 'exporting', 90, _t('generating_word', lang))
         docx_bytes = await export_docx_async(report_text, table_rows, columns)
         try:
             await storage.put(task_id, 'report.docx', docx_bytes)
@@ -1689,10 +1728,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                 )
 
         # ── PDF ──
-        update_task_status(task_id, 'exporting', 95,
-                           '正在从 Word 生成 PDF 文件...'
-                           if lang == 'zh'
-                           else 'Converting DOCX to PDF...')
+        update_task_status(task_id, 'exporting', 95, _t('generating_pdf', lang))
         pdf_bytes = await export_pdf_async(docx_bytes)
         try:
             await storage.put(task_id, 'report.pdf', pdf_bytes)
