@@ -202,6 +202,7 @@ export default function Chat() {
                   resultSummary: status.result_summary,
                 }]
               })
+              if (status.result_summary) setSaveCounter(c => c + 1)
               continue
             }
             if (status && (status.status === 'failed' || status.status === 'error')) {
@@ -253,6 +254,7 @@ export default function Chat() {
                 resultSummary: status.result_summary,
               }]
             })
+            if (status.result_summary) setSaveCounter(c => c + 1)
             startLongTaskPolling(tid, pollMsgId)
             }
           } catch {
@@ -270,6 +272,7 @@ export default function Chat() {
   // Save session after streaming completes — but ONLY if a session already exists
   // (session is created only when a long task is triggered)
   const pendingSaveRef = useRef(false)
+  const [saveCounter, setSaveCounter] = useState(0)
   useEffect(() => {
     if (streaming || messages.length === 0) return
     if (!sessionId) return  // No session yet = no long task ever triggered
@@ -292,7 +295,7 @@ export default function Chat() {
     }, 1000)
 
     return () => { clearTimeout(timer); pendingSaveRef.current = false }
-  }, [streaming, messages.length, sessionId])
+  }, [streaming, messages.length, sessionId, saveCounter])
 
   // Track whether the user is scrolled near the bottom of the chat.
   useEffect(() => {
@@ -752,6 +755,7 @@ export default function Chat() {
               + ` 任务ID: ${taskId}`
             setMessages((m) => findAndUpdate(m, newContent, data.result_summary))
           }
+          if (data.result_summary) setSaveCounter(c => c + 1)
         }
       } catch {
         // Non-fatal batch poll error; continue polling

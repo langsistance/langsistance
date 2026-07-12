@@ -1,4 +1,4 @@
--- ============================================================================
+﻿-- ============================================================================
 -- Add USPTO Prosecution History Analysis knowledge entry (type=3, long_task)
 -- ============================================================================
 -- This knowledge triggers the execute_prosecution_analysis Celery task when
@@ -25,13 +25,19 @@ INSERT INTO knowledge (
     params
 ) VALUES (
     0,   -- system-level knowledge (public=2 means visible to all users)
-    '根据专利申请号分析审查历史（美国USPTO 8位申请号）',
-    '示例：分析专利 17429113 的审查历史。'
-    '适用场景：用户提供美国专利申请号（8位纯数字，如17429113），要求分析审查过程、Office Action、答辩策略、Claim修改、授权原因等。'
-    '系统自动从USPTO下载审查文件（Office Action、Applicant Response、Amendment、Notice of Allowance），'
-    '使用AI生成详细的审查历史分析报告。'
-    '注意：仅适用于USPTO美国专利（8位数字申请号），中国专利审查（CN开头的申请号）请使用其他工具。',
-    '使用USPTO审查历史分析功能，自动下载审查文件并生成AI分析报告。此知识为long_task类型，选中后将触发后台专利审查分析任务。',
+    'zh:输入美国专利申请号，分析其审查历史（USPTO）|en:Enter a US patent application number to analyze its prosecution history',
+    'zh:USPTO审查历史分析（美国专利）：
+• 无效分析 — 帮我看看专利US12506212的主要发明点和File History
+• 驳回答复 — 我刚收到US12506212的非最终驳回，帮我分析驳回理由和答复策略
+• 修改技巧 — 专利US12506212审查中修改了几次，分析修改的技巧和目的
+• 侵权抗辩 — 审查档案中是否有可用于侵权抗辩的权利要求限制陈述
+• 最新动态 — 专利US12506212最近有没有新的审查意见或授权公告|en:USPTO prosecution history analysis:
+• Invalidation Analysis — Review key features and file history of patent US12506212
+• Office Action Response — I received a non-final rejection for US12506212, analyze and propose response
+• Amendment Review — Review amendment techniques used during prosecution of US12506212
+• Infringement Defense — Find limiting statements in prosecution record for infringement defense
+• Status Tracking — Any recent office actions or notice of allowance for US12506212',
+    'zh:自动从USPTO下载审查文件（Office Action、Applicant Response、Amendment、Notice of Allowance等）并使用AI生成详细分析报告。仅适用于USPTO美国专利（8位数字申请号）。|en:Automatically downloads prosecution documents from USPTO (Office Actions, Applicant Responses, Amendments, Notices of Allowance) and generates detailed AI analysis reports. US patents only (8-digit application numbers).',
     2,   -- public=2: visible to all users
     1,   -- status=1: active
     0,   -- embedding_id: auto-generated on first search
