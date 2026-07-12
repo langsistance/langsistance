@@ -202,7 +202,8 @@ export default function Chat() {
                   resultSummary: status.result_summary,
                 }]
               })
-              if (status.result_summary) setSaveCounter(c => c + 1)
+              // Persist summary immediately — messages.length unchanged so save effect won't fire
+              if (status.result_summary) { setTimeout(() => saveSessionMessages(sessionId!, messagesRef.current.map((m: { role: string; content: string; taskId?: string; resultSummary?: string }) => ({ role: m.role, content: m.content, ...(m.taskId ? { taskId: m.taskId } : {}), ...(m.resultSummary ? { resultSummary: m.resultSummary } : {}) })), 200) }
               continue
             }
             if (status && (status.status === 'failed' || status.status === 'error')) {
@@ -254,7 +255,8 @@ export default function Chat() {
                 resultSummary: status.result_summary,
               }]
             })
-            if (status.result_summary) setSaveCounter(c => c + 1)
+            // Persist summary immediately
+            if (status.result_summary) { setTimeout(() => saveSessionMessages(sessionId!, messagesRef.current.map((m: { role: string; content: string; taskId?: string; resultSummary?: string }) => ({ role: m.role, content: m.content, ...(m.taskId ? { taskId: m.taskId } : {}), ...(m.resultSummary ? { resultSummary: m.resultSummary } : {}) })), 200) }
             startLongTaskPolling(tid, pollMsgId)
             }
           } catch {
@@ -272,7 +274,8 @@ export default function Chat() {
   // Save session after streaming completes — but ONLY if a session already exists
   // (session is created only when a long task is triggered)
   const pendingSaveRef = useRef(false)
-  const [saveCounter, setSaveCounter] = useState(0)
+  const messagesRef = useRef(messages)
+  useEffect(() => { messagesRef.current = messages }, [messages])
   useEffect(() => {
     if (streaming || messages.length === 0) return
     if (!sessionId) return  // No session yet = no long task ever triggered
@@ -295,7 +298,7 @@ export default function Chat() {
     }, 1000)
 
     return () => { clearTimeout(timer); pendingSaveRef.current = false }
-  }, [streaming, messages.length, sessionId, saveCounter])
+  }, [streaming, messages.length, sessionId])
 
   // Track whether the user is scrolled near the bottom of the chat.
   useEffect(() => {
@@ -755,7 +758,8 @@ export default function Chat() {
               + ` 任务ID: ${taskId}`
             setMessages((m) => findAndUpdate(m, newContent, data.result_summary))
           }
-          if (data.result_summary) setSaveCounter(c => c + 1)
+          // Persist summary immediately
+          if (data.result_summary) { setTimeout(() => saveSessionMessages(sessionId!, messagesRef.current.map((m: { role: string; content: string; taskId?: string; resultSummary?: string }) => ({ role: m.role, content: m.content, ...(m.taskId ? { taskId: m.taskId } : {}), ...(m.resultSummary ? { resultSummary: m.resultSummary } : {}) })), 200) }
         }
       } catch {
         // Non-fatal batch poll error; continue polling
