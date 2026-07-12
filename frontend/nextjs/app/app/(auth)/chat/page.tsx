@@ -1,4 +1,4 @@
-﻿'use client'
+'use client'
 
 import { useState, useRef, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
@@ -73,8 +73,8 @@ export default function Chat() {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
-  // Batch polling: one global timer 鈫?one POST /batch_status for all active tasks
-  const activeTasksRef = useRef<Map<string, string>>(new Map())       // taskId 鈫?assistantId
+  // Batch polling: one global timer → one POST /batch_status for all active tasks
+  const activeTasksRef = useRef<Map<string, string>>(new Map())       // taskId → assistantId
   const globalPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const longTaskReceivedRef = useRef(false)
   const isNearBottomRef = useRef(true)
@@ -118,7 +118,7 @@ export default function Chat() {
   useEffect(() => {
     const sid = searchParams.get('session_id')
     if (!sid) {
-      // Always clear when navigating to a URL without session_id (e.g. 鏂板璇?.
+      // Always clear when navigating to a URL without session_id (e.g. 新对话).
       // This handles both the case where the component persisted across
       // a client-side navigation and the case where it freshly mounted
       // with stale ChatProvider state from the parent layout.
@@ -150,12 +150,12 @@ export default function Chat() {
               taskId: (m as any).taskId || undefined,
               artifacts: [],
             }))
-            // Strip orphan long-task messages (🚀/✅❌without taskId).
+            // Strip orphan long-task messages (🔬/✅/❌ without taskId).
             // These were saved before taskId was attached during SSE.
             // The resume loop below will recreate them with proper taskId,
             // avoiding duplicates that never update.
             .filter((m: { taskId?: string; content: string }) =>
-              m.taskId || (!m.content.includes('🚀') && !m.content.includes('✅') && !m.content.includes('❌'))
+              m.taskId || (!m.content.includes('🔬') && !m.content.includes('✅') && !m.content.includes('❌'))
             )
           if (loaded.length > 0) {
             setMessages(loaded)
@@ -168,7 +168,7 @@ export default function Chat() {
         }
         setSessionId(sid)
 
-        // Resume polling for any incomplete long tasks 鈥?batch fetch all statuses
+        // Resume polling for any incomplete long tasks — batch fetch all statuses
         if (longTaskIds.length > 0) {
           try {
             const batch = await pollLongTaskBatchStatus(longTaskIds)
@@ -177,10 +177,10 @@ export default function Chat() {
               if (!status) continue
 
             // Session save happens ~1s after SSE end, but the task may complete
-            // minutes later.  The in-memory message transitions to ✅❌via
-            // polling, but the saved session still has the stale 🚀 content.
+            // minutes later.  The in-memory message transitions to ✅/❌ via
+            // polling, but the saved session still has the stale 🔬 content.
             // Update completed/failed messages so the card shows the final state
-            // and so send()'s filter (which checks for ✅❌ preserves them.
+            // and so send()'s filter (which checks for ✅/❌) preserves them.
             if (status && (status.status === 'completed' || status.status === 'success')) {
               const files = (status.report_files || [])
                 .map((f: { format: string }) =>
@@ -229,7 +229,7 @@ export default function Chat() {
               ? t('chat.longTaskProgress')
                   .replace('{progress}', progress)
                   .replace('{phase}', phaseLabel)
-              : '🚀' 娣卞害鍒嗘瀽杩涜涓?..') + ` 浠诲姟ID: ${tid}`
+              : '🔬 深度分析进行中...') + ` 任务ID: ${tid}`
             let pollMsgId = `lt_resume_${tid}`
             setMessages(m => {
               const existingIdx = m.findIndex(msg => msg.taskId === tid)
@@ -255,18 +255,18 @@ export default function Chat() {
             startLongTaskPolling(tid, pollMsgId)
             }
           } catch {
-            // Batch status fetch failed 鈥?skip resume
+            // Batch status fetch failed — skip resume
           }
         }
       } catch {
-        // Session not found or error 鈥?start fresh
+        // Session not found or error — start fresh
       }
     })()
 
     return () => { cancelled = true }
   }, [searchParams, sessionId, setMessages, setSessionId])
 
-  // Save session after streaming completes 鈥?but ONLY if a session already exists
+  // Save session after streaming completes — but ONLY if a session already exists
   // (session is created only when a long task is triggered)
   const pendingSaveRef = useRef(false)
   useEffect(() => {
@@ -334,7 +334,7 @@ export default function Chat() {
     setStreaming(true)
     setStreamingId(assistantId)
 
-    // Collect full conversation history for context 鈥?include the new messages
+    // Collect full conversation history for context — include the new messages
     const conversationHistory = [
       ...messages,
       userMsg,
@@ -410,11 +410,11 @@ export default function Chat() {
               const sid = String(event.session_id ?? '')
               const isQueued = String(event.status ?? '') === 'queued'
               const initContent = (isQueued
-                ? '🚀' 娣卞害鍒嗘瀽宸叉帓闃燂紝灏嗗湪褰撳墠浠诲姟瀹屾垚鍚庤嚜鍔ㄥ紑濮?..'
+                ? '🔬 深度分析已排队，将在当前任务完成后自动开始...'
                 : t('chat.longTaskProgress')
                     .replace('{progress}', '[0%]')
-                    .replace('{phase}', '姝ｅ湪鍑嗗涓撳埄鍒嗘瀽...')
-              ) + ` 浠诲姟ID: ${taskId}`
+                    .replace('{phase}', '正在准备专利分析...')
+              ) + ` 任务ID: ${taskId}`
               setMessages((m) => {
                 // Dedup: remove any stale task messages with the same taskId
                 const cleaned = m.filter((msg: { taskId?: string }) => msg.taskId !== taskId)
@@ -479,11 +479,11 @@ export default function Chat() {
           longTaskReceivedRef.current = true
           const isQueued = recovered.status === 'queued'
           const initContent = (isQueued
-            ? '🚀' 娣卞害鍒嗘瀽宸叉帓闃燂紝灏嗗湪褰撳墠浠诲姟瀹屾垚鍚庤嚜鍔ㄥ紑濮?..'
+            ? '🔬 深度分析已排队，将在当前任务完成后自动开始...'
             : t('chat.longTaskProgress')
                 .replace('{progress}', '[0%]')
-                .replace('{phase}', '姝ｅ湪鍑嗗涓撳埄鍒嗘瀽...')
-          ) + ` 浠诲姟ID: ${recovered.taskId}`
+                .replace('{phase}', '正在准备专利分析...')
+          ) + ` 任务ID: ${recovered.taskId}`
 
           setMessages((m) => {
             const cleaned = m.filter((msg) => msg.taskId !== recovered.taskId)
@@ -638,14 +638,14 @@ export default function Chat() {
     }
   }
 
-  // Shared batch poll loop 鈥?fires one POST /batch_status for all active tasks
+  // Shared batch poll loop — fires one POST /batch_status for all active tasks
   function ensureGlobalPollLoop() {
     if (globalPollTimerRef.current) return // already running
 
     async function pollAll() {
       const activeIds = Array.from(activeTasksRef.current.keys())
       if (activeIds.length === 0) {
-        // Nothing to poll 鈥?stop the loop
+        // Nothing to poll — stop the loop
         if (globalPollTimerRef.current) {
           clearInterval(globalPollTimerRef.current)
           globalPollTimerRef.current = null
@@ -663,8 +663,8 @@ export default function Chat() {
               msg.taskId === taskId
                 ? { ...msg, content: t('chat.longTaskProgress')
                     .replace('{progress}', '[0%]')
-                    .replace('{phase}', '姝ｅ湪鍑嗗涓撳埄鍒嗘瀽...')
-                    + ` 浠诲姟ID: ${taskId}` }
+                    .replace('{phase}', '正在准备专利分析...')
+                    + ` 任务ID: ${taskId}` }
                 : msg
             ))
             continue
@@ -673,7 +673,7 @@ export default function Chat() {
           if (data.status === 'queued') {
             setMessages((m) => m.map(msg =>
               msg.taskId === taskId
-                ? { ...msg, content: `🚀 娣卞害鍒嗘瀽鎺掗槦涓紝灏嗗湪褰撳墠浠诲姟瀹屾垚鍚庤嚜鍔ㄥ紑濮?.. 浠诲姟ID: ${taskId}` }
+                ? { ...msg, content: `🔬 深度分析排队中，将在当前任务完成后自动开始... 任务ID: ${taskId}` }
                 : msg
             ))
             continue
@@ -718,24 +718,24 @@ export default function Chat() {
               data.result_summary,
             ))
           } else if (data.status === 'paused') {
-            // Don't stop polling 鈥?the task may be resumed later
-            const pausedLabel = data.current_step || `宸叉殏鍋滐紙杩涘害 ${data.progress || 0}%锛塦
+            // Don't stop polling — the task may be resumed later
+            const pausedLabel = data.current_step || `已暂停（进度 ${data.progress || 0}%）`
             setMessages((m) => findAndUpdate(
               m,
-              `鈴?${pausedLabel} 浠诲姟ID: ${taskId}`,
+              `⏸ ${pausedLabel} 任务ID: ${taskId}`,
               data.result_summary,
             ))
           } else if (data.status === 'cancelling') {
-            // Backend is processing the stop request 鈥?show progress until cancelled
+            // Backend is processing the stop request — show progress until cancelled
             const pct = data.progress != null ? `[${data.progress}%]` : ''
             setMessages((m) => findAndUpdate(
               m,
-              `鈴?姝ｅ湪鍋滄... ${pct} 浠诲姟ID: ${taskId}`,
+              `⏹ 正在停止... ${pct} 任务ID: ${taskId}`,
               data.result_summary,
             ))
           } else if (data.status === 'cancelled') {
             stopLongTaskPolling(taskId)
-            setMessages((m) => findAndUpdate(m, `鈴?浠诲姟宸插彇娑?浠诲姟ID: ${taskId}`))
+            setMessages((m) => findAndUpdate(m, `⏹ 任务已取消 任务ID: ${taskId}`))
           } else if (data.status === 'failed' || data.status === 'error') {
             stopLongTaskPolling(taskId)
             setMessages((m) => findAndUpdate(
@@ -747,7 +747,7 @@ export default function Chat() {
             const newContent = t('chat.longTaskProgress')
               .replace('{progress}', progress)
               .replace('{phase}', phaseLabel)
-              + ` 浠诲姟ID: ${taskId}`
+              + ` 任务ID: ${taskId}`
             setMessages((m) => findAndUpdate(m, newContent, data.result_summary))
           }
         }
@@ -864,7 +864,7 @@ export default function Chat() {
                 <line x1="12" y1="3" x2="12" y2="15" />
               </svg>
               <p>{t('chat.dropFilesHere') || 'Drop patent specification files here'}</p>
-              <span className="file-drop-hint">PDF, DOCX, XML 路 Max 10 MB each 路 Up to 100 files</span>
+              <span className="file-drop-hint">PDF, DOCX, XML · Max 10 MB each · Up to 100 files</span>
             </div>
           </div>
         )}
