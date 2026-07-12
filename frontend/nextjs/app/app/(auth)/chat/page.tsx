@@ -150,12 +150,12 @@ export default function Chat() {
               taskId: (m as any).taskId || undefined,
               artifacts: [],
             }))
-            // Strip orphan long-task messages (馃敩/鉁?鉂?without taskId).
+            // Strip orphan long-task messages (馃敩/✅❌without taskId).
             // These were saved before taskId was attached during SSE.
             // The resume loop below will recreate them with proper taskId,
             // avoiding duplicates that never update.
             .filter((m: { taskId?: string; content: string }) =>
-              m.taskId || (!m.content.includes('馃敩') && !m.content.includes('鉁?) && !m.content.includes('鉂?))
+              m.taskId || (!m.content.includes('馃敩') && !m.content.includes('✅) && !m.content.includes('❌))
             )
           if (loaded.length > 0) {
             setMessages(loaded)
@@ -177,10 +177,10 @@ export default function Chat() {
               if (!status) continue
 
             // Session save happens ~1s after SSE end, but the task may complete
-            // minutes later.  The in-memory message transitions to 鉁?鉂?via
+            // minutes later.  The in-memory message transitions to ✅❌via
             // polling, but the saved session still has the stale 馃敩 content.
             // Update completed/failed messages so the card shows the final state
-            // and so send()'s filter (which checks for 鉁?鉂? preserves them.
+            // and so send()'s filter (which checks for ✅❌ preserves them.
             if (status && (status.status === 'completed' || status.status === 'success')) {
               const files = (status.report_files || [])
                 .map((f: { format: string }) =>
