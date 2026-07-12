@@ -149,6 +149,7 @@ export default function Chat() {
               content: m.content,
               taskId: (m as any).taskId || undefined,
               artifacts: [],
+              resultSummary: (m as any).resultSummary || undefined,
             }))
             // Strip orphan long-task messages (🔬/✅/❌ without taskId).
             // These were saved before taskId was attached during SSE.
@@ -281,7 +282,8 @@ export default function Chat() {
           role: m.role,
           content: m.content,
           ...(m.taskId ? { taskId: m.taskId } : {}),
-        }))
+              ...(m.resultSummary ? { resultSummary: m.resultSummary } : {}),
+              ...(m.resultSummary ? { resultSummary: m.resultSummary } : {}),
         await saveSessionMessages(sessionId, toSave)
       } catch {
         // Non-critical
