@@ -150,12 +150,12 @@ export default function Chat() {
               taskId: (m as any).taskId || undefined,
               artifacts: [],
             }))
-            // Strip orphan long-task messages (馃敩/✅❌without taskId).
+            // Strip orphan long-task messages (🚀/✅❌without taskId).
             // These were saved before taskId was attached during SSE.
             // The resume loop below will recreate them with proper taskId,
             // avoiding duplicates that never update.
             .filter((m: { taskId?: string; content: string }) =>
-              m.taskId || (!m.content.includes('馃敩') && !m.content.includes('✅) && !m.content.includes('❌))
+              m.taskId || (!m.content.includes('🚀') && !m.content.includes('✅') && !m.content.includes('❌'))
             )
           if (loaded.length > 0) {
             setMessages(loaded)
@@ -178,7 +178,7 @@ export default function Chat() {
 
             // Session save happens ~1s after SSE end, but the task may complete
             // minutes later.  The in-memory message transitions to ✅❌via
-            // polling, but the saved session still has the stale 馃敩 content.
+            // polling, but the saved session still has the stale 🚀 content.
             // Update completed/failed messages so the card shows the final state
             // and so send()'s filter (which checks for ✅❌ preserves them.
             if (status && (status.status === 'completed' || status.status === 'success')) {
@@ -229,7 +229,7 @@ export default function Chat() {
               ? t('chat.longTaskProgress')
                   .replace('{progress}', progress)
                   .replace('{phase}', phaseLabel)
-              : '馃敩 娣卞害鍒嗘瀽杩涜涓?..') + ` 浠诲姟ID: ${tid}`
+              : '🚀' 娣卞害鍒嗘瀽杩涜涓?..') + ` 浠诲姟ID: ${tid}`
             let pollMsgId = `lt_resume_${tid}`
             setMessages(m => {
               const existingIdx = m.findIndex(msg => msg.taskId === tid)
@@ -410,7 +410,7 @@ export default function Chat() {
               const sid = String(event.session_id ?? '')
               const isQueued = String(event.status ?? '') === 'queued'
               const initContent = (isQueued
-                ? '馃敩 娣卞害鍒嗘瀽宸叉帓闃燂紝灏嗗湪褰撳墠浠诲姟瀹屾垚鍚庤嚜鍔ㄥ紑濮?..'
+                ? '🚀' 娣卞害鍒嗘瀽宸叉帓闃燂紝灏嗗湪褰撳墠浠诲姟瀹屾垚鍚庤嚜鍔ㄥ紑濮?..'
                 : t('chat.longTaskProgress')
                     .replace('{progress}', '[0%]')
                     .replace('{phase}', '姝ｅ湪鍑嗗涓撳埄鍒嗘瀽...')
@@ -479,7 +479,7 @@ export default function Chat() {
           longTaskReceivedRef.current = true
           const isQueued = recovered.status === 'queued'
           const initContent = (isQueued
-            ? '馃敩 娣卞害鍒嗘瀽宸叉帓闃燂紝灏嗗湪褰撳墠浠诲姟瀹屾垚鍚庤嚜鍔ㄥ紑濮?..'
+            ? '🚀' 娣卞害鍒嗘瀽宸叉帓闃燂紝灏嗗湪褰撳墠浠诲姟瀹屾垚鍚庤嚜鍔ㄥ紑濮?..'
             : t('chat.longTaskProgress')
                 .replace('{progress}', '[0%]')
                 .replace('{phase}', '姝ｅ湪鍑嗗涓撳埄鍒嗘瀽...')
@@ -673,7 +673,7 @@ export default function Chat() {
           if (data.status === 'queued') {
             setMessages((m) => m.map(msg =>
               msg.taskId === taskId
-                ? { ...msg, content: `馃敩 娣卞害鍒嗘瀽鎺掗槦涓紝灏嗗湪褰撳墠浠诲姟瀹屾垚鍚庤嚜鍔ㄥ紑濮?.. 浠诲姟ID: ${taskId}` }
+                ? { ...msg, content: `🚀 娣卞害鍒嗘瀽鎺掗槦涓紝灏嗗湪褰撳墠浠诲姟瀹屾垚鍚庤嚜鍔ㄥ紑濮?.. 浠诲姟ID: ${taskId}` }
                 : msg
             ))
             continue
