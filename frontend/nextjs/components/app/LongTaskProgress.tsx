@@ -53,6 +53,11 @@ function parseTaskContent(content: string): TaskState | null {
   // Extract step label
   const labelMatch = content.match(/\]\s*(.+?)(?:\.{2,})?$/)
   let stepLabel = labelMatch ? labelMatch[1].trim() : ''
+  // Clean garbled Unicode from LLM output
+  stepLabel = stepLabel.replace(/\uFFFD/g, '')
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '')
+    .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '')
+    .replace(/[\u0080-\u009F]/g, '')
 
   // Paused state
   if (content.includes('⏸') || content.includes('已暂停')) {

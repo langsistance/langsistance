@@ -79,6 +79,14 @@ export default function Chat() {
   const longTaskReceivedRef = useRef(false)
   const isNearBottomRef = useRef(true)
   const [transientStatus, setTransientStatus] = useState('')
+  function cleanGarbledText(text) {
+    if (!text) return text;
+    return text
+      .replace(/\uFFFD/g, '')
+      .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '')
+      .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '')
+      .replace(/[\u0080-\u009F]/g, '');
+  }
   const [enabledScenes, setEnabledScenes] = useState<any[]>([])
   const [sceneSmartQA, setSceneSmartQA] = useState<{name: string, desc: string}[]>([])
   const [sceneDeepResearch, setSceneDeepResearch] = useState<{name: string, desc: string}[]>([])
@@ -462,7 +470,7 @@ export default function Chat() {
             )
           if (token) {
             setTransientStatus('')
-            setMessages((m) => updateAssistantMessage(m, assistantId, String(token)))
+            setMessages((m) => updateAssistantMessage(m, assistantId, cleanGarbledText(String(token))))
           }
         }
       }
