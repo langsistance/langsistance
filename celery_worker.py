@@ -1020,7 +1020,7 @@ def _t(key, lang="zh", **kwargs):
     )
     report_title = '专利分析报告' if batch_lang == 'zh' else 'Patent Analysis Report'
 
-    def _assemble_report(
+    async def _assemble_report(
         exec_summary: str | None,
         completed_parts: list[str],
         current_heading: str | None = None,
@@ -1039,7 +1039,7 @@ def _t(key, lang="zh", **kwargs):
     update_task_status(task_id, 'generating_report', 76,
                        '正在撰写执行摘要...')
 
-    async def _exec_chunk(partial: str) -> None:
+    async async def _exec_chunk(partial: str) -> None:
         summary_updater.push(
             _assemble_report(partial, []),
             step_msg='正在撰写执行摘要...',
@@ -1104,7 +1104,7 @@ def _t(key, lang="zh", **kwargs):
         summary_updater.progress = sec_pct
         summary_updater.step_msg = step_msg
 
-        def _section_chunk(partial: str, _heading=section['heading']) -> None:
+        async def _section_chunk(partial: str, _heading=section['heading']) -> None:
             summary_updater.push(
                 _assemble_report(
                     exec_summary,
@@ -1178,7 +1178,7 @@ def _t(key, lang="zh", **kwargs):
     report_files = []
     local_storage = None
 
-    def _get_local_storage():
+    async def _get_local_storage():
         """Lazy-init local storage for fallback."""
         nonlocal local_storage
         if local_storage is None:
@@ -1705,7 +1705,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         report_files = []
         local_storage = None
 
-        def _get_local_storage():
+        async def _get_local_storage():
             nonlocal local_storage
             if local_storage is None:
                 from sources.long_task.storage import create_storage as _create
@@ -2399,7 +2399,7 @@ async def export_pdf_async(docx_bytes: bytes) -> bytes:
     import tempfile
     import shutil
 
-    def _convert():
+    async def _convert():
         tmpdir = tempfile.mkdtemp(prefix='pdfconv_')
         try:
             docx_path = os.path.join(tmpdir, 'report.docx')
@@ -2560,7 +2560,7 @@ async def export_docx_async(report_text: str, table_rows: list, columns: list) -
         for run in heading.runs:
             _set_run_font(run, bold=True)
 
-    def _sync_export():
+    async def _sync_export():
         doc = Document()
 
         # Set document default fonts for cross-platform compatibility
