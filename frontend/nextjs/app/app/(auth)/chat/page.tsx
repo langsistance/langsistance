@@ -79,7 +79,7 @@ export default function Chat() {
   const longTaskReceivedRef = useRef(false)
   const isNearBottomRef = useRef(true)
   const [transientStatus, setTransientStatus] = useState('')
-  function cleanGarbledText(text) {
+  function cleanGarbledText(text: string): string {
     if (!text) return text;
     return text
       .replace(/\uFFFD/g, '')
