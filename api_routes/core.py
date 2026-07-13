@@ -1125,9 +1125,9 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                             'user_id': str(local_user_id),
                             'scenario': scenario,
                         }
+                        celery_params['lang'] = query_lang
                         if is_prosecution:
                             celery_params['patent_id'] = patent_ids[0] if patent_ids else ''
-                            celery_params['lang'] = query_lang
                         else:
                             celery_params['patent_ids'] = patent_ids
                             celery_params['patent_source'] = patent_source
