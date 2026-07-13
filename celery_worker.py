@@ -1039,7 +1039,7 @@ def _t(key, lang="zh", **kwargs):
     update_task_status(task_id, 'generating_report', 76,
                        '正在撰写执行摘要...')
 
-    def _exec_chunk(partial: str) -> None:
+    async def _exec_chunk(partial: str) -> None:
         summary_updater.push(
             _assemble_report(partial, []),
             step_msg='正在撰写执行摘要...',
