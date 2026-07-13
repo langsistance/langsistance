@@ -1,4 +1,4 @@
-ï»¿"""Celery worker entry point for long-running patent analysis tasks."""
+"""Celery worker entry point for long-running patent analysis tasks."""
 
 import asyncio
 import json
@@ -40,10 +40,10 @@ app.conf.update(
         # With task_acks_late=True, the task is NOT acknowledged until it
         # completes.  If visibility_timeout < actual runtime, Redis will
         # redeliver the task to another worker while the first worker is
-        # still running â€” causing TWO workers to execute the same task.
+        # still running ¡ª causing TWO workers to execute the same task.
         #
         # Graceful shutdown (docker stop / SIGTERM) is handled by
-        # worker_shutdown_timeout + stop_grace_period â€” the worker
+        # worker_shutdown_timeout + stop_grace_period ¡ª the worker
         # rejects unacked tasks within 25 s, so they return to the
         # queue immediately.  visibility_timeout is only for hard crashes.
         'visibility_timeout': 7200,
@@ -53,21 +53,21 @@ app.conf.update(
     worker_shutdown_timeout=25,
 )
 
-# â”€â”€ Status message translations â”€â”€
+# ©¤©¤ Status message translations ©¤©¤
 _STATUS_MSGS = {
     "zh": {
-        "preparing": "æ­£åœ¨å‡†å¤‡ä¸“åˆ©åˆ†æï¼ˆ{total} ä¸ªä¸“åˆ©ï¼‰...",
-        "extracting_file": "æ­£åœ¨è§£æä¸Šä¼ æ–‡ä»¶ï¼ˆ{current}/{total}ï¼‰...",
-        "extracting_by_name": "æ­£åœ¨è§£æï¼š{name}ï¼ˆ{current}/{total}ï¼‰...",
-        "ocr_page": "OCRè¯†åˆ«ï¼š{name}ï¼ˆ{current}/{total}é¡µï¼‰...",
-        "searching": "æ­£åœ¨æœç´¢ {focus} çš„ç›¸å…³ä¸“åˆ©ï¼ˆUSPTOï¼‰...",
-        "searching_page": "æ­£åœ¨æœç´¢ {focus} çš„ç›¸å…³ä¸“åˆ©ï¼ˆç¬¬{page}é¡µï¼‰...",
-        "searching_resolve": "æ­£åœ¨è·å–ç¬¬{page}é¡µä¸“åˆ©è¯¦æƒ…ï¼ˆ{resolved}/{on_page}ï¼‰...",
-        "analyzing": "æ­£åœ¨åˆ†æç¬¬ {current}/{total} ä¸ªä¸“åˆ©...",
-        "analyzing_progress": "åˆ†æè¿›åº¦: {current}/{total}",
-        "generating_word": "æ­£åœ¨ç”Ÿæˆ Word æ–‡ä»¶...",
-        "generating_pdf": "æ­£åœ¨ä» Word ç”Ÿæˆ PDF æ–‡ä»¶...",
-        "fetching_uspto": "æ­£åœ¨è·å–USPTOæ–‡ä»¶åˆ—è¡¨...",
+        "preparing": "ÕıÔÚ×¼±¸×¨Àû·ÖÎö£¨{total} ¸ö×¨Àû£©...",
+        "extracting_file": "ÕıÔÚ½âÎöÉÏ´«ÎÄ¼ş£¨{current}/{total}£©...",
+        "extracting_by_name": "ÕıÔÚ½âÎö£º{name}£¨{current}/{total}£©...",
+        "ocr_page": "OCRÊ¶±ğ£º{name}£¨{current}/{total}Ò³£©...",
+        "searching": "ÕıÔÚËÑË÷ {focus} µÄÏà¹Ø×¨Àû£¨USPTO£©...",
+        "searching_page": "ÕıÔÚËÑË÷ {focus} µÄÏà¹Ø×¨Àû£¨µÚ{page}Ò³£©...",
+        "searching_resolve": "ÕıÔÚ»ñÈ¡µÚ{page}Ò³×¨ÀûÏêÇé£¨{resolved}/{on_page}£©...",
+        "analyzing": "ÕıÔÚ·ÖÎöµÚ {current}/{total} ¸ö×¨Àû...",
+        "analyzing_progress": "·ÖÎö½ø¶È: {current}/{total}",
+        "generating_word": "ÕıÔÚÉú³É Word ÎÄ¼ş...",
+        "generating_pdf": "ÕıÔÚ´Ó Word Éú³É PDF ÎÄ¼ş...",
+        "fetching_uspto": "ÕıÔÚ»ñÈ¡USPTOÎÄ¼şÁĞ±í...",
     },
     "en": {
         "preparing": "Preparing patent analysis ({total} patents)...",
@@ -96,7 +96,7 @@ def execute_patent_analysis(self, task_id: str, params: dict):
     """Batch patent analysis -- 4-phase serial pipeline with checkpointing."""
     retry_count = self.request.retries
     _pipeline_logger.info(
-        f"[task={task_id}] START â€” "
+        f"[task={task_id}] START ¡ª "
         f"query={params.get('query', '')[:120]}, "
         f"patent_source={params.get('patent_source', 'cnipa')}, "
         f"session_id={params.get('session_id', '')}, "
@@ -106,7 +106,7 @@ def execute_patent_analysis(self, task_id: str, params: dict):
     # Belt-and-suspenders: if Celery's retry tracking is broken, hard-stop here
     if retry_count >= self.max_retries:
         _pipeline_logger.error(
-            f"[task={task_id}] HARD_STOP â€” retry_count={retry_count} >= {self.max_retries}"
+            f"[task={task_id}] HARD_STOP ¡ª retry_count={retry_count} >= {self.max_retries}"
         )
         user_id = params.get('user_id', '')
         if user_id:
@@ -154,7 +154,7 @@ def execute_patent_analysis(self, task_id: str, params: dict):
         if all_uspto:
             params['patent_source'] = 'uspto'
             _pipeline_logger.info(
-                f"[task={task_id}] CONFIG auto_detect_uspto â€” "
+                f"[task={task_id}] CONFIG auto_detect_uspto ¡ª "
                 f"all {len(patent_ids)} IDs are 8-digit, "
                 f"overriding patent_source to 'uspto'"
             )
@@ -166,13 +166,13 @@ def execute_patent_analysis(self, task_id: str, params: dict):
     total = len(patent_ids)
 
     _pipeline_logger.info(
-        f"[task={task_id}] CONFIG â€” "
+        f"[task={task_id}] CONFIG ¡ª "
         f"model_family={model_family}, max_patents={source_max}, "
         f"patent_ids_count={len(patent_ids)}, "
         f"patent_ids={patent_ids[:10]}{'...' if len(patent_ids) > 10 else ''}"
     )
 
-    # â”€â”€ Immediate progress update so frontend shows feedback right away â”€â”€
+    # ©¤©¤ Immediate progress update so frontend shows feedback right away ©¤©¤
     update_task_status(task_id, 'preparing', 1,
                        _t('preparing', batch_lang, total=total))
 
@@ -194,8 +194,8 @@ def execute_patent_analysis(self, task_id: str, params: dict):
         pro_provider = Provider(provider_name='deepseek', model='deepseek-reasoner',
                                 server_address='', is_local=False)
 
-    # Vision provider â€” configured via config.ini [LONG_TASK]
-    #   vision_provider / vision_model â€” independent of provider_family
+    # Vision provider ¡ª configured via config.ini [LONG_TASK]
+    #   vision_provider / vision_model ¡ª independent of provider_family
     vision_provider = None
     if vision_enabled:
         vision_cfg_provider = ltc.get('vision_provider', DEFAULT_VISION_PROVIDER)
@@ -239,14 +239,14 @@ def execute_patent_analysis(self, task_id: str, params: dict):
                 create_storage=create_storage,
             ))
             _pipeline_logger.info(
-                f"[task={task_id}] PIPELINE_DONE â€” status={result.get('status')}"
+                f"[task={task_id}] PIPELINE_DONE ¡ª status={result.get('status')}"
             )
             return result
         finally:
             loop.close()
     except Exception as e:
         _pipeline_logger.error(
-            f"[task={task_id}] FAILED â€” error={e}"
+            f"[task={task_id}] FAILED ¡ª error={e}"
         )
         set_task_failed(task_id, str(e))
         user_id_for_analytics = params.get('user_id', '')
@@ -257,11 +257,11 @@ def execute_patent_analysis(self, task_id: str, params: dict):
         try:
             raise self.retry(exc=e)
         except self.MaxRetriesExceededError:
-            # Permanent failure â€” clear user's running key so queued tasks proceed.
+            # Permanent failure ¡ª clear user's running key so queued tasks proceed.
             # Delete the running key directly first (safety net), then try
             # complete_user_task to dispatch the next queued task.
             _pipeline_logger.error(
-                f"[task={task_id}] MAX_RETRIES_EXCEEDED â€” clearing user queue lock"
+                f"[task={task_id}] MAX_RETRIES_EXCEEDED ¡ª clearing user queue lock"
             )
             user_id = params.get('user_id', '')
             if user_id:
@@ -277,12 +277,12 @@ def execute_patent_analysis(self, task_id: str, params: dict):
                     next_id = complete_user_task(str(user_id), task_id)
                     if next_id:
                         _pipeline_logger.info(
-                            f"[task={task_id}] QUEUE_DISPATCHED_AFTER_FAILURE â€” "
+                            f"[task={task_id}] QUEUE_DISPATCHED_AFTER_FAILURE ¡ª "
                             f"next_task_id={next_id}"
                         )
                 except Exception as qe:
                     _pipeline_logger.warning(
-                        f"[task={task_id}] QUEUE_CLEANUP_FAILED â€” {qe}"
+                        f"[task={task_id}] QUEUE_CLEANUP_FAILED ¡ª {qe}"
                     )
             raise
 
@@ -345,7 +345,7 @@ async def _run_pipeline(
     # ---- Crash recovery / resume: load checkpoint ----
     checkpoint = load_checkpoint(task_id)
     _pipeline_logger.info(
-        f"[task={task_id}] CHECKPOINT_LOAD â€” "
+        f"[task={task_id}] CHECKPOINT_LOAD ¡ª "
         f"found={checkpoint is not None}, "
         f"has_pending={bool(checkpoint and checkpoint.get('pending'))}, "
         f"completed_rows={len(checkpoint.get('completed_rows', [])) if checkpoint else 0}, "
@@ -374,7 +374,7 @@ async def _run_pipeline(
     if patent_file_refs and not patent_texts:
         total_files = len(patent_file_refs)
         _pipeline_logger.info(
-            f"[task={task_id}] FILE_EXTRACT â€” extracting text from "
+            f"[task={task_id}] FILE_EXTRACT ¡ª extracting text from "
             f"{total_files} uploaded files"
         )
         update_task_status(task_id, 'extracting_text', 0,
@@ -411,34 +411,34 @@ async def _run_pipeline(
                 if text and len(text) > 100:
                     patent_texts[pid] = text
                     _pipeline_logger.info(
-                        f"[task={task_id}] FILE_EXTRACT â€” {ref['filename']}: "
+                        f"[task={task_id}] FILE_EXTRACT ¡ª {ref['filename']}: "
                         f"{len(text)} chars"
                     )
                 else:
                     _pipeline_logger.warning(
-                        f"[task={task_id}] FILE_EXTRACT â€” {ref['filename']}: "
+                        f"[task={task_id}] FILE_EXTRACT ¡ª {ref['filename']}: "
                         f"extraction failed ({len(text) if text else 0} chars)"
                     )
             except Exception as e:
                 _pipeline_logger.error(
-                    f"[task={task_id}] FILE_EXTRACT â€” {ref['filename']}: {e}"
+                    f"[task={task_id}] FILE_EXTRACT ¡ª {ref['filename']}: {e}"
                 )
 
     is_file_upload_mode = bool(patent_texts)
     is_direct_id_mode = bool(patent_ids) and not is_file_upload_mode
     if is_file_upload_mode:
         _pipeline_logger.info(
-            f"[task={task_id}] MODE=file_upload â€” patent_count={len(patent_ids)}, "
+            f"[task={task_id}] MODE=file_upload ¡ª patent_count={len(patent_ids)}, "
             f"patent_ids={patent_ids[:10]}{'...' if len(patent_ids) > 10 else ''}"
         )
     elif is_direct_id_mode:
         _pipeline_logger.info(
-            f"[task={task_id}] MODE=direct_ids â€” patent_count={len(patent_ids)}, "
+            f"[task={task_id}] MODE=direct_ids ¡ª patent_count={len(patent_ids)}, "
             f"patent_ids={patent_ids[:10]}{'...' if len(patent_ids) > 10 else ''}"
         )
     else:
         _pipeline_logger.info(
-            f"[task={task_id}] MODE=search_extract â€” "
+            f"[task={task_id}] MODE=search_extract ¡ª "
             f"patent_ids_from_params={len(patent_ids)}"
         )
 
@@ -447,13 +447,20 @@ async def _run_pipeline(
     scene_candidates = None
     if scene_id:
         from sources.long_task.scene_tools import get_scene_knowledge_tools
-        scene_candidates = get_scene_knowledge_tools(scene_id)
+        try:
+            scene_candidates = get_scene_knowledge_tools(scene_id)
+        except Exception as e:
+            _pipeline_logger.warning(
+                f'[task={task_id}] PHASE0 scene_tools_failed - '
+                f'scene_id={scene_id}, error={e}'
+            )
+            scene_candidates = None
         _pipeline_logger.info(
-            f"[task={task_id}] PHASE0 â€” scene_id={scene_id}, "
+            f"[task={task_id}] PHASE0 ¡ª scene_id={scene_id}, "
             f"scene_candidates_count={len(scene_candidates) if scene_candidates else 0}"
         )
-    id_url_map = {}          # patent_id â†’ document_url from search results
-    id_pid_map = {}          # patent_id â†’ pid from CNIPA search results
+    id_url_map = {}          # patent_id ¡ú document_url from search results
+    id_pid_map = {}          # patent_id ¡ú pid from CNIPA search results
 
     # ==== Phase 0-prep: Extract patent IDs from query + conversation via LLM ====
     if not is_file_upload_mode and not is_direct_id_mode and not patent_ids:
@@ -475,7 +482,7 @@ async def _run_pipeline(
 
         if combined_text and len(combined_text) > 20:
             _pipeline_logger.info(
-                f"[task={task_id}] PHASE0 extract_patent_ids_from_text â€” "
+                f"[task={task_id}] PHASE0 extract_patent_ids_from_text ¡ª "
                 f"text_length={len(combined_text)}, "
                 f"sources=query({len(query_text)})+conv_msgs({len(conv_history)})"
             )
@@ -484,25 +491,25 @@ async def _run_pipeline(
                 "Extract ALL patent APPLICATION NUMBERS from the provided text. "
                 "\n\n"
                 "CRITICAL: The user may have typed IDs directly (e.g. "
-                "'17429113ã€18012525ã€18331482ã€‚è¿™æ˜¯3ä¸ªä¸“åˆ©ç”³è¯·å·'). "
-                "When the user mentions 'ä¸“åˆ©ç”³è¯·å·', 'application number', "
+                "'17429113¡¢18012525¡¢18331482¡£ÕâÊÇ3¸ö×¨ÀûÉêÇëºÅ'). "
+                "When the user mentions '×¨ÀûÉêÇëºÅ', 'application number', "
                 "or 'patent application', the adjacent numbers ARE the IDs. "
                 "\n\n"
-                "â€”â€” HOW TO IDENTIFY THE SOURCE COUNTRY â€”â€”\n"
-                "CNIPA (China / ä¸­å›½å›½å®¶çŸ¥è¯†äº§æƒå±€) application numbers:\n"
+                "¡ª¡ª HOW TO IDENTIFY THE SOURCE COUNTRY ¡ª¡ª\n"
+                "CNIPA (China / ÖĞ¹ú¹ú¼ÒÖªÊ¶²úÈ¨¾Ö) application numbers:\n"
                 "  - Format: YYYY + 8 digits + optional '.' + 1 check digit\n"
                 "  - Examples: 202310123456.7, 2023101234567, 202410567890.1\n"
                 "  - ALWAYS start with the year (2018-2026), 13+ digits total\n"
                 "  - May have a dot before the last digit (check digit)\n\n"
-                "USPTO (United States / ç¾å›½ä¸“åˆ©å•†æ ‡å±€) application numbers:\n"
+                "USPTO (United States / ÃÀ¹ú×¨ÀûÉÌ±ê¾Ö) application numbers:\n"
                 "  - Format: PURE 8-DIGIT NUMBERS or 2/6 slash format\n"
                 "  - Examples: 18331482, 17429113, 18/333482\n"
                 "  - Exactly 8 consecutive digits, or 2 digits + '/' + 6 digits\n"
                 "  - Do NOT confuse with publication numbers (US20230310100A1)\n"
                 "  - Do NOT confuse with granted patent numbers (e.g. 10299867)\n\n"
                 "DECISION RULE: count the digits.\n"
-                "  - Starts with year (20XX) + 9+ more digits â†’ CNIPA\n"
-                "  - Pure 8-digit number â†’ USPTO\n"
+                "  - Starts with year (20XX) + 9+ more digits ¡ú CNIPA\n"
+                "  - Pure 8-digit number ¡ú USPTO\n"
                 "  - If unsure, return 'unknown'\n\n"
                 'Return JSON: {"patent_ids": ["id1", ...], '
                 '"source": "uspto" or "cnipa" or "unknown"}'
@@ -512,7 +519,7 @@ async def _run_pipeline(
                 "Application numbers can be CNIPA (starts with year like 2023, "
                 "13+ digits, e.g. 202310123456.7) or USPTO (pure 8-digit, "
                 "e.g. 18331482). "
-                "Look for numbers labeled 'ç”³è¯·å·' or 'Application Number', "
+                "Look for numbers labeled 'ÉêÇëºÅ' or 'Application Number', "
                 "or bare numbers that the user refers to as patent/application IDs. "
                 "DO NOT extract publication numbers (US-prefixed like US20230310100A1) "
                 "or granted patent numbers. "
@@ -578,7 +585,7 @@ async def _run_pipeline(
                             sections.append(chunk)
                         start = end - 500
                 _pipeline_logger.info(
-                    f"[task={task_id}] PHASE0 split_extraction â€” "
+                    f"[task={task_id}] PHASE0 split_extraction ¡ª "
                     f"sections={len(sections)}, "
                     f"lengths={[len(s) for s in sections]}"
                 )
@@ -600,7 +607,7 @@ async def _run_pipeline(
                                     if pid and pid.isdigit() and len(pid) == 8:
                                         normalized.append(pid)
                             _pipeline_logger.info(
-                                f"[task={task_id}] PHASE0 section[{i}] â€” "
+                                f"[task={task_id}] PHASE0 section[{i}] ¡ª "
                                 f"found={extracted}"
                             )
                     except Exception as e:
@@ -609,14 +616,14 @@ async def _run_pipeline(
                         )
 
             patent_ids = sorted(set(normalized))
-            # If all extracted IDs are pure 8-digit â†’ almost certainly USPTO
+            # If all extracted IDs are pure 8-digit ¡ú almost certainly USPTO
             if patent_ids:
                 all_uspto_like = all(
                     pid.isdigit() and len(pid) == 8 for pid in patent_ids
                 )
                 if all_uspto_like and patent_source != 'uspto':
                     _pipeline_logger.info(
-                        f"[task={task_id}] PHASE0 auto_detect_uspto â€” "
+                        f"[task={task_id}] PHASE0 auto_detect_uspto ¡ª "
                         f"all {len(patent_ids)} IDs are 8-digit, "
                         f"overriding source from '{patent_source}' to 'uspto'"
                     )
@@ -628,7 +635,7 @@ async def _run_pipeline(
             )
             patent_ids = patent_ids[:source_max]
             _pipeline_logger.info(
-                f"[task={task_id}] PHASE0 llm_extracted_patent_ids â€” "
+                f"[task={task_id}] PHASE0 llm_extracted_patent_ids ¡ª "
                 f"count={len(patent_ids)}, "
                 f"source={params.get('patent_source', 'cnipa')}, "
                 f"patent_ids={patent_ids}"
@@ -636,14 +643,14 @@ async def _run_pipeline(
 
         if patent_ids:
             total = len(patent_ids)
-            # Only reset state for fresh runs â€” when resuming from checkpoint,
+            # Only reset state for fresh runs ¡ª when resuming from checkpoint,
             # pending and table_rows were already restored above.
             if not (checkpoint and checkpoint.get('pending')):
                 pending = patent_ids
                 table_rows = []
             else:
                 _pipeline_logger.info(
-                    f"[task={task_id}] CHECKPOINT_RESUME â€” "
+                    f"[task={task_id}] CHECKPOINT_RESUME ¡ª "
                     f"keeping checkpoint state: table_rows={len(table_rows)}, "
                     f"pending={len(pending)}"
                 )
@@ -658,14 +665,14 @@ async def _run_pipeline(
         )
         patent_source = params.get('patent_source', 'cnipa')
         update_task_status(task_id, 'searching_patents', 0,
-                           f'å·²å‘ç° {len(scene_candidates)} ä¸ªåœºæ™¯å·¥å…·ï¼Œæ­£åœ¨é€‰æ‹©æ£€ç´¢æ–¹æ¡ˆ...')
+                           f'ÒÑ·¢ÏÖ {len(scene_candidates)} ¸ö³¡¾°¹¤¾ß£¬ÕıÔÚÑ¡Ôñ¼ìË÷·½°¸...')
         selected = await select_tool(
             'search patents',
-            f"ä¸“åˆ©æ¥æº: {patent_source}\nç”¨æˆ·æŸ¥è¯¢: {params['query']}",
+            f"×¨ÀûÀ´Ô´: {patent_source}\nÓÃ»§²éÑ¯: {params['query']}",
             scene_candidates, flash_provider,
         )
         _pipeline_logger.info(
-            f"[task={task_id}] PHASE0 select_tool â€” "
+            f"[task={task_id}] PHASE0 select_tool ¡ª "
             f"selected={selected is not None}, "
             f"tool_title={selected.get('tool', {}).title if selected else 'N/A'}, "
             f"tool_url={selected.get('tool', {}).url if selected else 'N/A'}, "
@@ -674,7 +681,7 @@ async def _run_pipeline(
         )
         if selected:
             update_task_status(task_id, 'searching_patents', 2,
-                               f'æ­£åœ¨æ£€ç´¢ä¸“åˆ©ï¼š{selected.get("reason", "")}')
+                               f'ÕıÔÚ¼ìË÷×¨Àû£º{selected.get("reason", "")}')
             result = await execute_tool(selected['tool'], selected['params'])
             raw_items = result.get('raw_items', []) or []
             patent_ids = extract_patent_ids(raw_items)
@@ -682,7 +689,7 @@ async def _run_pipeline(
             from sources.long_task.scene_tools import extract_patent_id_pid_map
             id_pid_map = extract_patent_id_pid_map(raw_items)
             _pipeline_logger.info(
-                f"[task={task_id}] PHASE0 search_result â€” "
+                f"[task={task_id}] PHASE0 search_result ¡ª "
                 f"raw_items_count={len(raw_items)}, "
                 f"patent_ids_found={len(patent_ids)}, "
                 f"patent_ids={patent_ids[:10]}{'...' if len(patent_ids) > 10 else ''}, "
@@ -699,29 +706,29 @@ async def _run_pipeline(
             )
             if len(patent_ids) > source_max:
                 _pipeline_logger.info(
-                    f"[task={task_id}] PHASE0 truncating â€” "
+                    f"[task={task_id}] PHASE0 truncating ¡ª "
                     f"source={params.get('patent_source', 'cnipa')}, "
                     f"max={source_max}, found={len(patent_ids)}, "
                     f"truncated_to={source_max}"
                 )
                 patent_ids = patent_ids[:source_max]
             total = len(patent_ids)
-            # Only reset state for fresh runs â€” when resuming from checkpoint,
+            # Only reset state for fresh runs ¡ª when resuming from checkpoint,
             # pending and table_rows were already restored above.
             if not (checkpoint and checkpoint.get('pending')):
                 pending = patent_ids
                 table_rows = []
             else:
                 _pipeline_logger.info(
-                    f"[task={task_id}] CHECKPOINT_RESUME_SCENE â€” "
+                    f"[task={task_id}] CHECKPOINT_RESUME_SCENE ¡ª "
                     f"keeping checkpoint state: table_rows={len(table_rows)}, "
                     f"pending={len(pending)}"
                 )
             update_task_status(task_id, 'searching_patents', 5,
-                               f'æ£€ç´¢åˆ° {len(patent_ids)} ä¸ªä¸“åˆ©ï¼Œå¼€å§‹åˆ†æ',
+                               f'¼ìË÷µ½ {len(patent_ids)} ¸ö×¨Àû£¬¿ªÊ¼·ÖÎö',
                                patent_ids=patent_ids)
         else:
-            set_task_failed(task_id, 'æœªæ‰¾åˆ°åŒ¹é…çš„ä¸“åˆ©')
+            set_task_failed(task_id, 'Î´ÕÒµ½Æ¥ÅäµÄ×¨Àû')
             user_id_for_analytics = params.get('user_id', '')
             if user_id_for_analytics:
                 track_event("long_task:fail", user_id=user_id_for_analytics,
@@ -732,17 +739,17 @@ async def _run_pipeline(
 
     # ==== Phase 1: Generate columns (Flash) ====
     if resume_columns:
-        # Resuming a paused task â€” reuse columns from checkpoint
+        # Resuming a paused task ¡ª reuse columns from checkpoint
         columns = resume_columns
         _pipeline_logger.info(
-            f"[task={task_id}] PHASE1 skipped â€” resuming with {len(columns)} "
+            f"[task={task_id}] PHASE1 skipped ¡ª resuming with {len(columns)} "
             f"columns from checkpoint: {columns}"
         )
     else:
         update_task_status(task_id, 'generating_columns', 5,
-                           f'æ­£åœ¨ç”Ÿæˆåˆ†ææ¡†æ¶ï¼ˆ{total} ä¸ªä¸“åˆ©ï¼‰...')
+                           f'ÕıÔÚÉú³É·ÖÎö¿ò¼Ü£¨{total} ¸ö×¨Àû£©...')
         _pipeline_logger.info(
-            f"[task={task_id}] PHASE1 generate_table_columns â€” "
+            f"[task={task_id}] PHASE1 generate_table_columns ¡ª "
             f"query={params['query'][:100]}, patent_count={total}, "
             f"provider={flash_provider.model if hasattr(flash_provider, 'model') else 'flash'}"
         )
@@ -752,24 +759,24 @@ async def _run_pipeline(
             provider=flash_provider,
         )
         _pipeline_logger.info(
-            f"[task={task_id}] PHASE1 columns_generated â€” "
+            f"[task={task_id}] PHASE1 columns_generated ¡ª "
             f"column_count={len(columns)}, columns={columns}"
         )
         update_task_status(task_id, 'generating_columns', 5,
-                           f'åˆ†æç»´åº¦ï¼š{" | ".join(columns[1:4])}...',
+                           f'·ÖÎöÎ¬¶È£º{" | ".join(columns[1:4])}...',
                            table_columns=columns)
         # Update MySQL long_tasks table after phase 1
         _update_mysql_progress(task_id, 'generating_columns', 5)
 
     # ==== Phase 2: Per-patent download -> analyze -> summarize ====
     _pipeline_logger.info(
-        f"[task={task_id}] PHASE2 START â€” pending_count={len(pending)}, "
+        f"[task={task_id}] PHASE2 START ¡ª pending_count={len(pending)}, "
         f"total={total}"
     )
     for i, patent_id in enumerate(pending):
         patent_index = len(table_rows) + 1
 
-        # â”€â”€ Pause / Stop checkpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ©¤©¤ Pause / Stop checkpoint ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
         _uid = params.get('user_id', '')
         _completed = len(table_rows)
 
@@ -785,11 +792,11 @@ async def _run_pipeline(
             return _result
 
         _result = _handle_task_pause(task_id, _uid, _completed, total, {
-            'completed': [r.get('ä¸“åˆ©å·', '') for r in table_rows if not r.get('_failed')],
+            'completed': [r.get('×¨ÀûºÅ', '') for r in table_rows if not r.get('_failed')],
             'current': patent_id,
             'pending': pending[i:],
             'completed_rows': table_rows,
-            'failed': [r.get('ä¸“åˆ©å·', '') for r in table_rows if r.get('_failed')],
+            'failed': [r.get('×¨ÀûºÅ', '') for r in table_rows if r.get('_failed')],
             'columns': columns,
         })
         if _result:
@@ -800,7 +807,7 @@ async def _run_pipeline(
             completed_before = len(table_rows)
             update_task_status(task_id, 'analyzing',
                                progress_pct(completed_before + i, total),
-                               f'æ­£åœ¨ä¸‹è½½ä¸“åˆ©æ–‡ä»¶ï¼ˆ{patent_index}/{total}ï¼‰...',
+                               f'ÕıÔÚÏÂÔØ×¨ÀûÎÄ¼ş£¨{patent_index}/{total}£©...',
                                table_rows=table_rows)
 
             # Try scene tool download first, fall back to hardcoded download
@@ -809,7 +816,7 @@ async def _run_pipeline(
             if is_file_upload_mode:
                 patent_text = patent_texts.get(patent_id, '')
                 _pipeline_logger.info(
-                    f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] â€” "
+                    f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] ¡ª "
                     f"patent_id={patent_id}, using_uploaded_text, "
                     f"text_length={len(patent_text)}"
                 )
@@ -825,7 +832,7 @@ async def _run_pipeline(
                 )
 
             _pipeline_logger.info(
-                f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] download_done â€” "
+                f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] download_done ¡ª "
                 f"patent_id={patent_id}, "
                 f"text_length={len(patent_text) if patent_text else 0}, "
                 f"binary_cached={fallback_binary is not None}, "
@@ -834,10 +841,10 @@ async def _run_pipeline(
 
             update_task_status(task_id, 'analyzing',
                                progress_pct(completed_before + i, total),
-                               f'æ­£åœ¨åˆ†æï¼ˆ{patent_index}/{total}ï¼‰ï¼š{patent_id}',
+                               f'ÕıÔÚ·ÖÎö£¨{patent_index}/{total}£©£º{patent_id}',
                                table_rows=table_rows)
 
-            # â”€â”€ Text extraction may be incomplete for short patents or
+            # ©¤©¤ Text extraction may be incomplete for short patents or
             #     scanned/image PDFs (pypdf returns little/nothing).  Threshold
             #     at 10k chars ensures we have enough text for meaningful analysis.
             #     Strategy: try vision (MiniMax-M3) first, then OCR as fallback.
@@ -852,18 +859,18 @@ async def _run_pipeline(
                     provider=pro_provider, timeout=60,
                 )
                 _pipeline_logger.info(
-                    f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] analyze_done â€” "
+                    f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] analyze_done ¡ª "
                     f"patent_id={patent_id}, row_keys={list(row.keys()) if row else 'None'}"
                 )
             else:
-                # Text insufficient â€” need binary for vision or OCR
+                # Text insufficient ¡ª need binary for vision or OCR
                 pdf_bytes = None
                 if fallback_binary is not None:
                     # Reuse binary already downloaded during text extraction
                     pdf_bytes = fallback_binary
                     _pipeline_logger.info(
                         f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
-                        f"vision_using_cached_binary â€” patent_id={patent_id}, "
+                        f"vision_using_cached_binary ¡ª patent_id={patent_id}, "
                         f"len={len(pdf_bytes)}"
                     )
                 elif is_file_upload_mode:
@@ -879,14 +886,14 @@ async def _run_pipeline(
                                 pdf_bytes = fh.read()
                             _pipeline_logger.info(
                                 f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
-                                f"file_upload_binary_read â€” patent_id={patent_id}, "
+                                f"file_upload_binary_read ¡ª patent_id={patent_id}, "
                                 f"file={ref['filename']}, "
                                 f"len={len(pdf_bytes)}"
                             )
                         except Exception as e:
                             _pipeline_logger.warning(
                                 f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
-                                f"file_upload_binary_read_failed â€” patent_id={patent_id}, "
+                                f"file_upload_binary_read_failed ¡ª patent_id={patent_id}, "
                                 f"error={e}"
                             )
                 elif params.get('patent_source') == 'uspto':
@@ -897,7 +904,7 @@ async def _run_pipeline(
                     row = build_failed_row(patent_id,
                         "PDF text extraction failed and could not download binary")
                 elif want_vision:
-                    # Path A: MiniMax-M3 vision â†’ OCR fallback
+                    # Path A: MiniMax-M3 vision ¡ú OCR fallback
                     from sources.long_task.patent_analyzer import analyze_patent_with_vision
                     row = await analyze_patent_with_vision(
                         pdf_bytes=pdf_bytes, patent_id=patent_id,
@@ -907,7 +914,7 @@ async def _run_pipeline(
                     if row.get('_failed'):
                         _pipeline_logger.info(
                             f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
-                            f"vision_failed_fallback_to_ocr â€” patent_id={patent_id}"
+                            f"vision_failed_fallback_to_ocr ¡ª patent_id={patent_id}"
                         )
                         ocr_text = _ocr_from_pdf_reader(pdf_bytes)
                         if ocr_text and len(ocr_text) >= 1000:
@@ -917,10 +924,10 @@ async def _run_pipeline(
                                 provider=pro_provider, timeout=60,
                             )
                 else:
-                    # Path B: Vision disabled â€” straight to OCR
+                    # Path B: Vision disabled ¡ª straight to OCR
                     _pipeline_logger.info(
                         f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
-                        f"vision_disabled_ocr â€” patent_id={patent_id}"
+                        f"vision_disabled_ocr ¡ª patent_id={patent_id}"
                     )
                     ocr_text = _ocr_from_pdf_reader(pdf_bytes)
                     if ocr_text and len(ocr_text) >= 1000:
@@ -938,37 +945,37 @@ async def _run_pipeline(
                 provider=pro_provider,
             )
             _pipeline_logger.info(
-                f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] summary_done â€” "
+                f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] summary_done ¡ª "
                 f"patent_id={patent_id}, "
                 f"summary_length={len(row.get('_summary', '')) if row.get('_summary') else 0}"
             )
 
         except Exception as e:
             _pipeline_logger.error(
-                f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] FAILED â€” "
+                f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] FAILED ¡ª "
                 f"patent_id={patent_id}, error={e}"
             )
             row = build_failed_row(patent_id, str(e))
 
         table_rows.append(row)
         _pipeline_logger.info(
-            f"[task={task_id}] PHASE2 table_updated â€” "
+            f"[task={task_id}] PHASE2 table_updated ¡ª "
             f"completed={len(table_rows)}/{total}, "
             f"successful={len([r for r in table_rows if not r.get('_failed')])}, "
             f"failed={len([r for r in table_rows if r.get('_failed')])}"
         )
         save_checkpoint(task_id, {
-            'completed': [r.get('ä¸“åˆ©å·', patent_id) for r in table_rows if not r.get('_failed')],
+            'completed': [r.get('×¨ÀûºÅ', patent_id) for r in table_rows if not r.get('_failed')],
             'current': patent_id,
             'pending': pending[i+1:],
             'completed_rows': table_rows,
-            'failed': [r.get('ä¸“åˆ©å·', patent_id) for r in table_rows if r.get('_failed')],
+            'failed': [r.get('×¨ÀûºÅ', patent_id) for r in table_rows if r.get('_failed')],
             'columns': columns,
         })
 
         update_task_status(task_id, 'analyzing',
                            progress_pct(completed_before + i + 1, total),
-                           f'å·²å®Œæˆ {len(table_rows)}/{total} ä¸ªä¸“åˆ©åˆ†æ',
+                           f'ÒÑÍê³É {len(table_rows)}/{total} ¸ö×¨Àû·ÖÎö',
                            table_rows=table_rows)
     # Clean up temp upload directory after Phase 2 (vision fallback may have read files)
     if patent_file_refs:
@@ -977,20 +984,20 @@ async def _run_pipeline(
         try:
             _shutil.rmtree(upload_dir, ignore_errors=True)
             _pipeline_logger.info(
-                f"[task={task_id}] FILE_CLEANUP â€” removed {upload_dir}"
+                f"[task={task_id}] FILE_CLEANUP ¡ª removed {upload_dir}"
             )
         except Exception:
             pass
     # Update MySQL long_tasks table after phase 2
     _pipeline_logger.info(
-        f"[task={task_id}] PHASE2 COMPLETE â€” "
+        f"[task={task_id}] PHASE2 COMPLETE ¡ª "
         f"total_rows={len(table_rows)}, table_columns={columns}"
     )
     _update_mysql_progress(task_id, 'analyzing', 75)
 
     # ==== Phase 3: Generate report (Pro, dynamic) ====
     _pipeline_logger.info(
-        f"[task={task_id}] PHASE3 generate_report â€” "
+        f"[task={task_id}] PHASE3 generate_report ¡ª "
         f"columns={columns}, table_rows_count={len(table_rows)}, "
         f"provider={pro_provider.model if hasattr(pro_provider, 'model') else 'pro'}"
     )
@@ -998,9 +1005,9 @@ async def _run_pipeline(
     from sources.long_task.status_manager import ThrottledSummaryUpdater
     batch_lang = params.get('lang', 'zh')
     summary_updater = ThrottledSummaryUpdater(
-        task_id, progress=76, step_msg='æ­£åœ¨æ’°å†™æ‰§è¡Œæ‘˜è¦...',
+        task_id, progress=76, step_msg='ÕıÔÚ×«Ğ´Ö´ĞĞÕªÒª...',
     )
-    report_title = 'ä¸“åˆ©åˆ†ææŠ¥å‘Š' if batch_lang == 'zh' else 'Patent Analysis Report'
+    report_title = '×¨Àû·ÖÎö±¨¸æ' if batch_lang == 'zh' else 'Patent Analysis Report'
 
     def _assemble_report(
         exec_summary: str | None,
@@ -1010,21 +1017,21 @@ async def _run_pipeline(
     ) -> str:
         parts = [f"# {report_title}\n\n"]
         if exec_summary:
-            exec_heading = 'æ‰§è¡Œæ‘˜è¦' if batch_lang == 'zh' else 'Executive Summary'
+            exec_heading = 'Ö´ĞĞÕªÒª' if batch_lang == 'zh' else 'Executive Summary'
             parts.append(f"## {exec_heading}\n\n{exec_summary}\n\n")
         parts.extend(completed_parts)
         if current_heading and current_text:
             parts.append(f"## {current_heading}\n\n{current_text}")
         return "".join(parts)
 
-    # â”€â”€ Executive Summary â”€â”€
+    # ©¤©¤ Executive Summary ©¤©¤
     update_task_status(task_id, 'generating_report', 76,
-                       'æ­£åœ¨æ’°å†™æ‰§è¡Œæ‘˜è¦...')
+                       'ÕıÔÚ×«Ğ´Ö´ĞĞÕªÒª...')
 
     def _exec_chunk(partial: str) -> None:
         summary_updater.push(
             _assemble_report(partial, []),
-            step_msg='æ­£åœ¨æ’°å†™æ‰§è¡Œæ‘˜è¦...',
+            step_msg='ÕıÔÚ×«Ğ´Ö´ĞĞÕªÒª...',
         )
 
     try:
@@ -1037,24 +1044,24 @@ async def _run_pipeline(
             on_chunk=_exec_chunk,
         )
         _pipeline_logger.info(
-            f"[task={task_id}] PHASE3 exec_summary â€” "
+            f"[task={task_id}] PHASE3 exec_summary ¡ª "
             f"length={len(exec_summary)}"
         )
         summary_updater.push(
             _assemble_report(exec_summary, []),
             progress=78,
-            step_msg='æ­£åœ¨æ’°å†™æ‰§è¡Œæ‘˜è¦...',
+            step_msg='ÕıÔÚ×«Ğ´Ö´ĞĞÕªÒª...',
             force=True,
         )
     except Exception as e:
         _pipeline_logger.error(
-            f"[task={task_id}] PHASE3 exec_summary FAILED â€” {e}"
+            f"[task={task_id}] PHASE3 exec_summary FAILED ¡ª {e}"
         )
         exec_summary = None
 
-    # â”€â”€ Outline â”€â”€
+    # ©¤©¤ Outline ©¤©¤
     update_task_status(task_id, 'generating_report', 80,
-                       'æ­£åœ¨è§„åˆ’æŠ¥å‘Šç»“æ„...')
+                       'ÕıÔÚ¹æ»®±¨¸æ½á¹¹...')
     try:
         outline = await generate_report_outline(
             query=params['query'], columns=columns,
@@ -1063,25 +1070,25 @@ async def _run_pipeline(
         )
     except Exception as e:
         _pipeline_logger.error(
-            f"[task={task_id}] PHASE3 outline FAILED â€” {e}, falling back to default"
+            f"[task={task_id}] PHASE3 outline FAILED ¡ª {e}, falling back to default"
         )
         outline = {
-            'title': 'ä¸“åˆ©åˆ†ææŠ¥å‘Š',
-            'sections': [{'heading': 'åˆ†æç»“æœ', 'description': ''}],
+            'title': '×¨Àû·ÖÎö±¨¸æ',
+            'sections': [{'heading': '·ÖÎö½á¹û', 'description': ''}],
         }
     report_title = outline.get('title', report_title)
     _pipeline_logger.info(
-        f"[task={task_id}] PHASE3 outline â€” "
+        f"[task={task_id}] PHASE3 outline ¡ª "
         f"title={outline.get('title', '')}, "
         f"sections_count={len(outline.get('sections', []))}, "
         f"sections={[s.get('heading', '') for s in outline.get('sections', [])]}"
     )
 
     report_parts = []
-    sections = outline.get('sections', [{'heading': 'åˆ†æç»“æœ', 'description': ''}])
+    sections = outline.get('sections', [{'heading': '·ÖÎö½á¹û', 'description': ''}])
     for idx, section in enumerate(sections):
         sec_pct = 80 + int((idx + 1) / len(sections) * 10)
-        step_msg = f'æ­£åœ¨æ’°å†™ï¼š{section["heading"]}'
+        step_msg = f'ÕıÔÚ×«Ğ´£º{section["heading"]}'
         update_task_status(task_id, 'generating_report', sec_pct, step_msg)
         summary_updater.progress = sec_pct
         summary_updater.step_msg = step_msg
@@ -1107,9 +1114,9 @@ async def _run_pipeline(
             )
         except Exception as e:
             _pipeline_logger.error(
-                f"[task={task_id}] PHASE3 section[{idx+1}/{len(sections)}] FAILED â€” {e}"
+                f"[task={task_id}] PHASE3 section[{idx+1}/{len(sections)}] FAILED ¡ª {e}"
             )
-            text = f"ï¼ˆ{section['heading']} ç”Ÿæˆå¤±è´¥ï¼‰"
+            text = f"£¨{section['heading']} Éú³ÉÊ§°Ü£©"
         section_md = f"## {section['heading']}\n\n{text}"
         report_parts.append(section_md)
         summary_updater.push(
@@ -1119,27 +1126,27 @@ async def _run_pipeline(
             force=True,
         )
         _pipeline_logger.info(
-            f"[task={task_id}] PHASE3 section[{idx+1}/{len(sections)}] â€” "
+            f"[task={task_id}] PHASE3 section[{idx+1}/{len(sections)}] ¡ª "
             f"heading={section['heading']}, text_length={len(text)}"
         )
 
-    # â”€â”€ Assemble report â”€â”€
+    # ©¤©¤ Assemble report ©¤©¤
     exec_section = (
-        f"## æ‰§è¡Œæ‘˜è¦\n\n{exec_summary}\n\n"
+        f"## Ö´ĞĞÕªÒª\n\n{exec_summary}\n\n"
         if exec_summary else ""
     )
     report_text = (
-        f"# {outline.get('title', 'ä¸“åˆ©åˆ†ææŠ¥å‘Š')}\n\n"
+        f"# {outline.get('title', '×¨Àû·ÖÎö±¨¸æ')}\n\n"
         + exec_section
         + "\n\n".join(report_parts)
     )
     _pipeline_logger.info(
-        f"[task={task_id}] PHASE3 report_text â€” "
+        f"[task={task_id}] PHASE3 report_text ¡ª "
         f"total_length={len(report_text)}, sections_written={len(report_parts)}, "
         f"has_exec_summary={exec_summary is not None}"
     )
     update_task_status(task_id, 'generating_report', 90,
-                       'æŠ¥å‘Šæ’°å†™å®Œæˆ', result_summary=report_text)
+                       '±¨¸æ×«Ğ´Íê³É', result_summary=report_text)
     _update_mysql_progress(task_id, 'generating_report', 90, result_summary=report_text)
 
     # ==== Phase 4: Export files ====
@@ -1149,11 +1156,11 @@ async def _run_pipeline(
         storage = create_storage(storage_cfg)
     except Exception as e:
         _pipeline_logger.error(
-            f"[task={task_id}] PHASE4 storage_init FAILED â€” {e}, falling back to local"
+            f"[task={task_id}] PHASE4 storage_init FAILED ¡ª {e}, falling back to local"
         )
         storage = create_storage({'report_storage_backend': 'local'})
     _pipeline_logger.info(
-        f"[task={task_id}] PHASE4 export â€” "
+        f"[task={task_id}] PHASE4 export ¡ª "
         f"storage_backend={storage_cfg.get('report_storage_backend', 'local')}"
     )
 
@@ -1168,56 +1175,56 @@ async def _run_pipeline(
             local_storage = _create({'report_storage_backend': 'local'})
         return local_storage
 
-    # â”€â”€ Generate and upload DOCX â”€â”€
+    # ©¤©¤ Generate and upload DOCX ©¤©¤
     update_task_status(task_id, 'exporting', 90, _t('generating_word', batch_lang))
     docx_bytes = await export_docx_async(report_text, table_rows, columns)
     try:
         await storage.put(task_id, 'report.docx', docx_bytes)
         _pipeline_logger.info(
-            f"[task={task_id}] PHASE4 docx â€” size_bytes={len(docx_bytes)}"
+            f"[task={task_id}] PHASE4 docx ¡ª size_bytes={len(docx_bytes)}"
         )
         report_files.append({'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes)})
     except Exception as e:
         _pipeline_logger.error(
-            f"[task={task_id}] PHASE4 docx upload FAILED â€” {e}, falling back to local"
+            f"[task={task_id}] PHASE4 docx upload FAILED ¡ª {e}, falling back to local"
         )
         try:
             await _get_local_storage().put(task_id, 'report.docx', docx_bytes)
             _pipeline_logger.info(
-                f"[task={task_id}] PHASE4 docx â€” local fallback OK, size_bytes={len(docx_bytes)}"
+                f"[task={task_id}] PHASE4 docx ¡ª local fallback OK, size_bytes={len(docx_bytes)}"
             )
             report_files.append({'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes)})
         except Exception as e2:
             _pipeline_logger.error(
-                f"[task={task_id}] PHASE4 docx local fallback ALSO FAILED â€” {e2}"
+                f"[task={task_id}] PHASE4 docx local fallback ALSO FAILED ¡ª {e2}"
             )
 
-    # â”€â”€ Generate and upload PDF â”€â”€
+    # ©¤©¤ Generate and upload PDF ©¤©¤
     update_task_status(task_id, 'exporting', 95, _t('generating_pdf', batch_lang))
     pdf_bytes = await export_pdf_async(docx_bytes)
     try:
         await storage.put(task_id, 'report.pdf', pdf_bytes)
         _pipeline_logger.info(
-            f"[task={task_id}] PHASE4 pdf â€” size_bytes={len(pdf_bytes)}"
+            f"[task={task_id}] PHASE4 pdf ¡ª size_bytes={len(pdf_bytes)}"
         )
         report_files.append({'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes)})
     except Exception as e:
         _pipeline_logger.error(
-            f"[task={task_id}] PHASE4 pdf upload FAILED â€” {e}, falling back to local"
+            f"[task={task_id}] PHASE4 pdf upload FAILED ¡ª {e}, falling back to local"
         )
         try:
             await _get_local_storage().put(task_id, 'report.pdf', pdf_bytes)
             _pipeline_logger.info(
-                f"[task={task_id}] PHASE4 pdf â€” local fallback OK, size_bytes={len(pdf_bytes)}"
+                f"[task={task_id}] PHASE4 pdf ¡ª local fallback OK, size_bytes={len(pdf_bytes)}"
             )
             report_files.append({'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes)})
         except Exception as e2:
             _pipeline_logger.error(
-                f"[task={task_id}] PHASE4 pdf local fallback ALSO FAILED â€” {e2}"
+                f"[task={task_id}] PHASE4 pdf local fallback ALSO FAILED ¡ª {e2}"
             )
 
     _pipeline_logger.info(
-        f"[task={task_id}] COMPLETED â€” "
+        f"[task={task_id}] COMPLETED ¡ª "
         f"patents_analyzed={len(table_rows)}, "
         f"report_files={[f['format'] for f in report_files]}"
     )
@@ -1229,7 +1236,7 @@ async def _run_pipeline(
                     task_id=task_id, patent_count=len(table_rows),
                     patent_source=params.get('patent_source', ''))
 
-    # â”€â”€ Per-user queue: dispatch next queued task if any â”€â”€
+    # ©¤©¤ Per-user queue: dispatch next queued task if any ©¤©¤
     user_id = params.get('user_id', '')
     if user_id:
         try:
@@ -1240,18 +1247,18 @@ async def _run_pipeline(
         except Exception as e:
             import traceback
             _pipeline_logger.warning(
-                f"[task={task_id}] QUEUE_DISPATCH_FAILED â€” {type(e).__name__}: {e}"
+                f"[task={task_id}] QUEUE_DISPATCH_FAILED ¡ª {type(e).__name__}: {e}"
             )
             _pipeline_logger.warning(
-                f"[task={task_id}] QUEUE_DISPATCH_TRACEBACK â€”\n{traceback.format_exc()}"
+                f"[task={task_id}] QUEUE_DISPATCH_TRACEBACK ¡ª\n{traceback.format_exc()}"
             )
 
     return {'status': 'completed', 'task_id': task_id}
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
 # Prosecution History Analysis Task (single patent)
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
 
 
 @app.task(bind=True, max_retries=2, default_retry_delay=30, time_limit=1800, soft_time_limit=1770)
@@ -1288,7 +1295,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
     user_id = params.get('user_id', '')
 
     _pipeline_logger.info(
-        f"[task={task_id}] START â€” "
+        f"[task={task_id}] START ¡ª "
         f"patent_id={patent_id}, "
         f"query={query[:120]}, "
         f"lang={lang}, "
@@ -1301,7 +1308,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         _update_mysql_progress(task_id, 'failed', 0)
         return {'status': 'failed', 'task_id': task_id, 'error': 'No patent_id'}
 
-    # â”€â”€ Provider setup â”€â”€
+    # ©¤©¤ Provider setup ©¤©¤
     ltc = get_long_task_config()
     model_family = ltc['provider_family']
 
@@ -1336,11 +1343,11 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             server_address='', is_local=False,
         )
 
-    # â”€â”€ Run pipeline â”€â”€
+    # ©¤©¤ Run pipeline ©¤©¤
     async def _run():
-        # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        # ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
         # Phase 0: Fetch USPTO document list + classify by priority
-        # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        # ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
         update_task_status(task_id, 'preparing', 1,
                            _t('fetching_uspto', lang))
         app_number = ''.join(c for c in patent_id if c.isdigit())
@@ -1360,13 +1367,13 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             f"{app_number}/documents"
         )
         _pipeline_logger.info(
-            f"[task={task_id}] PHASE0 fetch_doc_list â€” "
+            f"[task={task_id}] PHASE0 fetch_doc_list ¡ª "
             f"patent_id={patent_id}, url={doc_list_url}"
         )
         resp = await _uspto_get_with_retry(doc_list_url, headers, timeout=20)
         if resp.status_code != 200:
             _pipeline_logger.error(
-                f"[task={task_id}] PHASE0 doc_list_failed â€” status={resp.status_code}"
+                f"[task={task_id}] PHASE0 doc_list_failed ¡ª status={resp.status_code}"
             )
             set_task_failed(task_id, f"USPTO API returned HTTP {resp.status_code}")
             _update_mysql_progress(task_id, 'failed', 0)
@@ -1381,7 +1388,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         )
         if not documents:
             if lang == 'zh':
-                msg = f"USPTOæœªè¿”å›ä¸“åˆ©ç”³è¯· {app_number} çš„ä»»ä½•æ–‡ä»¶ã€‚å¯èƒ½åŸå› ï¼šç”³è¯·å·ä¸å­˜åœ¨ã€æ— æƒè®¿é—®ã€æˆ–å°šæœªå…¬å¼€ã€‚"
+                msg = f"USPTOÎ´·µ»Ø×¨ÀûÉêÇë {app_number} µÄÈÎºÎÎÄ¼ş¡£¿ÉÄÜÔ­Òò£ºÉêÇëºÅ²»´æÔÚ¡¢ÎŞÈ¨·ÃÎÊ¡¢»òÉĞÎ´¹«¿ª¡£"
             else:
                 msg = f"USPTO returned no documents for application {app_number}. The application may not exist, may not be accessible, or may not yet be published."
             set_task_failed(task_id, msg)
@@ -1395,7 +1402,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             docs_to_download.extend(manifest.recommended)
 
         _pipeline_logger.info(
-            f"[task={task_id}] PHASE0 classified â€” "
+            f"[task={task_id}] PHASE0 classified ¡ª "
             f"total_in_bag={len(documents)}, "
             f"must_download={len(manifest.must_download)}, "
             f"recommended={len(manifest.recommended)}, "
@@ -1405,16 +1412,16 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
 
         if not docs_to_download:
             if lang == 'zh':
-                msg = "æœªæ‰¾åˆ°å¯åˆ†æçš„å®¡æŸ¥æ–‡ä»¶ï¼ˆæ—  Office Actionã€Response æˆ– Amendmentï¼‰ã€‚å¯èƒ½è¯¥ä¸“åˆ©å°šæœªè¿›å…¥å®è´¨å®¡æŸ¥é˜¶æ®µã€‚"
+                msg = "Î´ÕÒµ½¿É·ÖÎöµÄÉó²éÎÄ¼ş£¨ÎŞ Office Action¡¢Response »ò Amendment£©¡£¿ÉÄÜ¸Ã×¨ÀûÉĞÎ´½øÈëÊµÖÊÉó²é½×¶Î¡£"
             else:
                 msg = "No analyzable prosecution documents found (no Office Actions, Responses, or Amendments). The patent may not have entered substantive examination."
             set_task_failed(task_id, msg)
             _update_mysql_progress(task_id, 'failed', 0)
             return {'status': 'failed', 'task_id': task_id, 'error': msg}
 
-        # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        # ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
         # Phase 1: Generate table columns (Flash LLM)
-        # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        # ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
         from sources.long_task.prosecution_analyzer import (
             generate_table_columns,
             analyze_single_document,
@@ -1424,9 +1431,9 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         )
 
         update_task_status(task_id, 'generating_columns', 5,
-                           f'æ­£åœ¨ç”Ÿæˆåˆ†ææ¡†æ¶ï¼ˆ{len(docs_to_download)} ä¸ªå®¡æŸ¥æ–‡ä»¶ï¼‰...')
+                           f'ÕıÔÚÉú³É·ÖÎö¿ò¼Ü£¨{len(docs_to_download)} ¸öÉó²éÎÄ¼ş£©...')
         _pipeline_logger.info(
-            f"[task={task_id}] PHASE1 generate_table_columns â€” "
+            f"[task={task_id}] PHASE1 generate_table_columns ¡ª "
             f"query={query[:100]}, doc_count={len(docs_to_download)}, "
             f"provider={flash_provider.model if hasattr(flash_provider, 'model') else 'flash'}"
         )
@@ -1435,24 +1442,24 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             provider=flash_provider, lang=lang,
         )
         _pipeline_logger.info(
-            f"[task={task_id}] PHASE1 columns_generated â€” "
+            f"[task={task_id}] PHASE1 columns_generated ¡ª "
             f"column_count={len(columns)}, columns={columns}"
         )
         update_task_status(task_id, 'generating_columns', 5,
-                           f'åˆ†æç»´åº¦ï¼š{" | ".join(columns[1:4])}...',
+                           f'·ÖÎöÎ¬¶È£º{" | ".join(columns[1:4])}...',
                            table_columns=columns)
         _update_mysql_progress(task_id, 'generating_columns', 5)
 
-        # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-        # Phase 2: Per-document download â†’ analyze â†’ summarize
-        # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        # ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
+        # Phase 2: Per-document download ¡ú analyze ¡ú summarize
+        # ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
         total_dl = len(docs_to_download)
         _pipeline_logger.info(
-            f"[task={task_id}] PHASE2 START â€” "
+            f"[task={task_id}] PHASE2 START ¡ª "
             f"pending_count={total_dl}, total={total_dl}"
         )
         update_task_status(task_id, 'downloading', 5,
-                           f'æ­£åœ¨ä¸‹è½½å®¡æŸ¥æ–‡ä»¶ï¼ˆ0/{total_dl}ï¼‰...'
+                           f'ÕıÔÚÏÂÔØÉó²éÎÄ¼ş£¨0/{total_dl}£©...'
                            if lang == 'zh'
                            else f'Downloading documents (0/{total_dl})...')
 
@@ -1464,7 +1471,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         for _i, _doc in enumerate(docs_to_download):
             doc_index = _i + 1
 
-            # â”€â”€ Stop / Pause checkpoint (shared long-task helpers) â”€â”€
+            # ©¤©¤ Stop / Pause checkpoint (shared long-task helpers) ©¤©¤
             _completed = len(table_rows)
             _result = _handle_task_stop(task_id, user_id, _completed, total_dl)
             if _result:
@@ -1479,11 +1486,11 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             if _result:
                 return _result
 
-            # â”€â”€ Download â”€â”€
+            # ©¤©¤ Download ©¤©¤
             _pct = progress_pct(len(table_rows), total_dl)
             update_task_status(
                 task_id, 'downloading', _pct,
-                f'æ­£åœ¨ä¸‹è½½å®¡æŸ¥æ–‡ä»¶ï¼ˆ{doc_index}/{total_dl}ï¼‰...'
+                f'ÕıÔÚÏÂÔØÉó²éÎÄ¼ş£¨{doc_index}/{total_dl}£©...'
                 if lang == 'zh'
                 else f'Downloading document {doc_index}/{total_dl}...',
                 table_rows=table_rows,
@@ -1494,7 +1501,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
 
             # Log every document
             _pipeline_logger.info(
-                f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] download_done â€” "
+                f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] download_done ¡ª "
                 f"code={_doc.document_code}, "
                 f"fmt={_doc.file_format}, "
                 f"text_length={len(_doc.text) if _doc.text else 0}, "
@@ -1503,16 +1510,16 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                 f"desc={_doc.description[:60]}"
             )
 
-            # â”€â”€ Stop check after download â”€â”€
+            # ©¤©¤ Stop check after download ©¤©¤
             _result = _handle_task_stop(task_id, user_id, _completed, total_dl)
             if _result:
                 return _result
 
-            # â”€â”€ Vision fallback for scanned PDFs â”€â”€
+            # ©¤©¤ Vision fallback for scanned PDFs ©¤©¤
             if _doc.priority == 1 and _doc.binary and not _doc.text and vision_enabled:
                 update_task_status(
                     task_id, 'downloading', _pct,
-                    f'æ­£åœ¨OCRè¯†åˆ«ï¼ˆ{doc_index}/{total_dl}ï¼‰...'
+                    f'ÕıÔÚOCRÊ¶±ğ£¨{doc_index}/{total_dl}£©...'
                     if lang == 'zh'
                     else f'OCR processing {doc_index}/{total_dl}...',
                     table_rows=table_rows,
@@ -1524,19 +1531,19 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                     if _text and len(_text.strip()) > 50:
                         _doc.text = _text.strip()
                         _pipeline_logger.info(
-                            f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] vision_ok â€” "
+                            f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] vision_ok ¡ª "
                             f"code={_doc.document_code}, chars={len(_doc.text)}"
                         )
                 except Exception as _e:
                     _pipeline_logger.warning(
-                        f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] vision_error â€” "
+                        f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] vision_error ¡ª "
                         f"code={_doc.document_code}, error={type(_e).__name__}: {_e}"
                     )
 
-            # â”€â”€ Skip analysis if no text after download + vision â”€â”€
+            # ©¤©¤ Skip analysis if no text after download + vision ©¤©¤
             if not _doc.text or len(_doc.text.strip()) < 50:
                 _pipeline_logger.warning(
-                    f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] no_text â€” "
+                    f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] no_text ¡ª "
                     f"code={_doc.document_code}, skipping analysis"
                 )
                 row = build_failed_row(_doc.document_code, "text extraction failed", columns, lang)
@@ -1545,16 +1552,16 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                 table_rows.append(row)
                 continue
 
-            # â”€â”€ Stop check before analysis â”€â”€
+            # ©¤©¤ Stop check before analysis ©¤©¤
             _result = _handle_task_stop(task_id, user_id, _completed, total_dl)
             if _result:
                 return _result
 
-            # â”€â”€ Analyze â”€â”€
+            # ©¤©¤ Analyze ©¤©¤
             update_task_status(
                 task_id, 'analyzing',
                 progress_pct(len(table_rows), total_dl),
-                f'æ­£åœ¨åˆ†æï¼ˆ{doc_index}/{total_dl}ï¼‰ï¼š{_doc.description[:40]}'
+                f'ÕıÔÚ·ÖÎö£¨{doc_index}/{total_dl}£©£º{_doc.description[:40]}'
                 if lang == 'zh'
                 else f'Analyzing {doc_index}/{total_dl}: {_doc.description[:40]}',
                 table_rows=table_rows,
@@ -1572,24 +1579,24 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                 )
             except Exception as e:
                 _pipeline_logger.warning(
-                    f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] analyze_error â€” "
+                    f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] analyze_error ¡ª "
                     f"code={_doc.document_code}, error={type(e).__name__}: {e}"
                 )
                 row = build_failed_row(_doc.document_code, str(e), columns, lang)
                 row["_failed"] = True
 
             _pipeline_logger.info(
-                f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] analyze_done â€” "
+                f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] analyze_done ¡ª "
                 f"code={_doc.document_code}, "
                 f"row_keys={list(row.keys()) if row else 'None'}"
             )
 
-            # â”€â”€ Stop check before summary â”€â”€
+            # ©¤©¤ Stop check before summary ©¤©¤
             _result = _handle_task_stop(task_id, user_id, _completed, total_dl)
             if _result:
                 return _result
 
-            # â”€â”€ Summarize â”€â”€
+            # ©¤©¤ Summarize ©¤©¤
             try:
                 summary = await generate_document_summary(
                     doc_text=_doc.text, row=row, query=query,
@@ -1597,7 +1604,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                 )
             except Exception as e:
                 _pipeline_logger.warning(
-                    f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] summary_error â€” "
+                    f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] summary_error ¡ª "
                     f"code={_doc.document_code}: {e}"
                 )
                 summary = ""
@@ -1605,13 +1612,13 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             table_rows.append(row)
 
             _pipeline_logger.info(
-                f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] summary_done â€” "
+                f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] summary_done ¡ª "
                 f"code={_doc.document_code}, summary_chars={len(summary)}"
             )
 
         docs_with_text = [d for d in docs_to_download if d.text]
         _pipeline_logger.info(
-            f"[task={task_id}] PHASE2 COMPLETE â€” "
+            f"[task={task_id}] PHASE2 COMPLETE ¡ª "
             f"downloaded={_dl_ok}/{total_dl}, "
             f"with_text={len(docs_with_text)}/{total_dl}, "
             f"table_rows={len(table_rows)}, "
@@ -1620,23 +1627,23 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
 
         if not table_rows:
             if lang == 'zh':
-                msg = "æ‰€æœ‰å®¡æŸ¥æ–‡ä»¶å¤„ç†å¤±è´¥ã€‚æ–‡ä»¶å¯èƒ½æ˜¯æ‰«æä»¶æˆ–åŠ å¯†PDFã€‚"
+                msg = "ËùÓĞÉó²éÎÄ¼ş´¦ÀíÊ§°Ü¡£ÎÄ¼ş¿ÉÄÜÊÇÉ¨Ãè¼ş»ò¼ÓÃÜPDF¡£"
             else:
                 msg = "All prosecution documents failed processing. Files may be scanned images or encrypted PDFs."
             set_task_failed(task_id, msg)
             _update_mysql_progress(task_id, 'failed', 0)
             return {'status': 'failed', 'task_id': task_id, 'error': msg}
 
-        # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        # ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
         # Phase 3: Generate report (Pro, dynamic outline + sections)
-        # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        # ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
         _pipeline_logger.info(
-            f"[task={task_id}] PHASE3 generate_report â€” "
+            f"[task={task_id}] PHASE3 generate_report ¡ª "
             f"columns={columns}, table_rows_count={len(table_rows)}, "
             f"provider={pro_provider.model if hasattr(pro_provider, 'model') else 'pro'}"
         )
         update_task_status(task_id, 'generating_report', 80,
-                           'æ­£åœ¨æ’°å†™æ‰§è¡Œæ‘˜è¦...'
+                           'ÕıÔÚ×«Ğ´Ö´ĞĞÕªÒª...'
                            if lang == 'zh'
                            else 'Writing executive summary...')
 
@@ -1644,7 +1651,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         summary_updater = ThrottledSummaryUpdater(
             task_id,
             progress=80,
-            step_msg='æ­£åœ¨æ’°å†™æ‰§è¡Œæ‘˜è¦...' if lang == 'zh' else 'Writing executive summary...',
+            step_msg='ÕıÔÚ×«Ğ´Ö´ĞĞÕªÒª...' if lang == 'zh' else 'Writing executive summary...',
         )
 
         report_text = await gen_report(
@@ -1658,29 +1665,29 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             summary_updater=summary_updater,
         )
         _pipeline_logger.info(
-            f"[task={task_id}] PHASE3 report_generated â€” "
+            f"[task={task_id}] PHASE3 report_generated ¡ª "
             f"total_chars={len(report_text)}"
         )
         update_task_status(task_id, 'generating_report', 90,
-                           'æŠ¥å‘Šæ’°å†™å®Œæˆ' if lang == 'zh' else 'Report writing complete',
+                           '±¨¸æ×«Ğ´Íê³É' if lang == 'zh' else 'Report writing complete',
                            result_summary=report_text)
         _update_mysql_progress(task_id, 'generating_report', 90, result_summary=report_text)
 
-        # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        # ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
         # Phase 4: Export files (DOCX + PDF)
-        # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        # ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
         from sources.long_task.storage import get_storage_config
 
         storage_cfg = get_storage_config()
         _pipeline_logger.info(
-            f"[task={task_id}] PHASE4 export â€” "
+            f"[task={task_id}] PHASE4 export ¡ª "
             f"storage_backend={storage_cfg.get('report_storage_backend', 'local')}"
         )
         try:
             storage = create_storage(storage_cfg)
         except Exception as e:
             _pipeline_logger.error(
-                f"[task={task_id}] PHASE4 storage_init FAILED â€” {e}, falling back to local"
+                f"[task={task_id}] PHASE4 storage_init FAILED ¡ª {e}, falling back to local"
             )
             storage = create_storage({'report_storage_backend': 'local'})
 
@@ -1694,65 +1701,65 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                 local_storage = _create({'report_storage_backend': 'local'})
             return local_storage
 
-        # â”€â”€ DOCX (with table) â”€â”€
+        # ©¤©¤ DOCX (with table) ©¤©¤
         update_task_status(task_id, 'exporting', 90, _t('generating_word', lang))
         docx_bytes = await export_docx_async(report_text, table_rows, columns)
         try:
             await storage.put(task_id, 'report.docx', docx_bytes)
             _pipeline_logger.info(
-                f"[task={task_id}] PHASE4 docx â€” size_bytes={len(docx_bytes)}"
+                f"[task={task_id}] PHASE4 docx ¡ª size_bytes={len(docx_bytes)}"
             )
             report_files.append({
                 'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes),
             })
         except Exception as e:
             _pipeline_logger.error(
-                f"[task={task_id}] PHASE4 docx upload FAILED â€” {e}, falling back to local"
+                f"[task={task_id}] PHASE4 docx upload FAILED ¡ª {e}, falling back to local"
             )
             try:
                 await _get_local_storage().put(task_id, 'report.docx', docx_bytes)
                 _pipeline_logger.info(
-                    f"[task={task_id}] PHASE4 docx â€” local fallback OK, size_bytes={len(docx_bytes)}"
+                    f"[task={task_id}] PHASE4 docx ¡ª local fallback OK, size_bytes={len(docx_bytes)}"
                 )
                 report_files.append({
                     'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes),
                 })
             except Exception as e2:
                 _pipeline_logger.error(
-                    f"[task={task_id}] PHASE4 docx local fallback ALSO FAILED â€” {e2}"
+                    f"[task={task_id}] PHASE4 docx local fallback ALSO FAILED ¡ª {e2}"
                 )
 
-        # â”€â”€ PDF â”€â”€
+        # ©¤©¤ PDF ©¤©¤
         update_task_status(task_id, 'exporting', 95, _t('generating_pdf', lang))
         pdf_bytes = await export_pdf_async(docx_bytes)
         try:
             await storage.put(task_id, 'report.pdf', pdf_bytes)
             _pipeline_logger.info(
-                f"[task={task_id}] PHASE4 pdf â€” size_bytes={len(pdf_bytes)}"
+                f"[task={task_id}] PHASE4 pdf ¡ª size_bytes={len(pdf_bytes)}"
             )
             report_files.append({
                 'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes),
             })
         except Exception as e:
             _pipeline_logger.error(
-                f"[task={task_id}] PHASE4 pdf upload FAILED â€” {e}, falling back to local"
+                f"[task={task_id}] PHASE4 pdf upload FAILED ¡ª {e}, falling back to local"
             )
             try:
                 await _get_local_storage().put(task_id, 'report.pdf', pdf_bytes)
                 _pipeline_logger.info(
-                    f"[task={task_id}] PHASE4 pdf â€” local fallback OK, size_bytes={len(pdf_bytes)}"
+                    f"[task={task_id}] PHASE4 pdf ¡ª local fallback OK, size_bytes={len(pdf_bytes)}"
                 )
                 report_files.append({
                     'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes),
                 })
             except Exception as e2:
                 _pipeline_logger.error(
-                    f"[task={task_id}] PHASE4 pdf local fallback ALSO FAILED â€” {e2}"
+                    f"[task={task_id}] PHASE4 pdf local fallback ALSO FAILED ¡ª {e2}"
                 )
 
-        # â”€â”€ Complete â”€â”€
+        # ©¤©¤ Complete ©¤©¤
         _pipeline_logger.info(
-            f"[task={task_id}] COMPLETED â€” "
+            f"[task={task_id}] COMPLETED ¡ª "
             f"patent_id={patent_id}, "
             f"docs_analyzed={len(table_rows)}, "
             f"report_chars={len(report_text)}, "
@@ -1770,7 +1777,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             except Exception as e:
                 import traceback
                 _pipeline_logger.warning(
-                    f"[task={task_id}] QUEUE_DISPATCH_FAILED â€” "
+                    f"[task={task_id}] QUEUE_DISPATCH_FAILED ¡ª "
                     f"{type(e).__name__}: {e}"
                 )
 
@@ -1782,7 +1789,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
     except Exception as e:
         import traceback
         _pipeline_logger.error(
-            f"[task={task_id}] UNHANDLED_ERROR â€” "
+            f"[task={task_id}] UNHANDLED_ERROR ¡ª "
             f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
         )
         # Safety net: release user lock so queued tasks can proceed
@@ -1800,7 +1807,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         loop.close()
 
 
-# â”€â”€ Phase 0 helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ©¤©¤ Phase 0 helpers ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
 
 def _get_max_patents_for_source(
     patent_source: str,
@@ -1810,9 +1817,9 @@ def _get_max_patents_for_source(
 ) -> int:
     """Return the per-source patent count cap.
 
-    CNIPA (China) â†’ configurable (default 10).
-    USPTO (US) â†’ configurable (default 50).
-    Unknown / other â†’ conservative CNIPA limit.
+    CNIPA (China) ¡ú configurable (default 10).
+    USPTO (US) ¡ú configurable (default 50).
+    Unknown / other ¡ú conservative CNIPA limit.
     """
     if patent_source == 'uspto':
         return min(default_max, max_uspto)
@@ -1841,19 +1848,19 @@ async def _download_patent_via_scene_or_fallback(
     """Download patent text via scene tool, direct USPTO API, or fallback.
 
     Returns (text, binary):
-      - (text, None)          â€” text extracted successfully
-      - (None, binary_bytes)  â€” binary cached for vision/OCR fallback
-      - (None, None)          â€” download failed entirely
+      - (text, None)          ¡ª text extracted successfully
+      - (None, binary_bytes)  ¡ª binary cached for vision/OCR fallback
+      - (None, None)          ¡ª download failed entirely
     """
     doc_url = (id_url_map or {}).get(patent_id, '')
     patent_source = params.get('patent_source', 'cnipa')
     pid = (id_pid_map or {}).get(patent_id, '')
 
-    # â”€â”€ Step 1: Try scene tool download â”€â”€
+    # ©¤©¤ Step 1: Try scene tool download ©¤©¤
     if scene_candidates:
         from sources.long_task.scene_tools import select_tool, execute_tool
 
-        context = f'ä¸“åˆ©æ¥æº: {patent_source}\npatent_id={patent_id}'
+        context = f'×¨ÀûÀ´Ô´: {patent_source}\npatent_id={patent_id}'
         if doc_url:
             context += f', document_url={doc_url}'
         if pid:
@@ -1868,14 +1875,14 @@ async def _download_patent_via_scene_or_fallback(
         if selected:
             tool_obj = selected.get('tool')
             _pipeline_logger.info(
-                f"[download] scene_tool_selected â€” patent_id={patent_id}, "
+                f"[download] scene_tool_selected ¡ª patent_id={patent_id}, "
                 f"tool={getattr(tool_obj, 'title', '?') if tool_obj else '?'}"
             )
             result = await execute_tool(selected['tool'], selected['params'])
             from sources.long_task.scene_tools import extract_document_text
             text = extract_document_text(result)
             _pipeline_logger.info(
-                f"[download] scene_tool_result â€” patent_id={patent_id}, "
+                f"[download] scene_tool_result ¡ª patent_id={patent_id}, "
                 f"text_found={text is not None}, "
                 f"text_length={len(text) if text else 0}"
             )
@@ -1902,27 +1909,27 @@ async def _download_patent_via_scene_or_fallback(
                     f"trying direct USPTO API"
                 )
 
-    # â”€â”€ Step 2: Direct USPTO API for US patents â”€â”€
+    # ©¤©¤ Step 2: Direct USPTO API for US patents ©¤©¤
     if patent_source == 'uspto':
         uspto_text, uspto_binary = await _download_uspto_patent_direct(patent_id, flash_provider)
         if uspto_text and len(uspto_text) > 100:
             return (uspto_text, None)
         if uspto_binary is not None:
             _pipeline_logger.info(
-                f"[download] uspto_text_extraction_failed_but_binary_cached â€” "
+                f"[download] uspto_text_extraction_failed_but_binary_cached ¡ª "
                 f"patent_id={patent_id}, binary_len={len(uspto_binary)}, "
                 f"passing to vision/OCR fallback"
             )
             return (None, uspto_binary)
         _pipeline_logger.info(
-            f"[download] uspto_text_extraction_failed â€” patent_id={patent_id}, "
+            f"[download] uspto_text_extraction_failed ¡ª patent_id={patent_id}, "
             f"no binary cached, falling through to vision/OCR re-download"
         )
         return (None, None)
 
-    # â”€â”€ Step 3: Hardcoded download (CNIPA or other sources) â”€â”€
+    # ©¤©¤ Step 3: Hardcoded download (CNIPA or other sources) ©¤©¤
     _pipeline_logger.info(
-        f"[download] fallback â€” patent_id={patent_id}, "
+        f"[download] fallback ¡ª patent_id={patent_id}, "
         f"patent_source={patent_source}"
     )
     text = await download_patent_document(patent_id, patent_source)
@@ -1932,13 +1939,13 @@ async def _download_patent_via_scene_or_fallback(
 async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> tuple[str | None, bytes | None]:
     """Download USPTO patent document text directly (two-step).
 
-    Step 1: GET /api/v1/patent/applications/{appNumber}/documents â†’ document list
-    Step 2: LLM picks the specification â†’ GET its download URL â†’ return text
+    Step 1: GET /api/v1/patent/applications/{appNumber}/documents ¡ú document list
+    Step 2: LLM picks the specification ¡ú GET its download URL ¡ú return text
 
     Returns (text, binary):
-      - (text, None)          â€” text extracted successfully
-      - (None, binary_bytes)  â€” all specs failed text extraction, but binary cached
-      - (None, None)          â€” download failed entirely
+      - (text, None)          ¡ª text extracted successfully
+      - (None, binary_bytes)  ¡ª all specs failed text extraction, but binary cached
+      - (None, None)          ¡ª download failed entirely
     """
     import asyncio
     import json as _json
@@ -1951,7 +1958,7 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
         app_number = ''.join(c for c in app_number if c.isdigit())
         if not app_number or len(app_number) < 8:
             _pipeline_logger.warning(
-                f"[download] uspto_invalid_app_number â€” patent_id={patent_id}"
+                f"[download] uspto_invalid_app_number ¡ª patent_id={patent_id}"
             )
             return (None, None)
         headers = {'Accept': 'application/json'}
@@ -1965,12 +1972,12 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
             f"{app_number}/documents"
         )
         _pipeline_logger.info(
-            f"[download] uspto_step1 â€” url={doc_list_url}"
+            f"[download] uspto_step1 ¡ª url={doc_list_url}"
         )
         resp = await _uspto_get_with_retry(doc_list_url, headers, timeout=20)
         if resp.status_code != 200:
             _pipeline_logger.warning(
-                f"[download] uspto_step1_failed â€” status={resp.status_code}"
+                f"[download] uspto_step1_failed ¡ª status={resp.status_code}"
             )
             return (None, None)
 
@@ -1987,12 +1994,12 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
                 if isinstance(d, dict) and d.get('documentCode') == 'SPEC'
             )
             _pipeline_logger.info(
-                f"[download] uspto_step1_done â€” doc_count={len(documents)}, "
+                f"[download] uspto_step1_done ¡ª doc_count={len(documents)}, "
                 f"spec_count={spec_count}"
             )
         if not documents:
             _pipeline_logger.warning(
-                f"[download] uspto_no_documents â€” patent_id={app_number}"
+                f"[download] uspto_no_documents ¡ª patent_id={app_number}"
             )
             return (None, None)
 
@@ -2025,7 +2032,7 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
                 selection = await flash_provider.complete_json(
                     "You are a patent document classifier. From a list of USPTO "
                     "patent application documents, identify the specification "
-                    "(è¯´æ˜ä¹¦). The specification is typically:\n"
+                    "(ËµÃ÷Êé). The specification is typically:\n"
                     "- code = 'SPEC' or description containing 'Specification'\n"
                     "- The main detailed description of the invention\n"
                     "- NOT the abstract, claims-only sequence listing, or drawings\n"
@@ -2041,7 +2048,7 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
                     if isinstance(idx, int) and 0 <= idx < len(documents):
                         preferred = documents[idx]
                         _pipeline_logger.info(
-                            f"[download] llm_selected_spec â€” index={idx}, "
+                            f"[download] llm_selected_spec ¡ª index={idx}, "
                             f"code={preferred.get('documentCode')}, "
                             f"reason={selection.get('reason', '')[:100]}"
                         )
@@ -2054,12 +2061,12 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
 
         if not spec_docs:
             _pipeline_logger.warning(
-                f"[download] uspto_no_spec_found â€” patent_id={app_number}"
+                f"[download] uspto_no_spec_found ¡ª patent_id={app_number}"
             )
             return (None, None)
 
         _pipeline_logger.info(
-            f"[download] uspto_spec_candidates â€” count={len(spec_docs)}, "
+            f"[download] uspto_spec_candidates ¡ª count={len(spec_docs)}, "
             f"indices={[documents.index(d) for d in spec_docs]}"
         )
 
@@ -2074,7 +2081,7 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
             spec_url = get_download_url_from_doc(spec_doc)
             format_label = _guess_format_from_url(spec_url)
             _pipeline_logger.info(
-                f"[download] uspto_spec[{attempt+1}/{len(spec_docs)}] â€” "
+                f"[download] uspto_spec[{attempt+1}/{len(spec_docs)}] ¡ª "
                 f"code={spec_code}, format={format_label}, "
                 f"url={spec_url[:100]}"
             )
@@ -2085,7 +2092,7 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
             chars = len(text.strip()) if text else 0
             if chars > 200:
                 _pipeline_logger.info(
-                    f"[download] uspto_spec[{attempt+1}] ok â€” "
+                    f"[download] uspto_spec[{attempt+1}] ok ¡ª "
                     f"format={format_label}, chars={chars}"
                 )
                 all_parts.append(text.strip())
@@ -2098,37 +2105,37 @@ async def _download_uspto_patent_direct(patent_id: str, flash_provider=None) -> 
                     first_binary_fallback = binary
                     _pipeline_logger.info(
                         f"[download] uspto_spec[{attempt+1}] binary_cached "
-                        f"for vision fallback â€” len={len(binary)}"
+                        f"for vision fallback ¡ª len={len(binary)}"
                     )
 
         if all_parts:
             combined = "\n\n".join(all_parts)
             _pipeline_logger.info(
-                f"[download] uspto_all_specs_done â€” "
+                f"[download] uspto_all_specs_done ¡ª "
                 f"parts={len(all_parts)}, total_chars={len(combined)}"
             )
             return (combined, None)
 
         if first_binary_fallback is not None:
             _pipeline_logger.info(
-                f"[download] uspto_all_text_failed_but_binary_cached â€” "
+                f"[download] uspto_all_text_failed_but_binary_cached ¡ª "
                 f"patent_id={app_number}, binary_len={len(first_binary_fallback)}"
             )
             return (None, first_binary_fallback)
 
         _pipeline_logger.warning(
-            f"[download] uspto_all_specs_failed â€” patent_id={app_number}, "
+            f"[download] uspto_all_specs_failed ¡ª patent_id={app_number}, "
             f"tried={len(spec_docs)}"
         )
         return (None, None)
     except Exception as e:
         _pipeline_logger.warning(
-            f"[download] uspto_direct_error â€” patent_id={patent_id}, error={e}"
+            f"[download] uspto_direct_error ¡ª patent_id={patent_id}, error={e}"
         )
         return (None, None)
 
 
-# â”€â”€ Vision extraction for scanned prosecution documents â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ©¤©¤ Vision extraction for scanned prosecution documents ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
 
 
 async def _extract_text_via_vision(
@@ -2156,7 +2163,7 @@ async def _extract_text_via_vision(
         import asyncio
         from sources.long_task.patent_analyzer import _pdf_to_base64_images
 
-        # Run CPU-bound PDFâ†’image conversion in thread to avoid blocking event loop
+        # Run CPU-bound PDF¡úimage conversion in thread to avoid blocking event loop
         loop = asyncio.get_running_loop()
         images = await loop.run_in_executor(
             None, _pdf_to_base64_images, pdf_bytes,
@@ -2166,12 +2173,12 @@ async def _extract_text_via_vision(
             images = images[:max_pages]
         if not images:
             _pipeline_logger.warning(
-                f"[vision] no_images â€” desc={doc_description[:60]}"
+                f"[vision] no_images ¡ª desc={doc_description[:60]}"
             )
             return None
 
         _pipeline_logger.info(
-            f"[vision] processing â€” desc={doc_description[:60]}, "
+            f"[vision] processing ¡ª desc={doc_description[:60]}, "
             f"pages={len(images)}"
         )
 
@@ -2180,7 +2187,7 @@ async def _extract_text_via_vision(
 
         system_prompt = (
             "You are an OCR assistant. Extract ALL text from these patent "
-            "prosecution document page images. Output the text verbatim â€” "
+            "prosecution document page images. Output the text verbatim ¡ª "
             "do not summarize, do not add commentary. Preserve section "
             "headings, numbered paragraphs, and claim language exactly as "
             "they appear."
@@ -2214,14 +2221,14 @@ async def _extract_text_via_vision(
         )
         text = response.choices[0].message.content or ""
         _pipeline_logger.info(
-            f"[vision] done â€” desc={doc_description[:60]}, "
+            f"[vision] done ¡ª desc={doc_description[:60]}, "
             f"chars={len(text)}"
         )
         return text.strip() if text.strip() else None
 
     except Exception as e:
         _pipeline_logger.warning(
-            f"[vision] error â€” desc={doc_description[:60]}, "
+            f"[vision] error ¡ª desc={doc_description[:60]}, "
             f"error={type(e).__name__}: {e}"
         )
         return None
@@ -2247,9 +2254,9 @@ def progress_pct(completed: int, total: int) -> int:
     return 5 + min(70, int(completed / total * 70))
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
 # Shared long-task control helpers (stop / pause)
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
 
 
 def _handle_task_stop(
@@ -2268,7 +2275,7 @@ def _handle_task_stop(
         return None
 
     _pipeline_logger.info(
-        f"[task={task_id}] STOPPED_BY_USER â€” "
+        f"[task={task_id}] STOPPED_BY_USER ¡ª "
         f"completed={completed}/{total}"
     )
     set_task_cancelled(task_id)
@@ -2303,13 +2310,13 @@ def _handle_task_pause(
         return None
 
     _pipeline_logger.info(
-        f"[task={task_id}] PAUSED_BY_USER â€” "
+        f"[task={task_id}] PAUSED_BY_USER ¡ª "
         f"completed={completed}/{total}"
     )
     save_checkpoint(task_id, checkpoint)
     update_task_status(
         task_id, 'paused', progress_pct(completed, total),
-        f'å·²æš‚åœï¼ˆ{completed}/{total}ï¼‰ï¼Œç‚¹å‡»ç»§ç»­å¯æ¢å¤',
+        f'ÒÑÔİÍ££¨{completed}/{total}£©£¬µã»÷¼ÌĞø¿É»Ö¸´',
         status='paused',
     )
     if user_id:
@@ -2320,7 +2327,7 @@ def _handle_task_pause(
                 _dispatch_queued_task(next_id, user_id)
         except Exception as e:
             _pipeline_logger.warning(
-                f"[task={task_id}] PAUSE_DISPATCH_FAILED â€” {e}"
+                f"[task={task_id}] PAUSE_DISPATCH_FAILED ¡ª {e}"
             )
     return {'status': 'paused', 'task_id': task_id}
 
@@ -2368,7 +2375,7 @@ def _dispatch_queued_task(next_task_id: str, user_id: str) -> None:
                 task_id=next_task_id, params=next_params,
             )
         _pipeline_logger.info(
-            f"[queue] dispatched_after_pause â€” "
+            f"[queue] dispatched_after_pause ¡ª "
             f"next_task_id={next_task_id}, type={task_type}"
         )
     finally:
@@ -2419,8 +2426,8 @@ async def export_docx_async(report_text: str, table_rows: list, columns: list) -
 
     # Cross-platform font config for Word/WPS compatibility
     LATIN_FONT = 'Arial'
-    CJK_FONT = 'Microsoft YaHei'  # å¾®è½¯é›…é»‘, pre-installed on Windows
-    FALLBACK_FONT = 'SimSun'      # å®‹ä½“, universal fallback
+    CJK_FONT = 'Microsoft YaHei'  # Î¢ÈíÑÅºÚ, pre-installed on Windows
+    FALLBACK_FONT = 'SimSun'      # ËÎÌå, universal fallback
 
     def _set_run_font(run, bold=False, italic=False):
         """Set cross-platform fonts on a run (Latin + East Asian)."""
@@ -2504,7 +2511,7 @@ async def export_docx_async(report_text: str, table_rows: list, columns: list) -
 
             # Separator
             if line.strip() in ('---', '***', '___'):
-                doc.add_paragraph('â”€' * 60)
+                doc.add_paragraph('©¤' * 60)
                 i += 1
                 continue
 
@@ -2560,7 +2567,7 @@ async def export_docx_async(report_text: str, table_rows: list, columns: list) -
 
         # Add analysis table at the end
         if table_rows and columns:
-            h = doc.add_heading('åˆ†ææ•°æ®è¡¨', level=2)
+            h = doc.add_heading('·ÖÎöÊı¾İ±í', level=2)
             _set_heading_font(h)
             tbl = doc.add_table(rows=1, cols=len(columns))
             tbl.style = 'Table Grid'
@@ -2620,7 +2627,7 @@ tr:nth-child(even){{background:#fafafa;}}
 <body>{text_html}{rows_html}</body></html>"""
 
 
-# â”€â”€ USPTO download helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ©¤©¤ USPTO download helpers ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
 
 import re as _re
 
@@ -2663,7 +2670,7 @@ async def _uspto_get_with_retry(url: str, headers: dict, timeout: int = 30):
             return resp
         last_status = resp.status_code
         _pipeline_logger.info(
-            f"[download] uspto_429_retry â€” attempt={attempt+1}/10, "
+            f"[download] uspto_429_retry ¡ª attempt={attempt+1}/10, "
             f"url={url[:80]}"
         )
         await _asyncio.sleep(1)
@@ -2684,9 +2691,9 @@ async def _download_uspto_spec_with_redirect(
     redirect.  Pattern taken from uspto_download.py.
 
     Returns (text, binary):
-      - (text, None)          â€” text extracted successfully
-      - (None, binary_bytes)  â€” binary downloaded but text extraction failed
-      - (None, None)          â€” download failed entirely
+      - (text, None)          ¡ª text extracted successfully
+      - (None, binary_bytes)  ¡ª binary downloaded but text extraction failed
+      - (None, None)          ¡ª download failed entirely
     """
     import asyncio
 
@@ -2695,7 +2702,7 @@ async def _download_uspto_spec_with_redirect(
     spec_url = _get_download_url_from_doc(spec_doc)
     if not spec_url:
         _pipeline_logger.warning(
-            f"[download] uspto_spec_no_url â€” app={app_number}, "
+            f"[download] uspto_spec_no_url ¡ª app={app_number}, "
             f"spec_doc_keys={list(spec_doc.keys()) if spec_doc else 'N/A'}"
         )
         return (None, None)
@@ -2703,7 +2710,7 @@ async def _download_uspto_spec_with_redirect(
         resp = await _uspto_get_with_retry(spec_url, headers, timeout=30)
         if resp.status_code != 200:
             _pipeline_logger.warning(
-                f"[download] uspto_spec_hop{hop}_failed â€” status={resp.status_code}"
+                f"[download] uspto_spec_hop{hop}_failed ¡ª status={resp.status_code}"
             )
             return (None, None)
 
@@ -2717,7 +2724,7 @@ async def _download_uspto_spec_with_redirect(
         # If response looks like a file (not text/JSON), extract text properly
         if force_binary or (content_type and not any(t in content_type for t in ('text/', 'json', 'xml', 'html'))):
             _pipeline_logger.info(
-                f"[download] uspto_spec_binary â€” type={content_type}, "
+                f"[download] uspto_spec_binary ¡ª type={content_type}, "
                 f"len={len(resp.content)}"
             )
             extracted = _extract_text_from_binary(
@@ -2727,7 +2734,7 @@ async def _download_uspto_spec_with_redirect(
             if extracted and len(extracted) > 100:
                 return (extracted, None)
             _pipeline_logger.warning(
-                f"[download] uspto_spec_extract_empty â€” "
+                f"[download] uspto_spec_extract_empty ¡ª "
                 f"type={content_type}, len={len(resp.content)}"
             )
             return (None, resp.content)
@@ -2736,7 +2743,7 @@ async def _download_uspto_spec_with_redirect(
         stripped = content.strip()
         if not stripped:
             _pipeline_logger.warning(
-                f"[download] uspto_spec_empty â€” app={app_number}"
+                f"[download] uspto_spec_empty ¡ª app={app_number}"
             )
             return (None, None)
 
@@ -2745,21 +2752,21 @@ async def _download_uspto_spec_with_redirect(
         redirect_url = _extract_first_url(stripped)
         if redirect_url and redirect_url != spec_url:
             _pipeline_logger.info(
-                f"[download] uspto_spec_redirect â€” to={redirect_url[:120]}"
+                f"[download] uspto_spec_redirect ¡ª to={redirect_url[:120]}"
             )
             spec_url = redirect_url
             continue
 
         # No redirect: this IS the content
         _pipeline_logger.info(
-            f"[download] uspto_spec_done â€” len={len(stripped)}"
+            f"[download] uspto_spec_done ¡ª len={len(stripped)}"
         )
         return (stripped, None)
 
     return (None, None)
 
 
-# â”€â”€ Binary download for vision fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ©¤©¤ Binary download for vision fallback ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
 
 async def _download_uspto_binary_for_vision(
     patent_id: str,
@@ -2785,7 +2792,7 @@ async def _download_uspto_binary_for_vision(
         app_number = "".join(c for c in app_number if c.isdigit())
         if not app_number:
             _pipeline_logger.warning(
-                f"[vision_dl] uspto_invalid_app_number â€” patent_id={patent_id}"
+                f"[vision_dl] uspto_invalid_app_number ¡ª patent_id={patent_id}"
             )
             return None
 
@@ -2797,12 +2804,12 @@ async def _download_uspto_binary_for_vision(
         resp = await _uspto_get_with_retry(docs_url, uspto_headers, timeout=30)
         if resp.status_code != 200:
             _pipeline_logger.warning(
-                f"[vision_dl] uspto_doc_list_failed â€” status={resp.status_code}"
+                f"[vision_dl] uspto_doc_list_failed ¡ª status={resp.status_code}"
             )
             return None
         data = resp.json()
     except Exception as e:
-        _pipeline_logger.warning(f"[vision_dl] uspto_doc_list_error â€” {e}")
+        _pipeline_logger.warning(f"[vision_dl] uspto_doc_list_error ¡ª {e}")
         return None
 
     documents = data.get("documentBag", [])
@@ -2849,7 +2856,7 @@ async def _download_uspto_binary_for_vision(
                     chosen = documents[idx]
                     spec_docs = [chosen]
                     _pipeline_logger.info(
-                        f"[vision_dl] llm_selected_spec â€” index={idx}, "
+                        f"[vision_dl] llm_selected_spec ¡ª index={idx}, "
                         f"code={chosen.get('documentCode', '?')}"
                     )
             except Exception:
@@ -2857,7 +2864,7 @@ async def _download_uspto_binary_for_vision(
 
     if not spec_docs:
         _pipeline_logger.warning(
-            f"[vision_dl] uspto_no_spec â€” patent_id={app_number}"
+            f"[vision_dl] uspto_no_spec ¡ª patent_id={app_number}"
         )
         return None
 
@@ -2871,7 +2878,7 @@ async def _download_uspto_binary_for_vision(
             continue
 
         _pipeline_logger.info(
-            f"[vision_dl] attempt[{attempt+1}/{len(spec_docs)}] â€” "
+            f"[vision_dl] attempt[{attempt+1}/{len(spec_docs)}] ¡ª "
             f"url={spec_url[:100]}"
         )
 
@@ -2884,7 +2891,7 @@ async def _download_uspto_binary_for_vision(
                 ct = resp.headers.get("Content-Type", "").lower()
                 if ct and not any(t in ct for t in ("text/", "json", "xml", "html")):
                     _pipeline_logger.info(
-                        f"[vision_dl] binary_downloaded â€” type={ct}, "
+                        f"[vision_dl] binary_downloaded ¡ª type={ct}, "
                         f"len={len(resp.content)}"
                     )
                     return resp.content
@@ -2898,7 +2905,7 @@ async def _download_uspto_binary_for_vision(
 
                 break
             except Exception as e:
-                _pipeline_logger.warning(f"[vision_dl] hop{hop}_error â€” {e}")
+                _pipeline_logger.warning(f"[vision_dl] hop{hop}_error ¡ª {e}")
                 break
 
     return None
