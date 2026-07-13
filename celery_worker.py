@@ -1,182 +1,12 @@
-"""Celery worker entry point for long-running patent analysis tasks."""
-
-import asyncio
-import json
-import os
-import sys
-
-# Ensure the project root is on sys.path so `sources.*` imports work
-# both under docker-compose (volume mount at /app) and bare Docker runs.
-_project_root = os.path.dirname(os.path.abspath(__file__))
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
-
-from celery import Celery
-from sources.logger import Logger
-from sources.analytics import track_event
-
-_pipeline_logger = Logger("long_task_pipeline.log")
-
-REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
-REDIS_PORT = int(os.getenv('REDIS_PORT', '6379'))
-REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
-
-app = Celery('patent_tasks', broker=REDIS_URL, backend=REDIS_URL)
-
-app.conf.update(
-    task_serializer='json',
-    result_serializer='json',
-    accept_content=['json'],
-    task_track_started=True,
-    task_acks_late=True,
-    task_reject_on_worker_lost=True,
-    worker_prefetch_multiplier=1,
-    broker_connection_retry_on_startup=True,
-    broker_transport_options={
-        # After a worker dies HARD (kill -9 / power loss), unacked tasks
-        # become visible to other workers after this many seconds.
-        #
-        # MUST be >= time_limit (3600 s) to prevent dual execution.
-        # With task_acks_late=True, the task is NOT acknowledged until it
-        # completes.  If visibility_timeout < actual runtime, Redis will
-        # redeliver the task to another worker while the first worker is
-        # still running �� causing TWO workers to execute the same task.
-        #
-        # Graceful shutdown (docker stop / SIGTERM) is handled by
-        # worker_shutdown_timeout + stop_grace_period �� the worker
-        # rejects unacked tasks within 25 s, so they return to the
-        # queue immediately.  visibility_timeout is only for hard crashes.
-        'visibility_timeout': 7200,
-    },
-    # Allow running tasks enough time to reject cleanly during warm shutdown
-    # before Docker sends SIGKILL.
-    worker_shutdown_timeout=25,
-)
-
-# ���� Status message translations ����
-_STATUS_MSGS = {
-    "zh": {
-        "preparing": "����׼��ר��������{total} ��ר����...",
-        "extracting_file": "���ڽ����ϴ��ļ���{current}/{total}��...",
-        "extracting_by_name": "���ڽ�����{name}��{current}/{total}��...",
-        "ocr_page": "OCRʶ��{name}��{current}/{total}ҳ��...",
-        "searching": "�������� {focus} �����ר����USPTO��...",
-        "searching_page": "�������� {focus} �����ר������{page}ҳ��...",
-        "searching_resolve": "���ڻ�ȡ��{page}ҳר�����飨{resolved}/{on_page}��...",
-        "analyzing": "���ڷ����� {current}/{total} ��ר��...",
-        "analyzing_progress": "��������: {current}/{total}",
-        "generating_word": "�������� Word �ļ�...",
-        "generating_pdf": "���ڴ� Word ���� PDF �ļ�...",
-        "fetching_uspto": "���ڻ�ȡUSPTO�ļ��б�...",
-    },
-    "en": {
-        "preparing": "Preparing patent analysis ({total} patents)...",
-        "extracting_file": "Parsing uploaded files ({current}/{total})...",
-        "extracting_by_name": "Parsing: {name} ({current}/{total})...",
-        "ocr_page": "OCR: {name} (page {current}/{total})...",
-        "searching": "Searching {focus} patents (USPTO)...",
-        "searching_page": "Searching {focus} patents (page {page})...",
-        "searching_resolve": "Fetching patent details page {page} ({resolved}/{on_page})...",
-        "analyzing": "Analyzing patent {current}/{total}...",
-        "analyzing_progress": "Analysis progress: {current}/{total}",
-        "generating_word": "Generating Word document...",
-        "generating_pdf": "Converting DOCX to PDF...",
-        "fetching_uspto": "Fetching USPTO file list...",
-    },
-}
-
-def _t(key, lang="zh", **kwargs):
-    msgs = _STATUS_MSGS.get(lang, _STATUS_MSGS["zh"])
-    msg = msgs.get(key, key)
-    return msg.format(**kwargs) if kwargs else msg
-
-
-@app.task(bind=True, max_retries=3, default_retry_delay=30, time_limit=3600, soft_time_limit=3540)
-def execute_patent_analysis(self, task_id: str, params: dict):
-    """Batch patent analysis -- 4-phase serial pipeline with checkpointing."""
-    retry_count = self.request.retries
-    _pipeline_logger.info(
-        f"[task={task_id}] START �� "
-        f"query={params.get('query', '')[:120]}, "
-        f"patent_source={params.get('patent_source', 'cnipa')}, "
-        f"session_id={params.get('session_id', '')}, "
-        f"scene_id={params.get('scene_id', '')}, "
-        f"retry={retry_count}/{self.max_retries}"
-    )
-    # Belt-and-suspenders: if Celery's retry tracking is broken, hard-stop here
-    if retry_count >= self.max_retries:
-        _pipeline_logger.error(
-            f"[task={task_id}] HARD_STOP �� retry_count={retry_count} >= {self.max_retries}"
-        )
-        user_id = params.get('user_id', '')
-        if user_id:
-            from sources.long_task.user_queue import complete_user_task
-            try:
-                complete_user_task(str(user_id), task_id)
-            except Exception:
-                pass
-        return {'status': 'failed', 'task_id': task_id,
-                'error': f'Max retries ({self.max_retries}) exceeded'}
-    from sources.long_task.status_manager import (
-        update_task_status, set_task_completed, set_task_failed,
-        save_checkpoint, load_checkpoint,
-    )
-    from sources.long_task.config import (
-        get_long_task_config,
-        DEFAULT_VISION_PROVIDER,
-        DEFAULT_VISION_MODEL,
-    )
-    from sources.long_task.patent_analyzer import (
-        generate_table_columns, download_patent_document,
-        analyze_single_patent, generate_patent_summary, build_failed_row,
-    )
-    from sources.long_task.report_generator import (
-        generate_report_outline, generate_report_section,
-        generate_executive_summary,
-    )
-    from sources.long_task.storage import create_storage
-    from sources.llm_provider import Provider
-
-    ltc = get_long_task_config()
-    model_family = ltc['provider_family']
-    max_patents = ltc['max_patents']
-    max_patents_cnipa = ltc.get('max_patents_cnipa', 10)
-    max_patents_uspto = ltc.get('max_patents_uspto', 50)
-    vision_enabled = ltc.get('vision_enabled', True)
-
-    # ---- Input dedup + source-based truncation ----
-    patent_ids = sorted(set(params.get('patent_ids', [])))
-    # Auto-detect USPTO: pure 8-digit numbers are USPTO application IDs
-    if patent_ids and params.get('patent_source', '') != 'uspto':
-        all_uspto = all(
-            pid.isdigit() and len(pid) == 8 for pid in patent_ids
-        )
-        if all_uspto:
-            params['patent_source'] = 'uspto'
-            _pipeline_logger.info(
-                f"[task={task_id}] CONFIG auto_detect_uspto �� "
-                f"all {len(patent_ids)} IDs are 8-digit, "
-                f"overriding patent_source to 'uspto'"
-            )
-    source_max = _get_max_patents_for_source(
-        params.get('patent_source', ''), max_patents,
-        max_patents_cnipa, max_patents_uspto,
-    )
-    patent_ids = patent_ids[:source_max]
-    total = len(patent_ids)
-
-    _pipeline_logger.info(
-        f"[task={task_id}] CONFIG �� "
-        f"model_family={model_family}, max_patents={source_max}, "
-        f"patent_ids_count={len(patent_ids)}, "
-        f"patent_ids={patent_ids[:10]}{'...' if len(patent_ids) > 10 else ''}"
-    )
-
-    # ���� Immediate progress update so frontend shows feedback right away ����
-    _pipeline_logger.info(f'[task={task_id}] PRE_STATUS_UPDATE �� writing preparing status to Redis')
+# ── Immediate progress update so frontend shows feedback right away ──
+    _pipeline_logger.info(f\x27[task={task_id}] PRE_STATUS_UPDATE — writing preparing status to Redis\x27)
     try:
-        update_task_status(task_id, 'preparing', 1,
-                           _t('preparing', batch_lang, total=total))
+        update_task_status(task_id, \x27preparing\x27, 1,
+                           _t(\x27preparing\x27, batch_lang, total=total))
+        _pipeline_logger.info(f\x27[task={task_id}] POST_STATUS_UPDATE — Redis write ok\x27)
+    except Exception as e:
+        _pipeline_logger.error(f\x27[task={task_id}] STATUS_UPDATE_FAILED — Redis write error: {e}\x27)
+        _pipeline_logger.info(f\x27[task={task_id}] CONTINUING_WITHOUT_REDIS — pipeline proceeding despite status update failure\x27)
         _pipeline_logger.info(f'[task={task_id}] POST_STATUS_UPDATE �� Redis write ok')
     except Exception as e:
         _pipeline_logger.error(f'[task={task_id}] STATUS_UPDATE_FAILED �� Redis write error: {e}')
@@ -455,7 +285,14 @@ async def _run_pipeline(
         from sources.long_task.scene_tools import get_scene_knowledge_tools
         try:
             try:
+            try:
             scene_candidates = get_scene_knowledge_tools(scene_id)
+        except Exception as e:
+            _pipeline_logger.warning(
+                f\x27[task={task_id}] PHASE0 scene_tools_failed — \x27
+                f\x27scene_id={scene_id}, error={e}\x27
+            )
+            scene_candidates = None
         except Exception as e:
             _pipeline_logger.warning(
                 f'[task={task_id}] PHASE0 scene_tools_failed — '
