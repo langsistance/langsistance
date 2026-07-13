@@ -173,8 +173,14 @@ def execute_patent_analysis(self, task_id: str, params: dict):
     )
 
     # ©¤©¤ Immediate progress update so frontend shows feedback right away ©¤©¤
-    update_task_status(task_id, 'preparing', 1,
-                       _t('preparing', batch_lang, total=total))
+    _pipeline_logger.info(f'[task={task_id}] PRE_STATUS_UPDATE ¡ª writing preparing status to Redis')
+    try:
+        update_task_status(task_id, 'preparing', 1,
+                           _t('preparing', batch_lang, total=total))
+        _pipeline_logger.info(f'[task={task_id}] POST_STATUS_UPDATE ¡ª Redis write ok')
+    except Exception as e:
+        _pipeline_logger.error(f'[task={task_id}] STATUS_UPDATE_FAILED ¡ª Redis write error: {e}')
+        _pipeline_logger.info(f'[task={task_id}] CONTINUING_WITHOUT_REDIS ¡ª pipeline proceeding despite status update failure')
 
     # ---- Provider setup ----
     if model_family == 'minimax':
