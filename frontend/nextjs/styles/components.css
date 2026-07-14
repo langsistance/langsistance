@@ -1359,12 +1359,12 @@ input[type="checkbox"] {
 }
 
 .scene-hint-group-smart {
-  background: linear-gradient(135deg, rgba(59,130,246,0.03) 0%, rgba(139,92,246,0.02) 100%);
-  border-color: rgba(59,130,246,0.1);
+  background: linear-gradient(135deg, rgba(59,130,246,0.04) 0%, rgba(99,102,241,0.03) 100%);
+  border-color: rgba(59,130,246,0.12);
 }
 
 .scene-hint-group-smart:hover {
-  border-color: rgba(59,130,246,0.2);
+  border-color: rgba(59,130,246,0.22);
 }
 
 .scene-hint-group-deep {
@@ -1404,6 +1404,13 @@ input[type="checkbox"] {
 
 .scene-hint-group-deep .scene-hint-group-label {
   background: linear-gradient(135deg, #06b6d4 0%, #6366f1 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.scene-hint-group-smart .scene-hint-group-label {
+  background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -1449,9 +1456,9 @@ input[type="checkbox"] {
   border-bottom: none;
 }
 
-/* ── Deep Research Grouped Layout ──────────────────────────────────────────── */
+/* ── Knowledge Group Layout (shared by Smart QA & Deep Research) ──────────── */
 
-.deep-group {
+.knowledge-group {
   position: relative;
   margin-top: 6px;
   padding: 8px 12px;
@@ -1464,12 +1471,23 @@ input[type="checkbox"] {
   transition: border-color 0.3s, box-shadow 0.3s;
 }
 
-.deep-group:hover {
+.knowledge-group:hover {
   border-left-color: rgba(99,102,241,0.45);
   box-shadow: 0 0 20px rgba(6,182,212,0.08), inset 0 0 16px rgba(99,102,241,0.03);
 }
 
-.deep-group-list {
+/* Smart QA: blue accent */
+.scene-hint-group-smart .knowledge-group {
+  border-left-color: rgba(59,130,246,0.3);
+  box-shadow: 0 0 12px rgba(59,130,246,0.04), inset 0 0 12px rgba(59,130,246,0.02);
+}
+
+.scene-hint-group-smart .knowledge-group:hover {
+  border-left-color: rgba(99,102,241,0.45);
+  box-shadow: 0 0 20px rgba(59,130,246,0.08), inset 0 0 16px rgba(99,102,241,0.03);
+}
+
+.knowledge-group-list {
   list-style: none;
   padding: 0;
   margin: 0;
@@ -1478,7 +1496,7 @@ input[type="checkbox"] {
   gap: 2px;
 }
 
-.deep-group-item {
+.knowledge-group-item {
   display: flex;
   align-items: flex-start;
   gap: 8px;
@@ -1488,11 +1506,17 @@ input[type="checkbox"] {
   transition: background 0.15s;
 }
 
-.deep-group-item:hover {
+/* Deep Research: cyan hover */
+.scene-hint-group-deep .knowledge-group-item:hover {
   background: rgba(6,182,212,0.05);
 }
 
-.deep-group-item-dot {
+/* Smart QA: blue hover */
+.scene-hint-group-smart .knowledge-group-item:hover {
+  background: rgba(59,130,246,0.05);
+}
+
+.knowledge-group-item-dot {
   flex-shrink: 0;
   width: 5px;
   height: 5px;
@@ -1502,7 +1526,13 @@ input[type="checkbox"] {
   box-shadow: 0 0 4px rgba(6,182,212,0.35);
 }
 
-.deep-group-item-text {
+/* Smart QA: blue dot */
+.scene-hint-group-smart .knowledge-group-item-dot {
+  background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%);
+  box-shadow: 0 0 4px rgba(59,130,246,0.35);
+}
+
+.knowledge-group-item-text {
   font-size: 13px;
   color: var(--text-secondary);
   white-space: pre-line;

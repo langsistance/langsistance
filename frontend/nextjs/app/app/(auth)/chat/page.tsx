@@ -121,7 +121,20 @@ export default function Chat() {
       .catch(() => {})
   }, [lang])
 
-  // Group deep research items by scene name for structured display
+  // Group scene knowledge items by scene name for structured display
+  const groupedSmartQA = useMemo(() => {
+    const map = new Map<string, {name: string, desc: string}[]>()
+    for (const item of sceneSmartQA) {
+      const existing = map.get(item.name)
+      if (existing) {
+        existing.push(item)
+      } else {
+        map.set(item.name, [item])
+      }
+    }
+    return Array.from(map.entries())
+  }, [sceneSmartQA])
+
   const groupedDeepResearch = useMemo(() => {
     const map = new Map<string, {name: string, desc: string}[]>()
     for (const item of sceneDeepResearch) {
@@ -827,13 +840,18 @@ export default function Chat() {
                   <div className="scene-hint-group-header">
                     <span className="scene-hint-group-label">{t('chat.sceneSmartQA')}</span>
                   </div>
-                  <ul className="scene-hint-list">
-                    {sceneSmartQA.map((ex, i) => (
-                      <li key={i} className="scene-hint-item">
-                        {ex.desc}
-                      </li>
-                    ))}
-                  </ul>
+                  {groupedSmartQA.map(([sceneName, items]) => (
+                    <div key={sceneName} className="knowledge-group">
+                      <ul className="knowledge-group-list">
+                        {items.map((ex, i) => (
+                          <li key={i} className="knowledge-group-item">
+                            <span className="knowledge-group-item-dot" aria-hidden="true" />
+                            <span className="knowledge-group-item-text">{ex.desc}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
                 </div>
               )}
 
@@ -843,12 +861,12 @@ export default function Chat() {
                     <span className="scene-hint-group-label">{t('chat.sceneDeepResearch')}</span>
                   </div>
                   {groupedDeepResearch.map(([sceneName, items]) => (
-                    <div key={sceneName} className="deep-group">
-                      <ul className="deep-group-list">
+                    <div key={sceneName} className="knowledge-group">
+                      <ul className="knowledge-group-list">
                         {items.map((ex, i) => (
-                          <li key={i} className="deep-group-item">
-                            <span className="deep-group-item-dot" aria-hidden="true" />
-                            <span className="deep-group-item-text">{ex.desc}</span>
+                          <li key={i} className="knowledge-group-item">
+                            <span className="knowledge-group-item-dot" aria-hidden="true" />
+                            <span className="knowledge-group-item-text">{ex.desc}</span>
                           </li>
                         ))}
                       </ul>
