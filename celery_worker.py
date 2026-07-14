@@ -377,6 +377,8 @@ async def _run_pipeline(
         table_rows = []
         pending = patent_ids
 
+    batch_lang = params.get('lang', 'zh')
+
     # ---- Mode detection ----
     patent_texts = params.get('patent_texts', {}) or {}
     patent_file_refs = params.get('patent_file_refs', []) or []
@@ -1014,7 +1016,6 @@ async def _run_pipeline(
     )
 
     from sources.long_task.status_manager import ThrottledSummaryUpdater
-    batch_lang = params.get('lang', 'zh')
     summary_updater = ThrottledSummaryUpdater(
         task_id, progress=76, step_msg='正在撰写执行摘要...',
     )
