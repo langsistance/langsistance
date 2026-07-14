@@ -1646,6 +1646,7 @@ Begin your response now:
 
             on_artifacts = getattr(callback_handler, "on_artifacts", None)
             if on_artifacts:
+                _replace_uspto_download_urls_for_batch(items_for_export)
                 artifacts = build_result_artifacts(
                     items_for_export,
                     query_id=getattr(self, "_last_query_id", None),
@@ -1706,6 +1707,7 @@ Begin your response now:
 
             on_artifacts = getattr(callback_handler, "on_artifacts", None)
             if on_artifacts:
+                _replace_uspto_download_urls_for_batch(items_for_export)
                 artifacts = build_result_artifacts(
                     items_for_export,
                     query_id=getattr(self, "_last_query_id", None),
@@ -1762,6 +1764,7 @@ Begin your response now:
 
         on_artifacts = getattr(callback_handler, "on_artifacts", None)
         if on_artifacts:
+            _replace_uspto_download_urls_for_batch(items_for_export)
             artifacts = build_result_artifacts(
                 items_for_export,
                 query_id=getattr(self, "_last_query_id", None),
