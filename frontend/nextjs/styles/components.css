@@ -1359,21 +1359,21 @@ input[type="checkbox"] {
 }
 
 .scene-hint-group-smart {
-  background: linear-gradient(135deg, rgba(59,130,246,0.04) 0%, rgba(99,102,241,0.03) 100%);
-  border-color: rgba(59,130,246,0.12);
+  background: linear-gradient(135deg, rgba(16,163,127,0.04) 0%, rgba(13,143,111,0.02) 100%);
+  border-color: rgba(16,163,127,0.1);
 }
 
 .scene-hint-group-smart:hover {
-  border-color: rgba(59,130,246,0.22);
+  border-color: rgba(16,163,127,0.2);
 }
 
 .scene-hint-group-deep {
-  background: linear-gradient(135deg, rgba(6,182,212,0.04) 0%, rgba(99,102,241,0.03) 100%);
-  border-color: rgba(6,182,212,0.12);
+  background: linear-gradient(135deg, rgba(16,163,127,0.05) 0%, rgba(13,143,111,0.03) 100%);
+  border-color: rgba(16,163,127,0.12);
 }
 
 .scene-hint-group-deep:hover {
-  border-color: rgba(6,182,212,0.22);
+  border-color: rgba(16,163,127,0.22);
 }
 
 .scene-hint-group-header {
@@ -1399,21 +1399,11 @@ input[type="checkbox"] {
 }
 
 .scene-hint-group-smart .scene-hint-group-label {
-  color: #3b82f6;
+  color: #0d8f6f;
 }
 
 .scene-hint-group-deep .scene-hint-group-label {
-  background: linear-gradient(135deg, #06b6d4 0%, #6366f1 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-.scene-hint-group-smart .scene-hint-group-label {
-  background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: #10A37F;
 }
 
 .scene-hint-list {
@@ -1463,28 +1453,26 @@ input[type="checkbox"] {
   margin-top: 6px;
   padding: 8px 12px;
   border-radius: 8px;
-  background: rgba(255,255,255,0.4);
+  background: rgba(255,255,255,0.5);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-  border-left: 3px solid rgba(6,182,212,0.3);
-  box-shadow: 0 0 12px rgba(6,182,212,0.04), inset 0 0 12px rgba(6,182,212,0.02);
+  border-left: 3px solid rgba(16,163,127,0.25);
+  box-shadow: 0 0 12px rgba(16,163,127,0.04), inset 0 0 12px rgba(16,163,127,0.02);
   transition: border-color 0.3s, box-shadow 0.3s;
 }
 
 .knowledge-group:hover {
-  border-left-color: rgba(99,102,241,0.45);
-  box-shadow: 0 0 20px rgba(6,182,212,0.08), inset 0 0 16px rgba(99,102,241,0.03);
+  border-left-color: rgba(16,163,127,0.45);
+  box-shadow: 0 0 20px rgba(16,163,127,0.08), inset 0 0 16px rgba(16,163,127,0.03);
 }
 
-/* Smart QA: blue accent */
-.scene-hint-group-smart .knowledge-group {
-  border-left-color: rgba(59,130,246,0.3);
-  box-shadow: 0 0 12px rgba(59,130,246,0.04), inset 0 0 12px rgba(59,130,246,0.02);
+/* Deep Research: slightly more saturated */
+.scene-hint-group-deep .knowledge-group {
+  border-left-color: rgba(16,163,127,0.35);
 }
 
-.scene-hint-group-smart .knowledge-group:hover {
-  border-left-color: rgba(99,102,241,0.45);
-  box-shadow: 0 0 20px rgba(59,130,246,0.08), inset 0 0 16px rgba(99,102,241,0.03);
+.scene-hint-group-deep .knowledge-group:hover {
+  border-left-color: rgba(16,163,127,0.5);
 }
 
 .knowledge-group-list {
@@ -1506,14 +1494,8 @@ input[type="checkbox"] {
   transition: background 0.15s;
 }
 
-/* Deep Research: cyan hover */
-.scene-hint-group-deep .knowledge-group-item:hover {
-  background: rgba(6,182,212,0.05);
-}
-
-/* Smart QA: blue hover */
-.scene-hint-group-smart .knowledge-group-item:hover {
-  background: rgba(59,130,246,0.05);
+.knowledge-group-item:hover {
+  background: rgba(16,163,127,0.05);
 }
 
 .knowledge-group-item-dot {
@@ -1522,14 +1504,14 @@ input[type="checkbox"] {
   height: 5px;
   margin-top: 7px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #06b6d4 0%, #6366f1 100%);
-  box-shadow: 0 0 4px rgba(6,182,212,0.35);
+  background: rgba(16,163,127,0.5);
+  box-shadow: 0 0 4px rgba(16,163,127,0.25);
 }
 
-/* Smart QA: blue dot */
+/* Smart QA: slightly softer */
 .scene-hint-group-smart .knowledge-group-item-dot {
-  background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%);
-  box-shadow: 0 0 4px rgba(59,130,246,0.35);
+  background: rgba(16,163,127,0.4);
+  box-shadow: 0 0 4px rgba(16,163,127,0.2);
 }
 
 .knowledge-group-item-text {
