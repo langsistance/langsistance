@@ -1318,7 +1318,7 @@ Begin your response now:
         self._last_user_prompt = prompt
         self._last_query_id = query_id
         if callback_handler:
-            await _emit_status(callback_handler, "姝ｅ湪鍒嗘瀽鎮ㄧ殑闂...")
+            await _emit_status(callback_handler, "正在分析您的问题...")
         # Pass conversation history so the LLM routing knowledge selection
         # can understand what "杩?鏉? or "from the results above" refers to.
         conv_history = self.memory.get()
@@ -1340,7 +1340,7 @@ Begin your response now:
             if callback_handler:
                 try:
                     await asyncio.wait_for(
-                        _emit_status(callback_handler, "姝ｅ湪鍚姩鎵归噺涓撳埄鍒嗘瀽浠诲姟..."),
+                        _emit_status(callback_handler, "正在启动批量专利分析任务..."),
                         timeout=5.0,
                     )
                 except Exception:
@@ -1351,9 +1351,9 @@ Begin your response now:
         if is_workflow_knowledge(knowledge_item):
             if callback_handler:
                 await callback_handler.on_llm_new_token(
-                    f"宸插尮閰嶇粍鍚堢煡璇嗭細{knowledge_item.question}\n\n"
+                    f"已匹配组合知识：{knowledge_item.question}\n\n"
                 )
-                await _emit_status(callback_handler, "姝ｅ湪鎵ц缁勫悎鐭ヨ瘑娴佺▼...")
+                await _emit_status(callback_handler, "正在执行组合知识流程...")
             workflow_result = await WorkflowExecutor(
                 self.llm,
                 status_callback=_status_callback_for(callback_handler),
@@ -1777,7 +1777,7 @@ Begin your response now:
             workflow_result = getattr(self, "_workflow_result", None)
             if workflow_result is not None:
                 self._workflow_result = None
-                await _emit_status(callback_handler, "姝ｅ湪鏁寸悊缁撴灉...")
+                await _emit_status(callback_handler, "正在整理结果...")
                 output_mode = getattr(workflow_result, "output_mode", "last")
                 raw_items = getattr(workflow_result, "raw_items", None)
                 if output_mode == "all":
