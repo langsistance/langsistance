@@ -51,6 +51,8 @@ services:
     command: celery -A celery_worker worker --loglevel=info --concurrency=3
     working_dir: /app
     environment:
+      - PYTHONIOENCODING=utf-8
+      - LANG=C.UTF-8
       - PYTHONPATH=/app
       - REDIS_HOST=${REDIS_HOST}
       - REDIS_PORT=${REDIS_PORT}

@@ -1,6 +1,8 @@
 
 FROM --platform=linux/amd64 python:3.11.13-slim-bullseye
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONIOENCODING=utf-8
+ENV LANG=C.UTF-8
 
 RUN echo "deb http://mirrors.aliyun.com/debian/ bullseye main" > /etc/apt/sources.list && \
     echo "deb http://mirrors.aliyun.com/debian-security bullseye-security main" >> /etc/apt/sources.list && \

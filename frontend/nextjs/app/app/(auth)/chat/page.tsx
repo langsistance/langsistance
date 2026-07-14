@@ -391,7 +391,7 @@ export default function Chat() {
           if (evt && typeof evt === 'object') {
             const event = evt as Record<string, unknown>
             if (event.type === 'status') {
-              setTransientStatus(String(event.message ?? ''))
+              setTransientStatus(cleanGarbledText(String(event.message ?? '')))
               continue
             }
             if (event.type === 'artifact_start') {
