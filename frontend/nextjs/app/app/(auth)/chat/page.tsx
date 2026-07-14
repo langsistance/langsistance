@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { queryStream, queryStreamWithFiles, getUserSceneStatus, getSceneKnowledge, pollLongTaskBatchStatus, getLongTaskReportUrl, getSession, saveSessionMessages } from '@/services/api'
 import { pollRecoverLongTask } from '@/lib/longTaskRecovery'
@@ -120,6 +120,20 @@ export default function Chat() {
       })
       .catch(() => {})
   }, [lang])
+
+  // Group deep research items by scene name for structured display
+  const groupedDeepResearch = useMemo(() => {
+    const map = new Map<string, {name: string, desc: string}[]>()
+    for (const item of sceneDeepResearch) {
+      const existing = map.get(item.name)
+      if (existing) {
+        existing.push(item)
+      } else {
+        map.set(item.name, [item])
+      }
+    }
+    return Array.from(map.entries())
+  }, [sceneDeepResearch])
 
   // Load session from URL param (and resume long task polling if needed)
   const lastLoadedSidRef = useRef<string | null>(null)
@@ -826,15 +840,27 @@ export default function Chat() {
               {sceneDeepResearch.length > 0 && (
                 <div className="scene-hint-group scene-hint-group-deep">
                   <div className="scene-hint-group-header">
+                    <span className="scene-hint-group-icon">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="11" cy="11" r="8"/>
+                        <path d="m21 21-4.3-4.3"/>
+                      </svg>
+                    </span>
                     <span className="scene-hint-group-label">{t('chat.sceneDeepResearch')}</span>
                   </div>
-                  <ul className="scene-hint-list">
-                    {sceneDeepResearch.map((ex, i) => (
-                      <li key={i} className="scene-hint-item">
-                        {ex.desc}
-                      </li>
-                    ))}
-                  </ul>
+                  {groupedDeepResearch.map(([sceneName, items]) => (
+                    <div key={sceneName} className="deep-group">
+                      <div className="deep-group-tag">{sceneName}</div>
+                      <ul className="deep-group-list">
+                        {items.map((ex, i) => (
+                          <li key={i} className="deep-group-item">
+                            <span className="deep-group-item-dot" aria-hidden="true" />
+                            <span className="deep-group-item-text">{ex.desc}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
