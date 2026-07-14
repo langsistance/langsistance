@@ -840,17 +840,10 @@ export default function Chat() {
               {sceneDeepResearch.length > 0 && (
                 <div className="scene-hint-group scene-hint-group-deep">
                   <div className="scene-hint-group-header">
-                    <span className="scene-hint-group-icon">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="11" cy="11" r="8"/>
-                        <path d="m21 21-4.3-4.3"/>
-                      </svg>
-                    </span>
                     <span className="scene-hint-group-label">{t('chat.sceneDeepResearch')}</span>
                   </div>
                   {groupedDeepResearch.map(([sceneName, items]) => (
                     <div key={sceneName} className="deep-group">
-                      <div className="deep-group-tag">{sceneName}</div>
                       <ul className="deep-group-list">
                         {items.map((ex, i) => (
                           <li key={i} className="deep-group-item">
