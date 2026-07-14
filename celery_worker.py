@@ -283,6 +283,48 @@ def _update_mysql_progress(task_id: str, current_phase: str, progress: int, resu
         pass  # Non-fatal: MySQL update failure should not break the pipeline
 
 
+# ── Status message translations ──
+_STATUS_MSGS = {
+    "zh": {
+        "preparing": "正在准备专利分析（{total} 个专利）...",
+        "extracting_file": "正在解析上传文件（{current}/{total}）...",
+        "extracting_by_name": "正在解析：{name}（{current}/{total}）...",
+        "ocr_page": "OCR识别：{name}（{current}/{total}页）...",
+        "tool_select": "已发现 {count} 个场景工具，正在选择检索方案...",
+        "tool_search": "正在检索专利：{reason}",
+        "searching": "正在搜索 {focus} 的相关专利（USPTO）...",
+        "searching_page": "正在搜索 {focus} 的相关专利（第{page}页）...",
+        "searching_resolve": "正在获取第{page}页专利详情（{resolved}/{on_page}）...",
+        "analyzing": "正在分析第 {current}/{total} 个专利...",
+        "analyzing_progress": "分析进度: {current}/{total}",
+        "generating_word": "正在生成 Word 文件...",
+        "generating_pdf": "正在从 Word 生成 PDF 文件...",
+        "fetching_uspto": "正在获取USPTO文件列表...",
+    },
+    "en": {
+        "preparing": "Preparing patent analysis ({total} patents)...",
+        "extracting_file": "Parsing uploaded files ({current}/{total})...",
+        "extracting_by_name": "Parsing: {name} ({current}/{total})...",
+        "ocr_page": "OCR: {name} (page {current}/{total})...",
+        "tool_select": "Found {count} scene tools, selecting search strategy...",
+        "tool_search": "Searching patents: {reason}",
+        "searching": "Searching {focus} patents (USPTO)...",
+        "searching_page": "Searching {focus} patents (page {page})...",
+        "searching_resolve": "Fetching patent details page {page} ({resolved}/{on_page})...",
+        "analyzing": "Analyzing patent {current}/{total}...",
+        "analyzing_progress": "Analysis progress: {current}/{total}",
+        "generating_word": "Generating Word document...",
+        "generating_pdf": "Converting DOCX to PDF...",
+        "fetching_uspto": "Fetching USPTO file list...",
+    },
+}
+
+def _t(key, lang="zh", **kwargs):
+    msgs = _STATUS_MSGS.get(lang, _STATUS_MSGS["zh"])
+    msg = msgs.get(key, key)
+    return msg.format(**kwargs) if kwargs else msg
+
+
 async def _run_pipeline(
     task_id: str,
     params: dict,
@@ -973,48 +1015,6 @@ async def _run_pipeline(
 
     from sources.long_task.status_manager import ThrottledSummaryUpdater
     batch_lang = params.get('lang', 'zh')
-
-# ── Status message translations ──
-_STATUS_MSGS = {
-    "zh": {
-        "preparing": "正在准备专利分析（{total} 个专利）...",
-        "extracting_file": "正在解析上传文件（{current}/{total}）...",
-        "extracting_by_name": "正在解析：{name}（{current}/{total}）...",
-        "ocr_page": "OCR识别：{name}（{current}/{total}页）...",
-        "tool_select": "已发现 {count} 个场景工具，正在选择检索方案...",
-        "tool_search": "正在检索专利：{reason}",
-        "searching": "正在搜索 {focus} 的相关专利（USPTO）...",
-        "searching_page": "正在搜索 {focus} 的相关专利（第{page}页）...",
-        "searching_resolve": "正在获取第{page}页专利详情（{resolved}/{on_page}）...",
-        "analyzing": "正在分析第 {current}/{total} 个专利...",
-        "analyzing_progress": "分析进度: {current}/{total}",
-        "generating_word": "正在生成 Word 文件...",
-        "generating_pdf": "正在从 Word 生成 PDF 文件...",
-        "fetching_uspto": "正在获取USPTO文件列表...",
-    },
-    "en": {
-        "preparing": "Preparing patent analysis ({total} patents)...",
-        "extracting_file": "Parsing uploaded files ({current}/{total})...",
-        "extracting_by_name": "Parsing: {name} ({current}/{total})...",
-        "ocr_page": "OCR: {name} (page {current}/{total})...",
-        "tool_select": "Found {count} scene tools, selecting search strategy...",
-        "tool_search": "Searching patents: {reason}",
-        "searching": "Searching {focus} patents (USPTO)...",
-        "searching_page": "Searching {focus} patents (page {page})...",
-        "searching_resolve": "Fetching patent details page {page} ({resolved}/{on_page})...",
-        "analyzing": "Analyzing patent {current}/{total}...",
-        "analyzing_progress": "Analysis progress: {current}/{total}",
-        "generating_word": "Generating Word document...",
-        "generating_pdf": "Converting DOCX to PDF...",
-        "fetching_uspto": "Fetching USPTO file list...",
-    },
-}
-
-def _t(key, lang="zh", **kwargs):
-    msgs = _STATUS_MSGS.get(lang, _STATUS_MSGS["zh"])
-    msg = msgs.get(key, key)
-    return msg.format(**kwargs) if kwargs else msg
-
     summary_updater = ThrottledSummaryUpdater(
         task_id, progress=76, step_msg='正在撰写执行摘要...',
     )
