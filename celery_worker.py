@@ -1201,7 +1201,7 @@ async def _run_pipeline(
             f"[task={task_id}] PHASE4 docx upload FAILED — {e}, falling back to local"
         )
         try:
-            await _get_local_storage().put(task_id, 'report.docx', docx_bytes)
+            await (await _get_local_storage()).put(task_id, 'report.docx', docx_bytes)
             _pipeline_logger.info(
                 f"[task={task_id}] PHASE4 docx — local fallback OK, size_bytes={len(docx_bytes)}"
             )
@@ -1225,7 +1225,7 @@ async def _run_pipeline(
             f"[task={task_id}] PHASE4 pdf upload FAILED — {e}, falling back to local"
         )
         try:
-            await _get_local_storage().put(task_id, 'report.pdf', pdf_bytes)
+            await (await _get_local_storage()).put(task_id, 'report.pdf', pdf_bytes)
             _pipeline_logger.info(
                 f"[task={task_id}] PHASE4 pdf — local fallback OK, size_bytes={len(pdf_bytes)}"
             )
@@ -1729,7 +1729,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                 f"[task={task_id}] PHASE4 docx upload FAILED — {e}, falling back to local"
             )
             try:
-                await _get_local_storage().put(task_id, 'report.docx', docx_bytes)
+                await (await _get_local_storage()).put(task_id, 'report.docx', docx_bytes)
                 _pipeline_logger.info(
                     f"[task={task_id}] PHASE4 docx — local fallback OK, size_bytes={len(docx_bytes)}"
                 )
@@ -1757,7 +1757,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                 f"[task={task_id}] PHASE4 pdf upload FAILED — {e}, falling back to local"
             )
             try:
-                await _get_local_storage().put(task_id, 'report.pdf', pdf_bytes)
+                await (await _get_local_storage()).put(task_id, 'report.pdf', pdf_bytes)
                 _pipeline_logger.info(
                     f"[task={task_id}] PHASE4 pdf — local fallback OK, size_bytes={len(pdf_bytes)}"
                 )
@@ -2400,7 +2400,7 @@ async def export_pdf_async(docx_bytes: bytes) -> bytes:
     import tempfile
     import shutil
 
-    async def _convert():
+    def _convert():
         tmpdir = tempfile.mkdtemp(prefix='pdfconv_')
         try:
             docx_path = os.path.join(tmpdir, 'report.docx')
@@ -2561,7 +2561,7 @@ async def export_docx_async(report_text: str, table_rows: list, columns: list) -
         for run in heading.runs:
             _set_run_font(run, bold=True)
 
-    async def _sync_export():
+    def _sync_export():
         doc = Document()
 
         # Set document default fonts for cross-platform compatibility
