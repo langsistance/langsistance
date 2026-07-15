@@ -28,6 +28,7 @@ from sources.knowledge.type_utils import infer_knowledge_type
 from sources.logger import Logger
 from sources.analytics import track_event
 from sources.user.passport import verify_firebase_token, get_user_by_id
+from sources.bilingual import pick_lang
 
 logger = Logger("backend.log")
 router = APIRouter()
@@ -533,10 +534,9 @@ async def query_knowledge_records(
     limit: int = 10,
     offset: int = 0,
     push_filter: int | None = None,
+    lang: str = "",
 ):
-    """
-    查询知识记录接口
-    """
+    """查询知识记录接口"""
     # logger.info(f"Querying knowledge records for user: {userId} with query: {query}")
 
     auth_header = http_request.headers.get("Authorization")
@@ -654,12 +654,13 @@ async def query_knowledge_records(
             # 转换为KnowledgeItem对象列表
             knowledge_items = []
             tool_ids = set()  # 收集所有相关的tool_id
+            apply_lang = lang.strip() if lang else ""
             for row in results:
                 knowledge_item = KnowledgeItem(
                     id=row['id'],
                     user_id=str(row['user_id']),
-                    question=row['question'],
-                    description=row['description'],
+                    question=pick_lang(row['question'], apply_lang) if apply_lang else row['question'],
+                    description=pick_lang(row['description'], apply_lang) if apply_lang else row['description'],
                     answer=row['answer'],
                     public=row['public'],
                     model_name=row['model_name'] or "",
@@ -728,10 +729,9 @@ async def query_public_knowledge(
     limit: int = 10,
     offset: int = 0,
     push_filter: int | None = None,
+    lang: str = "",
 ):
-    """
-    查询公开知识记录接口
-    """
+    """查询公开知识记录接口"""
     logger.info(f"Querying public knowledge with query: {query}")
 
     # 参数校验
@@ -841,12 +841,13 @@ async def query_public_knowledge(
 
             # 转换为KnowledgeItem对象列表
             knowledge_items = []
+            apply_lang = lang.strip() if lang else ""
             for row in results:
                 knowledge_item = KnowledgeItem(
                     id=row['id'],
                     user_id=str(row['user_id']),
-                    question=row['question'],
-                    description=row['description'],
+                    question=pick_lang(row['question'], apply_lang) if apply_lang else row['question'],
+                    description=pick_lang(row['description'], apply_lang) if apply_lang else row['description'],
                     answer=row['answer'],
                     public=row['public'],
                     model_name=row['model_name'] or "",
@@ -1306,6 +1307,7 @@ async def query_knowledge_shares(
     limit: int = 10,
     offset: int = 0,
     push_filter: int | None = None,
+    lang: str = "",
 ):
     """
     查询用户收到的知识分享请求
@@ -1406,6 +1408,7 @@ async def query_knowledge_shares(
 
             # 组装返回数据
             knowledge_items = []
+            apply_lang = lang.strip() if lang else ""
             for share in share_results:
                 knowledge_id = share["knowledge_id"]
                 if knowledge_id in knowledge_map:
@@ -1413,8 +1416,8 @@ async def query_knowledge_shares(
                     knowledge_item = KnowledgeItem(
                         id=knowledge_data["id"],
                         user_id=user_id,
-                        question=knowledge_data["question"],
-                        description=knowledge_data["description"],
+                        question=pick_lang(knowledge_data["question"], apply_lang) if apply_lang else knowledge_data["question"],
+                        description=pick_lang(knowledge_data["description"], apply_lang) if apply_lang else knowledge_data["description"],
                         answer=knowledge_data["answer"],
                         public=knowledge_data["public"],
                         model_name=knowledge_data["model_name"] or "",
@@ -1475,6 +1478,7 @@ async def get_user_shared_knowledge(
     limit: int = 10,
     offset: int = 0,
     push_filter: int | None = None,
+    lang: str = "",
 ):
     """
     根据分享人查询知识分享记录
@@ -1574,6 +1578,7 @@ async def get_user_shared_knowledge(
 
             # 组装返回数据
             knowledge_items = []
+            apply_lang = lang.strip() if lang else ""
             for share in share_results:
                 knowledge_id = share["knowledge_id"]
                 if knowledge_id in knowledge_map:
@@ -1581,8 +1586,8 @@ async def get_user_shared_knowledge(
                     knowledge_item = KnowledgeItem(
                         id=knowledge_data["id"],
                         user_id=str(knowledge_data["user_id"]),
-                        question=knowledge_data["question"],
-                        description=knowledge_data["description"],
+                        question=pick_lang(knowledge_data["question"], apply_lang) if apply_lang else knowledge_data["question"],
+                        description=pick_lang(knowledge_data["description"], apply_lang) if apply_lang else knowledge_data["description"],
                         answer=knowledge_data["answer"],
                         public=knowledge_data["public"],
                         model_name=knowledge_data["model_name"] or "",

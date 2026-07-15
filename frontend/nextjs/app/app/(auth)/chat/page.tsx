@@ -9,6 +9,7 @@ import MarkdownMessage from '@/components/app/MarkdownMessage'
 import { useChatSession } from '@/contexts/ChatContext'
 import type { ChatMessage } from '@/contexts/ChatContext'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { pickLang } from '@/lib/bilingual'
 import {
   addAssistantArtifactChunk,
   addAssistantArtifactEnd,
@@ -105,7 +106,7 @@ export default function Chat() {
             items.forEach((item: any) => {
               const example = {
                 name: scene.name,
-                desc: item.description || item.question,
+                desc: pickLang(item.description || item.question, lang),
               }
               if (item.type === 3) {
                 deepResearch.push(example)

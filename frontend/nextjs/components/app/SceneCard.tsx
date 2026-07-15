@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useI18n } from '@/lib/app-i18n'
 import { getSceneKnowledge } from '@/services/api'
+import { pickLang } from '@/lib/bilingual'
 
 interface SceneInfo {
   id: number
@@ -77,8 +78,8 @@ export default function SceneCard({ scene, onToggle }: SceneCardProps) {
           </p>
           <ul className="scene-card-examples">
             {displayItems.map((item) => (
-              <li key={item.id} className="scene-card-example-item" title={item.question || item.description || ""}>
-                {item.question || item.description}
+              <li key={item.id} className="scene-card-example-item" title={pickLang(item.question || item.description || "", lang)}>
+                {pickLang(item.question || item.description, lang)}
               </li>
             ))}
           </ul>

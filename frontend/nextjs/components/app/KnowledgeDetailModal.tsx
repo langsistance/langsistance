@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react'
 import { useI18n } from '@/lib/app-i18n'
 import { getKnowledgeTypeBadge } from '@/lib/knowledgeTypeBadge'
+import { pickLang } from '@/lib/bilingual'
 import {
   getKnowledgeNamesByIdFromExtraInfo,
   getWorkflowInstructionsForReadOnly,
@@ -128,7 +129,7 @@ export default function KnowledgeDetailModal({
                   <textarea
                     className="form-textarea knowledge-readonly-textarea"
                     placeholder={lang === 'en' ? 'No description' : '无描述'}
-                    value={item.description || ''}
+                    value={pickLang(item.description || '', lang)}
                     readOnly
                     rows={2}
                   />
@@ -148,7 +149,7 @@ export default function KnowledgeDetailModal({
               )}
               {item.description && (
                 <div className="detail-item">
-                  <strong>{lang === 'en' ? 'Description' : '描述'}：</strong>{item.description}
+                  <strong>{lang === 'en' ? 'Description' : '描述'}：</strong>{pickLang(item.description, lang)}
                 </div>
               )}
             </div>

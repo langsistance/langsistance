@@ -18,75 +18,10 @@ from .models import (
 from sources.knowledge.knowledge import get_db_connection
 from sources.logger import Logger
 from sources.user.passport import verify_firebase_token
+from sources.bilingual import pick_lang, localize_knowledge_fields, localize_scene_fields
 
 logger = Logger("backend.log")
 router = APIRouter()
-
-
-def _pick_lang(text: str, lang: str) -> str:
-    """Parse bilingual ``zh:中文|en:English`` description and return *lang* part.
-
-    Returns the original text unchanged when no pipe separator is found
-    (backward compatible with single-language data).
-    """
-    import re
-
-    if not text:
-        return ''
-
-    # ── Step 1: split ONLY on | that is followed by zh: or en: ──────────
-    # This avoids false splits when | appears inside the content itself.
-    parts = re.split(r'\|(?=(?:zh|en):)', text)
-
-    prefix = f'{lang}:'
-    other_prefix = 'zh:' if lang == 'en' else 'en:'
-
-    # ── Step 2: look for the segment starting with the requested lang ───
-    for part in parts:
-        part = part.strip()
-        if part.startswith(prefix):
-            result = part[len(prefix):]
-
-            # ── Step 3: strip any embedded other-language marker ─────────
-            # If the data is corrupted and the other language's prefix
-            # appears without a | delimiter, truncate at that point.
-            idx = result.find(other_prefix)
-            if idx != -1:
-                result = result[:idx].rstrip()
-
-            # Also handle the case where the SAME prefix appears again
-            # (double-applied) — strip everything after any re-appearance.
-            idx2 = result.find(f'|{prefix}')
-            if idx2 != -1:
-                result = result[:idx2].rstrip()
-            idx3 = result.find(prefix)
-            if idx3 != -1:
-                # Only strip if it's a plausible embedded marker (not part
-                # of normal text — zh:/en: are unlikely in normal content)
-                result = result[:idx3].rstrip()
-
-            return result
-
-    # ── Fallback: single-language data (no | delimiter found) ─────────
-    # Strip any leading language prefix if present.
-    for pfx in ('zh:', 'en:'):
-        if text.startswith(pfx):
-            return text[len(pfx):]
-    return text
-
-
-def _localize_scene(scene_dict: dict, lang: str) -> dict:
-    """Apply bilingual parsing to scene name + description."""
-    scene_dict['name'] = _pick_lang(scene_dict.get('name', ''), lang)
-    scene_dict['description'] = _pick_lang(scene_dict.get('description', ''), lang)
-    return scene_dict
-
-
-def _localize_knowledge(item_dict: dict, lang: str) -> dict:
-    """Apply bilingual parsing to knowledge question + description."""
-    item_dict['question'] = _pick_lang(item_dict.get('question', ''), lang)
-    item_dict['description'] = _pick_lang(item_dict.get('description', ''), lang)
-    return item_dict
 
 
 @router.get("/scenes/available", response_model=SceneListResponse)
@@ -114,7 +49,7 @@ async def list_available_scenes(lang: str = Query("zh")):
                     "description": row["description"] or "",
                     "knowledge_count": row["knowledge_count"],
                 }
-                _localize_scene(scene_dict, lang)
+                localize_scene_fields(scene_dict, lang)
                 scenes.append(SceneItem(**scene_dict))
 
             return JSONResponse(
@@ -159,7 +94,7 @@ async def get_scene_knowledge(scene_id: int, lang: str = Query("zh")):
                     "description": row["description"] or "",
                     "type": row.get("type", 1),
                 }
-                _localize_knowledge(item_dict, lang)
+                localize_knowledge_fields(item_dict, lang)
                 items.append(SceneKnowledgeItem(**item_dict))
 
             return JSONResponse(
@@ -227,7 +162,7 @@ async def get_user_scenes(http_request: Request, lang: str = Query("zh")):
                     "subscribed": row["id"] in subscribed_ids,
                     "knowledge_count": row["knowledge_count"],
                 }
-                _localize_scene(scene_dict, lang)
+                localize_scene_fields(scene_dict, lang)
                 scenes.append(UserSceneStatusItem(**scene_dict))
 
             return JSONResponse(
