@@ -29,18 +29,50 @@ def _pick_lang(text: str, lang: str) -> str:
     Returns the original text unchanged when no pipe separator is found
     (backward compatible with single-language data).
     """
-    if not text or '|' not in text:
-        return text or ''
+    import re
+
+    if not text:
+        return ''
+
+    # ── Step 1: split ONLY on | that is followed by zh: or en: ──────────
+    # This avoids false splits when | appears inside the content itself.
+    parts = re.split(r'\|(?=(?:zh|en):)', text)
+
     prefix = f'{lang}:'
-    for part in text.split('|'):
+    other_prefix = 'zh:' if lang == 'en' else 'en:'
+
+    # ── Step 2: look for the segment starting with the requested lang ───
+    for part in parts:
         part = part.strip()
         if part.startswith(prefix):
-            return part[len(prefix):]
-    # Fallback: return the first segment (likely the original Chinese)
-    first = text.split('|')[0].strip()
-    if ':' in first:
-        return first.split(':', 1)[1].strip()
-    return first
+            result = part[len(prefix):]
+
+            # ── Step 3: strip any embedded other-language marker ─────────
+            # If the data is corrupted and the other language's prefix
+            # appears without a | delimiter, truncate at that point.
+            idx = result.find(other_prefix)
+            if idx != -1:
+                result = result[:idx].rstrip()
+
+            # Also handle the case where the SAME prefix appears again
+            # (double-applied) — strip everything after any re-appearance.
+            idx2 = result.find(f'|{prefix}')
+            if idx2 != -1:
+                result = result[:idx2].rstrip()
+            idx3 = result.find(prefix)
+            if idx3 != -1:
+                # Only strip if it's a plausible embedded marker (not part
+                # of normal text — zh:/en: are unlikely in normal content)
+                result = result[:idx3].rstrip()
+
+            return result
+
+    # ── Fallback: single-language data (no | delimiter found) ─────────
+    # Strip any leading language prefix if present.
+    for pfx in ('zh:', 'en:'):
+        if text.startswith(pfx):
+            return text[len(pfx):]
+    return text
 
 
 def _localize_scene(scene_dict: dict, lang: str) -> dict:
