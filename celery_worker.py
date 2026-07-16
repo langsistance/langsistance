@@ -4,6 +4,10 @@ import asyncio
 import json
 import os
 import sys
+import warnings
+
+# Suppress Celery's superuser warning in Docker (container runs as root)
+warnings.filterwarnings('ignore', message='.*running the worker with superuser privileges.*')
 
 # Ensure the project root is on sys.path so `sources.*` imports work
 # both under docker-compose (volume mount at /app) and bare Docker runs.
@@ -673,12 +677,12 @@ async def _run_pipeline(
         # previous query was a large-list summary with download-only output),
         # try to retrieve patent IDs stored from the generated Excel/CSV artifacts.
         if not patent_ids and scenario == 'conversation_refs':
-            session_id = params.get('session_id', '')
-            if session_id:
+            user_id = params.get('user_id', '')
+            if user_id:
                 try:
                     from sources.knowledge.knowledge import get_redis_connection
                     r = get_redis_connection()
-                    key = f"lt:conv:{session_id}:patent_ids"
+                    key = f"lt:conv:{user_id}:patent_ids"
                     stored = r.get(key)
                     if stored:
                         stored_ids = json.loads(stored)
@@ -1287,6 +1291,17 @@ async def _run_pipeline(
     )
     _update_mysql_progress(task_id, 'exporting', 100)
     set_task_completed(task_id, report_files)
+
+    # Store analyzed patent IDs so follow-up conversation_refs queries
+    # (e.g. "哪些是AI相关的") can find them even when the previous query
+    # was a long task rather than a general agent query with artifacts.
+    _store_long_task_patent_ids(
+        task_id=task_id,
+        table_rows=table_rows,
+        columns=columns,
+        user_id=params.get('user_id', ''),
+    )
+
     user_id_for_analytics = params.get('user_id', '')
     if user_id_for_analytics:
         track_event("long_task:complete", user_id=user_id_for_analytics,
@@ -2966,3 +2981,53 @@ async def _download_uspto_binary_for_vision(
                 break
 
     return None
+
+
+# ── Conversation patent ID storage (for follow-up conversation_refs queries) ──────
+
+_CONV_PATENT_IDS_TTL = 3600  # 1 hour
+
+
+def _store_long_task_patent_ids(
+    task_id: str,
+    table_rows: list,
+    columns: list,
+    user_id: str,
+) -> None:
+    """Store patent IDs after a long task completes.
+
+    Enables follow-up conversation_refs queries (e.g. "哪些是AI相关的")
+    to find patent IDs even when the previous query was a long task rather
+    than a general agent query with downloadable artifacts.
+    """
+    if not user_id or not table_rows:
+        return
+
+    # Use the first column (typically '专利号' / 'patent_number') as the ID source.
+    id_column = columns[0] if columns else None
+    if not id_column:
+        return
+
+    patent_ids = []
+    for row in table_rows:
+        pid = str(row.get(id_column, '')).strip()
+        if pid and not row.get('_failed'):
+            patent_ids.append(pid)
+
+    if not patent_ids:
+        return
+
+    try:
+        from sources.knowledge.knowledge import get_redis_connection
+        r = get_redis_connection()
+        key = f"lt:conv:{user_id}:patent_ids"
+        r.set(key, json.dumps(patent_ids, ensure_ascii=False),
+              ex=_CONV_PATENT_IDS_TTL)
+        _pipeline_logger.info(
+            f"[task={task_id}] stored_patent_ids_for_followup — "
+            f"count={len(patent_ids)}, key={key}"
+        )
+    except Exception as e:
+        _pipeline_logger.warning(
+            f"[task={task_id}] store_patent_ids_failed — {e}"
+        )

@@ -60,20 +60,28 @@ def _store_conversation_patent_ids(agent, items_for_export: list) -> None:
     queries (scenario='conversation_refs') can retrieve patent IDs even
     when the conversation text is a summary (large-list mode).
 
-    Keyed by session_id — ties IDs to the exact conversation.
+    Keyed by user_id — always available on both the write side (general
+    agent) and read side (long task), without requiring client-side
+    session_id propagation.
     """
-    session_id = getattr(agent, '_last_session_id', None)
-    if not session_id:
+    user_id = getattr(agent, '_last_user_id', None)
+    if not user_id:
         return
     patent_ids = _extract_patent_ids_from_items(items_for_export)
     if not patent_ids:
         return
     try:
         from sources.knowledge.knowledge import get_redis_connection
+        from sources.logger import Logger
+        _store_logger = Logger("general_agent.log")
         r = get_redis_connection()
-        key = f"{_CONV_PATENT_IDS_KEY_PREFIX}:{session_id}:patent_ids"
+        key = f"{_CONV_PATENT_IDS_KEY_PREFIX}:{user_id}:patent_ids"
         r.set(key, json.dumps(patent_ids, ensure_ascii=False),
               ex=_CONV_PATENT_IDS_TTL)
+        _store_logger.info(
+            f"stored_conversation_patent_ids — "
+            f"count={len(patent_ids)}, key={key}"
+        )
     except Exception:
         pass  # Non-critical: long task will fall back to text extraction
 
@@ -1387,12 +1395,11 @@ Begin your response now:
                 working = False
         return answer, reasoning
 
-    async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler, push_filter=None, session_id=None):
+    async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler, push_filter=None):
         #self.knowledgeTool = get_knowledge_tool(user_id,  prompt)
         self._last_user_prompt = prompt
         self._last_query_id = query_id
         self._last_user_id = user_id
-        self._last_session_id = session_id
         if callback_handler:
             await _emit_status(callback_handler, "正在分析您的问题...")
         # Pass conversation history so the LLM routing knowledge selection

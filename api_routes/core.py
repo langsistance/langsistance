@@ -1000,8 +1000,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                     openai_agent = await general_agent.create_agent(
                         user_id, request.query, request.query_id,
                         request.tool_data, handler,
-                        push_filter=request.push_filter,
-                        session_id=request.session_id
+                        push_filter=request.push_filter
                     )
                 except Exception as e:
                     app_logger.error(f"Failed to create agent: {str(e)}")
