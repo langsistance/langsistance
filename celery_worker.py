@@ -135,6 +135,8 @@ def execute_patent_analysis(self, task_id: str, params: dict):
         f"patent_ids={patent_ids[:10]}{'...' if len(patent_ids) > 10 else ''}"
     )
 
+    batch_lang = params.get('lang', 'zh')
+
     # ── Immediate progress update so frontend shows feedback right away ──
     _pipeline_logger.info(f'[task={task_id}] PRE_STATUS_UPDATE — writing preparing status to Redis')
     try:
@@ -376,8 +378,6 @@ async def _run_pipeline(
     else:
         table_rows = []
         pending = patent_ids
-
-    batch_lang = params.get('lang', 'zh')
 
     # ---- Mode detection ----
     patent_texts = params.get('patent_texts', {}) or {}
@@ -1021,7 +1021,7 @@ async def _run_pipeline(
     )
     report_title = '专利分析报告' if batch_lang == 'zh' else 'Patent Analysis Report'
 
-    async def _assemble_report(
+    def _assemble_report(
         exec_summary: str | None,
         completed_parts: list[str],
         current_heading: str | None = None,
@@ -1040,7 +1040,7 @@ async def _run_pipeline(
     update_task_status(task_id, 'generating_report', 76,
                        '正在撰写执行摘要...')
 
-    async def _exec_chunk(partial: str) -> None:
+    def _exec_chunk(partial: str) -> None:
         summary_updater.push(
             _assemble_report(partial, []),
             step_msg='正在撰写执行摘要...',
@@ -1105,7 +1105,7 @@ async def _run_pipeline(
         summary_updater.progress = sec_pct
         summary_updater.step_msg = step_msg
 
-        async def _section_chunk(partial: str, _heading=section['heading']) -> None:
+        def _section_chunk(partial: str, _heading=section['heading']) -> None:
             summary_updater.push(
                 _assemble_report(
                     exec_summary,
