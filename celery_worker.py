@@ -191,6 +191,7 @@ def execute_patent_analysis(self, task_id: str, params: dict):
                 max_patents=max_patents,
                 max_patents_cnipa=max_patents_cnipa,
                 max_patents_uspto=max_patents_uspto,
+                batch_lang=batch_lang,
                 flash_provider=flash_provider,
                 pro_provider=pro_provider,
                 vision_provider=vision_provider if vision_enabled else None,
@@ -352,6 +353,7 @@ async def _run_pipeline(
     create_storage,
     max_patents_cnipa: int = 10,
     max_patents_uspto: int = 50,
+    batch_lang: str = 'zh',
 ) -> dict:
     """Internal async pipeline orchestrator."""
 
@@ -375,6 +377,19 @@ async def _run_pipeline(
             # Fallback: extract columns from first completed row
             first = table_rows[0]
             resume_columns = [k for k in first.keys() if not k.startswith('_')]
+    elif checkpoint and checkpoint.get('completed_rows'):
+        # All patents already analyzed — skip PHASE0-2, jump directly to PHASE3
+        table_rows = checkpoint['completed_rows']
+        pending = []
+        resume_columns = checkpoint.get('columns')
+        if not resume_columns and table_rows:
+            first = table_rows[0]
+            resume_columns = [k for k in first.keys() if not k.startswith('_')]
+        _pipeline_logger.info(
+            f"[task={task_id}] CHECKPOINT_ALL_DONE — "
+            f"all {len(table_rows)} patents already analyzed, "
+            f"skipping PHASE0-2, jumping to PHASE3"
+        )
     else:
         table_rows = []
         pending = patent_ids

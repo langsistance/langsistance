@@ -620,9 +620,14 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
 
         You MUST follow all rules below without exception:
 
-        1. You may ONLY modify existing values in the JSON.
-           - DO NOT add new fields, If a field is empty in the template, then leave it empty.
-           - DO NOT change the JSON structure or nesting
+        1. Modify the JSON to match the user's intent exactly.
+           - Replace values the user wants to change
+           - Remove query conditions (AND / OR clauses) that are NOT relevant to the user's request
+             Example: if the template query is `assignee:"Samsung" AND assignor:"Seiko Epson"`
+             and the user only asks for "Apple Inc." as assignee, simplify it to:
+             `assignee:"Apple Inc."` (remove the unrelated assignor condition entirely)
+           - DO NOT add new fields or query conditions the user did not ask for
+           - DO NOT change the JSON structure or top-level nesting
            - CRITICAL: DO NOT include user_id or query_id in the params JSON - these are separate parameters
 
         2. Field semantics:
@@ -634,7 +639,8 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
 
         3. Value replacement rules:
            - Replace a value only if the user query clearly maps to the meaning of an existing field
-           - If the user query does not mention or imply a field, keep its original value unchanged
+           - If the user query does not mention or imply a field, keep its original value unchanged (but REMOVE it if it appears as an AND/OR clause in a query string that would make the search too restrictive — see rule 1)
+           - When the user asks to search by ONE criterion only (e.g., assignee), strip away unrelated AND clauses so the query returns results instead of nothing
            - If the original tool params contain api-key, api_key, apikey, x-api-key, or another API key field, preserve that key and its value exactly in the generated params
            - Do NOT infer or invent information not explicitly expressed by the user
            - DO NOT extract or infer user_id or query_id from the user's request into the params JSON
