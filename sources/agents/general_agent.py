@@ -48,6 +48,74 @@ MAX_VALUE_CHARS_THRESHOLD = int(os.getenv("GENERAL_AGENT_MAX_VALUE_CHARS", "1000
 SMALL_LIST_THRESHOLD = int(os.getenv("GENERAL_AGENT_SMALL_LIST_THRESHOLD", "3"))
 USE_LARGE_LIST_SUMMARY = True  # 设为 False 切回逐条批处理模式
 
+# Redis key prefix and TTL for storing patent IDs from conversation artifacts
+_CONV_PATENT_IDS_KEY_PREFIX = "lt:conv"
+_CONV_PATENT_IDS_TTL = 3600  # 1 hour
+
+
+def _store_conversation_patent_ids(agent, items_for_export: list) -> None:
+    """Store patent IDs from conversation artifacts into Redis.
+
+    Called after every artifact generation so that follow-up long-task
+    queries (scenario='conversation_refs') can retrieve patent IDs even
+    when the conversation text is a summary (large-list mode).
+
+    Keyed by session_id — ties IDs to the exact conversation.
+    """
+    session_id = getattr(agent, '_last_session_id', None)
+    if not session_id:
+        return
+    patent_ids = _extract_patent_ids_from_items(items_for_export)
+    if not patent_ids:
+        return
+    try:
+        from sources.knowledge.knowledge import get_redis_connection
+        r = get_redis_connection()
+        key = f"{_CONV_PATENT_IDS_KEY_PREFIX}:{session_id}:patent_ids"
+        r.set(key, json.dumps(patent_ids, ensure_ascii=False),
+              ex=_CONV_PATENT_IDS_TTL)
+    except Exception:
+        pass  # Non-critical: long task will fall back to text extraction
+
+
+def _extract_patent_ids_from_items(items: list) -> list:
+    """Extract patent application numbers from raw search result items.
+
+    Handles both USPTO (8-digit applicationNumberText) and CNIPA
+    (YYYY + 8+ digits in various fields) formats.
+    """
+    patent_ids = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        # USPTO: applicationNumberText is the primary field
+        app_num = str(item.get('applicationNumberText', '')).strip()
+        if app_num and app_num.isdigit() and 7 <= len(app_num) <= 12:
+            patent_ids.append(app_num)
+            continue
+        # CNIPA / other sources: check common patent ID field names
+        for key in ('applicationNumber', 'patentApplicationNumber',
+                     'apc', 'patentNumber', '专利申请号'):
+            val = str(item.get(key, '')).strip()
+            if val and len(val) >= 8:
+                patent_ids.append(val)
+                break
+        # Check nested applicationMetaData
+        meta = item.get('applicationMetaData')
+        if isinstance(meta, dict):
+            pn = str(meta.get('patentNumber', '')).strip()
+            if pn and pn.isdigit() and len(pn) >= 8 and pn not in patent_ids:
+                # This is a granted patent number — also check for app number
+                pass  # applicationNumberText already handled above
+    # Deduplicate preserving order
+    seen = set()
+    result = []
+    for pid in patent_ids:
+        if pid not in seen:
+            seen.add(pid)
+            result.append(pid)
+    return result
+
 def _is_long_task_knowledge(knowledge_item) -> bool:
     """Check if knowledge item represents a long task (type=3)."""
     if knowledge_item is None:
@@ -1319,10 +1387,12 @@ Begin your response now:
                 working = False
         return answer, reasoning
 
-    async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler, push_filter=None):
+    async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler, push_filter=None, session_id=None):
         #self.knowledgeTool = get_knowledge_tool(user_id,  prompt)
         self._last_user_prompt = prompt
         self._last_query_id = query_id
+        self._last_user_id = user_id
+        self._last_session_id = session_id
         if callback_handler:
             await _emit_status(callback_handler, "正在分析您的问题...")
         # Pass conversation history so the LLM routing knowledge selection
@@ -1661,6 +1731,10 @@ Begin your response now:
                 )
                 if artifacts:
                     await on_artifacts(artifacts)
+
+            # Store patent IDs for potential follow-up long-task conversation refs
+            _store_conversation_patent_ids(self, items_for_export)
+
             return
         # 鈹€鈹€ 澶у垪琛細璧板師鏈夌殑杩囨护 + 鎵归噺鏍煎紡鍖栬矾寰?鈹€鈹€
 
@@ -1722,6 +1796,10 @@ Begin your response now:
                 )
                 if artifacts:
                     await on_artifacts(artifacts)
+
+            # Store patent IDs for potential follow-up long-task conversation refs
+            _store_conversation_patent_ids(self, items_for_export)
+
             return
 
 
@@ -1779,6 +1857,9 @@ Begin your response now:
             )
             if artifacts:
                 await on_artifacts(artifacts)
+
+        # Store patent IDs for potential follow-up long-task conversation refs
+        _store_conversation_patent_ids(self, items_for_export)
 
 
     async def invoke_agent(self, agent, callback_handler):

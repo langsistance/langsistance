@@ -669,6 +669,36 @@ async def _run_pipeline(
                 f"patent_ids={patent_ids}"
             )
 
+        # Fallback: when conversation_refs yields no IDs from text (e.g. the
+        # previous query was a large-list summary with download-only output),
+        # try to retrieve patent IDs stored from the generated Excel/CSV artifacts.
+        if not patent_ids and scenario == 'conversation_refs':
+            session_id = params.get('session_id', '')
+            if session_id:
+                try:
+                    from sources.knowledge.knowledge import get_redis_connection
+                    r = get_redis_connection()
+                    key = f"lt:conv:{session_id}:patent_ids"
+                    stored = r.get(key)
+                    if stored:
+                        stored_ids = json.loads(stored)
+                        if isinstance(stored_ids, list):
+                            patent_ids = [str(pid).strip() for pid in stored_ids
+                                          if str(pid).strip()]
+                        _pipeline_logger.info(
+                            f"[task={task_id}] PHASE0 fallback_from_stored_ids — "
+                            f"count={len(patent_ids)}, key={key}"
+                        )
+                    else:
+                        _pipeline_logger.info(
+                            f"[task={task_id}] PHASE0 stored_ids_empty — "
+                            f"key={key} not found in Redis"
+                        )
+                except Exception as e:
+                    _pipeline_logger.warning(
+                        f"[task={task_id}] PHASE0 stored_ids_lookup_failed — {e}"
+                    )
+
         if patent_ids:
             total = len(patent_ids)
             # Only reset state for fresh runs — when resuming from checkpoint,
