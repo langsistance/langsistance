@@ -180,13 +180,14 @@ export default function Chat() {
         if (data.messages && Array.isArray(data.messages)) {
           const loaded = data.messages
             .filter((m: { role: string; content: string }) => m.role && m.content)
-            .map((m: { role: string; content: string; taskId?: string }, i: number) => ({
+            .map((m: { role: string; content: string; taskId?: string; patent_ids?: string[] }, i: number) => ({
               id: `hist_${i}_${Date.now()}`,
               role: m.role,
               content: m.content,
               taskId: (m as any).taskId || undefined,
               artifacts: [],
               resultSummary: (m as any).resultSummary || undefined,
+              patent_ids: (m as any).patent_ids || undefined,
             }))
             // Strip orphan long-task messages (🔬/✅/❌ without taskId).
             // These were saved before taskId was attached during SSE.
@@ -304,7 +305,7 @@ export default function Chat() {
     return () => { cancelled = true }
   }, [searchParams, sessionId, setMessages, setSessionId])
 
-  const messagesHash = JSON.stringify(messages.map(m => ({ role: m.role, content: m.content, taskId: (m as any).taskId, resultSummary: (m as any).resultSummary })))
+  const messagesHash = JSON.stringify(messages.map(m => ({ role: m.role, content: m.content, taskId: (m as any).taskId, resultSummary: (m as any).resultSummary, patent_ids: (m as any).patent_ids })))
   // Save session after streaming completes — but ONLY if a session already exists
   // (session is created only when a long task is triggered)
   const pendingSaveRef = useRef(false)
@@ -321,6 +322,7 @@ export default function Chat() {
           content: m.content,
           ...(m.taskId ? { taskId: m.taskId } : {}),
           ...(m.resultSummary ? { resultSummary: m.resultSummary } : {}),
+          ...(m.patent_ids ? { patent_ids: m.patent_ids } : {}),
         }))
         await saveSessionMessages(sessionId, toSave)
       } catch {
