@@ -83,6 +83,13 @@ def _acquire_uspto_api_slot(url: str) -> bool:
 
 
 class OutboundHttpClient:
+    # Status codes that trigger an automatic retry for USPTO API calls.
+    # 429 is the official rate-limit code; 400 is often returned by USPTO
+    # for transient issues (throttling, URL expiry, service instability).
+    _USPTO_RETRYABLE_STATUSES: set[int] = {400, 429}
+    _USPTO_MAX_RETRIES: int = 10
+    _USPTO_RETRY_DELAY_SECONDS: float = 1.0
+
     def request(self, method: str, url: str, *, purpose: str = "general", **kwargs):
         global requests
         if requests is None:
@@ -91,43 +98,93 @@ class OutboundHttpClient:
             requests = requests_module
 
         validate_outbound_url(url)
-        acquired_uspto_slot = _acquire_uspto_api_slot(url)
-        try:
-            started_at = time.monotonic()
-            response = requests.request(method, url, **kwargs)
-            elapsed_ms = int((time.monotonic() - started_at) * 1000)
-            self._log_request(method, url, purpose, response.status_code, elapsed_ms)
-            return response
-        finally:
-            if acquired_uspto_slot:
-                _uspto_api_semaphore.release()
+
+        is_uspto = _is_uspto_api_url(url)
+        max_attempts = self._USPTO_MAX_RETRIES if is_uspto else 1
+
+        last_status = None
+        for attempt in range(max_attempts):
+            acquired_uspto_slot = False
+            if is_uspto:
+                acquired_uspto_slot = _acquire_uspto_api_slot(url)
+            try:
+                started_at = time.monotonic()
+                response = requests.request(method, url, **kwargs)
+                elapsed_ms = int((time.monotonic() - started_at) * 1000)
+                self._log_request(method, url, purpose, response.status_code, elapsed_ms)
+
+                if (
+                    is_uspto
+                    and response.status_code in self._USPTO_RETRYABLE_STATUSES
+                    and attempt + 1 < max_attempts
+                ):
+                    last_status = response.status_code
+                    logger.info(
+                        f"outbound_http uspto_{response.status_code}_retry "
+                        f"attempt={attempt+1}/{max_attempts} url={url[:120]}"
+                    )
+                    time.sleep(self._USPTO_RETRY_DELAY_SECONDS)
+                    continue
+
+                return response
+            finally:
+                if acquired_uspto_slot:
+                    _uspto_api_semaphore.release()
+
+        raise RuntimeError(
+            f"USPTO retries exhausted (status={last_status}) for {url[:120]}"
+        )
 
     async def arequest(self, method: str, url: str, *, purpose: str = "general", **kwargs):
         import asyncio
         import httpx
 
         validate_outbound_url(url)
-        acquired_uspto_slot = False
-        if _is_uspto_api_url(url):
-            acquired_uspto_slot = await asyncio.to_thread(
-                _uspto_api_semaphore.acquire,
-                True,
-                USPTO_API_CONCURRENCY_TIMEOUT_SECONDS,
-            )
-            if not acquired_uspto_slot:
-                raise OutboundHttpConcurrencyTimeoutError(
-                    f"Outbound HTTP concurrency limit reached for {USPTO_API_HOST}"
+
+        is_uspto = _is_uspto_api_url(url)
+        max_attempts = self._USPTO_MAX_RETRIES if is_uspto else 1
+
+        last_status = None
+        for attempt in range(max_attempts):
+            acquired_uspto_slot = False
+            if is_uspto:
+                acquired_uspto_slot = await asyncio.to_thread(
+                    _uspto_api_semaphore.acquire,
+                    True,
+                    USPTO_API_CONCURRENCY_TIMEOUT_SECONDS,
                 )
-        try:
-            started_at = time.monotonic()
-            async with httpx.AsyncClient() as client:
-                response = await client.request(method, url, **kwargs)
-            elapsed_ms = int((time.monotonic() - started_at) * 1000)
-            self._log_request(method, url, purpose, response.status_code, elapsed_ms)
-            return response
-        finally:
-            if acquired_uspto_slot:
-                _uspto_api_semaphore.release()
+                if not acquired_uspto_slot:
+                    raise OutboundHttpConcurrencyTimeoutError(
+                        f"Outbound HTTP concurrency limit reached for {USPTO_API_HOST}"
+                    )
+            try:
+                started_at = time.monotonic()
+                async with httpx.AsyncClient() as client:
+                    response = await client.request(method, url, **kwargs)
+                elapsed_ms = int((time.monotonic() - started_at) * 1000)
+                self._log_request(method, url, purpose, response.status_code, elapsed_ms)
+
+                if (
+                    is_uspto
+                    and response.status_code in self._USPTO_RETRYABLE_STATUSES
+                    and attempt + 1 < max_attempts
+                ):
+                    last_status = response.status_code
+                    logger.info(
+                        f"outbound_http uspto_{response.status_code}_retry "
+                        f"attempt={attempt+1}/{max_attempts} url={url[:120]}"
+                    )
+                    await asyncio.sleep(self._USPTO_RETRY_DELAY_SECONDS)
+                    continue
+
+                return response
+            finally:
+                if acquired_uspto_slot:
+                    _uspto_api_semaphore.release()
+
+        raise RuntimeError(
+            f"USPTO retries exhausted (status={last_status}) for {url[:120]}"
+        )
 
     def get(self, url: str, *, purpose: str = "general", **kwargs):
         return self.request("GET", url, purpose=purpose, **kwargs)

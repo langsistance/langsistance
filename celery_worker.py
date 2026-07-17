@@ -2737,30 +2737,17 @@ _extract_text_from_binary = extract_text_from_binary
 
 
 async def _uspto_get_with_retry(url: str, headers: dict, timeout: int = 30):
-    """GET *url* with up to 10 retries on 429 (rate-limit), sleeping 1 s between.
+    """GET *url* via outbound_http.
 
-    Returns the ``requests.Response`` or raises on non-429 errors after
-    exhausting retries.
+    Retry on 400 / 429 is handled centrally by OutboundHttpClient for all
+    USPTO API URLs.  This wrapper keeps the calling code unchanged.
     """
     import asyncio as _asyncio
     from sources.http_outbound import outbound_http
 
-    last_status = None
-    for attempt in range(10):
-        resp = await _asyncio.to_thread(
-            outbound_http.get, url, purpose="patent_download",
-            headers=headers, timeout=timeout,
-        )
-        if resp.status_code != 429:
-            return resp
-        last_status = resp.status_code
-        _pipeline_logger.info(
-            f"[download] uspto_429_retry — attempt={attempt+1}/10, "
-            f"url={url[:80]}"
-        )
-        await _asyncio.sleep(1)
-    raise RuntimeError(
-        f"USPTO rate-limit retries exhausted (429) for {url[:120]}"
+    return await _asyncio.to_thread(
+        outbound_http.get, url, purpose="patent_download",
+        headers=headers, timeout=timeout,
     )
 
 
