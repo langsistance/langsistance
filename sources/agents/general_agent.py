@@ -674,16 +674,9 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
            Pass params as a structured object in the tool call, not as a JSON-encoded string.
            Do NOT wrap the whole params object in quotes.
             """
-            params_output_rule = """
-           - When invoking the tool, provide params as a JSON object, not a string
-           - The params object must be valid JSON and must not contain extra closing braces
-            """
         else:
             params_call_instruction = """
         3. params: A valid JSON string containing ONLY the API request parameters (template below)
-            """
-            params_output_rule = """
-           - The params string must contain valid, strictly formatted JSON
             """
 
         path_field_semantics = ""
@@ -718,7 +711,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
 
         The third parameter "params" template: {self._sanitize_params_for_llm(tool_info.params)}
 
-        Your task is to analyze the user's input and modify the third parameter "params" template according to the user's specific requirements. Generate a new JSON object containing only the parameters that need to be changed or specified based on the user's request.
+        Your task is to analyze the user's input and modify the third parameter "params" template according to the user's specific requirements. Generate the COMPLETE params JSON with ALL fields from the template — keep unchanged fields as-is, and modify only the values that need to match the user's request.
 
         You MUST follow all rules below without exception:
 
@@ -748,11 +741,10 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
            - DO NOT extract or infer user_id or query_id from the user's request into the params JSON
            {path_replacement_rules}
 
-        4. Output rules:
-           - Output ONLY the final, complete JSON for the params parameter
-           - DO NOT include explanations, reasoning, comments, or formatting outside JSON
-           {params_output_rule}
-           - DO NOT include user_id or query_id fields in the JSON output
+        4. Tool calling rules:
+           - You MUST call the tool with the three required arguments: user_id, query_id, and params
+           - For the params argument: provide the COMPLETE JSON from the template above, with values modified per the user's request. Include ALL top-level fields (method, Content-Type, query, header, body) even if unchanged.
+           - DO NOT put user_id or query_id inside the params JSON — they are separate tool arguments
 
         Execute the tool with the appropriate parameters and generate the final response strictly based on the tool's output.
 

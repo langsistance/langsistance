@@ -267,6 +267,13 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
         "timeout": timeout,
     }
     if method in {"POST", "PUT", "PATCH"}:
+        if not request_body:
+            logger.warning(
+                f"backend_tool: {method} request to {url[:120]} has empty body — "
+                f"LLM may have failed to generate params. "
+                f"param_keys={list(user_params.keys()) if isinstance(user_params, dict) else type(user_params).__name__}"
+            )
+            return {"data": "Request failed: LLM did not generate valid request parameters (empty body)", "raw_items": None}
         request_kwargs["json"] = request_body
 
     # 对 open.zldsj.com 请求打印完整请求信息
