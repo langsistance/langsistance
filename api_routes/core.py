@@ -338,6 +338,7 @@ def _prepare_long_task_inputs(
     patent_file_refs: list = None,
     app_logger=None,
     llm_result: dict = None,
+    user_id: str = "",
 ) -> dict:
     """Prepare patent analysis inputs, optionally enriched by LLM classification.
 
@@ -442,6 +443,30 @@ def _prepare_long_task_inputs(
                             if st and len(st) > 100:
                                 patent_texts[pid] = st
         patent_texts = patent_texts if patent_texts else None
+        # ── Redis fallback: when messages don't carry patent_ids (e.g. SSE not
+        #     yet processed by frontend), read from the same Redis key that
+        #     _store_conversation_patent_ids / _store_long_task_patent_ids write.
+        #     Insert at front so Redis IDs take priority over regex noise.
+        if _msg_patent_ids_found == 0 and user_id:
+            try:
+                from sources.knowledge.knowledge import get_redis_connection
+                r = get_redis_connection()
+                stored_raw = r.get(f"lt:conv:{user_id}:patent_ids")
+                if stored_raw:
+                    stored_ids = json.loads(stored_raw)
+                    if isinstance(stored_ids, list):
+                        _redis_ids = [str(pid).strip() for pid in stored_ids if str(pid).strip()]
+                        # Prepend: Redis IDs before regex matches
+                        patent_ids = list(dict.fromkeys(_redis_ids + patent_ids))
+                        if app_logger:
+                            app_logger.info(
+                                f"Long task redis_fallback — "
+                                f"redis_ids={len(_redis_ids)}, "
+                                f"total_patent_ids={len(patent_ids)}"
+                            )
+            except Exception:
+                pass
+
         if app_logger:
             app_logger.info(
                 f"Long task msg_patent_ids — "
@@ -474,6 +499,20 @@ def _prepare_long_task_inputs(
                             st = p.get('spec_text', '')
                             if st and len(st) > 100:
                                 patent_texts[pid] = st
+
+        # ── Redis fallback for the no-LLM path ──
+        if _msg_patent_ids_found == 0 and user_id:
+            try:
+                from sources.knowledge.knowledge import get_redis_connection
+                r = get_redis_connection()
+                stored_raw = r.get(f"lt:conv:{user_id}:patent_ids")
+                if stored_raw:
+                    stored_ids = json.loads(stored_raw)
+                    if isinstance(stored_ids, list):
+                        _redis_ids = [str(pid).strip() for pid in stored_ids if str(pid).strip()]
+                        patent_ids = list(dict.fromkeys(_redis_ids + patent_ids))
+            except Exception:
+                pass
 
         query_uspto = _patent_id_re.findall(r'\b(\d{8})\b', query or "")
         query_slash = _patent_id_re.findall(r'\b(\d{2})/(\d{6})\b', query or "")
@@ -833,6 +872,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                 conv_history=conversation_history,
                 patent_file_refs=patent_file_refs,
                 app_logger=app_logger,
+                user_id=str(local_user_id),
             )
             patent_source = inputs["patent_source"]
             scenario = inputs["scenario"]
@@ -1070,6 +1110,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                             scene_id=scene_id,
                             app_logger=app_logger,
                             llm_result=llm_result,
+                            user_id=str(local_user_id),
                         )
                         patent_ids = inputs["patent_ids"]
                         patent_source = inputs["patent_source"]
@@ -1304,6 +1345,20 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                 token_buffer.clear()
                             artifact_json = json.dumps(event)
                             yield f"data:{artifact_json}\n\n"
+                            current_time = asyncio.get_event_loop().time()
+                            last_flush_time = current_time
+                            last_stream_time = current_time
+
+                        elif event['type'] == 'patent_ids':
+                            # Hidden event: carry patent IDs to the frontend so
+                            # follow-up conversation_refs queries include them.
+                            # Not displayed — frontend stores in message state.
+                            if token_buffer:
+                                combined = ''.join(token_buffer)
+                                token_json = json.dumps(combined)
+                                yield f"data:{token_json}\n\n"
+                                token_buffer.clear()
+                            yield f"data:{json.dumps(event)}\n\n"
                             current_time = asyncio.get_event_loop().time()
                             last_flush_time = current_time
                             last_stream_time = current_time
