@@ -20,6 +20,7 @@ export interface ChatMessage {
   artifacts?: ChatArtifact[]
   taskId?: string  // long task ID for progress tracking across save/load
   resultSummary?: string  // long task report markdown preview
+  patent_ids?: string[]  // hidden — carried in conversation_history for follow-up queries
 }
 
 interface ChatContextValue {
