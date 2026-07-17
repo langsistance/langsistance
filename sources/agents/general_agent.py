@@ -100,11 +100,16 @@ async def _emit_patent_ids_to_frontend(agent, items_for_export, callback_handler
         return
     cb_queue = getattr(callback_handler, 'queue', None)
     if cb_queue is None:
+        agent.logger.warning("_emit_patent_ids_to_frontend: callback_handler has no queue")
         return
     await cb_queue.put({
         'type': 'patent_ids',
         'patent_ids': patent_ids,
     })
+    agent.logger.info(
+        f"_emit_patent_ids_to_frontend — count={len(patent_ids)}, "
+        f"ids={patent_ids[:5]}{'...' if len(patent_ids) > 5 else ''}"
+    )
 
 
 def _extract_patent_ids_from_items(items: list) -> list:

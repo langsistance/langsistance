@@ -420,11 +420,13 @@ def _prepare_long_task_inputs(
         # Guard against LLM misclassification (e.g. direct_ids for a
         # follow-up query) by reading them regardless of scenario.
         patent_texts = {}
+        _msg_patent_ids_found = 0
         for msg in conv_history:
             if msg.get('role') == 'assistant':
                 # Read hidden patent_ids array emitted by general_agent / long task
                 hidden_ids = msg.get('patent_ids')
-                if isinstance(hidden_ids, list):
+                if isinstance(hidden_ids, list) and hidden_ids:
+                    _msg_patent_ids_found += len(hidden_ids)
                     for pid in hidden_ids:
                         pid = str(pid).strip()
                         if pid and pid not in patent_ids:
@@ -440,15 +442,24 @@ def _prepare_long_task_inputs(
                             if st and len(st) > 100:
                                 patent_texts[pid] = st
         patent_texts = patent_texts if patent_texts else None
+        if app_logger:
+            app_logger.info(
+                f"Long task msg_patent_ids — "
+                f"found_in_messages={_msg_patent_ids_found}, "
+                f"total_patent_ids={len(patent_ids)}, "
+                f"conv_history_msgs={len(conv_history)}"
+            )
     else:
         # ── Fallback: regex + keyword detection (no LLM available) ──
         patent_ids = list(dict.fromkeys(regex_ids))
         patent_texts = {}
+        _msg_patent_ids_found = 0
         for msg in conv_history:
             if msg.get('role') == 'assistant':
                 # Read hidden patent_ids array emitted by general_agent / long task
                 hidden_ids = msg.get('patent_ids')
-                if isinstance(hidden_ids, list):
+                if isinstance(hidden_ids, list) and hidden_ids:
+                    _msg_patent_ids_found += len(hidden_ids)
                     for pid in hidden_ids:
                         pid = str(pid).strip()
                         if pid and pid not in patent_ids:
