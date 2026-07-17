@@ -413,30 +413,33 @@ def _prepare_long_task_inputs(
         else:
             patent_ids = list(dict.fromkeys(llm_ids)) if llm_ids else list(dict.fromkeys(regex_ids))
 
-        if scenario == "conversation_refs":
-            patent_texts = {}
-            for msg in conv_history:
-                if msg.get('role') == 'assistant':
-                    # Read hidden patent_ids array emitted by general_agent / long task
-                    hidden_ids = msg.get('patent_ids')
-                    if isinstance(hidden_ids, list):
-                        for pid in hidden_ids:
-                            pid = str(pid).strip()
-                            if pid and pid not in patent_ids:
+        # ── Always read hidden patent_ids from assistant messages ──
+        # (emitted by general_agent SSE / long task completion).
+        # This is a reliable signal — the backend explicitly placed these
+        # IDs in the message, so they are not random 8-digit noise.
+        # Guard against LLM misclassification (e.g. direct_ids for a
+        # follow-up query) by reading them regardless of scenario.
+        patent_texts = {}
+        for msg in conv_history:
+            if msg.get('role') == 'assistant':
+                # Read hidden patent_ids array emitted by general_agent / long task
+                hidden_ids = msg.get('patent_ids')
+                if isinstance(hidden_ids, list):
+                    for pid in hidden_ids:
+                        pid = str(pid).strip()
+                        if pid and pid not in patent_ids:
+                            patent_ids.append(pid)
+                # Read patent_data (richer format with spec_text)
+                if msg.get('patent_data'):
+                    for p in msg['patent_data']:
+                        if isinstance(p, dict) and 'patent_id' in p:
+                            pid = str(p['patent_id'])
+                            if pid not in patent_ids:
                                 patent_ids.append(pid)
-                    # Read patent_data (richer format with spec_text)
-                    if msg.get('patent_data'):
-                        for p in msg['patent_data']:
-                            if isinstance(p, dict) and 'patent_id' in p:
-                                pid = str(p['patent_id'])
-                                if pid not in patent_ids:
-                                    patent_ids.append(pid)
-                                st = p.get('spec_text', '')
-                                if st and len(st) > 100:
-                                    patent_texts[pid] = st
-            patent_texts = patent_texts if patent_texts else None
-        else:
-            patent_texts = None
+                            st = p.get('spec_text', '')
+                            if st and len(st) > 100:
+                                patent_texts[pid] = st
+        patent_texts = patent_texts if patent_texts else None
     else:
         # ── Fallback: regex + keyword detection (no LLM available) ──
         patent_ids = list(dict.fromkeys(regex_ids))
