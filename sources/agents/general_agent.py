@@ -53,7 +53,7 @@ _CONV_PATENT_IDS_KEY_PREFIX = "lt:conv"
 _CONV_PATENT_IDS_TTL = 3600  # 1 hour
 
 
-def _store_conversation_patent_ids(agent, items_for_export: list) -> None:
+def _store_conversation_patent_ids(agent, items_for_export: list) -> list | None:
     """Store patent IDs from conversation artifacts into Redis.
 
     Called after every artifact generation so that follow-up long-task
@@ -63,27 +63,48 @@ def _store_conversation_patent_ids(agent, items_for_export: list) -> None:
     Keyed by user_id — always available on both the write side (general
     agent) and read side (long task), without requiring client-side
     session_id propagation.
+
+    Returns the extracted patent_ids list (may be empty) so callers can
+    also emit them to the frontend via SSE.
     """
     user_id = getattr(agent, '_last_user_id', None)
-    if not user_id:
-        return
+    patent_ids = _extract_patent_ids_from_items(items_for_export)
+    if not patent_ids:
+        return None
+    if user_id:
+        try:
+            from sources.knowledge.knowledge import get_redis_connection
+            from sources.logger import Logger
+            _store_logger = Logger("general_agent.log")
+            r = get_redis_connection()
+            key = f"{_CONV_PATENT_IDS_KEY_PREFIX}:{user_id}:patent_ids"
+            r.set(key, json.dumps(patent_ids, ensure_ascii=False),
+                  ex=_CONV_PATENT_IDS_TTL)
+            _store_logger.info(
+                f"stored_conversation_patent_ids — "
+                f"count={len(patent_ids)}, key={key}"
+            )
+        except Exception:
+            pass  # Non-critical: long task will fall back to text extraction
+    return patent_ids
+
+
+async def _emit_patent_ids_to_frontend(agent, items_for_export, callback_handler) -> None:
+    """Extract patent IDs and emit as a hidden SSE event to the frontend.
+
+    The frontend stores these IDs in the assistant message (not displayed),
+    so follow-up conversation_refs queries include them in conversation_history.
+    """
     patent_ids = _extract_patent_ids_from_items(items_for_export)
     if not patent_ids:
         return
-    try:
-        from sources.knowledge.knowledge import get_redis_connection
-        from sources.logger import Logger
-        _store_logger = Logger("general_agent.log")
-        r = get_redis_connection()
-        key = f"{_CONV_PATENT_IDS_KEY_PREFIX}:{user_id}:patent_ids"
-        r.set(key, json.dumps(patent_ids, ensure_ascii=False),
-              ex=_CONV_PATENT_IDS_TTL)
-        _store_logger.info(
-            f"stored_conversation_patent_ids — "
-            f"count={len(patent_ids)}, key={key}"
-        )
-    except Exception:
-        pass  # Non-critical: long task will fall back to text extraction
+    cb_queue = getattr(callback_handler, 'queue', None)
+    if cb_queue is None:
+        return
+    await cb_queue.put({
+        'type': 'patent_ids',
+        'patent_ids': patent_ids,
+    })
 
 
 def _extract_patent_ids_from_items(items: list) -> list:
@@ -1741,6 +1762,9 @@ Begin your response now:
 
             # Store patent IDs for potential follow-up long-task conversation refs
             _store_conversation_patent_ids(self, items_for_export)
+            # Also emit to frontend so follow-up queries carry patent IDs in
+            # conversation_history (independent of Redis).
+            await _emit_patent_ids_to_frontend(self, items_for_export, callback_handler)
 
             return
         # 鈹€鈹€ 澶у垪琛細璧板師鏈夌殑杩囨护 + 鎵归噺鏍煎紡鍖栬矾寰?鈹€鈹€
@@ -1806,6 +1830,9 @@ Begin your response now:
 
             # Store patent IDs for potential follow-up long-task conversation refs
             _store_conversation_patent_ids(self, items_for_export)
+            # Also emit to frontend so follow-up queries carry patent IDs in
+            # conversation_history (independent of Redis).
+            await _emit_patent_ids_to_frontend(self, items_for_export, callback_handler)
 
             return
 
@@ -1867,6 +1894,9 @@ Begin your response now:
 
         # Store patent IDs for potential follow-up long-task conversation refs
         _store_conversation_patent_ids(self, items_for_export)
+        # Also emit to frontend so follow-up queries carry patent IDs in
+        # conversation_history (independent of Redis).
+        await _emit_patent_ids_to_frontend(self, items_for_export, callback_handler)
 
 
     async def invoke_agent(self, agent, callback_handler):

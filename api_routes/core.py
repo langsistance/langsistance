@@ -416,15 +416,24 @@ def _prepare_long_task_inputs(
         if scenario == "conversation_refs":
             patent_texts = {}
             for msg in conv_history:
-                if msg.get('role') == 'assistant' and msg.get('patent_data'):
-                    for p in msg['patent_data']:
-                        if isinstance(p, dict) and 'patent_id' in p:
-                            pid = str(p['patent_id'])
-                            if pid not in patent_ids:
+                if msg.get('role') == 'assistant':
+                    # Read hidden patent_ids array emitted by general_agent / long task
+                    hidden_ids = msg.get('patent_ids')
+                    if isinstance(hidden_ids, list):
+                        for pid in hidden_ids:
+                            pid = str(pid).strip()
+                            if pid and pid not in patent_ids:
                                 patent_ids.append(pid)
-                            st = p.get('spec_text', '')
-                            if st and len(st) > 100:
-                                patent_texts[pid] = st
+                    # Read patent_data (richer format with spec_text)
+                    if msg.get('patent_data'):
+                        for p in msg['patent_data']:
+                            if isinstance(p, dict) and 'patent_id' in p:
+                                pid = str(p['patent_id'])
+                                if pid not in patent_ids:
+                                    patent_ids.append(pid)
+                                st = p.get('spec_text', '')
+                                if st and len(st) > 100:
+                                    patent_texts[pid] = st
             patent_texts = patent_texts if patent_texts else None
         else:
             patent_texts = None
@@ -433,15 +442,24 @@ def _prepare_long_task_inputs(
         patent_ids = list(dict.fromkeys(regex_ids))
         patent_texts = {}
         for msg in conv_history:
-            if msg.get('role') == 'assistant' and msg.get('patent_data'):
-                for p in msg['patent_data']:
-                    if isinstance(p, dict) and 'patent_id' in p:
-                        pid = p['patent_id']
-                        if pid not in patent_ids:
+            if msg.get('role') == 'assistant':
+                # Read hidden patent_ids array emitted by general_agent / long task
+                hidden_ids = msg.get('patent_ids')
+                if isinstance(hidden_ids, list):
+                    for pid in hidden_ids:
+                        pid = str(pid).strip()
+                        if pid and pid not in patent_ids:
                             patent_ids.append(pid)
-                        st = p.get('spec_text', '')
-                        if st and len(st) > 100:
-                            patent_texts[pid] = st
+                # Read patent_data (richer format with spec_text)
+                if msg.get('patent_data'):
+                    for p in msg['patent_data']:
+                        if isinstance(p, dict) and 'patent_id' in p:
+                            pid = p['patent_id']
+                            if pid not in patent_ids:
+                                patent_ids.append(pid)
+                            st = p.get('spec_text', '')
+                            if st and len(st) > 100:
+                                patent_texts[pid] = st
 
         query_uspto = _patent_id_re.findall(r'\b(\d{8})\b', query or "")
         query_slash = _patent_id_re.findall(r'\b(\d{2})/(\d{6})\b', query or "")

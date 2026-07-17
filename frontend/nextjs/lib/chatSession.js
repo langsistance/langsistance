@@ -88,3 +88,16 @@ export function addAssistantArtifactEnd(messages, messageId, artifactId) {
     }
   })
 }
+
+/**
+ * Attach hidden patent_ids to the assistant message so follow-up
+ * conversation_refs queries include them in conversation_history.
+ */
+export function addAssistantPatentIds(messages, messageId, patentIds) {
+  if (!patentIds || !Array.isArray(patentIds) || patentIds.length === 0) return messages
+  return messages.map((msg) =>
+    msg.id === messageId
+      ? { ...msg, patent_ids: patentIds }
+      : msg
+  )
+}

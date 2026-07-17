@@ -1290,7 +1290,20 @@ async def _run_pipeline(
         f"report_files={[f['format'] for f in report_files]}"
     )
     _update_mysql_progress(task_id, 'exporting', 100)
-    set_task_completed(task_id, report_files)
+
+    # Extract patent IDs from result table for the frontend to store in
+    # conversation messages (hidden field), enabling follow-up conversation_refs
+    # queries without relying solely on Redis.
+    _completed_patent_ids = []
+    _id_col = columns[0] if columns else None
+    if _id_col:
+        for _row in table_rows:
+            _pid = str(_row.get(_id_col, '')).strip()
+            if _pid and not _row.get('_failed'):
+                _completed_patent_ids.append(_pid)
+
+    set_task_completed(task_id, report_files,
+                       patent_ids=_completed_patent_ids if _completed_patent_ids else None)
 
     # Store analyzed patent IDs so follow-up conversation_refs queries
     # (e.g. "哪些是AI相关的") can find them even when the previous query

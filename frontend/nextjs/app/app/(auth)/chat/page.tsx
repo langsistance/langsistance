@@ -14,6 +14,7 @@ import {
   addAssistantArtifactChunk,
   addAssistantArtifactEnd,
   addAssistantArtifactStart,
+  addAssistantPatentIds,
   createChatId,
   createChatMessage,
   updateAssistantMessage,
@@ -381,6 +382,7 @@ export default function Chat() {
     ].map(m => ({
       role: m.role,
       content: m.content,
+      ...(m.patent_ids ? { patent_ids: m.patent_ids } : {}),
     }))
 
     const controller = new AbortController()
@@ -441,6 +443,13 @@ export default function Chat() {
                 assistantId,
                 String(event.artifact_id ?? event.artifactId ?? '')
               ))
+              continue
+            }
+            if (event.type === 'patent_ids') {
+              const ids = event.patent_ids
+              if (Array.isArray(ids) && ids.length > 0) {
+                setMessages((m) => addAssistantPatentIds(m, assistantId, ids))
+              }
               continue
             }
             if (event.type === 'long_task_created') {
@@ -751,11 +760,25 @@ export default function Chat() {
             const files = (data.report_files || [])
               .map((f: { format: string }) => `[${f.format.toUpperCase()}](${getLongTaskReportUrl(taskId, f.format as 'pdf' | 'docx')})`)
               .join(' | ')
-            setMessages((m) => findAndUpdate(
-              m,
-              t('chat.longTaskCompleted').replace('{files}', files),
-              data.result_summary,
-            ))
+            // Preserve patent_ids from completed task status so follow-up
+            // conversation_refs queries can find them in conversation_history.
+            const taskPatentIds: string[] | undefined =
+              Array.isArray(data.patent_ids) ? data.patent_ids as string[] : undefined
+            setMessages((m) => {
+              const updated = findAndUpdate(
+                m,
+                t('chat.longTaskCompleted').replace('{files}', files),
+                data.result_summary,
+              )
+              if (taskPatentIds && taskPatentIds.length > 0) {
+                return updated.map(msg =>
+                  msg.taskId === taskId
+                    ? { ...msg, patent_ids: taskPatentIds }
+                    : msg
+                )
+              }
+              return updated
+            })
           } else if (data.status === 'paused') {
             // Don't stop polling — the task may be resumed later
             const pausedLabel = data.current_step || `已暂停（进度 ${data.progress || 0}%）`

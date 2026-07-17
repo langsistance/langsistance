@@ -61,14 +61,17 @@ def load_checkpoint(task_id: str) -> dict | None:
     return json.loads(raw)
 
 
-def set_task_completed(task_id: str, report_files: list) -> None:
-    """Mark task as completed with report file metadata."""
+def set_task_completed(task_id: str, report_files: list,
+                      patent_ids: list | None = None) -> None:
+    """Mark task as completed with report file metadata and optional patent IDs."""
     r = _get_redis()
     raw = r.get(_status_key(task_id))
     status = json.loads(raw) if raw else {}
     status['status'] = 'completed'
     status['progress'] = 100
     status['report_files'] = report_files
+    if patent_ids:
+        status['patent_ids'] = patent_ids
     r.set(_status_key(task_id), json.dumps(status, ensure_ascii=False),
           ex=TASK_STATUS_TTL)
 
