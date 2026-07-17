@@ -375,11 +375,11 @@ export default function Chat() {
     setStreamingId(assistantId)
 
     // Collect full conversation history for context — include the new messages
-    const conversationHistory = [
+    const conversationHistory = ([
       ...messages,
       userMsg,
       assistant,
-    ].map(m => ({
+    ] as ChatMessage[]).map(m => ({
       role: m.role,
       content: m.content,
       ...(m.patent_ids ? { patent_ids: m.patent_ids } : {}),
