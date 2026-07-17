@@ -1431,11 +1431,102 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
     # ── Run pipeline ──
     async def _run():
         # ═════════════════════════════════════════════════════════════════
-        # Phase 0: Fetch USPTO document list + classify by priority
+        # Phase 0: Resolve patent identifier → application number, then
+        # fetch USPTO document list + classify by priority.
         # ═════════════════════════════════════════════════════════════════
         update_task_status(task_id, 'preparing', 1,
                            _t('fetching_uspto', lang))
-        app_number = ''.join(c for c in patent_id if c.isdigit())
+
+        raw_patent_id = patent_id.strip()
+        digits_only = ''.join(c for c in raw_patent_id if c.isdigit())
+        id_type = params.get('patent_id_type', 'unknown')
+        app_number = None
+
+        # ── Resolve grant / publication number → application number ──
+        if id_type in ('grant_number', 'publication_number'):
+            _pipeline_logger.info(
+                f"[task={task_id}] PHASE0 resolving — "
+                f"patent_id={patent_id}, id_type={id_type}"
+            )
+            try:
+                import json as _json, re as _re
+                _lucene_special = _re.compile(r'(["\\+\-!(){}[\]^~*?:/]|&&|\|\|)')
+                def _escape_lucene(s: str) -> str:
+                    return _lucene_special.sub(r'\\\1', s)
+
+                _digits_esc = _escape_lucene(digits_only)
+                _raw_esc = _escape_lucene(raw_patent_id)
+                pub_candidates = [_raw_esc]
+                if digits_only and digits_only != raw_patent_id:
+                    pub_candidates.append(_digits_esc)
+                pub_clauses = ' OR '.join(
+                    f'applicationMetaData.earliestPublicationNumber:"{c}"'
+                    for c in pub_candidates
+                )
+                # For grant_number: search by patentNumber.
+                # For publication_number: search by earliestPublicationNumber.
+                # Always include applicationNumberText as fallback.
+                if id_type == 'grant_number':
+                    search_q = f'applicationMetaData.patentNumber:"{_digits_esc}"'
+                else:
+                    search_q = pub_clauses
+                search_q += f' OR applicationNumberText:"{_digits_esc}"'
+
+                search_body = {
+                    "q": search_q,
+                    "pagination": {"offset": 0, "limit": 3},
+                    "fields": [
+                        "applicationNumberText",
+                        "applicationMetaData.patentNumber",
+                        "applicationMetaData.earliestPublicationNumber",
+                        "applicationMetaData.inventionTitle",
+                    ],
+                }
+                uspto_key = _os.getenv('USPTO_API_KEY', '')
+                search_headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+                if uspto_key:
+                    search_headers['X-API-Key'] = uspto_key
+
+                import httpx as _httpx
+                async with _httpx.AsyncClient(timeout=20) as _client:
+                    search_resp = await _client.post(
+                        "https://api.uspto.gov/api/v1/patent/applications/search",
+                        headers=search_headers,
+                        json=search_body,
+                    )
+                if search_resp.status_code == 200:
+                    search_data = _json.loads(search_resp.text) if search_resp.text else {}
+                    results = (
+                        search_data.get('results') or
+                        search_data.get('patentApplications') or
+                        []
+                    )
+                    if isinstance(results, list) and results:
+                        app_number = (
+                            results[0].get('applicationNumberText') or
+                            results[0].get('applicationNumber')
+                        )
+                        if app_number:
+                            app_number = ''.join(c for c in str(app_number) if c.isdigit())
+                            _pipeline_logger.info(
+                                f"[task={task_id}] PHASE0 resolved — "
+                                f"input={patent_id} ({id_type}) → app_number={app_number}"
+                            )
+                if not app_number:
+                    _pipeline_logger.warning(
+                        f"[task={task_id}] PHASE0 resolve_failed — "
+                        f"status={search_resp.status_code}, "
+                        f"falling back to digits_only={digits_only}"
+                    )
+            except Exception as _resolve_err:
+                _pipeline_logger.warning(
+                    f"[task={task_id}] PHASE0 resolve_error — {_resolve_err}"
+                )
+
+        # ── Fallback: use digits_only as application number ──
+        if not app_number:
+            app_number = digits_only
+
         if not app_number or len(app_number) < 8:
             set_task_failed(task_id, f"Invalid patent application number: {patent_id}")
             _update_mysql_progress(task_id, 'failed', 0)

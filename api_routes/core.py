@@ -295,7 +295,16 @@ async def _classify_long_task_async(
         '{"scenario": "prosecution"|"direct_ids"|"conversation_refs", '
         '"patent_ids": ["id1","id2"], '
         '"patent_source": "uspto"|"cnipa"|"unknown", '
-        '"reasoning": "简要说明"}'
+        '"patent_id_type": "application_number"|"grant_number"|"publication_number"|"unknown", '
+        '"reasoning": "简要说明"}\n\n'
+        "## patent_id_type 判断规则（仅 prosecution 场景需要，其他场景填 unknown）\n"
+        "- application_number: 用户明确说是「申请号/application number」，"
+        "或 ID 格式为 2位系列码+6位序号（如 17/027,484 或 17027484）\n"
+        "- grant_number: 用户明确说是「授权号/patent number/grant number」，"
+        "或 ID 在对话中作为 Patent No. 出现（如 US12506212 中的 12506212 可能是授权号）\n"
+        "- publication_number: ID 格式为 US + 4位年份 + 7位序号（如 US20250103146A1），"
+        "或用户明确说是「公开号/publication number」\n"
+        "- unknown: 无法判断 → 系统将默认按 application_number 处理"
     )
 
     user_text = (
@@ -327,6 +336,7 @@ async def _classify_long_task_async(
         "scenario": result.get("scenario", "unknown"),
         "patent_ids": result.get("patent_ids", []) or [],
         "patent_source": result.get("patent_source", "auto"),
+        "patent_id_type": result.get("patent_id_type", "unknown"),
         "reasoning": result.get("reasoning", ""),
     }
 
@@ -402,6 +412,7 @@ def _prepare_long_task_inputs(
     if llm_result and llm_result.get("scenario") != "unknown":
         scenario = llm_result["scenario"]
         patent_source = llm_result.get("patent_source", "auto")
+        patent_id_type = llm_result.get("patent_id_type", "unknown")
         llm_ids = llm_result.get("patent_ids", []) or []
 
         # For direct_ids: trust the LLM's patent_ids exactly as returned.
@@ -493,6 +504,7 @@ def _prepare_long_task_inputs(
         patent_source = _detect_patent_source(
             scene_id=scene_id, conv_history=conv_history, query=query, app_logger=app_logger,
         )
+        patent_id_type = "unknown"
         patent_texts = patent_texts if patent_texts else None
 
     if app_logger:
@@ -507,6 +519,7 @@ def _prepare_long_task_inputs(
         "scenario": scenario,
         "patent_ids": patent_ids,
         "patent_source": patent_source,
+        "patent_id_type": patent_id_type,
         "patent_texts": patent_texts,
     }
 
@@ -841,6 +854,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
             )
             patent_source = inputs["patent_source"]
             scenario = inputs["scenario"]
+            patent_id_type = inputs.get("patent_id_type", "unknown")
 
             reused_session = False
             existing_session_id = (form.get("session_id") or "").strip()
@@ -1081,6 +1095,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         patent_source = inputs["patent_source"]
                         patent_texts = inputs["patent_texts"] or {}
                         scenario = inputs["scenario"]
+                        patent_id_type = inputs.get("patent_id_type", "unknown")
 
                         # ── Session reuse: if the client already has a session, append to it ──
                         reused_session = False
@@ -1166,6 +1181,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         celery_params['lang'] = query_lang
                         if is_prosecution:
                             celery_params['patent_id'] = patent_ids[0] if patent_ids else ''
+                            celery_params['patent_id_type'] = patent_id_type
                         else:
                             celery_params['patent_ids'] = patent_ids
                             celery_params['patent_source'] = patent_source
