@@ -216,6 +216,7 @@ export async function pollLongTaskStatus(taskId: string): Promise<{
   report_files?: { format: string; filename: string; size: number }[]
   result_summary?: string
   error_message?: string
+  patent_ids?: string[]
 }> {
   return get(`/long_task/${taskId}/status`)
 }
@@ -229,6 +230,7 @@ export async function pollLongTaskBatchStatus(taskIds: string[]): Promise<Record
   report_files?: { format: string; filename: string; size: number }[]
   result_summary?: string
   error_message?: string
+  patent_ids?: string[]
 }>> {
   const headers = await authHeaders()
   const res = await fetch(`${BASE_URL}/long_task/batch_status`, {
