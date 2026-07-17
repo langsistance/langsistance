@@ -1486,36 +1486,56 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                 search_headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
                 if uspto_key:
                     search_headers['X-API-Key'] = uspto_key
+                search_url = "https://api.uspto.gov/api/v1/patent/applications/search"
 
-                import httpx as _httpx
-                async with _httpx.AsyncClient(timeout=20) as _client:
-                    search_resp = await _client.post(
-                        "https://api.uspto.gov/api/v1/patent/applications/search",
-                        headers=search_headers,
-                        json=search_body,
-                    )
-                if search_resp.status_code == 200:
-                    search_data = _json.loads(search_resp.text) if search_resp.text else {}
-                    results = (
-                        search_data.get('results') or
-                        search_data.get('patentApplications') or
-                        []
-                    )
-                    if isinstance(results, list) and results:
-                        app_number = (
-                            results[0].get('applicationNumberText') or
-                            results[0].get('applicationNumber')
-                        )
-                        if app_number:
-                            app_number = ''.join(c for c in str(app_number) if c.isdigit())
-                            _pipeline_logger.info(
-                                f"[task={task_id}] PHASE0 resolved — "
-                                f"input={patent_id} ({id_type}) → app_number={app_number}"
+                # Use outbound_http for retry support on USPTO API calls.
+                from sources.http_outbound import outbound_http as _outbound_http
+                search_resp = await asyncio.to_thread(
+                    _outbound_http.post, search_url,
+                    purpose="patent_download",
+                    headers=search_headers,
+                    json=search_body,
+                    timeout=30,
+                )
+                if search_resp.status_code == 200 and search_resp.text:
+                    search_data = _json.loads(search_resp.text)
+                    # USPTO returns different wrapper keys; scan for the first
+                    # list value in the response dict (same pattern as
+                    # _extract_raw_items in dynamic_tool_params.py).
+                    raw_items = None
+                    if isinstance(search_data, list):
+                        raw_items = search_data
+                    elif isinstance(search_data, dict):
+                        for _v in search_data.values():
+                            if isinstance(_v, list) and _v:
+                                raw_items = _v
+                                break
+                    if raw_items:
+                        _first = raw_items[0]
+                        if isinstance(_first, dict):
+                            app_number = (
+                                _first.get('applicationNumberText') or
+                                _first.get('applicationNumber') or
+                                _first.get('appNumberText') or
+                                _first.get('appNumber')
                             )
-                if not app_number:
+                            if app_number:
+                                app_number = ''.join(c for c in str(app_number) if c.isdigit())
+                if app_number:
+                    _pipeline_logger.info(
+                        f"[task={task_id}] PHASE0 resolved — "
+                        f"input={patent_id} ({id_type}) → app_number={app_number}"
+                    )
+                else:
+                    # Log response preview for debugging.
+                    _resp_preview = (
+                        search_resp.text[:500] if search_resp.text
+                        else "(empty)"
+                    )
                     _pipeline_logger.warning(
                         f"[task={task_id}] PHASE0 resolve_failed — "
                         f"status={search_resp.status_code}, "
+                        f"response_preview={_resp_preview}, "
                         f"falling back to digits_only={digits_only}"
                     )
             except Exception as _resolve_err:
