@@ -1431,13 +1431,27 @@ Begin your response now:
                 working = False
         return answer, reasoning
 
+    @staticmethod
+    def _detect_lang(text: str) -> str:
+        """Return 'zh' or 'en' based on CJK character ratio in *text*."""
+        if not text:
+            return 'zh'
+        cjk = sum(1 for c in text if '一' <= c <= '鿿')
+        alpha = sum(1 for c in text if c.isalpha())
+        total = cjk + alpha
+        if total == 0:
+            return 'zh'
+        return 'zh' if cjk / max(total, 1) > 0.15 else 'en'
+
     async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler, push_filter=None):
         #self.knowledgeTool = get_knowledge_tool(user_id,  prompt)
         self._last_user_prompt = prompt
         self._last_query_id = query_id
         self._last_user_id = user_id
+        lang = self._detect_lang(prompt)
         if callback_handler:
-            await _emit_status(callback_handler, "正在分析您的问题...")
+            await _emit_status(callback_handler,
+                "正在分析您的问题..." if lang == 'zh' else "Analyzing your question...")
         # Pass conversation history so the LLM routing knowledge selection
         # can understand what "杩?鏉? or "from the results above" refers to.
         conv_history = self.memory.get()
@@ -1459,7 +1473,8 @@ Begin your response now:
             if callback_handler:
                 try:
                     await asyncio.wait_for(
-                        _emit_status(callback_handler, "正在启动批量专利分析任务..."),
+                        _emit_status(callback_handler,
+                            "正在启动批量专利分析任务..." if lang == 'zh' else "Starting batch patent analysis..."),
                         timeout=5.0,
                     )
                 except Exception:
@@ -1470,9 +1485,12 @@ Begin your response now:
         if is_workflow_knowledge(knowledge_item):
             if callback_handler:
                 await callback_handler.on_llm_new_token(
-                    f"已匹配组合知识：{knowledge_item.question}\n\n"
+                    f"Matched workflow: {knowledge_item.question}\n\n"
+                    if lang != 'zh'
+                    else f"已匹配组合知识：{knowledge_item.question}\n\n"
                 )
-                await _emit_status(callback_handler, "正在执行组合知识流程...")
+                await _emit_status(callback_handler,
+                    "正在执行组合知识流程..." if lang == 'zh' else "Executing workflow...")
             workflow_result = await WorkflowExecutor(
                 self.llm,
                 status_callback=_status_callback_for(callback_handler),
@@ -1916,10 +1934,12 @@ Begin your response now:
 
     async def invoke_agent(self, agent, callback_handler):
         try:
+            lang = self._detect_lang(getattr(self, '_last_user_prompt', ''))
             workflow_result = getattr(self, "_workflow_result", None)
             if workflow_result is not None:
                 self._workflow_result = None
-                await _emit_status(callback_handler, "正在整理结果...")
+                await _emit_status(callback_handler,
+                    "正在整理结果..." if lang == 'zh' else "Organizing results...")
                 output_mode = getattr(workflow_result, "output_mode", "last")
                 raw_items = getattr(workflow_result, "raw_items", None)
                 if output_mode == "all":
