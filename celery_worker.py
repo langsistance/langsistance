@@ -1240,7 +1240,7 @@ async def _run_pipeline(
 
     # ── Assemble report ──
     exec_section = (
-        f"## 执行摘要\n\n{exec_summary}\n\n"
+        f"## {exec_heading}\n\n{exec_summary}\n\n"
         if exec_summary else ""
     )
     report_text = (
