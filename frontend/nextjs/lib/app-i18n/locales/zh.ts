@@ -151,6 +151,11 @@ export default {
     longTaskProgress: '🔬 {progress} {phase}',
     longTaskCompleted: '✅ 深度研究任务已完成\n\n{files}',
     longTaskFailed: '❌ 深度研究任务执行失败。',
+    longTaskRunning: '🔬 深度分析进行中...',
+    longTaskQueued: '🔬 深度分析已排队，将在当前任务完成后自动开始...',
+    longTaskQueuedWithId: '🔬 深度分析排队中，将在当前任务完成后自动开始... 任务ID: {taskId}',
+    longTaskStopping: '⏹ 正在停止... {pct} 任务ID: {taskId}',
+    phasePreparing: '正在准备专利分析...',
   },
 
   // 侧边栏

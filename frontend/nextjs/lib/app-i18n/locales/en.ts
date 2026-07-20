@@ -151,6 +151,11 @@ export default {
     longTaskProgress: '🔬 {progress} {phase}',
     longTaskCompleted: '✅ Deep research task complete\n\n{files}',
     longTaskFailed: '❌ Deep research task failed.',
+    longTaskRunning: '🔬 Analysis in progress...',
+    longTaskQueued: '🔬 Analysis queued, will start automatically after current task completes...',
+    longTaskQueuedWithId: '🔬 Analysis queued, will start automatically after current task completes... Task ID: {taskId}',
+    longTaskStopping: '⏹ Stopping... {pct} Task ID: {taskId}',
+    phasePreparing: 'Preparing patent analysis...',
   },
 
   // Sidebar

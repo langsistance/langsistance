@@ -304,9 +304,31 @@ _STATUS_MSGS = {
         "searching_resolve": "正在获取第{page}页专利详情（{resolved}/{on_page}）...",
         "analyzing": "正在分析第 {current}/{total} 个专利...",
         "analyzing_progress": "分析进度: {current}/{total}",
+        "generating_framework": "正在生成分析框架（{total} 个专利）...",
+        "downloading_patent": "正在下载专利文件（{current}/{total}）...",
+        "analysis_completed_count": "已完成 {current}/{total} 个专利分析",
+        "writing_summary": "正在撰写执行摘要...",
+        "generating_outline": "正在规划报告结构...",
+        "writing_section": "正在撰写：{heading}",
+        "section_failed": "（{heading} 生成失败）",
+        "report_writing_complete": "报告撰写完成",
+        "default_report_title": "专利分析报告",
+        "default_section_heading": "分析结果",
+        "default_exec_summary_heading": "执行摘要",
+        "default_analysis_table": "分析数据表",
+        "search_complete": "检索到 {count} 个专利，开始分析",
+        "no_patents_found": "未找到匹配的专利",
         "generating_word": "正在生成 Word 文件...",
         "generating_pdf": "正在从 Word 生成 PDF 文件...",
         "fetching_uspto": "正在获取USPTO文件列表...",
+        "prosecution_no_docs": "USPTO未返回专利申请 {app_number} 的任何文件。可能原因：申请号不存在、无权访问、或尚未公开。",
+        "prosecution_no_analyzable": "未找到可分析的审查文件（无 Office Action、Response 或 Amendment）。可能该专利尚未进入实质审查阶段。",
+        "prosecution_framework": "正在生成分析框架（{total} 个审查文件）...",
+        "prosecution_downloading": "正在下载审查文件（{current}/{total}）...",
+        "prosecution_ocr": "正在OCR识别（{current}/{total}）...",
+        "prosecution_analyzing": "正在分析（{current}/{total}）：{desc}",
+        "prosecution_all_failed": "所有审查文件处理失败。文件可能是扫描件或加密PDF。",
+        "prosecution_report_complete": "报告撰写完成",
     },
     "en": {
         "preparing": "Preparing patent analysis ({total} patents)...",
@@ -320,9 +342,31 @@ _STATUS_MSGS = {
         "searching_resolve": "Fetching patent details page {page} ({resolved}/{on_page})...",
         "analyzing": "Analyzing patent {current}/{total}...",
         "analyzing_progress": "Analysis progress: {current}/{total}",
+        "generating_framework": "Building analysis framework ({total} patents)...",
+        "downloading_patent": "Downloading patent files ({current}/{total})...",
+        "analysis_completed_count": "Completed {current}/{total} patent analyses",
+        "writing_summary": "Writing executive summary...",
+        "generating_outline": "Planning report structure...",
+        "writing_section": "Writing: {heading}",
+        "section_failed": "({heading} generation failed)",
+        "report_writing_complete": "Report writing complete",
+        "default_report_title": "Patent Analysis Report",
+        "default_section_heading": "Analysis Results",
+        "default_exec_summary_heading": "Executive Summary",
+        "default_analysis_table": "Analysis Data Table",
+        "search_complete": "Found {count} patents, starting analysis",
+        "no_patents_found": "No matching patents found",
         "generating_word": "Generating Word document...",
         "generating_pdf": "Converting DOCX to PDF...",
         "fetching_uspto": "Fetching USPTO file list...",
+        "prosecution_no_docs": "USPTO returned no documents for application {app_number}. The application may not exist, may not be accessible, or may not yet be published.",
+        "prosecution_no_analyzable": "No analyzable prosecution documents found (no Office Actions, Responses, or Amendments). The patent may not have entered substantive examination.",
+        "prosecution_framework": "Building analysis framework ({total} prosecution documents)...",
+        "prosecution_downloading": "Downloading documents ({current}/{total})...",
+        "prosecution_ocr": "OCR processing {current}/{total}...",
+        "prosecution_analyzing": "Analyzing {current}/{total}: {desc}",
+        "prosecution_all_failed": "All prosecution documents failed processing. Files may be scanned images or encrypted PDFs.",
+        "prosecution_report_complete": "Report writing complete",
     },
 }
 
@@ -727,7 +771,7 @@ async def _run_pipeline(
         )
         patent_source = params.get('patent_source', 'cnipa')
         update_task_status(task_id, 'searching_patents', 0,
-                           f'已发现 {len(scene_candidates)} 个场景工具，正在选择检索方案...')
+                           _t('tool_select', batch_lang, count=len(scene_candidates)))
         selected = await select_tool(
             'search patents',
             f"专利来源: {patent_source}\n用户查询: {params['query']}",
@@ -743,7 +787,7 @@ async def _run_pipeline(
         )
         if selected:
             update_task_status(task_id, 'searching_patents', 2,
-                               f'正在检索专利：{selected.get("reason", "")}')
+                               _t('tool_search', batch_lang, reason=selected.get("reason", "")))
             result = await execute_tool(selected['tool'], selected['params'])
             raw_items = result.get('raw_items', []) or []
             patent_ids = extract_patent_ids(raw_items)
@@ -787,10 +831,10 @@ async def _run_pipeline(
                     f"pending={len(pending)}"
                 )
             update_task_status(task_id, 'searching_patents', 5,
-                               f'检索到 {len(patent_ids)} 个专利，开始分析',
+                               _t('search_complete', batch_lang, count=len(patent_ids)),
                                patent_ids=patent_ids)
         else:
-            set_task_failed(task_id, '未找到匹配的专利')
+            set_task_failed(task_id, _t('no_patents_found', batch_lang))
             user_id_for_analytics = params.get('user_id', '')
             if user_id_for_analytics:
                 track_event("long_task:fail", user_id=user_id_for_analytics,
@@ -809,7 +853,7 @@ async def _run_pipeline(
         )
     else:
         update_task_status(task_id, 'generating_columns', 5,
-                           f'正在生成分析框架（{total} 个专利）...')
+                           _t('generating_framework', batch_lang, total=total))
         _pipeline_logger.info(
             f"[task={task_id}] PHASE1 generate_table_columns — "
             f"query={params['query'][:100]}, patent_count={total}, "
@@ -819,6 +863,7 @@ async def _run_pipeline(
             query=params['query'],
             patent_count=total,
             provider=flash_provider,
+            lang=batch_lang,
         )
         _pipeline_logger.info(
             f"[task={task_id}] PHASE1 columns_generated — "
@@ -869,7 +914,7 @@ async def _run_pipeline(
             completed_before = len(table_rows)
             update_task_status(task_id, 'analyzing',
                                progress_pct(completed_before + i, total),
-                               f'正在下载专利文件（{patent_index}/{total}）...',
+                               _t('downloading_patent', batch_lang, current=patent_index, total=total),
                                table_rows=table_rows)
 
             # Try scene tool download first, fall back to hardcoded download
@@ -903,7 +948,7 @@ async def _run_pipeline(
 
             update_task_status(task_id, 'analyzing',
                                progress_pct(completed_before + i, total),
-                               f'正在分析（{patent_index}/{total}）：{patent_id}',
+                               _t('analyzing', batch_lang, current=patent_index, total=total),
                                table_rows=table_rows)
 
             # ── Text extraction may be incomplete for short patents or
@@ -918,7 +963,7 @@ async def _run_pipeline(
                 row = await analyze_single_patent(
                     patent_id=patent_id, patent_text=patent_text,
                     columns=columns, query=params['query'],
-                    provider=pro_provider, timeout=60,
+                    provider=pro_provider, timeout=60, lang=batch_lang,
                 )
                 _pipeline_logger.info(
                     f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] analyze_done — "
@@ -964,14 +1009,15 @@ async def _run_pipeline(
                     )
                 if not pdf_bytes:
                     row = build_failed_row(patent_id,
-                        "PDF text extraction failed and could not download binary")
+                        "PDF text extraction failed and could not download binary",
+                        lang=batch_lang)
                 elif want_vision:
                     # Path A: MiniMax-M3 vision → OCR fallback
                     from sources.long_task.patent_analyzer import analyze_patent_with_vision
                     row = await analyze_patent_with_vision(
                         pdf_bytes=pdf_bytes, patent_id=patent_id,
                         columns=columns, query=params['query'],
-                        vision_provider=vision_provider,
+                        vision_provider=vision_provider, lang=batch_lang,
                     )
                     if row.get('_failed'):
                         _pipeline_logger.info(
@@ -983,7 +1029,7 @@ async def _run_pipeline(
                             row = await analyze_single_patent(
                                 patent_id=patent_id, patent_text=ocr_text,
                                 columns=columns, query=params['query'],
-                                provider=pro_provider, timeout=60,
+                                provider=pro_provider, timeout=60, lang=batch_lang,
                             )
                 else:
                     # Path B: Vision disabled — straight to OCR
@@ -996,15 +1042,16 @@ async def _run_pipeline(
                         row = await analyze_single_patent(
                             patent_id=patent_id, patent_text=ocr_text,
                             columns=columns, query=params['query'],
-                            provider=pro_provider, timeout=60,
+                            provider=pro_provider, timeout=60, lang=batch_lang,
                         )
                     else:
                         row = build_failed_row(patent_id,
-                            f"Text extraction and OCR both failed ({len(ocr_text) if ocr_text else 0} chars)")
+                            f"Text extraction and OCR both failed ({len(ocr_text) if ocr_text else 0} chars)",
+                            lang=batch_lang)
 
             row['_summary'] = await generate_patent_summary(
                 patent_id=patent_id, row=row, query=params['query'],
-                provider=pro_provider,
+                provider=pro_provider, lang=batch_lang,
             )
             _pipeline_logger.info(
                 f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] summary_done — "
@@ -1017,7 +1064,7 @@ async def _run_pipeline(
                 f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] FAILED — "
                 f"patent_id={patent_id}, error={e}"
             )
-            row = build_failed_row(patent_id, str(e))
+            row = build_failed_row(patent_id, str(e), lang=batch_lang)
 
         table_rows.append(row)
         _pipeline_logger.info(
@@ -1037,7 +1084,7 @@ async def _run_pipeline(
 
         update_task_status(task_id, 'analyzing',
                            progress_pct(completed_before + i + 1, total),
-                           f'已完成 {len(table_rows)}/{total} 个专利分析',
+                           _t('analysis_completed_count', batch_lang, current=len(table_rows), total=total),
                            table_rows=table_rows)
     # Clean up temp upload directory after Phase 2 (vision fallback may have read files)
     if patent_file_refs:
@@ -1066,9 +1113,10 @@ async def _run_pipeline(
 
     from sources.long_task.status_manager import ThrottledSummaryUpdater
     summary_updater = ThrottledSummaryUpdater(
-        task_id, progress=76, step_msg='正在撰写执行摘要...',
+        task_id, progress=76, step_msg=_t('writing_summary', batch_lang),
     )
-    report_title = '专利分析报告' if batch_lang == 'zh' else 'Patent Analysis Report'
+    report_title = _t('default_report_title', batch_lang)
+    exec_heading = _t('default_exec_summary_heading', batch_lang)
 
     def _assemble_report(
         exec_summary: str | None,
@@ -1078,7 +1126,6 @@ async def _run_pipeline(
     ) -> str:
         parts = [f"# {report_title}\n\n"]
         if exec_summary:
-            exec_heading = '执行摘要' if batch_lang == 'zh' else 'Executive Summary'
             parts.append(f"## {exec_heading}\n\n{exec_summary}\n\n")
         parts.extend(completed_parts)
         if current_heading and current_text:
@@ -1087,12 +1134,12 @@ async def _run_pipeline(
 
     # ── Executive Summary ──
     update_task_status(task_id, 'generating_report', 76,
-                       '正在撰写执行摘要...')
+                       _t('writing_summary', batch_lang))
 
     def _exec_chunk(partial: str) -> None:
         summary_updater.push(
             _assemble_report(partial, []),
-            step_msg='正在撰写执行摘要...',
+            step_msg=_t('writing_summary', batch_lang),
         )
 
     try:
@@ -1111,7 +1158,7 @@ async def _run_pipeline(
         summary_updater.push(
             _assemble_report(exec_summary, []),
             progress=78,
-            step_msg='正在撰写执行摘要...',
+            step_msg=_t('writing_summary', batch_lang),
             force=True,
         )
     except Exception as e:
@@ -1122,7 +1169,7 @@ async def _run_pipeline(
 
     # ── Outline ──
     update_task_status(task_id, 'generating_report', 80,
-                       '正在规划报告结构...')
+                       _t('generating_outline', batch_lang))
     try:
         outline = await generate_report_outline(
             query=params['query'], columns=columns,
@@ -1134,8 +1181,8 @@ async def _run_pipeline(
             f"[task={task_id}] PHASE3 outline FAILED — {e}, falling back to default"
         )
         outline = {
-            'title': '专利分析报告',
-            'sections': [{'heading': '分析结果', 'description': ''}],
+            'title': _t('default_report_title', batch_lang),
+            'sections': [{'heading': _t('default_section_heading', batch_lang), 'description': ''}],
         }
     report_title = outline.get('title', report_title)
     _pipeline_logger.info(
@@ -1146,10 +1193,10 @@ async def _run_pipeline(
     )
 
     report_parts = []
-    sections = outline.get('sections', [{'heading': '分析结果', 'description': ''}])
+    sections = outline.get('sections', [{'heading': _t('default_section_heading', batch_lang), 'description': ''}])
     for idx, section in enumerate(sections):
         sec_pct = 80 + int((idx + 1) / len(sections) * 10)
-        step_msg = f'正在撰写：{section["heading"]}'
+        step_msg = _t('writing_section', batch_lang, heading=section["heading"])
         update_task_status(task_id, 'generating_report', sec_pct, step_msg)
         summary_updater.progress = sec_pct
         summary_updater.step_msg = step_msg
@@ -1177,7 +1224,7 @@ async def _run_pipeline(
             _pipeline_logger.error(
                 f"[task={task_id}] PHASE3 section[{idx+1}/{len(sections)}] FAILED — {e}"
             )
-            text = f"（{section['heading']} 生成失败）"
+            text = _t('section_failed', batch_lang, heading=section['heading'])
         section_md = f"## {section['heading']}\n\n{text}"
         report_parts.append(section_md)
         summary_updater.push(
@@ -1197,7 +1244,7 @@ async def _run_pipeline(
         if exec_summary else ""
     )
     report_text = (
-        f"# {outline.get('title', '专利分析报告')}\n\n"
+        f"# {outline.get('title', _t('default_report_title', batch_lang))}\n\n"
         + exec_section
         + "\n\n".join(report_parts)
     )
@@ -1207,7 +1254,7 @@ async def _run_pipeline(
         f"has_exec_summary={exec_summary is not None}"
     )
     update_task_status(task_id, 'generating_report', 90,
-                       '报告撰写完成', result_summary=report_text)
+                       _t('report_writing_complete', batch_lang), result_summary=report_text)
     _update_mysql_progress(task_id, 'generating_report', 90, result_summary=report_text)
 
     # ==== Phase 4: Export files ====
@@ -1238,7 +1285,7 @@ async def _run_pipeline(
 
     # ── Generate and upload DOCX ──
     update_task_status(task_id, 'exporting', 90, _t('generating_word', batch_lang))
-    docx_bytes = await export_docx_async(report_text, table_rows, columns)
+    docx_bytes = await export_docx_async(report_text, table_rows, columns, lang=batch_lang)
     try:
         await storage.put(task_id, 'report.docx', docx_bytes)
         _pipeline_logger.info(
@@ -1627,7 +1674,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         )
 
         update_task_status(task_id, 'generating_columns', 5,
-                           f'正在生成分析框架（{len(docs_to_download)} 个审查文件）...')
+                           _t('prosecution_framework', lang, total=len(docs_to_download)))
         _pipeline_logger.info(
             f"[task={task_id}] PHASE1 generate_table_columns — "
             f"query={query[:100]}, doc_count={len(docs_to_download)}, "
@@ -1655,9 +1702,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             f"pending_count={total_dl}, total={total_dl}"
         )
         update_task_status(task_id, 'downloading', 5,
-                           f'正在下载审查文件（0/{total_dl}）...'
-                           if lang == 'zh'
-                           else f'Downloading documents (0/{total_dl})...')
+                           _t('prosecution_downloading', lang, current=0, total=total_dl))
 
         async def _fetch_prosecution(url: str, hdrs: dict, timeout: int):
             return await _uspto_get_with_retry(url, hdrs, timeout)
@@ -1686,9 +1731,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             _pct = progress_pct(len(table_rows), total_dl)
             update_task_status(
                 task_id, 'downloading', _pct,
-                f'正在下载审查文件（{doc_index}/{total_dl}）...'
-                if lang == 'zh'
-                else f'Downloading document {doc_index}/{total_dl}...',
+                _t('prosecution_downloading', lang, current=doc_index, total=total_dl),
                 table_rows=table_rows,
             )
             await download_single_document(_doc, _fetch_prosecution, app_number, headers)
@@ -1715,9 +1758,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             if _doc.priority == 1 and _doc.binary and not _doc.text and vision_enabled:
                 update_task_status(
                     task_id, 'downloading', _pct,
-                    f'正在OCR识别（{doc_index}/{total_dl}）...'
-                    if lang == 'zh'
-                    else f'OCR processing {doc_index}/{total_dl}...',
+                    _t('prosecution_ocr', lang, current=doc_index, total=total_dl),
                     table_rows=table_rows,
                 )
                 try:
@@ -1757,9 +1798,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             update_task_status(
                 task_id, 'analyzing',
                 progress_pct(len(table_rows), total_dl),
-                f'正在分析（{doc_index}/{total_dl}）：{_doc.description[:40]}'
-                if lang == 'zh'
-                else f'Analyzing {doc_index}/{total_dl}: {_doc.description[:40]}',
+                _t('prosecution_analyzing', lang, current=doc_index, total=total_dl, desc=_doc.description[:40]),
                 table_rows=table_rows,
             )
             try:
@@ -1839,15 +1878,13 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             f"provider={pro_provider.model if hasattr(pro_provider, 'model') else 'pro'}"
         )
         update_task_status(task_id, 'generating_report', 80,
-                           '正在撰写执行摘要...'
-                           if lang == 'zh'
-                           else 'Writing executive summary...')
+                           _t('writing_summary', lang))
 
         from sources.long_task.status_manager import ThrottledSummaryUpdater
         summary_updater = ThrottledSummaryUpdater(
             task_id,
             progress=80,
-            step_msg='正在撰写执行摘要...' if lang == 'zh' else 'Writing executive summary...',
+            step_msg=_t('writing_summary', lang),
         )
 
         report_text = await gen_report(
@@ -1865,7 +1902,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             f"total_chars={len(report_text)}"
         )
         update_task_status(task_id, 'generating_report', 90,
-                           '报告撰写完成' if lang == 'zh' else 'Report writing complete',
+                           _t('prosecution_report_complete', lang),
                            result_summary=report_text)
         _update_mysql_progress(task_id, 'generating_report', 90, result_summary=report_text)
 
@@ -1899,7 +1936,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
 
         # ── DOCX (with table) ──
         update_task_status(task_id, 'exporting', 90, _t('generating_word', lang))
-        docx_bytes = await export_docx_async(report_text, table_rows, columns)
+        docx_bytes = await export_docx_async(report_text, table_rows, columns, lang=lang)
         try:
             await storage.put(task_id, 'report.docx', docx_bytes)
             _pipeline_logger.info(
@@ -2609,7 +2646,7 @@ async def export_pdf_async(docx_bytes: bytes) -> bytes:
     return await loop.run_in_executor(None, _convert)
 
 
-async def export_docx_async(report_text: str, table_rows: list, columns: list) -> bytes:
+async def export_docx_async(report_text: str, table_rows: list, columns: list, lang: str = 'zh') -> bytes:
     """Export report as DOCX using python-docx, run in executor."""
     import asyncio
     import io
@@ -2763,7 +2800,7 @@ async def export_docx_async(report_text: str, table_rows: list, columns: list) -
 
         # Add analysis table at the end
         if table_rows and columns:
-            h = doc.add_heading('分析数据表', level=2)
+            h = doc.add_heading(_t('default_analysis_table', lang), level=2)
             _set_heading_font(h)
             tbl = doc.add_table(rows=1, cols=len(columns))
             tbl.style = 'Table Grid'

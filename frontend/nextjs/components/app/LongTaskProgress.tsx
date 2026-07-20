@@ -186,16 +186,16 @@ const PHASES = [
 ]
 
 const PHASE_MATCH_KEYWORDS: Record<string, string[]> = {
-  extracting_text: ['文件解析', '解析上传'],
-  searching_patents: ['检索'],
-  generating_columns: ['分析框架', '分析维度'],
-  analyzing: ['正在分析', '下载专利', '专利分析', '已完成'],
-  generating_report: ['报告', '撰写'],
-  exporting: ['Word', 'PDF', '导出'],
+  extracting_text: ['文件解析', '解析上传', 'Parsing', 'Extracting', 'OCR'],
+  searching_patents: ['检索', 'Searching', 'Fetching USPTO'],
+  generating_columns: ['分析框架', '分析维度', 'framework', 'Analysis framework', 'Building analysis'],
+  analyzing: ['正在分析', '下载专利', '专利分析', '已完成', 'Analyzing', 'Downloading', 'Analysis progress', 'Completed'],
+  generating_report: ['报告', '撰写', 'Report', 'Writing', 'summary', 'outline'],
+  exporting: ['Word', 'PDF', '导出', 'Generating Word', 'Converting DOCX', 'Exporting'],
 }
 
 function isFileUploadMode(content: string): boolean {
-  return content.includes('上传文件') || content.includes('extracting_text')
+  return content.includes('上传文件') || content.includes('extracting_text') || content.includes('uploaded file') || content.includes('Parsing')
 }
 
 async function callLongTaskApi(taskId: string, action: 'pause' | 'resume' | 'stop'): Promise<boolean> {
