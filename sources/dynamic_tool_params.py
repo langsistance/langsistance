@@ -20,27 +20,169 @@ _URL_RE = re.compile(r'https?://[^\s"\'<>\])}]+')
 logger = Logger("dynamic_tool_params.log")
 
 
+def _repair_llm_json(text: str) -> str:
+    """Attempt to repair common LLM-generated JSON syntax errors.
+
+    Handles, in order:
+    1. Trailing commas before closing ] or }
+    2. Missing commas between string value and next key (``"value""key"``)
+    3. Missing commas between closing brace/bracket and next token
+    4. Single-quoted strings (converted to double quotes)
+    5. Unescaped double quotes inside string values
+    6. Extra trailing characters after the root object
+    """
+    original = text
+    text = text.strip()
+
+    # 1. Remove trailing commas before ] or }
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+
+    # 2. Missing comma between a quoted string value and the next quoted key:
+    #    "value""next_key"  →  "value", "next_key"
+    text = re.sub(r'"\s*"(?=[^:]*":)', '", "', text)
+
+    # 3. Missing comma between } or ] and a following "key":
+    #    }"next_key"  →  }, "next_key"
+    #    ]"next_key"  →  ], "next_key"
+    text = re.sub(r'([}\]])\s*"(?=[^"]*"\s*:)', r'\1, "', text)
+
+    # 4. Convert single-quoted keys/values to double quotes.
+    #    Strategy: replace structural single quotes (outside double-quoted
+    #    strings) with double quotes, then re-escape any inner conflicts.
+
+    def _try_parse(candidate: str):
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            return None
+
+    if _try_parse(text) is None:
+        # Walk character by character, tracking whether we are inside a
+        # double-quoted string.  Only replace single quotes outside strings.
+        chars: list[str] = []
+        in_double = False
+        i = 0
+        while i < len(text):
+            ch = text[i]
+            if ch == "\\" and in_double and i + 1 < len(text):
+                # Keep escape sequences inside double-quoted strings intact
+                chars.append(ch)
+                chars.append(text[i + 1])
+                i += 2
+                continue
+            if ch == '"':
+                in_double = not in_double
+                chars.append(ch)
+            elif ch == "'" and not in_double:
+                chars.append('"')
+            else:
+                chars.append(ch)
+            i += 1
+        quote_fixed = "".join(chars)
+        if (result := _try_parse(quote_fixed)) is not None:
+            return quote_fixed
+
+    # 5. Unescaped double quotes inside string values — find patterns like:
+    #    "key": "value with "unescaped" quotes"
+    #    Replace inner unescaped quotes with escaped quotes.
+    if _try_parse(text) is None:
+        # Match "key": "<value_with_unescaped_quotes>"
+        def _escape_inner_quotes(match):
+            key = match.group(1)
+            value = match.group(2)
+            # But this is complex; only handle the simplest case: LLM includes raw
+            # quotes from a template without escaping.  We escape every " inside
+            # the value that is not at the boundaries.
+            escaped_value = value.replace('\\"', '"').replace('"', '\\"')
+            return f'"{key}": "{escaped_value}"'
+
+        text = re.sub(
+            r'"([^"]+)"\s*:\s*"((?:[^"\\]|\\.)*(?:"[^"]*"[^"]*)*)"',
+            _escape_inner_quotes,
+            text,
+        )
+
+    # 6. Extra trailing content after the root JSON object — find the outermost
+    #    matched braces and discard anything after.
+    if _try_parse(text) is None:
+        # Walk from the end to find a balanced closing brace
+        depth = 0
+        end_idx = len(text)
+        for i in range(len(text) - 1, -1, -1):
+            ch = text[i]
+            if ch == "}":
+                depth += 1
+            elif ch == "{":
+                depth -= 1
+            if depth == 0 and ch == "}":
+                end_idx = i + 1
+                break
+        if end_idx < len(text):
+            text = text[:end_idx]
+
+    if text == original:
+        return original
+    return text
+
+
 def _coerce_json_object(value: Any, value_name: str) -> Dict[str, Any]:
-    """Return a JSON object from a dict or legacy JSON string."""
+    """Return a JSON object from a dict or legacy JSON string.
+
+    If the JSON string is malformed (common with LLM-generated content),
+    attempts automatic repair before raising an error.
+    """
     if isinstance(value, dict):
         return value
 
     if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"Invalid JSON in {value_name} at line {exc.lineno}, "
-                f"column {exc.colno}: {exc.msg}"
-            ) from exc
+        raw = value
 
-        if isinstance(parsed, dict):
+        def _do_parse(candidate: str):
+            parsed = json.loads(candidate)
+            if not isinstance(parsed, dict):
+                raise ValueError(
+                    f"{value_name} must decode to a JSON object, "
+                    f"got {type(parsed).__name__}"
+                )
             return parsed
 
+        # Best-effort parse: try raw first, then repaired.
+        parse_error: json.JSONDecodeError | None = None
+        try:
+            return _do_parse(raw)
+        except json.JSONDecodeError as exc:
+            parse_error = exc
+            logger.warning(
+                f"LLM produced invalid JSON for {value_name}: "
+                f"line {exc.lineno}, col {exc.colno}: {exc.msg}. "
+                f"Attempting repair. raw_len={len(raw)}"
+            )
+            # Log a truncated preview so we can diagnose later
+            preview = raw[:2000] if len(raw) > 2000 else raw
+            logger.warning(
+                f"Raw JSON preview ({value_name}): {preview}"
+            )
+
+        # Try repair
+        repaired = _repair_llm_json(raw)
+        if repaired != raw:
+            try:
+                result = _do_parse(repaired)
+                logger.info(
+                    f"Successfully repaired JSON for {value_name} "
+                    f"after fixing LLM syntax errors"
+                )
+                return result
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # If still failing, raise with context
+        assert parse_error is not None  # we only reach here if the first parse failed
         raise ValueError(
-            f"{value_name} must decode to a JSON object, "
-            f"got {type(parsed).__name__}"
-        )
+            f"Invalid JSON in {value_name} at line {parse_error.lineno}, "
+            f"column {parse_error.colno}: {parse_error.msg}. "
+            f"Automatic repair was attempted but failed."
+        ) from parse_error
 
     raise ValueError(
         f"{value_name} must be a JSON object or JSON string, "
@@ -226,6 +368,12 @@ def _inject_zldjs_auth_params(request_params: dict) -> None:
 
 def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | None) -> Dict[str, Any]:
     """Execute a push=2 backend tool and return parsed data plus list metadata."""
+    # Log raw LLM params before any parsing for diagnostic purposes
+    if isinstance(params, str) and params:
+        logger.info(
+            f"execute_backend_tool_request raw LLM params (len={len(params)}): "
+            f"{params[:3000]}{'...(truncated)' if len(params) > 3000 else ''}"
+        )
     params_data = _coerce_json_object(tool_info.params, "tool_info.params")
     user_params = _coerce_json_object(params or {}, "LLM tool params")
     url = _append_path_to_url(

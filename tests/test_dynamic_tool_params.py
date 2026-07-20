@@ -32,6 +32,91 @@ class TestDynamicToolParams(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Invalid JSON in LLM tool params"):
             _coerce_json_object(params, "LLM tool params")
 
+    def test_repairs_missing_comma_between_string_fields(self):
+        from sources.dynamic_tool_params import _coerce_json_object
+
+        # Simulates LLM forgetting the comma between "value" and next "key"
+        params = '{"query": {"q": "apple""assignee": "Google"}}'
+        result = _coerce_json_object(params, "LLM tool params")
+        self.assertEqual(result["query"]["q"], "apple")
+        self.assertEqual(result["query"]["assignee"], "Google")
+
+    def test_repairs_trailing_comma_in_object(self):
+        from sources.dynamic_tool_params import _coerce_json_object
+
+        params = '{"query": {"q": "apple",}, "body": {}}'
+        result = _coerce_json_object(params, "LLM tool params")
+        self.assertEqual(result["query"]["q"], "apple")
+
+    def test_repairs_trailing_comma_in_array(self):
+        from sources.dynamic_tool_params import _coerce_json_object
+
+        params = '{"items": ["a", "b", "c",]}'
+        result = _coerce_json_object(params, "LLM tool params")
+        self.assertEqual(result["items"], ["a", "b", "c"])
+
+    def test_repairs_missing_comma_after_closing_brace(self):
+        from sources.dynamic_tool_params import _coerce_json_object
+
+        # Missing comma between }"next_key":
+        params = '{"body": {"q": "search"}"query": {"page": 1}}'
+        result = _coerce_json_object(params, "LLM tool params")
+        self.assertEqual(result["body"]["q"], "search")
+        self.assertEqual(result["query"]["page"], 1)
+
+    def test_repairs_single_quoted_keys(self):
+        from sources.dynamic_tool_params import _coerce_json_object
+
+        params = "{'query': {'q': 'apple'}, 'body': {}}"
+        result = _coerce_json_object(params, "LLM tool params")
+        self.assertEqual(result["query"]["q"], "apple")
+
+    def test_repair_chain_multiple_fixes(self):
+        from sources.dynamic_tool_params import _coerce_json_object
+
+        # Missing comma + trailing comma
+        params = '{"query": {"q": "test""assignee": "Apple",}, "body": {}}'
+        result = _coerce_json_object(params, "LLM tool params")
+        self.assertEqual(result["query"]["q"], "test")
+        self.assertEqual(result["query"]["assignee"], "Apple")
+
+    def test_logs_warning_and_raw_json_on_repair(self):
+        import sources.dynamic_tool_params as dynamic_tool_params
+
+        class CaptureLogger:
+            def __init__(self):
+                self.messages = []
+
+            def info(self, message):
+                self.messages.append(("info", message))
+
+            def warning(self, message):
+                self.messages.append(("warning", message))
+
+        capture_logger = CaptureLogger()
+        original_logger = getattr(dynamic_tool_params, "logger", None)
+        dynamic_tool_params.logger = capture_logger
+
+        def restore_logger():
+            dynamic_tool_params.logger = original_logger
+
+        self.addCleanup(restore_logger)
+
+        # Malformed but repairable JSON
+        params = '{"query": {"q": "apple",}, "body": {}}'
+        result = dynamic_tool_params._coerce_json_object(params, "LLM tool params")
+
+        self.assertEqual(result["query"]["q"], "apple")
+
+        # Check that a warning was logged about the invalid JSON
+        warning_messages = [m for level, m in capture_logger.messages if level == "warning"]
+        self.assertTrue(any("LLM produced invalid JSON" in m for m in warning_messages))
+        self.assertTrue(any("Raw JSON preview" in m for m in warning_messages))
+
+        # Check that repair success was logged
+        info_messages = [m for level, m in capture_logger.messages if level == "info"]
+        self.assertTrue(any("Successfully repaired JSON" in m for m in info_messages))
+
     def test_appends_path_to_base_url(self):
         from sources.dynamic_tool_params import _append_path_to_url
 

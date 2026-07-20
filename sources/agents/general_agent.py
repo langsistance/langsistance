@@ -746,6 +746,15 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
            - For the params argument: provide the COMPLETE JSON from the template above, with values modified per the user's request. Include ALL top-level fields (method, Content-Type, query, header, body) even if unchanged.
            - DO NOT put user_id or query_id inside the params JSON — they are separate tool arguments
 
+        5. JSON FORMAT RULES — params MUST be valid JSON (CRITICAL):
+           - Every key-value pair MUST be separated by a comma (except the last pair in each object)
+           - Trailing commas (after the last value in an object/array) are FORBIDDEN
+           - All string values containing double quotes MUST escape them with backslash: \\"
+           - All string values containing backslashes MUST escape them: \\\\
+           - All keys and string values MUST use double quotes ("), NEVER single quotes (')
+           - Every opening brace/bracket MUST have a matching closing brace/bracket
+           - BEFORE outputting, mentally verify: "Is this JSON parseable by a strict parser?"
+
         Execute the tool with the appropriate parameters and generate the final response strictly based on the tool's output.
 
         If the task can be completed without invoking the tool, respond directly to the user without calling any tool.
@@ -1172,7 +1181,16 @@ Begin your response now:
                             return None
 
                     def dynamic_backend_tool_function(user_id: str, query_id: str, params: Dict[str, Any] | str):
-                        self.logger.info(f"dynamic_backend_tool_function user id is {user_id} - query id is {query_id} - param is {params}")
+                        if isinstance(params, str):
+                            self.logger.info(
+                                f"dynamic_backend_tool_function user_id={user_id} query_id={query_id} "
+                                f"params_type=str params_len={len(params)}"
+                            )
+                        else:
+                            self.logger.info(
+                                f"dynamic_backend_tool_function user_id={user_id} query_id={query_id} "
+                                f"params_type={type(params).__name__}"
+                            )
                         tool_result = execute_backend_tool_request(tool_info, params)
                         raw_items = tool_result.get("raw_items")
                         if raw_items:
