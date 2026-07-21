@@ -115,11 +115,11 @@ class TestGenerateExecutiveSummary(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(len(captured_messages) > 0, "Expected LLM to be called")
         system_msg = captured_messages[0][0][1]  # (system, content) tuple
-        self.assertIn("理解问题", system_msg)
-        self.assertIn("过滤信息", system_msg)
-        self.assertIn("逻辑组织", system_msg)
-        self.assertIn("给出建议", system_msg)
-        self.assertIn("不是通用摘要", system_msg)
+        self.assertIn("专利律师", system_msg)
+        self.assertIn("审查策略", system_msg)
+        self.assertIn("驳回策略", system_msg)
+        self.assertIn("授权原因", system_msg)
+        self.assertIn("不是按时间顺序总结", system_msg)
 
     async def test_strips_think_block(self):
         """Output containing </think> should have the think block stripped."""
@@ -193,7 +193,7 @@ class TestGenerateReportOutline(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("sections", result)
         self.assertTrue(
-            any("Prosecution Overview" in s["heading"] for s in result["sections"])
+            any("Claim Amendment Analysis" in s["heading"] for s in result["sections"])
         )
 
 
