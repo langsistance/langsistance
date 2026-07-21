@@ -1490,7 +1490,14 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         app_number = None
 
         # ── Resolve grant / publication number → application number ──
-        if id_type in ('grant_number', 'publication_number'):
+        # Also resolve when id_type is unknown or digits don't look like an
+        # application number (e.g. 7-digit grant numbers like 8388852).
+        _needs_resolution = (
+            id_type in ('grant_number', 'publication_number')
+            or id_type == 'unknown'
+            or len(digits_only) < 8
+        )
+        if _needs_resolution:
             _pipeline_logger.info(
                 f"[task={task_id}] PHASE0 resolving — "
                 f"patent_id={patent_id}, id_type={id_type}"
@@ -1510,13 +1517,21 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                     f'applicationMetaData.earliestPublicationNumber:"{c}"'
                     for c in pub_candidates
                 )
-                # For grant_number: search by patentNumber.
-                # For publication_number: search by earliestPublicationNumber.
+                # Search strategy by id_type:
+                # - grant_number: search by patentNumber (most precise)
+                # - publication_number: search by earliestPublicationNumber
+                # - unknown: search ALL fields to maximize chance of finding it
                 # Always include applicationNumberText as fallback.
                 if id_type == 'grant_number':
                     search_q = f'applicationMetaData.patentNumber:"{_digits_esc}"'
-                else:
+                elif id_type == 'publication_number':
                     search_q = pub_clauses
+                else:
+                    # unknown or other — search both patentNumber and publicationNumber
+                    search_q = (
+                        f'applicationMetaData.patentNumber:"{_digits_esc}"'
+                        f' OR {pub_clauses}'
+                    )
                 search_q += f' OR applicationNumberText:"{_digits_esc}"'
 
                 search_body = {

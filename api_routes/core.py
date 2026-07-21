@@ -278,7 +278,8 @@ async def _classify_long_task_async(
         "   例：（历史对话返回了专利列表）用户：「上述专利里哪些已授权」\n"
         "   例：（历史对话返回了专利结果）用户：「帮我分析第一个专利」\n\n"
         "## 专利ID格式\n"
-        "- USPTO（美国）: 纯8位数字，如 17429113, 18331482\n"
+        "- USPTO（美国）: 纯7-8位数字，如 8388852（7位授权号）, 17429113（8位申请号）\n"
+        "- USPTO 授权号（patent number）通常是7位数字，申请号（application number）通常是8位\n"
         "- CNIPA（中国）: 20XX + 8~9位数字，可选 .校验位，如 202310123456.7\n\n"
         "## 专利来源判断\n"
         "- 如果对话提到 USPTO、美国专利、美国专利商标局 → uspto\n"
@@ -301,10 +302,11 @@ async def _classify_long_task_async(
         "- application_number: 用户明确说是「申请号/application number」，"
         "或 ID 格式为 2位系列码+6位序号（如 17/027,484 或 17027484）\n"
         "- grant_number: 用户明确说是「授权号/patent number/grant number」，"
-        "或 ID 在对话中作为 Patent No. 出现（如 US12506212 中的 12506212 可能是授权号）\n"
+        "或 ID 是7位数字（如 8388852），或者 ID 在对话中作为 Patent No. 出现\n"
         "- publication_number: ID 格式为 US + 4位年份 + 7位序号（如 US20250103146A1），"
         "或用户明确说是「公开号/publication number」\n"
-        "- unknown: 无法判断 → 系统将默认按 application_number 处理"
+        "- 如果不确定：优先填 grant_number（系统会通过 USPTO API 自动解析出申请号）\n"
+        "- unknown: 仅在完全无法判断时使用"
     )
 
     user_text = (
