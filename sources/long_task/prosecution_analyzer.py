@@ -5,11 +5,12 @@ batch patent analysis pipeline:
 
   Phase 1:  generate_table_columns()      — Flash LLM determines column headers
   Phase 2a: analyze_single_document()     — Pro LLM fills one table row per doc
-  Phase 2b: generate_document_summary()   — 2-3 sentence summary per doc
-  Phase 3a: generate_executive_summary()  — concise summary at top of report
+  Phase 2b: generate_document_summary()   — prosecution strategy summary per doc
+  Phase 3a: generate_executive_summary()  — Key Prosecution Insights (bullet-point)
   Phase 3b: generate_report_outline()     — dynamic section outline
   Phase 3c: generate_report_section()     — streaming section writing
-  Phase 3d: generate_prosecution_report() — orchestrator (returns report + table)
+  Phase 3d: generate_claim_chart()        — Claim Limitation vs. Prior Art chart
+  Phase 3e: generate_prosecution_report() — orchestrator (returns report + table)
 """
 
 from __future__ import annotations
@@ -148,11 +149,11 @@ async def analyze_single_document(
             "（不是为了修改而修改，是为了绕开哪个对比文件的哪个特征）\n"
             "- 每个维度2-4句话，具体有依据\n"
             '- 如果某维度在文件中找不到明确信息，填写"文件中未明确描述"\n\n'
-            "CRITICAL 法律语气：\n"
-            "- 描述审查员行为时使用客观语言，不要推断审查员的主观意图\n"
-            "- 使用「审查员认为」「审查员指出」「根据审查记录」\n"
-            "- 不要说「审查员认可」「审查员承认」「审查员同意」\n"
-            "- 对 Notice of Allowance：只说「审查员未再提出驳回」，不说「审查员认可了修改」"
+            "CRITICAL 法律语气（绝对不可违反）：\n"
+            "- 🚫 禁止：「审查员认可」「审查员承认」「审查员同意」「审查员接受」「证明」「证实」\n"
+            "- ✅ 使用：「审查员认为」「审查员指出」「审查记录显示」「审查员未再提出驳回」\n"
+            "- 对 Notice of Allowance：只说「审查员未再基于已引用对比文件提出驳回」，不说「审查员认可了修改」\n"
+            "- 不要推断审查员的主观意图，只描述审查记录中的客观事实"
         )
         user_content = (
             f"用户问题：{query}\n\n"
@@ -185,12 +186,12 @@ async def analyze_single_document(
             " strategic purpose — what prior art feature was being avoided?\n"
             "- 2-4 sentences per dimension, specific and evidence-based\n"
             '- If a dimension cannot be found, write "Not described in this document"\n\n'
-            "CRITICAL Legal Tone:\n"
-            "- Describe examiner actions objectively — do not infer subjective intent\n"
-            '- Use "the examiner found", "the examiner stated", "based on the record"\n'
-            '- NEVER say "the examiner admitted", "the examiner agreed", "the examiner conceded"\n'
-            '- For Notice of Allowance: say "the examiner did not raise further rejections", '
-            'NOT "the examiner approved the amendments"'
+            "CRITICAL Legal Tone (DO NOT VIOLATE):\n"
+            '- Describe examiner actions objectively — do not infer subjective intent\n'
+            '- 🚫 BANNED: "admitted", "agreed", "conceded", "accepted", "approved", "proved"\n'
+            '- ✅ Use: "the examiner found", "the examiner stated", "based on the record", "according to the OA"\n'
+            '- For Notice of Allowance: "the examiner did not raise further rejections based on the cited references"'
+            ' — NEVER "the examiner approved the amendments"'
         )
         user_content = (
             f"User query: {query}\n\n"
@@ -440,23 +441,25 @@ async def generate_executive_summary(
             "══════════════════════════════════════\n"
             "CRITICAL 法律语气规则\n"
             "══════════════════════════════════════\n\n"
-            "你的报告可能被用于法律决策。必须遵守以下规则：\n\n"
-            "1. 永远不要使用绝对性语言描述审查员意图：\n"
-            "   ❌ 「审查员认可了修改后的权利要求」\n"
-            "   ❌ 「The examiner admitted...」\n"
-            "   ❌ 「审查员承认/同意/接受」\n"
-            "   ✅ 「Based on the prosecution record, the most likely reason for allowance was...」\n"
-            "   ✅ 「根据审查记录，授权的最可能原因是...」\n"
-            "   ✅ 「The allowance indicates the examiner did not find the amended claims unpatentable」\n\n"
-            "2. 对有效性分析使用降级语气：\n"
-            "   ❌ 「存在显著脆弱点」「该专利容易被攻击」\n"
-            "   ✅ 「Potential challenge points include...」\n"
-            "   ✅ 「可能的质疑方向包括...」\n"
-            "   ✅ 「To challenge this patent, prior art teaching [feature X] would be needed」\n\n"
-            "3. 不要推断审查员的主观意图：\n"
-            "   ✅ 描述审查记录中的客观事实\n"
-            "   ✅ 使用「likely」「may」「based on the record」「suggests」\n"
-            "   ❌ 使用「clearly」「undoubtedly」「admitted」「conceded」\n\n"
+            "你的报告可能被用于法律决策。以下规则绝对不可违反：\n\n"
+            "1. 🚫 禁止使用任何绝对化结论词：\n"
+            "   ❌ 「证明」「证实」「彻底瓦解」「绝对」「唯一原因」「毫无疑问」\n"
+            "   ❌ 「审查员认可了」「审查员接受了」「审查员承认」「审查员同意」\n"
+            "   ❌ 「审查员最终接受了该特征未被任何对比文件公开」\n"
+            "   ✅ 「根据审查记录推断，授权的最可能原因是...」\n"
+            "   ✅ 「基于最后一次OA撤回情况和Notice of Allowance，可推断...」\n"
+            "   ✅ 「主要原因」「最可能因素」「根据审查记录推断」「可能」\n"
+            "   ✅ 「Allowance 表明审查员未再基于已引用对比文件提出驳回」\n\n"
+            "2. 🚫 禁止对有效性做确定性判断：\n"
+            "   ❌ 「存在显著脆弱点」「该专利容易被攻击」「可以被无效」\n"
+            "   ✅ 「可能的质疑方向包括...」「潜在挑战点...」\n"
+            "   ✅ 「要挑战该专利，需要找到教导了 [X特征] 的对比文件」\n"
+            "   ✅ 「该专利的强度主要依赖于 [X限制] 的新颖性」\n\n"
+            "3. 🚫 禁止推断审查员主观意图：\n"
+            "   ✅ 只描述审查记录中的客观事实\n"
+            "   ✅ 使用「审查记录显示」「审查员指出」「审查员认为」\n"
+            "   ✅ 使用「likely」「may」「suggests」「based on the record」\n"
+            "   ❌ 使用「clearly」「undoubtedly」「admitted」「conceded」「proved」\n"
             "══════════════════════════════════════\n"
             "写作规则\n"
             "══════════════════════════════════════\n\n"
@@ -735,15 +738,17 @@ async def generate_report_section(
             "3. 不要虚构信息，只引用数据摘要中给出的内容\n"
             "4. 引用格式统一用 **[]** 包裹文件类型\n"
             "5. 结尾给出针对本章主题的结论\n\n"
-            "CRITICAL 法律语气：\n"
-            "- 描述审查员行为时使用「审查员认为」「审查记录显示」「根据审查文件」\n"
-            "- 永远不要说「审查员认可」「审查员承认」「审查员同意」\n"
-            "- 对不确定性使用「likely」「may」「suggests」「based on the record」\n"
-            "- 对有效性分析使用「Potential challenge points」「可能的质疑方向」\n\n"
-            "CRITICAL 精炼要求：\n"
-            "- 本章与其他章节内容绝对不能重复，如果某个事实已在其他章节提到就不要再说\n"
-            "- 300-500 字（不是 400-800），用最少的字传达最高的价值\n"
-            "- 如果一段话删除后不影响理解，就删除它\n"
+            "CRITICAL 法律语气（不可违反）：\n"
+            "- 🚫 禁止：「证明」「证实」「彻底瓦解」「绝对」「唯一原因」「毫无疑问」\n"
+            "- 🚫 禁止：「审查员认可」「审查员接受」「审查员承认」「审查员同意」\n"
+            "- ✅ 用：「审查记录显示」「审查员指出」「审查员认为」「根据审查文件」\n"
+            "- ✅ 用：「主要原因」「最可能因素」「根据审查记录推断」\n"
+            "- 对有效性：说「潜在挑战点」「可能的质疑方向」，不说「存在脆弱点」「容易被攻击」\n\n"
+            "CRITICAL 精炼与反重复：\n"
+            "- 🚫 绝对不要在核心审查洞察中已出现的事实再次展开叙述\n"
+            "- 如果某个特征已在核心审查洞察中提到，本章只补充之前没说过的细节\n"
+            "- 250-400 字（不是 400-800），用最少的字传达最高的价值\n"
+            "- 每句话删除后问自己：少了这句话，用户会丢失关键信息吗？如果不会，删掉\n"
             "- 先说最重要的信息，用户可能只读前几段"
         )
         user_content = (
@@ -752,11 +757,10 @@ async def generate_report_section(
             f"本章说明：{description}\n\n"
             f"各文件分析结果：\n{data_summary}\n\n"
             f"请撰写「{heading}」章节。要求：\n"
-            f"- 聚焦策略洞察，不是事实罗列\n"
+            f"- 聚焦策略洞察，不重复核心审查洞察已有内容\n"
             f"- 每个事实引用来源 **[文件类型]**\n"
-            f"- Markdown 格式，300-500 字\n"
-            f"- 与其他章节不重复，先写最重要的信息\n"
-            f"- 客观语气：不说「审查员认可」，用「审查记录显示」「审查员认为」"
+            f"- 250-400 字，先写最重要的\n"
+            f"- 🚫 禁止使用「证明」「认可」「接受」「承认」「绝对」等绝对化词语"
         )
     else:
         system_prompt = (
@@ -775,15 +779,17 @@ async def generate_report_section(
             "3. Do not fabricate — only use content from the data summary\n"
             "4. Citation format: **[]** wrapping the document type\n"
             "5. End with a conclusion relevant to the section topic\n\n"
-            "CRITICAL Legal Tone:\n"
-            '- Describe examiner actions as "the examiner found", "the record shows", "according to"\n'
-            '- NEVER say "the examiner admitted", "agreed", "conceded", "approved"\n'
-            '- Use "likely", "may", "suggests", "based on the record" for uncertainty\n'
-            '- Use "Potential challenge points" for validity analysis, not "significant vulnerabilities"\n\n'
-            "CRITICAL Conciseness:\n"
-            "- This section MUST NOT repeat content from other sections or from Key Prosecution Insights\n"
-            "- 300-500 words (NOT 400-800), maximum value in minimum words\n"
-            "- If removing a sentence doesn't change the insight, remove it\n"
+            "CRITICAL Legal Tone (DO NOT VIOLATE):\n"
+            '- 🚫 BANNED: "proved", "confirmed", "destroyed", "absolutely", "sole reason", "without doubt"\n'
+            '- 🚫 BANNED: "the examiner admitted", "agreed", "conceded", "accepted", "approved the amendment"\n'
+            '- ✅ Use: "the record shows", "the examiner found", "the examiner stated", "according to the OA"\n'
+            '- ✅ Use: "primary reason", "most likely factor", "based on the prosecution record"\n'
+            '- For validity: "potential challenge points", "possible grounds for challenge" — NOT "significant vulnerabilities"\n\n'
+            "CRITICAL Conciseness & Anti-Repetition:\n"
+            "- 🚫 NEVER repeat facts already covered in Key Prosecution Insights\n"
+            "- If a fact appeared in Key Prosecution Insights, this section only adds NEW detail not already stated\n"
+            "- 250-400 words (NOT 400-800), maximum value in minimum words\n"
+            "- After writing each sentence, ask: would the user lose critical info without it? If no, delete it\n"
             "- Lead with the most important information — users may only read the first few paragraphs"
         )
         user_content = (
@@ -792,11 +798,10 @@ async def generate_report_section(
             f"Description: {description}\n\n"
             f"Analysis results:\n{data_summary}\n\n"
             f"Write the '{heading}' section. Requirements:\n"
-            f"- Focus on strategy insights, not fact listing\n"
+            f"- Don't repeat what's already in Key Prosecution Insights\n"
             f"- Cite sources with **[Document Type]** format\n"
-            f"- Markdown, 300-500 words\n"
-            f"- No overlap with other sections or Key Prosecution Insights — lead with most important info\n"
-            f"- Objective tone: 'the record shows', 'the examiner found' — never 'admitted', 'agreed'"
+            f"- 250-400 words, lead with most important\n"
+            f"- 🚫 NEVER use 'admitted', 'agreed', 'conceded', 'proved', 'accepted'"
         )
 
     try:
@@ -834,7 +839,104 @@ def _fallback_text(kind: str, lang: str, heading: str = "") -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Phase 3d: Main orchestrator
+# Phase 3d: Claim Limitation Analysis Chart (Pro LLM)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+async def generate_claim_chart(
+    table_rows: list[dict],
+    columns: list[str],
+    provider: Any,
+    lang: str = "zh",
+) -> str:
+    """Generate a Claim Limitation Analysis Chart — a structured table mapping
+    each key claim limitation against prior art references, showing the
+    examiner's position and applicant's response.
+
+    This is the single highest-value deliverable for patent attorneys reviewing
+    a prosecution history. It answers: "Which limitation saved this patent?"
+    """
+    entries = []
+    for r in table_rows[:30]:
+        first_col = columns[0] if columns else "?"
+        doc_type = r.get(first_col, "?")
+        parts = [f"[{doc_type}]"]
+        for col in columns[1:8]:
+            val = str(r.get(col, "")).strip()
+            if val and val != "—":
+                parts.append(f"  {col}: {val}")
+        entries.append("\n".join(parts))
+    data_text = "\n\n".join(entries)
+
+    if lang == "zh":
+        system_prompt = (
+            "你是一个USPTO专利审查分析师。根据审查文件分析结果，"
+            "生成一份「Claim 限制 vs 对比文件」对照表。\n\n"
+            "目标：一眼看清哪个 Claim 限制最终让专利获得授权。\n\n"
+            "输出格式：Markdown 表格，包含以下列：\n"
+            "| Claim 限制 | Kang | Lim | 其他对比文件 | 审查员立场 | 申请人回应 |\n"
+            "|-----------|------|-----|-------------|-----------|----------|\n\n"
+            "填写规则：\n"
+            "- 如果对比文件公开了该限制 → 填 ✓\n"
+            "- 如果对比文件未公开 → 填 ✗\n"
+            "- 如果存在争议（审查员认为公开，申请人不同意）→ 填 ⚡争议\n"
+            "- 如果对比文件不适用 → 填 —\n"
+            "- 审查员立场：简要说明审查员对该限制的看法\n"
+            "- 申请人回应：简要说明申请人的反驳或修改\n\n"
+            "只列出与授权/驳回直接相关的关键限制（5-10 行），不要列所有限制。\n"
+            "在最下面加一行「★ 授权关键」，标注哪个限制是最终授权的决定性因素。\n\n"
+            "直接输出 Markdown 表格，不要输出JSON，不要加额外解释段落。"
+        )
+        user_content = (
+            f"审查文件分析结果：\n{data_text}\n\n"
+            f"请生成 Claim 限制 vs 对比文件对照表。只列关键限制，标注授权决定性因素。"
+        )
+    else:
+        system_prompt = (
+            "You are a USPTO patent prosecution analyst. Based on the prosecution "
+            "document analysis, generate a 'Claim Limitation vs. Prior Art' comparison table.\n\n"
+            "Goal: Show at a glance which claim limitation ultimately secured the patent.\n\n"
+            "Output format: Markdown table with these columns:\n"
+            "| Claim Limitation | [Ref1] | [Ref2] | Other Refs | Examiner Position | Applicant Response |\n"
+            "|-----------------|--------|--------|-----------|-------------------|-------------------|\n\n"
+            "Fill rules:\n"
+            "- If reference discloses the limitation → ✓\n"
+            "- If reference does NOT disclose → ✗\n"
+            "- If disputed (examiner says yes, applicant says no) → ⚡ Disputed\n"
+            "- If reference not applicable → —\n"
+            "- Examiner Position: brief summary of examiner's view\n"
+            "- Applicant Response: brief summary of applicant's rebuttal or amendment\n\n"
+            "Only list the key limitations directly relevant to allowance/rejection (5-10 rows).\n"
+            "Add a final row '★ Decisive Limitation' marking which limitation drove allowance.\n\n"
+            "Output Markdown table directly, no JSON, no extra explanatory paragraphs."
+        )
+        user_content = (
+            f"Prosecution document analysis:\n{data_text}\n\n"
+            f"Generate Claim Limitation vs Prior Art chart. Only key limitations. "
+            f"Mark the decisive limitation for allowance."
+        )
+
+    try:
+        llm = provider._get_langchain_llm(streaming=False)
+        messages = [("system", system_prompt), ("human", user_content)]
+        resp = await llm.ainvoke(messages)
+        text = (resp.content or "").strip()
+        if "</think>" in text:
+            text = text[text.rfind("</think>") + len("</think>"):].strip()
+        return text or (
+            "（Claim 对照表生成失败）" if lang == "zh"
+            else "(Claim chart generation failed)"
+        )
+    except Exception as e:
+        _logger.warning(f"[prosecution] claim_chart_failed: {e}")
+        return (
+            "（Claim 对照表生成失败）" if lang == "zh"
+            else "(Claim chart generation failed)"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 3e: Main orchestrator
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -961,6 +1063,18 @@ async def generate_prosecution_report(
                 step_msg=step_msg,
                 force=True,
             )
+
+    # ── Claim Limitation Chart ──
+    _logger.info("[prosecution] generating claim_chart")
+    claim_chart_heading = 'Claim 限制 vs 对比文件对照表' if lang == 'zh' else 'Claim Limitation vs. Prior Art Chart'
+    try:
+        claim_chart_md = await generate_claim_chart(
+            table_rows, columns, pro_provider, lang,
+        )
+        if claim_chart_md and '失败' not in claim_chart_md and 'failed' not in claim_chart_md.lower():
+            report_parts.append(f"## {claim_chart_heading}\n\n{claim_chart_md}")
+    except Exception as e:
+        _logger.warning(f"[prosecution] claim_chart skipped: {e}")
 
     # ── Build analysis table ──
     table_md = _build_markdown_table(table_rows, columns, lang)
