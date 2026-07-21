@@ -116,8 +116,8 @@ class TestGenerateExecutiveSummary(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(len(captured_messages) > 0, "Expected LLM to be called")
         system_msg = captured_messages[0][0][1]  # (system, content) tuple
         self.assertIn("专利律师", system_msg)
-        self.assertIn("Why This Patent Was Finally Allowed", system_msg)
-        self.assertIn("Strongest Rejection", system_msg)
+        self.assertIn("全程使用中文", system_msg)
+        self.assertIn("专利为什么最终获得授权", system_msg)
         self.assertIn("不是论文", system_msg)
         self.assertIn("不要重复", system_msg)
 
