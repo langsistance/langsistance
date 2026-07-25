@@ -164,9 +164,9 @@ def execute_patent_analysis(self, task_id: str, params: dict):
             pro_provider = Provider(provider_name='minimax', model='MiniMax-M3',
                                     server_address='', is_local=False)
     else:
-        flash_provider = Provider(provider_name='deepseek', model='deepseek-chat',
+        flash_provider = Provider(provider_name='deepseek', model='deepseek-v4-flash',
                                   server_address='', is_local=False)
-        pro_provider = Provider(provider_name='deepseek', model='deepseek-reasoner',
+        pro_provider = Provider(provider_name='deepseek', model='deepseek-v4-pro',
                                 server_address='', is_local=False)
 
     # Vision provider — configured via config.ini [LONG_TASK]
@@ -1455,11 +1455,11 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         )
     else:
         flash_provider = Provider(
-            provider_name='deepseek', model='deepseek-chat',
+            provider_name='deepseek', model='deepseek-v4-flash',
             server_address='', is_local=False,
         )
         pro_provider = Provider(
-            provider_name='deepseek', model='deepseek-reasoner',
+            provider_name='deepseek', model='deepseek-v4-pro',
             server_address='', is_local=False,
         )
 

@@ -230,7 +230,7 @@ async def _classify_long_task_async(
     ltc = get_long_task_config()
     flash = Provider(
         provider_name=ltc['provider_family'],
-        model='deepseek-chat' if ltc['provider_family'] == 'deepseek' else 'MiniMax-M2.7-highspeed',
+        model='deepseek-v4-flash' if ltc['provider_family'] == 'deepseek' else 'MiniMax-M2.7-highspeed',
         server_address='', is_local=False,
     )
 
