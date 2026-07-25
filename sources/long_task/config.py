@@ -64,6 +64,44 @@ DEFAULT_PROSECUTION_MAX_PAGES_PER_DOC = 100
 DEFAULT_PROSECUTION_INCLUDE_PRIORITY_2 = True
 
 
+# ── Patent family analysis config ───────────────────────────────────────────────
+
+DEFAULT_EPO_CONSUMER_KEY = ''
+DEFAULT_EPO_CONSUMER_SECRET = ''
+DEFAULT_FAMILY_MAX_JURISDICTIONS = 1  # start with US only
+
+
+def get_family_config(config_path: str = 'config.ini') -> dict:
+    """Read [FAMILY] section from config file.
+
+    Returns:
+        dict with keys:
+            epo_consumer_key (str)
+            epo_consumer_secret (str)
+            max_jurisdictions (int)
+    """
+    cfg = configparser.ConfigParser()
+    cfg.read(config_path)
+
+    epo_consumer_key = DEFAULT_EPO_CONSUMER_KEY
+    epo_consumer_secret = DEFAULT_EPO_CONSUMER_SECRET
+    max_jurisdictions = DEFAULT_FAMILY_MAX_JURISDICTIONS
+
+    if cfg.has_section('FAMILY'):
+        epo_consumer_key = cfg.get('FAMILY', 'epo_consumer_key',
+                                   fallback=DEFAULT_EPO_CONSUMER_KEY)
+        epo_consumer_secret = cfg.get('FAMILY', 'epo_consumer_secret',
+                                      fallback=DEFAULT_EPO_CONSUMER_SECRET)
+        max_jurisdictions = cfg.getint('FAMILY', 'max_jurisdictions',
+                                        fallback=DEFAULT_FAMILY_MAX_JURISDICTIONS)
+
+    return {
+        'epo_consumer_key': epo_consumer_key,
+        'epo_consumer_secret': epo_consumer_secret,
+        'max_jurisdictions': max_jurisdictions,
+    }
+
+
 def get_prosecution_config(config_path: str = 'config.ini') -> dict:
     """Read [PROSECUTION] section from config file.
 

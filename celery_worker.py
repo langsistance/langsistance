@@ -329,6 +329,7 @@ _STATUS_MSGS = {
         "prosecution_analyzing": "正在分析（{current}/{total}）：{desc}",
         "prosecution_all_failed": "所有审查文件处理失败。文件可能是扫描件或加密PDF。",
         "prosecution_report_complete": "报告撰写完成",
+        "family_lookup": "正在查询EPO同族专利...",
     },
     "en": {
         "preparing": "Preparing patent analysis ({total} patents)...",
@@ -367,6 +368,7 @@ _STATUS_MSGS = {
         "prosecution_analyzing": "Analyzing {current}/{total}: {desc}",
         "prosecution_all_failed": "All prosecution documents failed processing. Files may be scanned images or encrypted PDFs.",
         "prosecution_report_complete": "Report writing complete",
+        "family_lookup": "Looking up patent family via EPO...",
     },
 }
 
@@ -1386,6 +1388,653 @@ async def _run_pipeline(
             )
 
     return {'status': 'completed', 'task_id': task_id}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Patent Family Analysis Task (cross-jurisdiction, US first)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.task(bind=True, max_retries=2, default_retry_delay=60, time_limit=3600, soft_time_limit=3540)
+def execute_family_analysis(self, task_id: str, params: dict):
+    """Cross-jurisdiction patent family prosecution analysis.
+
+    Phase 0: EPO OPS family lookup → extract US member → normalize app_number.
+    Phase 1-4: Same US prosecution pipeline as ``execute_prosecution_analysis``.
+    """
+    import asyncio as _asyncio
+
+    retry_count = self.request.retries
+    patent_id = str(params.get('patent_id', '')).strip()
+    query = params.get('query', '')
+    lang = params.get('lang', 'zh')
+    session_id = params.get('session_id', '')
+    user_id = params.get('user_id', '')
+
+    _pipeline_logger.info(
+        f"[task={task_id}] FAMILY START — "
+        f"patent_id={patent_id}, "
+        f"query={query[:120]}, "
+        f"lang={lang}, "
+        f"session_id={session_id}, "
+        f"retry={retry_count}/{self.max_retries}"
+    )
+
+    if retry_count >= self.max_retries:
+        _pipeline_logger.error(
+            f"[task={task_id}] FAMILY HARD_STOP — retry_count={retry_count} >= {self.max_retries}"
+        )
+        if user_id:
+            from sources.long_task.user_queue import complete_user_task
+            try:
+                complete_user_task(str(user_id), task_id)
+            except Exception:
+                pass
+        return {'status': 'failed', 'task_id': task_id,
+                'error': f'Max retries ({self.max_retries}) exceeded'}
+
+    if not patent_id:
+        _pipeline_logger.error(f"[task={task_id}] FAMILY no patent_id provided")
+        _update_mysql_progress(task_id, 'failed', 0)
+        return {'status': 'failed', 'task_id': task_id, 'error': 'No patent_id'}
+
+    # ── Imports ──────────────────────────────────────────────────────────────
+    from sources.long_task.status_manager import (
+        update_task_status, set_task_completed, set_task_failed,
+    )
+    from sources.long_task.config import (
+        get_long_task_config, get_family_config, get_prosecution_config,
+        DEFAULT_VISION_PROVIDER, DEFAULT_VISION_MODEL,
+    )
+    from sources.long_task.patent_family import EPOFamilyClient, EPOError
+    from sources.long_task.family_member import PatentFamily
+    from sources.long_task.prosecution_downloader import (
+        classify_prosecution_documents,
+        download_single_document,
+    )
+    from sources.long_task.storage import create_storage
+    from sources.llm_provider import Provider
+
+    # ── Provider setup ───────────────────────────────────────────────────────
+    ltc = get_long_task_config()
+    model_family = ltc['provider_family']
+
+    if model_family == 'minimax':
+        flash_provider = Provider(
+            provider_name='minimax', model='MiniMax-M2.7-highspeed',
+            server_address='', is_local=False,
+        )
+        pro_provider = Provider(
+            provider_name='minimax', model='MiniMax-M3',
+            server_address='', is_local=False,
+        )
+    else:
+        flash_provider = Provider(
+            provider_name='deepseek', model='deepseek-v4-flash',
+            server_address='', is_local=False,
+        )
+        pro_provider = Provider(
+            provider_name='deepseek', model='deepseek-v4-pro',
+            server_address='', is_local=False,
+        )
+
+    ptc = get_prosecution_config()
+    include_priority_2 = ptc.get('include_priority_2', True)
+    vision_enabled = ltc.get('vision_enabled', True)
+    vision_provider = None
+    if vision_enabled:
+        vision_cfg_provider = ltc.get('vision_provider', DEFAULT_VISION_PROVIDER)
+        vision_cfg_model = ltc.get('vision_model', DEFAULT_VISION_MODEL)
+        vision_provider = Provider(
+            provider_name=vision_cfg_provider, model=vision_cfg_model,
+            server_address='', is_local=False,
+        )
+
+    # ── Family config ────────────────────────────────────────────────────────
+    fc = get_family_config()
+    epo_key = fc.get('epo_consumer_key', '')
+    epo_secret = fc.get('epo_consumer_secret', '')
+
+    if not epo_key or not epo_secret:
+        _pipeline_logger.error(
+            f"[task={task_id}] FAMILY missing EPO credentials — "
+            f"set [FAMILY] epo_consumer_key / epo_consumer_secret in config.ini"
+        )
+        set_task_failed(task_id, "EPO API credentials not configured")
+        _update_mysql_progress(task_id, 'failed', 0)
+        return {'status': 'failed', 'task_id': task_id,
+                'error': 'EPO credentials not configured'}
+
+    # ── Run pipeline ─────────────────────────────────────────────────────────
+    async def _run():
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 0: EPO family lookup → extract US member
+        # ═════════════════════════════════════════════════════════════════
+        update_task_status(task_id, 'preparing', 1,
+                           _t('family_lookup', lang))
+
+        epo_client = EPOFamilyClient(
+            consumer_key=epo_key,
+            consumer_secret=epo_secret,
+        )
+
+        try:
+            family = await epo_client.lookup_family(patent_id)
+        except EPOError as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] FAMILY PHASE0 epo_error — {e}"
+            )
+            set_task_failed(task_id, f"EPO family lookup failed: {e}")
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': str(e)}
+
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE0 epo_ok — "
+            f"family_id={family.family_id}, "
+            f"total_count={family.total_count}, "
+            f"jurisdictions={family.jurisdictions}, "
+            f"dedup_members={len(family.deduplicated_members)}"
+        )
+
+        # ── Extract US member ────────────────────────────────────────────
+        us_member = family.get_representative('US')
+        if not us_member:
+            _pipeline_logger.warning(
+                f"[task={task_id}] FAMILY PHASE0 no_us_member — "
+                f"jurisdictions={family.jurisdictions}"
+            )
+            if lang == 'zh':
+                msg = (
+                    f"在EPO同族专利数据库中未找到 {patent_id} 的美国同族成员。"
+                    f"该专利的同族覆盖: {', '.join(family.jurisdictions)}。"
+                )
+            else:
+                msg = (
+                    f"No US family member found for {patent_id} in the EPO "
+                    f"family database. Jurisdictions found: {', '.join(family.jurisdictions)}."
+                )
+            set_task_failed(task_id, msg)
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
+        us_pub_number = us_member.pub_number
+        us_app_number = us_member.normalized_app_number
+
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE0 us_member — "
+            f"pub_number={us_pub_number}, "
+            f"pub_kind={us_member.pub_kind}, "
+            f"is_granted={us_member.is_granted}, "
+            f"app_number_raw={us_member.app_number}, "
+            f"app_number_normalized={us_app_number}, "
+            f"title={us_member.title[:80] if us_member.title else '(none)'}"
+        )
+
+        if not us_app_number or len(us_app_number) < 8:
+            _pipeline_logger.error(
+                f"[task={task_id}] FAMILY PHASE0 invalid_app_number — "
+                f"raw={us_member.app_number}, normalized={us_app_number}"
+            )
+            if lang == 'zh':
+                msg = f"无法从EPO同族数据中提取有效的美国专利申请号 (原始: {us_member.app_number})"
+            else:
+                msg = f"Cannot extract valid US application number from EPO family data (raw: {us_member.app_number})"
+            set_task_failed(task_id, msg)
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
+        # Update status with family overview for frontend
+        family_overview = _build_family_overview_status(family, lang)
+        update_task_status(task_id, 'preparing', 5,
+                           family_overview.get('step_msg', ''),
+                           family_overview=family_overview)
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 0.5: Fetch USPTO document list + classify
+        # ═════════════════════════════════════════════════════════════════
+        update_task_status(task_id, 'preparing', 8,
+                           _t('fetching_uspto', lang))
+
+        headers = {'Accept': 'application/json'}
+        uspto_key = _os.getenv('USPTO_API_KEY', '')
+        if uspto_key:
+            headers['X-API-Key'] = uspto_key
+
+        doc_list_url = (
+            f"https://api.uspto.gov/api/v1/patent/applications/"
+            f"{us_app_number}/documents"
+        )
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE0 fetch_doc_list — "
+            f"app_number={us_app_number}, url={doc_list_url}"
+        )
+        resp = await _uspto_get_with_retry(doc_list_url, headers, timeout=20)
+        if resp.status_code != 200:
+            _pipeline_logger.error(
+                f"[task={task_id}] FAMILY PHASE0 doc_list_failed — status={resp.status_code}"
+            )
+            set_task_failed(task_id, f"USPTO API returned HTTP {resp.status_code}")
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id,
+                    'error': f'USPTO API status {resp.status_code}'}
+
+        doc_list = resp.json() if resp.text else {}
+        documents = (
+            doc_list.get('documentBag', [])
+            if isinstance(doc_list, dict)
+            else []
+        )
+        if not documents:
+            if lang == 'zh':
+                msg = f"USPTO未返回专利申请 {us_app_number} 的任何文件。可能原因：申请号不存在、无权访问、或尚未公开。"
+            else:
+                msg = f"USPTO returned no documents for application {us_app_number}. The application may not exist, may not be accessible, or may not yet be published."
+            set_task_failed(task_id, msg)
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
+        manifest = classify_prosecution_documents(documents)
+        docs_to_download = manifest.must_download.copy()
+        if include_priority_2:
+            docs_to_download.extend(manifest.recommended)
+
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE0 classified — "
+            f"total_in_bag={len(documents)}, "
+            f"must_download={len(manifest.must_download)}, "
+            f"recommended={len(manifest.recommended)}, "
+            f"skipped={len(manifest.skipped)}, "
+            f"to_download={len(docs_to_download)}"
+        )
+
+        if not docs_to_download:
+            if lang == 'zh':
+                msg = "未找到可分析的审查文件（无 Office Action、Response 或 Amendment）。可能该专利尚未进入实质审查阶段。"
+            else:
+                msg = "No analyzable prosecution documents found (no Office Actions, Responses, or Amendments). The patent may not have entered substantive examination."
+            set_task_failed(task_id, msg)
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 1: Generate table columns (Flash LLM)
+        # ═════════════════════════════════════════════════════════════════
+        from sources.long_task.prosecution_analyzer import (
+            generate_table_columns,
+            analyze_single_document,
+            generate_document_summary,
+            build_failed_row,
+            generate_prosecution_report as gen_report,
+        )
+
+        update_task_status(task_id, 'generating_columns', 10,
+                           _t('prosecution_framework', lang, total=len(docs_to_download)))
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE1 generate_table_columns — "
+            f"query={query[:100]}, doc_count={len(docs_to_download)}"
+        )
+        columns = await generate_table_columns(
+            query=query, doc_count=len(docs_to_download),
+            provider=flash_provider, lang=lang,
+        )
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE1 columns_generated — "
+            f"column_count={len(columns)}, columns={columns}"
+        )
+        update_task_status(task_id, 'generating_columns', 12,
+                           f'分析维度：{" | ".join(columns[1:4])}...',
+                           table_columns=columns)
+        _update_mysql_progress(task_id, 'generating_columns', 12)
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 2: Per-document download → analyze → summarize
+        # ═════════════════════════════════════════════════════════════════
+        total_dl = len(docs_to_download)
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE2 START — "
+            f"pending_count={total_dl}, total={total_dl}"
+        )
+        update_task_status(task_id, 'downloading', 15,
+                           _t('prosecution_downloading', lang, current=0, total=total_dl))
+
+        async def _fetch_prosecution(url: str, hdrs: dict, timeout: int):
+            return await _uspto_get_with_retry(url, hdrs, timeout)
+
+        table_rows: list[dict] = []
+        _dl_ok = 0
+        for _i, _doc in enumerate(docs_to_download):
+            doc_index = _i + 1
+
+            _completed = len(table_rows)
+            _result = _handle_task_stop(task_id, user_id, _completed, total_dl)
+            if _result:
+                return _result
+            _result = _handle_task_pause(task_id, user_id, _completed, total_dl, {
+                'completed': [r.get(columns[0], '') for r in table_rows if not r.get('_failed')],
+                'pending': [d.document_code for d in docs_to_download[_i:]],
+                'completed_rows': table_rows,
+                'failed': [r.get(columns[0], '') for r in table_rows if r.get('_failed')],
+                'columns': columns,
+            })
+            if _result:
+                return _result
+
+            _pct = progress_pct(len(table_rows), total_dl)
+            update_task_status(
+                task_id, 'downloading', _pct,
+                _t('prosecution_downloading', lang, current=doc_index, total=total_dl),
+                table_rows=table_rows,
+            )
+            await download_single_document(_doc, _fetch_prosecution, us_app_number, headers)
+            if _doc.text:
+                _dl_ok += 1
+
+            _pipeline_logger.info(
+                f"[task={task_id}] FAMILY PHASE2 doc[{doc_index}/{total_dl}] download_done — "
+                f"code={_doc.document_code}, "
+                f"fmt={_doc.file_format}, "
+                f"text_length={len(_doc.text) if _doc.text else 0}"
+            )
+
+            _result = _handle_task_stop(task_id, user_id, _completed, total_dl)
+            if _result:
+                return _result
+
+            if _doc.priority == 1 and _doc.binary and not _doc.text and vision_enabled:
+                update_task_status(
+                    task_id, 'downloading', _pct,
+                    _t('prosecution_ocr', lang, current=doc_index, total=total_dl),
+                    table_rows=table_rows,
+                )
+                try:
+                    _text = await _extract_text_via_vision(
+                        _doc.binary, _doc.description, vision_provider,
+                    )
+                    if _text and len(_text.strip()) > 50:
+                        _doc.text = _text.strip()
+                        _pipeline_logger.info(
+                            f"[task={task_id}] FAMILY PHASE2 doc[{doc_index}/{total_dl}] vision_ok"
+                        )
+                except Exception as _e:
+                    _pipeline_logger.warning(
+                        f"[task={task_id}] FAMILY PHASE2 doc[{doc_index}/{total_dl}] vision_error — {_e}"
+                    )
+
+            if not _doc.text or len(_doc.text.strip()) < 50:
+                _pipeline_logger.warning(
+                    f"[task={task_id}] FAMILY PHASE2 doc[{doc_index}/{total_dl}] no_text — skipping"
+                )
+                row = build_failed_row(_doc.document_code, "text extraction failed", columns, lang)
+                row["_failed"] = True
+                row["_summary"] = ""
+                table_rows.append(row)
+                continue
+
+            _result = _handle_task_stop(task_id, user_id, _completed, total_dl)
+            if _result:
+                return _result
+
+            update_task_status(
+                task_id, 'analyzing',
+                progress_pct(len(table_rows), total_dl),
+                _t('prosecution_analyzing', lang, current=doc_index, total=total_dl, desc=_doc.description[:40]),
+                table_rows=table_rows,
+            )
+            try:
+                row = await analyze_single_document(
+                    doc_text=_doc.text,
+                    doc_code=_doc.document_code,
+                    doc_desc=_doc.description,
+                    doc_category=_doc.category,
+                    columns=columns,
+                    query=query,
+                    provider=pro_provider,
+                    lang=lang,
+                )
+            except Exception as e:
+                _pipeline_logger.warning(
+                    f"[task={task_id}] FAMILY PHASE2 doc[{doc_index}/{total_dl}] analyze_error — {e}"
+                )
+                row = build_failed_row(_doc.document_code, str(e), columns, lang)
+                row["_failed"] = True
+
+            _result = _handle_task_stop(task_id, user_id, _completed, total_dl)
+            if _result:
+                return _result
+
+            try:
+                summary = await generate_document_summary(
+                    doc_text=_doc.text, row=row, query=query,
+                    provider=pro_provider, lang=lang,
+                )
+            except Exception as e:
+                _pipeline_logger.warning(
+                    f"[task={task_id}] FAMILY PHASE2 doc[{doc_index}/{total_dl}] summary_error — {e}"
+                )
+                summary = ""
+            row["_summary"] = summary
+            table_rows.append(row)
+
+        docs_with_text = [d for d in docs_to_download if d.text]
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE2 COMPLETE — "
+            f"downloaded={_dl_ok}/{total_dl}, "
+            f"with_text={len(docs_with_text)}/{total_dl}, "
+            f"table_rows={len(table_rows)}, "
+            f"failed_rows={sum(1 for r in table_rows if r.get('_failed'))}"
+        )
+
+        if not table_rows:
+            if lang == 'zh':
+                msg = "所有审查文件处理失败。文件可能是扫描件或加密PDF。"
+            else:
+                msg = "All prosecution documents failed processing. Files may be scanned images or encrypted PDFs."
+            set_task_failed(task_id, msg)
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 3: Generate report (Pro, dynamic outline + sections)
+        # ═════════════════════════════════════════════════════════════════
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE3 generate_report — "
+            f"columns={columns}, table_rows_count={len(table_rows)}"
+        )
+        update_task_status(task_id, 'generating_report', 80,
+                           _t('writing_summary', lang))
+
+        from sources.long_task.status_manager import ThrottledSummaryUpdater
+        summary_updater = ThrottledSummaryUpdater(
+            task_id,
+            progress=80,
+            step_msg=_t('writing_summary', lang),
+        )
+
+        report_text = await gen_report(
+            table_rows=table_rows,
+            columns=columns,
+            query=query,
+            patent_id=patent_id,
+            flash_provider=flash_provider,
+            pro_provider=pro_provider,
+            lang=lang,
+            summary_updater=summary_updater,
+        )
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE3 report_generated — "
+            f"total_chars={len(report_text)}"
+        )
+        update_task_status(task_id, 'generating_report', 90,
+                           _t('prosecution_report_complete', lang),
+                           result_summary=report_text)
+        _update_mysql_progress(task_id, 'generating_report', 90, result_summary=report_text)
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 4: Export files (DOCX + PDF)
+        # ═════════════════════════════════════════════════════════════════
+        from sources.long_task.storage import get_storage_config
+
+        storage_cfg = get_storage_config()
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE4 export — "
+            f"storage_backend={storage_cfg.get('report_storage_backend', 'local')}"
+        )
+        try:
+            storage = create_storage(storage_cfg)
+        except Exception as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] FAMILY PHASE4 storage_init FAILED — {e}, falling back to local"
+            )
+            storage = create_storage({'report_storage_backend': 'local'})
+
+        report_files = []
+        local_storage = None
+
+        async def _get_local_storage():
+            nonlocal local_storage
+            if local_storage is None:
+                from sources.long_task.storage import create_storage as _create
+                local_storage = _create({'report_storage_backend': 'local'})
+            return local_storage
+
+        update_task_status(task_id, 'exporting', 90, _t('generating_word', lang))
+        docx_bytes = await export_docx_async(report_text, table_rows, columns, lang=lang)
+        try:
+            await storage.put(task_id, 'report.docx', docx_bytes)
+            _pipeline_logger.info(
+                f"[task={task_id}] FAMILY PHASE4 docx — size_bytes={len(docx_bytes)}"
+            )
+            report_files.append({
+                'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes),
+            })
+        except Exception as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] FAMILY PHASE4 docx upload FAILED — {e}, falling back to local"
+            )
+            try:
+                await (await _get_local_storage()).put(task_id, 'report.docx', docx_bytes)
+                _pipeline_logger.info(
+                    f"[task={task_id}] FAMILY PHASE4 docx — local fallback OK, size_bytes={len(docx_bytes)}"
+                )
+                report_files.append({
+                    'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes),
+                })
+            except Exception as e2:
+                _pipeline_logger.error(
+                    f"[task={task_id}] FAMILY PHASE4 docx local fallback ALSO FAILED — {e2}"
+                )
+
+        update_task_status(task_id, 'exporting', 95, _t('generating_pdf', lang))
+        pdf_bytes = await export_pdf_async(docx_bytes)
+        try:
+            await storage.put(task_id, 'report.pdf', pdf_bytes)
+            _pipeline_logger.info(
+                f"[task={task_id}] FAMILY PHASE4 pdf — size_bytes={len(pdf_bytes)}"
+            )
+            report_files.append({
+                'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes),
+            })
+        except Exception as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] FAMILY PHASE4 pdf upload FAILED — {e}, falling back to local"
+            )
+            try:
+                await (await _get_local_storage()).put(task_id, 'report.pdf', pdf_bytes)
+                _pipeline_logger.info(
+                    f"[task={task_id}] FAMILY PHASE4 pdf — local fallback OK, size_bytes={len(pdf_bytes)}"
+                )
+                report_files.append({
+                    'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes),
+                })
+            except Exception as e2:
+                _pipeline_logger.error(
+                    f"[task={task_id}] FAMILY PHASE4 pdf local fallback ALSO FAILED — {e2}"
+                )
+
+        # ── Complete ──
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY COMPLETED — "
+            f"patent_id={patent_id}, "
+            f"us_pub={us_pub_number}, "
+            f"docs_analyzed={len(table_rows)}, "
+            f"report_chars={len(report_text)}, "
+            f"report_files={[f['format'] for f in report_files]}"
+        )
+        _update_mysql_progress(task_id, 'exporting', 100)
+        set_task_completed(task_id, report_files)
+
+        if user_id:
+            from sources.long_task.user_queue import complete_user_task
+            try:
+                next_task_id = complete_user_task(str(user_id), task_id)
+                if next_task_id:
+                    _dispatch_queued_task(next_task_id, user_id)
+            except Exception as e:
+                _pipeline_logger.warning(
+                    f"[task={task_id}] FAMILY QUEUE_DISPATCH_FAILED — {e}"
+                )
+
+        return {'status': 'completed', 'task_id': task_id}
+
+    loop = _asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(_run())
+    except Exception as e:
+        import traceback
+        _pipeline_logger.error(
+            f"[task={task_id}] FAMILY UNHANDLED_ERROR — "
+            f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
+        )
+        if user_id:
+            try:
+                from sources.long_task.user_queue import complete_user_task
+                complete_user_task(str(user_id), task_id)
+            except Exception:
+                pass
+        set_task_failed(task_id, f"{type(e).__name__}: {e}")
+        _update_mysql_progress(task_id, 'failed', 0)
+        return {'status': 'failed', 'task_id': task_id,
+                'error': f'{type(e).__name__}: {e}'}
+    finally:
+        loop.close()
+
+
+# ── Family helpers ─────────────────────────────────────────────────────────────
+
+
+def _build_family_overview_status(family, lang: str) -> dict:
+    """Build a family_overview dict for the frontend progress card."""
+    members_data = []
+    for m in family.deduplicated_members:
+        members_data.append({
+            'country': m.country,
+            'pub_number': m.pub_number,
+            'kind': m.pub_kind,
+            'is_granted': m.is_granted,
+            'title': m.title,
+        })
+
+    if lang == 'zh':
+        step_msg = (
+            f"查到 {family.query_pub_number} 的同族专利，"
+            f"共 {len(family.deduplicated_members)} 个成员，"
+            f"涉及 {len(family.jurisdictions)} 个司法辖区: "
+            f"{', '.join(family.jurisdictions)}"
+        )
+    else:
+        step_msg = (
+            f"Found {len(family.deduplicated_members)} family members for "
+            f"{family.query_pub_number} across {len(family.jurisdictions)} "
+            f"jurisdictions: {', '.join(family.jurisdictions)}"
+        )
+
+    return {
+        'family_id': family.family_id,
+        'total_count': family.total_count,
+        'jurisdictions': family.jurisdictions,
+        'members': members_data,
+        'step_msg': step_msg,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2612,7 +3261,13 @@ def _dispatch_queued_task(next_task_id: str, user_id: str) -> None:
             next_params['patent_texts'] = stored['patent_texts']
 
         task_type = row.get('task_type', 'patent_analysis')
-        if task_type == 'prosecution_analysis':
+        if task_type == 'family_analysis':
+            next_params['patent_id'] = stored.get('patent_id', '')
+            next_params['lang'] = stored.get('lang', 'zh')
+            execute_family_analysis.delay(
+                task_id=next_task_id, params=next_params,
+            )
+        elif task_type == 'prosecution_analysis':
             next_params['patent_id'] = stored.get('patent_id', '')
             next_params['lang'] = stored.get('lang', 'zh')
             execute_prosecution_analysis.delay(
