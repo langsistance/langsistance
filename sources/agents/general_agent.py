@@ -1447,14 +1447,26 @@ Begin your response now:
         #self.knowledgeTool = get_knowledge_tool(user_id,  prompt)
         self._last_user_prompt = prompt
         self._last_query_id = query_id
+        # Detect cross-user agent reuse: when the agent pool recycles this
+        # instance for a different user, stale conversation history (including
+        # patent IDs, assignee names, etc.) must be discarded so the LLM does
+        # not confuse another user's context with the current request.
+        previous_user_id = getattr(self, '_last_user_id', None)
+        is_different_user = bool(previous_user_id and previous_user_id != user_id)
         self._last_user_id = user_id
         lang = self._detect_lang(prompt)
         if callback_handler:
             await _emit_status(callback_handler,
                 "正在分析您的问题..." if lang == 'zh' else "Analyzing your question...")
         # Pass conversation history so the LLM routing knowledge selection
-        # can understand what "杩?鏉? or "from the results above" refers to.
+        # can understand what "这些" or "from the results above" refers to.
         conv_history = self.memory.get()
+        if is_different_user and conv_history:
+            self.logger.info(
+                f"Cross-user agent reuse detected (prev_user={previous_user_id}, "
+                f"cur_user={user_id}) — discarding {len(conv_history)} stale messages"
+            )
+            conv_history = conv_history[:1] if conv_history else []
         self.knowledgeTool = await select_knowledge_tool_with_llm(
             user_id,
             prompt,
@@ -1506,10 +1518,15 @@ Begin your response now:
         user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
         system_prompt = self.generate_system_prompt(tool_data)
         # Keep prior conversation context so follow-up queries referencing
-        # previous results (e.g. "浠庤繖3鏉′腑绛涢€夊嚭...") can be understood.
+        # previous results (e.g. "从这3条中筛选出...") can be understood.
         prior = self.memory.get()
-        if len(prior) > 6:
-            # Keep first message + last 5 messages to bound context window
+        if is_different_user and prior:
+            # Cross-user agent reuse: discard all prior history except the
+            # initial system prompt to prevent the LLM from using patent IDs,
+            # assignee names, or other data from a different user's session.
+            prior = prior[:1]
+        elif len(prior) > 6:
+            # Same user: keep first message + last 5 messages to bound context window
             prior = prior[:1] + prior[-1:]
         self.memory.reset(prior)
         self.memory.push('user', user_prompt)
