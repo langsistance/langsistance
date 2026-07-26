@@ -1447,32 +1447,20 @@ Begin your response now:
         #self.knowledgeTool = get_knowledge_tool(user_id,  prompt)
         self._last_user_prompt = prompt
         self._last_query_id = query_id
-        # Detect cross-user agent reuse: when the agent pool recycles this
-        # instance for a different user, stale conversation history (including
-        # patent IDs, assignee names, etc.) must be discarded so the LLM does
-        # not confuse another user's context with the current request.
-        previous_user_id = getattr(self, '_last_user_id', None)
-        is_different_user = bool(previous_user_id and previous_user_id != user_id)
         self._last_user_id = user_id
         lang = self._detect_lang(prompt)
         if callback_handler:
             await _emit_status(callback_handler,
                 "正在分析您的问题..." if lang == 'zh' else "Analyzing your question...")
-        # Pass conversation history so the LLM routing knowledge selection
-        # can understand what "这些" or "from the results above" refers to.
-        conv_history = self.memory.get()
-        if is_different_user and conv_history:
-            self.logger.info(
-                f"Cross-user agent reuse detected (prev_user={previous_user_id}, "
-                f"cur_user={user_id}) — discarding {len(conv_history)} stale messages"
-            )
-            conv_history = []
+        # Knowledge selection does not need conversation history — stale
+        # messages from prior calls (different tools, different users)
+        # only add noise and risk confusing the routing LLM.
         self.knowledgeTool = await select_knowledge_tool_with_llm(
             user_id,
             prompt,
             self.llm.complete_json,
             push_filter=push_filter,
-            conversation_history=conv_history,
+            conversation_history=[],
         )
         knowledge_item, tool_info = self.knowledgeTool
         self.logger.info(
@@ -1517,26 +1505,14 @@ Begin your response now:
             return None
         user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
         system_prompt = self.generate_system_prompt(tool_data)
-        # Keep prior conversation context so follow-up queries referencing
-        # previous results (e.g. "从这3条中筛选出...") can be understood.
-        prior = self.memory.get()
-        if is_different_user and prior:
-            # Cross-user agent reuse: discard ALL prior history to prevent
-            # the LLM from using patent IDs, assignee names, or other data
-            # from a different user's session. Using prior[:1] is unsafe
-            # because the first element may be a stale user message, not
-            # a system prompt.
-            prior = []
-        else:
-            # Always strip old system prompts — they contain tool-specific
-            # API templates that conflict with the current call's template.
-            # The LLM may follow a stale template (e.g. GET /{app}/documents)
-            # instead of the correct one (e.g. POST /search with body).
-            prior = [m for m in prior if m.get('role') == 'user']
-            if len(prior) > 6:
-                # Keep first user message + last user message for continuity
-                prior = prior[:1] + prior[-1:]
-        self.memory.reset(prior)
+        # ALWAYS discard prior conversation history before each tool call.
+        # Retaining any prior messages is unsafe because:
+        # 1. Old system prompts contain tool-specific API templates that
+        #    conflict with the current template (GET vs POST, etc.)
+        # 2. Old user messages embed user_id / query_id / patent numbers
+        #    that the LLM may pick up and use in the current tool call
+        # The system prompt + user prompt are regenerated fresh each time.
+        self.memory.reset([])
         self.memory.push('user', user_prompt)
         self.memory.push('system', system_prompt)
 
