@@ -873,55 +873,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         Do not return tool parameters, such as the user id and query id.
         Do NOT reveal any API keys, tokens, header values, or authentication credentials in your response.
 
-        ## Markdown Formatting Requirements
-
-        When generating your response based on the tool's output, you MUST format it beautifully using Markdown:
-
-        ### Essential Formatting Rules:
-
-        1. **Structure**: Use clear heading hierarchy (## for main sections, ### for subsections)
-        2. **Links**: Convert ALL URLs to descriptive links: `[meaningful text](URL)`
-        3. **Images**: Display images using: `![description](image_URL)`
-        4. **Lists**: Use `-` for bullet points, `1.` for numbered lists
-        5. **Emphasis**: Use **bold** for key terms, *italic* for emphasis, `code` for technical terms
-        6. **Tables**: Use tables for structured data comparison
-        7. **Spacing**: Add blank lines between content blocks for readability
-        8. **Code blocks**: Use fenced code blocks with language specification when showing code
-        9. **Long list handling**: If the tool result is a JSON array with many items, provide a concise summary with count statistics (e.g., total count, counts per category) instead of enumerating every item.
-
-        ### Response Structure Template:
-
-        Your response should follow this structure (but output DIRECTLY, not in a code block):
-
-        ## [Main Topic]
-
-        [Brief summary of what the tool returned]
-
-        ### Key Information
-        - Important point 1 (with details)
-        - Important point 2 (with details)
-        - ... (if the tool result is a long JSON list, show a summary with count statistics instead)
-
-        ### Details
-        [Organized detailed content 鈥?if the tool result is a long JSON list, show a summary with count statistics]
-
-        [Display images inline where relevant]
-        ![Image Description](image_URL)
-
-        **CRITICAL OUTPUT FORMAT**:
-        - Output your response as DIRECT Markdown content
-        - Do NOT wrap your entire response in a code block
-        - Do NOT start with ```markdown or ```
-        - Start directly with Markdown formatting (e.g., ## Title or plain text)
-        - Only use code blocks for actual code snippets within your content, not for the entire response
-
-        **CRITICAL CONTENT RULES**:
-        - If the tool result is a long JSON list, provide a concise summary with count statistics instead of listing every item
-        - Do NOT add a "Resources", "Sources", or "References" section at the end of your response
-        - Do NOT create a separate list of links at the bottom
-        - Integrate all links naturally within the content itself
-
-        **IMPORTANT**: Make your response visually appealing, easy to scan, and professionally formatted. Transform raw data into a beautiful, user-friendly presentation while ensuring ALL content from the tool result is displayed.
+        **CRITICAL**: Follow the Markdown formatting requirements from the system instructions at the start of this conversation. Do NOT wrap your response in a code block.
         """
 
         return system_prompt
