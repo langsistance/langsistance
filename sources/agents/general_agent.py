@@ -1528,8 +1528,15 @@ Begin your response now:
             # a system prompt.
             prior = []
         elif len(prior) > 6:
-            # Same user: keep first message + last 5 messages to bound context window
-            prior = prior[:1] + prior[-1:]
+            # Same user: only retain user messages from prior context.
+            # Old system prompts contain tool-specific API templates that
+            # conflict with the current call's system prompt — the LLM may
+            # follow a stale template (e.g. GET /{appNumber}/documents)
+            # instead of the current one (e.g. POST /search with body).
+            user_msgs = [m for m in prior if m.get('role') == 'user']
+            if len(user_msgs) > 6:
+                user_msgs = user_msgs[:1] + user_msgs[-1:]
+            prior = user_msgs
         self.memory.reset(prior)
         self.memory.push('user', user_prompt)
         self.memory.push('system', system_prompt)
