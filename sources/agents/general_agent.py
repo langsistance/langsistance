@@ -27,6 +27,7 @@ from sources.workflow.workflow_executor import WorkflowExecutor, is_workflow_kno
 from sources.http_outbound import outbound_http
 
 from langchain_core.tools import StructuredTool
+from langchain_core.callbacks import BaseCallbackHandler
 
 import os
 import time
@@ -305,7 +306,7 @@ class DynamicBackendToolFunction(BaseModel):
     )
 
 
-class _ResponseCollector:
+class _ResponseCollector(BaseCallbackHandler):
     """Wrap a callback handler to collect the full response text as it streams.
 
     Delegates all attribute access to the real handler (via __getattr__)
