@@ -297,42 +297,25 @@ class DynamicBackendToolFunction(BaseModel):
 class _ResponseCollector:
     """Wrap a callback handler to collect the full response text as it streams.
 
-    Delegates every event to the real handler unchanged while accumulating
-    on_llm_new_token payloads in `collected_text`.
+    Delegates all attribute access to the real handler (via __getattr__)
+    while accumulating on_llm_new_token payloads in `collected_text`.
     """
 
     def __init__(self, real_handler):
         self._real = real_handler
         self.collected_text = ""
 
+    def __getattr__(self, name):
+        # Proxy everything to the wrapped handler — including sync/async
+        # methods, attributes like `queue`, `run_inline`, etc.
+        if name in ('_real', 'collected_text'):
+            raise AttributeError(name)
+        return getattr(self._real, name)
+
     async def on_llm_new_token(self, token: str, **kwargs) -> None:
         self.collected_text += token
         if self._real:
             await self._real.on_llm_new_token(token, **kwargs)
-
-    async def on_llm_start(self, *args, **kwargs):
-        if self._real and hasattr(self._real, 'on_llm_start'):
-            await self._real.on_llm_start(*args, **kwargs)
-
-    async def on_llm_end(self, *args, **kwargs):
-        if self._real and hasattr(self._real, 'on_llm_end'):
-            await self._real.on_llm_end(*args, **kwargs)
-
-    async def on_llm_error(self, *args, **kwargs):
-        if self._real and hasattr(self._real, 'on_llm_error'):
-            await self._real.on_llm_error(*args, **kwargs)
-
-    async def on_tool_start(self, *args, **kwargs):
-        if self._real and hasattr(self._real, 'on_tool_start'):
-            await self._real.on_tool_start(*args, **kwargs)
-
-    async def on_tool_end(self, *args, **kwargs):
-        if self._real and hasattr(self._real, 'on_tool_end'):
-            await self._real.on_tool_end(*args, **kwargs)
-
-    async def on_agent_finish(self, *args, **kwargs):
-        if self._real and hasattr(self._real, 'on_agent_finish'):
-            await self._real.on_agent_finish(*args, **kwargs)
 
 
 async def _emit_status(callback_handler, message: str):
