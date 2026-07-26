@@ -1466,7 +1466,7 @@ Begin your response now:
                 f"Cross-user agent reuse detected (prev_user={previous_user_id}, "
                 f"cur_user={user_id}) — discarding {len(conv_history)} stale messages"
             )
-            conv_history = conv_history[:1] if conv_history else []
+            conv_history = []
         self.knowledgeTool = await select_knowledge_tool_with_llm(
             user_id,
             prompt,
@@ -1521,10 +1521,12 @@ Begin your response now:
         # previous results (e.g. "从这3条中筛选出...") can be understood.
         prior = self.memory.get()
         if is_different_user and prior:
-            # Cross-user agent reuse: discard all prior history except the
-            # initial system prompt to prevent the LLM from using patent IDs,
-            # assignee names, or other data from a different user's session.
-            prior = prior[:1]
+            # Cross-user agent reuse: discard ALL prior history to prevent
+            # the LLM from using patent IDs, assignee names, or other data
+            # from a different user's session. Using prior[:1] is unsafe
+            # because the first element may be a stale user message, not
+            # a system prompt.
+            prior = []
         elif len(prior) > 6:
             # Same user: keep first message + last 5 messages to bound context window
             prior = prior[:1] + prior[-1:]
