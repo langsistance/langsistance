@@ -717,10 +717,16 @@ class Provider:
         """
         Invoke a LangChain agent. Works with any provider since the agent was
         created with the correct ChatOpenAI config from openai_create().
+
+        NOTE: callback_handler is NOT passed in agent.ainvoke config because
+        the LLM already has it registered from _get_langchain_llm.  Double-
+        registration would cause each token to stream twice (once from the
+        LLM callback and once from the agent config callback), producing
+        garbled output like 'AgentAgenticic AI AI'.
         """
         self.logger.info(f"invoke agent history:{history}")
         try:
-            await agent.ainvoke({"messages": [{"role": "user", "content": history[0]["content"]}]}, config={"callbacks": [callback_handler]})
+            await agent.ainvoke({"messages": [{"role": "user", "content": history[0]["content"]}]})
         except Exception as e:
             raise e
 

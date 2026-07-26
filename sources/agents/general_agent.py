@@ -1607,7 +1607,14 @@ Begin your response now:
         self.logger.info(f"memory.get():{self.memory.get()}")
         self.tools = await self.get_tools(tool_data)
 
-        return self.llm.openai_create(self.tools, self.memory.get(), callback_handler)
+        # Wrap the callback handler so we can collect the response text
+        # for multi-turn conversation storage.  The wrapper is registered
+        # on the LLM via _get_langchain_llm so streaming works without
+        # double-registration in agent.ainvoke.
+        wrapped = _ResponseCollector(callback_handler)
+        self._active_collector = wrapped
+
+        return self.llm.openai_create(self.tools, self.memory.get(), wrapped)
 
 
     async def _stream_workflow_final_result(self, workflow_result, callback_handler):
@@ -2066,10 +2073,12 @@ Begin your response now:
                 self._store_current_turn()
                 return
 
-            # Wrap the handler to collect the assistant's text response
-            collector = _ResponseCollector(callback_handler)
+            # The callback handler was wrapped by create_agent with a
+            # _ResponseCollector so the LLM streams through it.  Re-use
+            # the same collector to avoid double-registration.
+            collector = getattr(self, '_active_collector', None)
             try:
-                await self.llm.openai_invoke(agent, self.memory.get(), collector)
+                await self.llm.openai_invoke(agent, self.memory.get())
                 # LangGraph agents don't call on_agent_finish — inject batch
                 # analysis here, after all LLM tokens have been streamed but
                 # before core.py sends 'end'.
@@ -2079,7 +2088,9 @@ Begin your response now:
             finally:
                 # Always store the conversation turn — even on partial failure
                 # we want to preserve what the LLM managed to produce.
-                self._store_current_turn(collector.collected_text)
+                self._store_current_turn(
+                    getattr(collector, 'collected_text', '') if collector else ''
+                )
         except Exception as e:
             raise e
 
