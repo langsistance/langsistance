@@ -1581,35 +1581,27 @@ Begin your response now:
         system_prompt = self.generate_system_prompt(tool_data)
 
         # ── Multi-turn memory ──────────────────────────────────────
-        # Rebuild memory as:
-        #   [fixed system prefix]          role + formatting  (safe to keep)
-        #   [... conversation history ...]  user ↔ assistant  (clean, no IDs)
-        #   [current user query]           fresh each call
-        #   [current tool system prompt]   fresh each call — LAST so LLM follows it
-        #
-        # Old system prompts with conflicting tool templates are never retained.
-        # User messages are clean (no user_id / query_id) thanks to the updated
-        # generate_user_prompt and auto-injection in the tool wrapper.
-        memory_msgs = []
-
-        # 1. Fixed system prefix
-        memory_msgs.append({
-            'role': 'system',
-            'content': self._get_fixed_system_prefix(),
-        })
-
-        # 2. Prior conversation turns — strip stale IDs from old user messages
+        # LangChain's openai_create / openai_invoke expect a specific
+        # shape: history[1] is the system prompt, history[0] is the
+        # first user message.  We merge the fixed prefix, conversation
+        # history, and tool template into a single system prompt at [1],
+        # and put the current query at [0].
+        conversation_block = ""
         for turn in getattr(self, '_conversation_turns', []):
             clean_user = _STRIP_IDS_RE.sub('', turn['user']).strip()
-            memory_msgs.append({'role': 'user', 'content': clean_user})
-            memory_msgs.append({'role': 'assistant', 'content': turn['assistant']})
+            conversation_block += f"\n\n## Previous conversation\n\nUser: {clean_user}\n\nAssistant: {turn['assistant']}"
 
-        # 3. Current user query
-        memory_msgs.append({'role': 'user', 'content': user_prompt})
+        combined_system = (
+            self._get_fixed_system_prefix()
+            + conversation_block
+            + "\n\n"
+            + system_prompt
+        )
 
-        # 4. Current tool system prompt (tool-specific — goes LAST)
-        memory_msgs.append({'role': 'system', 'content': system_prompt})
-
+        memory_msgs = [
+            {'role': 'user', 'content': user_prompt},
+            {'role': 'system', 'content': combined_system},
+        ]
         self.memory.reset(memory_msgs)
 
         self.logger.info(f"memory.get():{self.memory.get()}")
