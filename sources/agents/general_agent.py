@@ -1527,16 +1527,15 @@ Begin your response now:
             # because the first element may be a stale user message, not
             # a system prompt.
             prior = []
-        elif len(prior) > 6:
-            # Same user: only retain user messages from prior context.
-            # Old system prompts contain tool-specific API templates that
-            # conflict with the current call's system prompt — the LLM may
-            # follow a stale template (e.g. GET /{appNumber}/documents)
-            # instead of the current one (e.g. POST /search with body).
-            user_msgs = [m for m in prior if m.get('role') == 'user']
-            if len(user_msgs) > 6:
-                user_msgs = user_msgs[:1] + user_msgs[-1:]
-            prior = user_msgs
+        else:
+            # Always strip old system prompts — they contain tool-specific
+            # API templates that conflict with the current call's template.
+            # The LLM may follow a stale template (e.g. GET /{app}/documents)
+            # instead of the correct one (e.g. POST /search with body).
+            prior = [m for m in prior if m.get('role') == 'user']
+            if len(prior) > 6:
+                # Keep first user message + last user message for continuity
+                prior = prior[:1] + prior[-1:]
         self.memory.reset(prior)
         self.memory.push('user', user_prompt)
         self.memory.push('system', system_prompt)
