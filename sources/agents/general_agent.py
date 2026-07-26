@@ -52,6 +52,13 @@ USE_LARGE_LIST_SUMMARY = True  # 设为 False 切回逐条批处理模式
 _CONV_PATENT_IDS_KEY_PREFIX = "lt:conv"
 _CONV_PATENT_IDS_TTL = 3600  # 1 hour
 
+# Regex to strip user_id / query_id from historical user messages before
+# retaining them in multi-turn memory (current call still embeds them fresh).
+_STRIP_IDS_RE = re.compile(
+    r',?\s*user id is \d+,\s*query id is \w+,?\s*',
+    re.IGNORECASE,
+)
+
 
 def _store_conversation_patent_ids(agent, items_for_export: list) -> list | None:
     """Store patent IDs from conversation artifacts into Redis.
@@ -271,6 +278,8 @@ def _prune_for_summary(items: list, max_value_chars: int = None) -> list:
 
 # 瀹氫箟鍙傛暟妯″瀷
 class DynamicToolFunction(BaseModel):
+    user_id: str = Field(description="user id (provided in the user prompt)")
+    query_id: str = Field(description="query id (provided in the user prompt)")
     params: str = Field(
         description=(
             "params. If the original tool params contain api-key, api_key, "
@@ -281,6 +290,8 @@ class DynamicToolFunction(BaseModel):
 
 
 class DynamicBackendToolFunction(BaseModel):
+    user_id: str = Field(description="user id (provided in the user prompt)")
+    query_id: str = Field(description="query id (provided in the user prompt)")
     params: Dict[str, Any] | str = Field(
         description=(
             "API request parameters as a JSON object. For push=2 tools, "
@@ -764,16 +775,16 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         else:
             tool_description = tool_title
 
-        tool_params_info = "tool requires one parameter: params\n"
+        tool_params_info = "tool requires three parameters:user id - query id - params\n"
         if tool_info.push == 2:
             params_call_instruction = """
-        params: A JSON object containing ONLY the API request parameters (template below).
+        3. params: A JSON object containing ONLY the API request parameters (template below).
            Pass params as a structured object in the tool call, not as a JSON-encoded string.
            Do NOT wrap the whole params object in quotes.
             """
         else:
             params_call_instruction = """
-        params: A valid JSON string containing ONLY the API request parameters (template below)
+        3. params: A valid JSON string containing ONLY the API request parameters (template below)
             """
 
         path_field_semantics = ""
@@ -800,11 +811,16 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         Tool: {tool_title}
         Purpose: {tool_description}
         Input parameters: {tool_params_info}
+
+
+        IMPORTANT: The tool takes THREE separate parameters:
+        1. user_id: The user identifier (provided in the user prompt, DO NOT include in params)
+        2. query_id: The query identifier (provided in the user prompt, DO NOT include in params)
         {params_call_instruction}
 
-        The "params" template: {self._sanitize_params_for_llm(tool_info.params)}
+        The third parameter "params" template: {self._sanitize_params_for_llm(tool_info.params)}
 
-        Your task is to analyze the user's input and modify the "params" template according to the user's specific requirements. Generate the COMPLETE params JSON with ALL fields from the template — keep unchanged fields as-is, and modify only the values that need to match the user's request.
+        Your task is to analyze the user's input and modify the third parameter "params" template according to the user's specific requirements. Generate the COMPLETE params JSON with ALL fields from the template — keep unchanged fields as-is, and modify only the values that need to match the user's request.
 
         You MUST follow all rules below without exception:
 
@@ -816,6 +832,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
              `assignee:"Apple Inc."` (remove the unrelated assignor condition entirely)
            - DO NOT add new fields or query conditions the user did not ask for
            - DO NOT change the JSON structure or top-level nesting
+           - CRITICAL: DO NOT include user_id or query_id in the params JSON - these are separate parameters
 
         2. Field semantics:
            - method MUST remain unchanged
@@ -830,9 +847,15 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
            - When the user asks to search by ONE criterion only (e.g., assignee), strip away unrelated AND clauses so the query returns results instead of nothing
            - If the original tool params contain api-key, api_key, apikey, x-api-key, or another API key field, preserve that key and its value exactly in the generated params
            - Do NOT infer or invent information not explicitly expressed by the user
+           - DO NOT extract or infer user_id or query_id from the user's request into the params JSON
            {path_replacement_rules}
 
-        4. JSON FORMAT RULES — params MUST be valid JSON (CRITICAL):
+        4. Tool calling rules:
+           - You MUST call the tool with the three required arguments: user_id, query_id, and params
+           - For the params argument: provide the COMPLETE JSON from the template above, with values modified per the user's request. Include ALL top-level fields (method, Content-Type, query, header, body) even if unchanged.
+           - DO NOT put user_id or query_id inside the params JSON — they are separate tool arguments
+
+        5. JSON FORMAT RULES — params MUST be valid JSON (CRITICAL):
            - Every key-value pair MUST be separated by a comma (except the last pair in each object)
            - Trailing commas (after the last value in an object/array) are FORBIDDEN
            - All string values containing double quotes MUST escape them with backslash: \\"
@@ -847,6 +870,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
 
         Do not fabricate tool results. Do not assume tool behavior beyond the provided output.
 
+        Do not return tool parameters, such as the user id and query id.
         Do NOT reveal any API keys, tokens, header values, or authentication credentials in your response.
 
         ## Markdown Formatting Requirements
@@ -929,14 +953,17 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
 
 
     def generate_user_prompt(self, prompt, user_id=None, query_id=None) -> str:
-        # user_id / query_id are injected by the tool wrapper at call time
-        # (see get_dynamic_tools), not embedded in the prompt text. This
-        # keeps user messages safe to retain across multi-turn conversations.
+        # user_id / query_id are included so the LLM schema sees them as
+        # required parameters and generates the full API template. The tool
+        # wrapper overrides whatever the LLM passes with self._last_*.
+        uid = str(user_id) if user_id else ""
+        qid = str(query_id) if query_id else ""
         user_prompt = f"""
-        {prompt}
+        {prompt},
+        user id is {uid},
+        query id is {qid},
         """
         self.logger.info(f"user prompt:{user_prompt}")
-
         return user_prompt
 
     def generate_frontend_tool_direct_system_prompt(self, tool_data: str) -> str:
@@ -1224,9 +1251,12 @@ Begin your response now:
 
                 if tool_info:
 
-                    # Dynamic tool functions — user_id / query_id are injected
-                    # from the agent instance so the LLM prompt never embeds them.
-                    def dynamic_frontend_tool_function(params: str):
+                    # Dynamic tool functions — the schema still requires user_id /
+                    # query_id so the LLM sees a 3-parameter function and follows
+                    # the full template format, but the actual values are taken
+                    # from the agent instance (what the LLM passes is ignored).
+                    def dynamic_frontend_tool_function(user_id: str, query_id: str, params: str):
+                        # Always use stored values — ignore LLM-provided IDs
                         user_id = self._last_user_id
                         query_id = self._last_query_id
                         self.logger.info(f"dynamic_frontend_tool_function user id is {user_id} - query id is {query_id} - param is {params}")
@@ -1269,7 +1299,8 @@ Begin your response now:
                             self.logger.error(f"Failed to write to Redis: {str(e)}")
                             return None
 
-                    def dynamic_backend_tool_function(params: Dict[str, Any] | str):
+                    def dynamic_backend_tool_function(user_id: str, query_id: str, params: Dict[str, Any] | str):
+                        # Always use stored values — ignore LLM-provided IDs
                         user_id = self._last_user_id
                         query_id = self._last_query_id
                         if isinstance(params, str):
@@ -1615,9 +1646,10 @@ Begin your response now:
             'content': self._get_fixed_system_prefix(),
         })
 
-        # 2. Prior conversation turns (already sanitised — no IDs, no templates)
+        # 2. Prior conversation turns — strip stale IDs from old user messages
         for turn in getattr(self, '_conversation_turns', []):
-            memory_msgs.append({'role': 'user', 'content': turn['user']})
+            clean_user = _STRIP_IDS_RE.sub('', turn['user']).strip()
+            memory_msgs.append({'role': 'user', 'content': clean_user})
             memory_msgs.append({'role': 'assistant', 'content': turn['assistant']})
 
         # 3. Current user query
