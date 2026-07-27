@@ -256,7 +256,7 @@ async def _classify_long_task_async(
         "- 如果用户提问的意思是「基于之前的结果继续操作」→ 从历史中提取ID\n"
         "- 如果用户提问是一个全新的、独立的话题（与历史无关）→ 不提取任何ID，"
         "patent_ids 返回空数组，系统会自动触发搜索模式\n\n"
-        "## 五种场景\n"
+        "## 六种场景\n"
         "1. prosecution — 用户要分析**单个**专利的审查历史（审查过程、Office Action、"
         "答辩、Claim修改、授权原因等）。\n"
         "   关键词：审查历史、审查过程、审查意见、Office Action、prosecution、"
@@ -282,7 +282,22 @@ async def _classify_long_task_async(
         "   - patent_ids 从历史对话中提取\n"
         "   例：（历史对话返回了3个专利）用户：「从这3条中筛选出橡胶垫圈相关专利」\n"
         "   例：（历史对话返回了专利列表）用户：「上述专利里哪些已授权」\n"
-        "   例：（历史对话返回了专利结果）用户：「帮我分析第一个专利」\n\n"
+        "   例：（历史对话返回了专利结果）用户：「帮我分析第一个专利」\n"
+        "5. china_prosecution — 用户要分析**中国专利**的审查历史（审查决定、复审、"
+        "无效、异议等中国特有的审查程序）。\n"
+        "   **CRITICAL: 只要用户提到「中国」+「审查」相关关键词，就匹配此场景。**\n"
+        "   关键词：中国专利审查、中国审查历史、中国审查过程、复审决定、无效宣告、"
+        "审查决定、专利复审、专利无效、中国同族审查、在中国的审查、中国OA、"
+        "China examination、China prosecution、CN patent review、"
+        "reexamination CN、invalidation CN、CN review history、"
+        "examination history China、中国的审查\n"
+        "   - 即使用户提到的是US专利号（如 US12506212）+「在中国」，也匹配此场景\n"
+        "   - 即使用户同时提到了「同族」，如果有「中国审查」则是此场景而非 families\n"
+        "   - patent_ids 中只提取 **1个** 专利号\n"
+        "   - 例：「帮我看看 US12506212 在中国的审查历史」→ china_prosecution\n"
+        "   - 例：「分析专利 CN201710216936.1 在中国经历了哪些审查程序」→ china_prosecution\n"
+        "   - 例：「这个专利在中国有没有被无效过」→ china_prosecution\n"
+        "   - 例：「帮我看看 17429113 在中国的审查历史」→ china_prosecution\n"
         "## 专利ID格式\n"
         "- USPTO（美国）: 纯7-8位数字，如 8388852（7位授权号）, 17429113（8位申请号）\n"
         "- USPTO 授权号（patent number）通常是7位数字，申请号（application number）通常是8位\n"
@@ -299,12 +314,12 @@ async def _classify_long_task_async(
         "  AMD、NVIDIA、Qualcomm、IBM等），且没有明确提到中国专利 → uspto\n"
         "- 不确定 → unknown\n\n"
         "## 输出JSON\n"
-        '{"scenario": "prosecution"|"families"|"direct_ids"|"conversation_refs", '
+        '{"scenario": "prosecution"|"families"|"direct_ids"|"conversation_refs"|"china_prosecution", '
         '"patent_ids": ["id1","id2"], '
         '"patent_source": "uspto"|"cnipa"|"unknown", '
         '"patent_id_type": "application_number"|"grant_number"|"publication_number"|"unknown", '
         '"reasoning": "简要说明"}\n\n'
-        "## patent_id_type 判断规则（仅 prosecution 场景需要，其他场景填 unknown）\n"
+        "## patent_id_type 判断规则（仅 prosecution / china_prosecution 场景需要，其他场景填 unknown）\n"
         "- application_number: 用户明确说是「申请号/application number」，"
         "或 ID 格式为 2位系列码+6位序号（如 17/027,484 或 17027484）\n"
         "- grant_number: 用户明确说是「授权号/patent number/grant number」，"
@@ -1157,15 +1172,15 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                        (task_id, session_id, user_id, scene_id, task_type, input_params, status)
                                        VALUES (%s, %s, %s, %s, %s, %s, %s)""",
                                     (task_id, session_id, local_user_id, scene_id,
-                                     'family_analysis' if scenario == 'families' else ('prosecution_analysis' if scenario == 'prosecution' else 'patent_analysis'),
+                                     'family_analysis' if scenario == 'families' else ('prosecution_analysis' if scenario == 'prosecution' else ('china_examination' if scenario == 'china_prosecution' else 'patent_analysis')),
                                      json.dumps({
                                          'query': request.query,
                                          'query_id': request.query_id,
-                                         **({'patent_id': patent_ids[0]} if scenario == 'prosecution' and patent_ids else {'patent_id': ''}),
-                                         **({'patent_ids': patent_ids} if scenario != 'prosecution' else {}),
+                                         **({'patent_id': patent_ids[0]} if scenario in ('prosecution', 'families', 'china_prosecution') and patent_ids else {'patent_id': ''}),
+                                         **({'patent_ids': patent_ids} if scenario not in ('prosecution', 'families', 'china_prosecution') else {}),
                                          'patent_source': patent_source,
                                          **({'patent_texts': patent_texts} if patent_texts else {}),
-                                         **({'lang': _detect_query_language(request.query)} if scenario == 'prosecution' else {}),
+                                         **({'lang': _detect_query_language(request.query)} if scenario in ('prosecution', 'families', 'china_prosecution') else {}),
                                      }, ensure_ascii=False),
                                      'pending'))
                                 conn.commit()
@@ -1177,7 +1192,8 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
 
                         is_prosecution = (scenario == 'prosecution')
                         is_families = (scenario == 'families')
-                        is_single_patent = is_prosecution or is_families
+                        is_china_prosecution = (scenario == 'china_prosecution')
+                        is_single_patent = is_prosecution or is_families or is_china_prosecution
                         query_lang = _detect_query_language(request.query)
 
                         celery_params = {
@@ -1189,7 +1205,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                             'scenario': scenario,
                         }
                         celery_params['lang'] = query_lang
-                        if is_prosecution or is_families:
+                        if is_prosecution or is_families or is_china_prosecution:
                             celery_params['patent_id'] = patent_ids[0] if patent_ids else ''
                             celery_params['patent_id_type'] = patent_id_type
                         else:
@@ -1208,6 +1224,9 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                             elif is_prosecution:
                                 from celery_worker import execute_prosecution_analysis
                                 execute_prosecution_analysis.delay(task_id=task_id, params=celery_params)
+                            elif is_china_prosecution:
+                                from celery_worker import execute_china_examination_analysis
+                                execute_china_examination_analysis.delay(task_id=task_id, params=celery_params)
                             else:
                                 from celery_worker import execute_patent_analysis
                                 execute_patent_analysis.delay(task_id=task_id, params=celery_params)
@@ -1250,6 +1269,11 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                             status_msg = (
                                 '专利审查历史分析任务已提交' if queue_result == 'running'
                                 else '专利审查历史分析任务已排队，将在当前任务完成后自动开始'
+                            )
+                        elif is_china_prosecution:
+                            status_msg = (
+                                '中国专利审查历史分析任务已提交' if queue_result == 'running'
+                                else '中国专利审查历史分析任务已排队，将在当前任务完成后自动开始'
                             )
                         else:
                             status_msg = (

@@ -330,6 +330,14 @@ _STATUS_MSGS = {
         "prosecution_all_failed": "所有审查文件处理失败。文件可能是扫描件或加密PDF。",
         "prosecution_report_complete": "报告撰写完成",
         "family_lookup": "正在查询EPO同族专利...",
+        "china_resolving": "正在解析中国专利申请号...",
+        "china_fetching_review": "正在获取中国审查决定数据...",
+        "china_analyzing_decisions": "正在分析审查决定（{current}/{total}）...",
+        "china_generating_timeline": "正在生成审查时间线...",
+        "china_no_cn_member": "未找到该专利的中国同族成员，无法进行中国审查历史分析。",
+        "china_no_review_data": "未找到该中国专利的审查决定数据。",
+        "china_report_title": "中国专利 {patent_id} 审查历史分析报告",
+        "china_family_overview": "查到 {input_id} 的中国同族申请号 {cn_app}，同族覆盖 {n_juris} 个司法辖区: {juris}",
     },
     "en": {
         "preparing": "Preparing patent analysis ({total} patents)...",
@@ -369,6 +377,14 @@ _STATUS_MSGS = {
         "prosecution_all_failed": "All prosecution documents failed processing. Files may be scanned images or encrypted PDFs.",
         "prosecution_report_complete": "Report writing complete",
         "family_lookup": "Looking up patent family via EPO...",
+        "china_resolving": "Resolving Chinese patent application number...",
+        "china_fetching_review": "Fetching Chinese examination review data...",
+        "china_analyzing_decisions": "Analyzing examination decisions ({current}/{total})...",
+        "china_generating_timeline": "Building examination timeline...",
+        "china_no_cn_member": "No Chinese family member found for this patent.",
+        "china_no_review_data": "No examination review data found for this Chinese patent.",
+        "china_report_title": "Chinese Patent {patent_id} Examination History Report",
+        "china_family_overview": "Found CN application {cn_app} for {input_id}, family spans {n_juris} jurisdictions: {juris}",
     },
 }
 
@@ -2037,8 +2053,575 @@ def _build_family_overview_status(family, lang: str) -> dict:
     }
 
 
+# ── China Examination helpers ──────────────────────────────────────────────────
+
+
+def _build_markdown_table(
+    table_rows: list[dict], columns: list[str], lang: str = "zh",
+) -> str:
+    """Build a markdown table from analysis rows and columns."""
+    if not table_rows or not columns:
+        return ""
+
+    lines: list[str] = []
+    # Header
+    header = "| " + " | ".join(columns) + " |"
+    separator = "|" + "|".join("------" for _ in columns) + "|"
+    lines.append(header)
+    lines.append(separator)
+
+    for row in table_rows:
+        cells = []
+        for col in columns:
+            val = row.get(col, "")
+            val = str(val).replace("|", "\\|").replace("\n", " ")
+            if len(val) > 120:
+                val = val[:117] + "..."
+            cells.append(val)
+        lines.append("| " + " | ".join(cells) + " |")
+
+    if lang == "zh":
+        lines.insert(0, "## 审查决定分析表\n")
+    else:
+        lines.insert(0, "## Examination Decision Analysis Table\n")
+
+    return "\n".join(lines)
+
+
+def _build_events_summary_text(
+    events: list, lang: str = "zh",
+) -> str:
+    """Build a condensed text summary of all examination events for the LLM."""
+    from sources.long_task.china_examination import (
+        ExaminationEvent, _format_event_for_llm,
+    )
+    parts: list[str] = []
+    for i, evt in enumerate(events):
+        if not isinstance(evt, ExaminationEvent):
+            continue
+        label = evt.decision_label_zh if lang == "zh" else evt.decision_label_en
+        parts.append(
+            f"### {i+1}. {label} — {evt.decision_number} ({evt.decision_date})\n\n"
+            f"{_format_event_for_llm(evt)[:4000]}"
+        )
+    return "\n\n".join(parts)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# Prosecution History Analysis Task (single patent)
+# China Patent Examination History Analysis Task (single patent)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.task(bind=True, max_retries=2, default_retry_delay=60, time_limit=1800, soft_time_limit=1770)
+def execute_china_examination_analysis(self, task_id: str, params: dict):
+    """Analyze Chinese patent examination history via sipop.cn open data platform.
+
+    Phase 0: US/EP patent → CN application number via EPO family
+    Phase 1: Fetch examination data via SIPOP API (queryPatentReview + lawState + basicInfo)
+    Phase 2: AI analysis of examination events (Flash columns → Pro per-event analysis)
+    Phase 3: Generate report (DOCX + PDF)
+
+    Unlike USPTO prosecution analysis which downloads documents, this task works
+    with *structured* review decision data returned by the SIPOP API.
+    """
+    import asyncio as _asyncio
+    import os as _os
+
+    retry_count = self.request.retries
+    patent_id = str(params.get('patent_id', '')).strip()
+    query = params.get('query', '')
+    lang = params.get('lang', 'zh')
+    session_id = params.get('session_id', '')
+    user_id = params.get('user_id', '')
+
+    _pipeline_logger.info(
+        f"[task={task_id}] CHINA_EXAM START — "
+        f"patent_id={patent_id}, query={query[:120]}, lang={lang}, "
+        f"retry={retry_count}/{self.max_retries}"
+    )
+
+    if retry_count >= self.max_retries:
+        _pipeline_logger.error(
+            f"[task={task_id}] CHINA_EXAM HARD_STOP — retry_count={retry_count}"
+        )
+        if user_id:
+            from sources.long_task.user_queue import complete_user_task
+            try:
+                complete_user_task(str(user_id), task_id)
+            except Exception:
+                pass
+        return {'status': 'failed', 'task_id': task_id,
+                'error': f'Max retries ({self.max_retries}) exceeded'}
+
+    if not patent_id:
+        _pipeline_logger.error(f"[task={task_id}] CHINA_EXAM no patent_id provided")
+        return {'status': 'failed', 'task_id': task_id, 'error': 'No patent_id'}
+
+    # ── Imports ──────────────────────────────────────────────────────────────
+    from sources.long_task.status_manager import (
+        update_task_status, set_task_completed, set_task_failed,
+    )
+    from sources.long_task.config import (
+        get_long_task_config, get_sipop_config, get_family_config,
+    )
+    from sources.long_task.patent_family import EPOFamilyClient, EPOError
+    from sources.long_task.china_examination import (
+        resolve_cn_application_number,
+        fetch_examination_data,
+        generate_table_columns,
+        analyze_single_event,
+        generate_event_summary,
+        build_examination_timeline,
+    )
+    from sources.sipop_client import SipopClient, SipopError
+    from sources.long_task.storage import create_storage
+    from sources.llm_provider import Provider
+
+    # ── Provider setup ───────────────────────────────────────────────────────
+    ltc = get_long_task_config()
+    model_family = ltc['provider_family']
+
+    if model_family == 'minimax':
+        flash_provider = Provider(
+            provider_name='minimax', model='MiniMax-M2.7-highspeed',
+            server_address='', is_local=False,
+        )
+        pro_provider = Provider(
+            provider_name='minimax', model='MiniMax-M3',
+            server_address='', is_local=False,
+        )
+    else:
+        flash_provider = Provider(
+            provider_name='deepseek', model='deepseek-v4-flash',
+            server_address='', is_local=False,
+        )
+        pro_provider = Provider(
+            provider_name='deepseek', model='deepseek-v4-pro',
+            server_address='', is_local=False,
+        )
+
+    # ── SIPOP config ─────────────────────────────────────────────────────────
+    sipop_cfg = get_sipop_config()
+    sipop_app_key = sipop_cfg.get('app_key', '')
+    sipop_app_secret = sipop_cfg.get('app_secret', '')
+
+    if not sipop_app_key or not sipop_app_secret:
+        _pipeline_logger.error(
+            f"[task={task_id}] CHINA_EXAM missing SIPOP credentials"
+        )
+        set_task_failed(task_id, "SIPOP API credentials not configured")
+        _update_mysql_progress(task_id, 'failed', 0)
+        return {'status': 'failed', 'task_id': task_id,
+                'error': 'SIPOP credentials not configured'}
+
+    sipop_client = SipopClient(app_key=sipop_app_key, app_secret=sipop_app_secret)
+
+    # ── Family config (for EPO family lookup) ────────────────────────────────
+    fc = get_family_config()
+    epo_key = fc.get('epo_consumer_key', '')
+    epo_secret = fc.get('epo_consumer_secret', '')
+    epo_client = EPOFamilyClient(
+        consumer_key=epo_key, consumer_secret=epo_secret,
+    ) if epo_key and epo_secret else None
+
+    # ── Run pipeline ─────────────────────────────────────────────────────────
+    async def _run():
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 0: Resolve CN application number
+        # ═════════════════════════════════════════════════════════════════
+        update_task_status(task_id, 'preparing', 1,
+                           _t('china_resolving', lang))
+
+        family_context: dict = {}
+        try:
+            cn_app_number, family_context = await resolve_cn_application_number(
+                patent_id, epo_client,
+            )
+        except ValueError as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] CHINA_EXAM PHASE0 resolve_failed — {e}"
+            )
+            set_task_failed(task_id, str(e))
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': str(e)}
+
+        _pipeline_logger.info(
+            f"[task={task_id}] CHINA_EXAM PHASE0 resolved — "
+            f"input={patent_id}, cn_app={cn_app_number}, "
+            f"direct_cn={family_context.get('direct_cn', False)}, "
+            f"jurisdictions={family_context.get('jurisdictions', [])}"
+        )
+
+        # If we used EPO family, build an overview for the frontend
+        if not family_context.get('direct_cn'):
+            jurisdictions = family_context.get('jurisdictions', [])
+            update_task_status(
+                task_id, 'preparing', 5,
+                _t('china_family_overview', lang,
+                   input_id=patent_id, cn_app=cn_app_number,
+                   n_juris=len(jurisdictions),
+                   juris=', '.join(jurisdictions)),
+                family_overview={
+                    'input_id': patent_id,
+                    'cn_app_number': cn_app_number,
+                    'jurisdictions': jurisdictions,
+                    'members': family_context.get('members', []),
+                },
+            )
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 1: Fetch examination data from SIPOP API
+        # ═════════════════════════════════════════════════════════════════
+        update_task_status(task_id, 'preparing', 10,
+                           _t('china_fetching_review', lang))
+
+        try:
+            events, law_state, basic_info = await fetch_examination_data(
+                cn_app_number, sipop_client,
+            )
+        except SipopError as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] CHINA_EXAM PHASE1 fetch_failed — {e}"
+            )
+            set_task_failed(task_id, f"SIPOP API error: {e}")
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': str(e)}
+
+        total_events = len(events)
+        _pipeline_logger.info(
+            f"[task={task_id}] CHINA_EXAM PHASE1 data_fetched — "
+            f"events={total_events}, "
+            f"has_law_state={bool(law_state)}, "
+            f"has_basic_info={bool(basic_info)}"
+        )
+
+        if not events:
+            if lang == 'zh':
+                msg = (
+                    f"未找到中国专利申请 {cn_app_number} 的审查决定数据。"
+                    f"可能该专利尚未经历复审、无效或异议程序。"
+                )
+            else:
+                msg = (
+                    f"No examination review data found for CN application "
+                    f"{cn_app_number}. The patent may not have undergone "
+                    f"reexamination, invalidation, or opposition proceedings."
+                )
+            set_task_failed(task_id, msg)
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 2: Generate table columns (Flash LLM)
+        # ═════════════════════════════════════════════════════════════════
+        update_task_status(
+            task_id, 'generating_columns', 15,
+            _t('china_analyzing_decisions', lang, current=0, total=total_events),
+        )
+
+        _pipeline_logger.info(
+            f"[task={task_id}] CHINA_EXAM PHASE2 generate_table_columns"
+        )
+        columns = await generate_table_columns(
+            query=query, event_count=total_events,
+            provider=flash_provider, lang=lang,
+        )
+        _pipeline_logger.info(
+            f"[task={task_id}] CHINA_EXAM PHASE2 columns_generated — "
+            f"columns={columns}"
+        )
+        _update_mysql_progress(task_id, 'generating_columns', 20)
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 2b: Per-event analysis (Pro LLM)
+        # ═════════════════════════════════════════════════════════════════
+        table_rows: list[dict] = []
+        for i, event in enumerate(events):
+            idx = i + 1
+            pct = 20 + int((i / total_events) * 40)
+            update_task_status(
+                task_id, 'analyzing', pct,
+                _t('china_analyzing_decisions', lang, current=idx, total=total_events),
+                table_rows=table_rows,
+            )
+
+            # Pause / Stop handling
+            _uid = params.get('user_id', '')
+            _completed = len(table_rows)
+            _result = _handle_task_stop(task_id, _uid, _completed, total_events)
+            if _result:
+                return _result
+            _result = _handle_task_pause(task_id, _uid, _completed, total_events, {
+                'completed': [r.get('决定号', '') for r in table_rows],
+                'pending': [e.decision_number for e in events[i:]],
+                'completed_rows': table_rows,
+                'columns': columns,
+            })
+            if _result:
+                return _result
+
+            _pipeline_logger.info(
+                f"[task={task_id}] CHINA_EXAM PHASE2 event[{idx}/{total_events}] — "
+                f"decision={event.decision_number}, type={event.decision}"
+            )
+
+            try:
+                row = await analyze_single_event(
+                    event=event, columns=columns, query=query,
+                    provider=pro_provider, lang=lang,
+                )
+            except Exception as e:
+                _pipeline_logger.warning(
+                    f"[task={task_id}] CHINA_EXAM PHASE2 event[{idx}] analyze_error — {e}"
+                )
+                row = {"决定号": event.decision_number, "_failed": True,
+                       "_failure_reason": str(e)}
+                for col in columns:
+                    if col not in row:
+                        row[col] = "分析失败" if lang == "zh" else "Analysis failed"
+
+            try:
+                summary = await generate_event_summary(
+                    event=event, row=row, query=query,
+                    provider=pro_provider, lang=lang,
+                )
+            except Exception as e:
+                _pipeline_logger.warning(
+                    f"[task={task_id}] CHINA_EXAM PHASE2 event[{idx}] summary_error — {e}"
+                )
+                summary = ""
+            row["_summary"] = summary
+            table_rows.append(row)
+
+        _pipeline_logger.info(
+            f"[task={task_id}] CHINA_EXAM PHASE2 complete — "
+            f"table_rows={len(table_rows)}, "
+            f"failed={sum(1 for r in table_rows if r.get('_failed'))}"
+        )
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 3: Generate report
+        # ═════════════════════════════════════════════════════════════════
+        update_task_status(task_id, 'generating_report', 65,
+                           _t('china_generating_timeline', lang))
+
+        # Build timeline
+        timeline_md = await build_examination_timeline(
+            events=events, law_state=law_state,
+            basic_info=basic_info, lang=lang,
+        )
+
+        # Executive summary via AI
+        update_task_status(task_id, 'generating_report', 70,
+                           _t('writing_summary', lang))
+
+        from sources.long_task.status_manager import ThrottledSummaryUpdater
+        summary_updater = ThrottledSummaryUpdater(
+            task_id, progress=70, step_msg=_t('writing_summary', lang),
+        )
+
+        # Assemble report: Timeline + Analysis Table + AI-generated sections
+        title = basic_info.get("title", "") or patent_id
+        report_title = _t('china_report_title', lang, patent_id=title)
+
+        # Build the analysis table
+        table_md = _build_markdown_table(table_rows, columns, lang)
+
+        # Build a text summary of all events for the AI to generate report
+        events_summary_text = _build_events_summary_text(events, lang)
+
+        if lang == "zh":
+            exec_prompt = (
+                "你是一个中国专利审查历史分析专家。基于以下审查决定的综合分析数据，"
+                "撰写一份\"核心审查洞察\"摘要（300-500字）。\n\n"
+                "要求：\n"
+                "- 总结该专利在中国经历的关键审查程序\n"
+                "- 提炼出最关键的审查决定及其影响\n"
+                "- 如果涉及多个程序（如先复审再无效），分析程序之间的关系\n"
+                "- 对专利最终的法律状态给出判断\n"
+                "- 用 bullet points 组织，每点 1-2 句话\n"
+            )
+        else:
+            exec_prompt = (
+                "You are a China patent examination history analysis expert. "
+                "Based on the comprehensive analysis of the following examination "
+                "decisions, write a \"Key Examination Insights\" summary (300-500 words).\n\n"
+                "Requirements:\n"
+                "- Summarize the key examination procedures this patent underwent in China\n"
+                "- Extract the most critical decisions and their impact\n"
+                "- If multiple procedures are involved (e.g. reexamination then invalidation), "
+                "analyze the relationships between them\n"
+                "- Provide a judgment on the patent's final legal status\n"
+                "- Use bullet points, 1-2 sentences each\n"
+                "Write ALL content in English."
+            )
+
+        exec_text = ""
+        try:
+            exec_result = await pro_provider.complete_json(
+                exec_prompt,
+                f"专利：{title}（申请号：{cn_app_number}）\n\n"
+                f"{timeline_md}\n\n{events_summary_text}",
+            )
+            if isinstance(exec_result, dict):
+                exec_text = exec_result.get("summary", "") or str(exec_result)
+            else:
+                exec_text = str(exec_result) if exec_result else ""
+        except Exception as e:
+            _pipeline_logger.warning(
+                f"[task={task_id}] CHINA_EXAM PHASE3 exec_summary failed — {e}"
+            )
+            if lang == "zh":
+                exec_text = f"本报告分析了中国专利申请 {cn_app_number} 的 {total_events} 个审查决定。详细分析见下方审查决定分析表。"
+            else:
+                exec_text = f"This report analyzes {total_events} examination decisions for CN application {cn_app_number}. See detailed analysis in the table below."
+
+        exec_heading = _t('default_exec_summary_heading', lang)
+
+        report_text = (
+            f"# {report_title}\n\n"
+            f"## {exec_heading}\n\n{exec_text}\n\n"
+            f"{timeline_md}\n\n"
+            f"{table_md}\n\n"
+        )
+
+        # If there are events with substantial content, add per-decision analysis
+        for i, (event, row) in enumerate(zip(events, table_rows)):
+            summary = row.get("_summary", "")
+            if summary:
+                if lang == "zh":
+                    heading = f"决定 {event.decision_number} — {event.decision_label_zh}"
+                else:
+                    heading = f"Decision {event.decision_number} — {event.decision_label_en}"
+                report_text += f"### {heading}\n\n{summary}\n\n"
+
+        _pipeline_logger.info(
+            f"[task={task_id}] CHINA_EXAM PHASE3 report — "
+            f"total_chars={len(report_text)}"
+        )
+        update_task_status(task_id, 'generating_report', 90,
+                           _t('report_writing_complete', lang),
+                           result_summary=report_text)
+        _update_mysql_progress(task_id, 'generating_report', 90, result_summary=report_text)
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 4: Export DOCX + PDF
+        # ═════════════════════════════════════════════════════════════════
+        from sources.long_task.storage import get_storage_config
+
+        storage_cfg = get_storage_config()
+        _pipeline_logger.info(
+            f"[task={task_id}] CHINA_EXAM PHASE4 export — "
+            f"backend={storage_cfg.get('report_storage_backend', 'local')}"
+        )
+        try:
+            storage = create_storage(storage_cfg)
+        except Exception as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] CHINA_EXAM PHASE4 storage_init FAILED — {e}"
+            )
+            storage = create_storage({'report_storage_backend': 'local'})
+
+        report_files = []
+        local_storage = None
+
+        async def _get_local_storage():
+            nonlocal local_storage
+            if local_storage is None:
+                from sources.long_task.storage import create_storage as _create
+                local_storage = _create({'report_storage_backend': 'local'})
+            return local_storage
+
+        # DOCX
+        update_task_status(task_id, 'exporting', 90, _t('generating_word', lang))
+        docx_bytes = await export_docx_async(report_text, table_rows, columns, lang=lang)
+        try:
+            await storage.put(task_id, 'report.docx', docx_bytes)
+            _pipeline_logger.info(
+                f"[task={task_id}] CHINA_EXAM PHASE4 docx — size={len(docx_bytes)}"
+            )
+            report_files.append({'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes)})
+        except Exception as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] CHINA_EXAM PHASE4 docx upload FAILED — {e}"
+            )
+            try:
+                await (await _get_local_storage()).put(task_id, 'report.docx', docx_bytes)
+                report_files.append({'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes)})
+            except Exception as e2:
+                _pipeline_logger.error(
+                    f"[task={task_id}] CHINA_EXAM PHASE4 docx local fallback ALSO FAILED — {e2}"
+                )
+
+        # PDF
+        update_task_status(task_id, 'exporting', 95, _t('generating_pdf', lang))
+        pdf_bytes = await export_pdf_async(docx_bytes)
+        try:
+            await storage.put(task_id, 'report.pdf', pdf_bytes)
+            _pipeline_logger.info(
+                f"[task={task_id}] CHINA_EXAM PHASE4 pdf — size={len(pdf_bytes)}"
+            )
+            report_files.append({'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes)})
+        except Exception as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] CHINA_EXAM PHASE4 pdf upload FAILED — {e}"
+            )
+            try:
+                await (await _get_local_storage()).put(task_id, 'report.pdf', pdf_bytes)
+                report_files.append({'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes)})
+            except Exception as e2:
+                _pipeline_logger.error(
+                    f"[task={task_id}] CHINA_EXAM PHASE4 pdf local fallback ALSO FAILED — {e2}"
+                )
+
+        # ── Complete ──
+        _pipeline_logger.info(
+            f"[task={task_id}] CHINA_EXAM COMPLETED — "
+            f"patent_id={patent_id}, cn_app={cn_app_number}, "
+            f"decisions_analyzed={len(table_rows)}, "
+            f"report_chars={len(report_text)}, "
+            f"files={[f['format'] for f in report_files]}"
+        )
+        _update_mysql_progress(task_id, 'exporting', 100)
+        set_task_completed(task_id, report_files)
+
+        if user_id:
+            from sources.long_task.user_queue import complete_user_task
+            try:
+                next_task_id = complete_user_task(str(user_id), task_id)
+                if next_task_id:
+                    _dispatch_queued_task(next_task_id, user_id)
+            except Exception as e:
+                _pipeline_logger.warning(
+                    f"[task={task_id}] CHINA_EXAM QUEUE_DISPATCH_FAILED — {e}"
+                )
+
+        return {'status': 'completed', 'task_id': task_id}
+
+    loop = _asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(_run())
+    except Exception as e:
+        import traceback
+        _pipeline_logger.error(
+            f"[task={task_id}] CHINA_EXAM UNHANDLED_ERROR — "
+            f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
+        )
+        if user_id:
+            try:
+                from sources.long_task.user_queue import complete_user_task
+                complete_user_task(str(user_id), task_id)
+            except Exception:
+                pass
+        set_task_failed(task_id, f"{type(e).__name__}: {e}")
+        _update_mysql_progress(task_id, 'failed', 0)
+        return {'status': 'failed', 'task_id': task_id,
+                'error': f'{type(e).__name__}: {e}'}
+    finally:
+        loop.close()
+
+
+# ── Prosecution History Analysis Task (single patent)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 

@@ -102,6 +102,36 @@ def get_family_config(config_path: str = 'config.ini') -> dict:
     }
 
 
+# ── SIPOP (China patent open data platform) config ──────────────────────────
+
+DEFAULT_SIPOP_APP_KEY = ''
+DEFAULT_SIPOP_APP_SECRET = ''
+
+
+def get_sipop_config(config_path: str = 'config.ini') -> dict:
+    """Read [SIPOP] section from config file, with env var overrides.
+
+    Returns:
+        dict with keys: app_key (str), app_secret (str)
+    """
+    import os as _os
+    cfg = configparser.ConfigParser()
+    cfg.read(config_path)
+
+    app_key = _os.getenv('SIPOP_APP_KEY', '')
+    app_secret = _os.getenv('SIPOP_APP_SECRET', '')
+
+    if not app_key and cfg.has_section('SIPOP'):
+        app_key = cfg.get('SIPOP', 'app_key', fallback=DEFAULT_SIPOP_APP_KEY)
+    if not app_secret and cfg.has_section('SIPOP'):
+        app_secret = cfg.get('SIPOP', 'app_secret', fallback=DEFAULT_SIPOP_APP_SECRET)
+
+    return {
+        'app_key': app_key.strip(),
+        'app_secret': app_secret.strip(),
+    }
+
+
 def get_prosecution_config(config_path: str = 'config.ini') -> dict:
     """Read [PROSECUTION] section from config file.
 
