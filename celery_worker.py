@@ -2107,6 +2107,80 @@ def _build_events_summary_text(
     return "\n\n".join(parts)
 
 
+def _build_basic_info_timeline(
+    basic_info: dict, law_state: dict, lang: str = "zh",
+) -> str:
+    """Build a basic info + law-state summary markdown block."""
+    lines: list[str] = []
+    if lang == "zh":
+        lines.append("## 专利基本信息\n")
+    else:
+        lines.append("## Patent Basic Information\n")
+
+    title = basic_info.get("title", "")
+    app_num = basic_info.get("applicationDocNum", "")
+    app_date = basic_info.get("applicationDate", "")
+    pub_num = basic_info.get("publicationDocNum", "")
+    pub_date = basic_info.get("publicationDate", "")
+    applicants = basic_info.get("applicant", [])
+    applicant_str = ", ".join(applicants) if isinstance(applicants, list) else str(applicants or "")
+    inventors = basic_info.get("inventor", [])
+    inventor_str = ", ".join(inventors) if isinstance(inventors, list) else str(inventors or "")
+    ipc_main = basic_info.get("ipcMain", "")
+    abstract = basic_info.get("abstractDesc", "")
+
+    if lang == "zh":
+        if title:
+            lines.append(f"**专利名称**：{title}")
+        if app_num:
+            lines.append(f"**申请号**：{app_num}")
+        if app_date:
+            lines.append(f"**申请日**：{app_date}")
+        if pub_num:
+            lines.append(f"**公开号**：{pub_num}")
+        if pub_date:
+            lines.append(f"**公开日**：{pub_date}")
+        if applicant_str:
+            lines.append(f"**申请人**：{applicant_str}")
+        if inventor_str:
+            lines.append(f"**发明人**：{inventor_str}")
+        if ipc_main:
+            lines.append(f"**主分类号**：{ipc_main}")
+        if abstract:
+            lines.append(f"\n**摘要**：{abstract}")
+
+        law_status = law_state.get("lawStatus", "")
+        law_date = law_state.get("date", "")
+        if law_status or law_date:
+            lines.append(f"\n**当前法律状态**：{law_status}（{law_date}）")
+    else:
+        if title:
+            lines.append(f"**Title**: {title}")
+        if app_num:
+            lines.append(f"**Application Number**: {app_num}")
+        if app_date:
+            lines.append(f"**Filing Date**: {app_date}")
+        if pub_num:
+            lines.append(f"**Publication Number**: {pub_num}")
+        if pub_date:
+            lines.append(f"**Publication Date**: {pub_date}")
+        if applicant_str:
+            lines.append(f"**Applicant**: {applicant_str}")
+        if inventor_str:
+            lines.append(f"**Inventor**: {inventor_str}")
+        if ipc_main:
+            lines.append(f"**IPC Main**: {ipc_main}")
+        if abstract:
+            lines.append(f"\n**Abstract**: {abstract}")
+
+        law_status = law_state.get("lawStatus", "")
+        law_date = law_state.get("date", "")
+        if law_status or law_date:
+            lines.append(f"\n**Current Legal Status**: {law_status} ({law_date})")
+
+    return "\n".join(lines) + "\n"
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # China Patent Examination History Analysis Task (single patent)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2172,6 +2246,8 @@ def execute_china_examination_analysis(self, task_id: str, params: dict):
         analyze_single_event,
         generate_event_summary,
         build_examination_timeline,
+        format_claims_for_report,
+        build_legal_status_timeline,
     )
     from sources.sipop_client import SipopClient, SipopError
     from sources.long_task.storage import create_storage
@@ -2276,7 +2352,7 @@ def execute_china_examination_analysis(self, task_id: str, params: dict):
                            _t('china_fetching_review', lang))
 
         try:
-            events, law_state, basic_info = await fetch_examination_data(
+            events, law_state, basic_info, claims, legal_timeline = await fetch_examination_data(
                 cn_app_number, sipop_client,
             )
         except SipopError as e:
@@ -2290,26 +2366,98 @@ def execute_china_examination_analysis(self, task_id: str, params: dict):
         total_events = len(events)
         _pipeline_logger.info(
             f"[task={task_id}] CHINA_EXAM PHASE1 data_fetched — "
-            f"events={total_events}, "
+            f"events={total_events}, claims={len(claims)}, "
+            f"legal_events={len(legal_timeline)}, "
             f"has_law_state={bool(law_state)}, "
             f"has_basic_info={bool(basic_info)}"
         )
 
         if not events:
+            # No examination review decisions — but we may still have claims
+            # and legal status data to build a useful report.
+            title = basic_info.get("title", "") or patent_id
+            report_title = _t('china_report_title', lang, patent_id=title)
+            claims_md = format_claims_for_report(claims, lang) if claims else ""
+            legal_md = build_legal_status_timeline(legal_timeline, lang) if legal_timeline else ""
+
+            # Build timeline from basic info
+            basic_timeline = _build_basic_info_timeline(basic_info, law_state, lang)
+
+            if not claims_md and not legal_md:
+                # Truly nothing — fail gracefully
+                if lang == 'zh':
+                    msg = (
+                        f"未找到中国专利申请 {cn_app_number} 的审查决定、权利要求"
+                        f"或法律状态数据。可能该专利数据尚未录入平台。"
+                    )
+                else:
+                    msg = (
+                        f"No examination review, claims, or legal status data "
+                        f"found for CN application {cn_app_number}."
+                    )
+                set_task_failed(task_id, msg)
+                _update_mysql_progress(task_id, 'failed', 0)
+                return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
             if lang == 'zh':
-                msg = (
-                    f"未找到中国专利申请 {cn_app_number} 的审查决定数据。"
-                    f"可能该专利尚未经历复审、无效或异议程序。"
+                exec_text = (
+                    f"中国专利申请 {cn_app_number} 暂无复审、无效或异议审查决定记录。"
+                    f"以下为专利的基本信息、权利要求及法律状态时间线。"
                 )
             else:
-                msg = (
-                    f"No examination review data found for CN application "
-                    f"{cn_app_number}. The patent may not have undergone "
-                    f"reexamination, invalidation, or opposition proceedings."
+                exec_text = (
+                    f"No reexamination, invalidation, or opposition decisions "
+                    f"found for CN application {cn_app_number}. "
+                    f"Below are the patent's basic information, claims, and "
+                    f"legal status timeline."
                 )
-            set_task_failed(task_id, msg)
-            _update_mysql_progress(task_id, 'failed', 0)
-            return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
+            exec_heading = _t('default_exec_summary_heading', lang)
+            report_text = (
+                f"# {report_title}\n\n"
+                f"## {exec_heading}\n\n{exec_text}\n\n"
+                f"{basic_timeline}\n\n"
+                f"{claims_md}\n\n"
+                f"{legal_md}\n"
+            )
+
+            # Export
+            table_rows = []
+            columns = ["决定号"]
+            _update_mysql_progress(task_id, 'generating_report', 90, result_summary=report_text)
+
+            from sources.long_task.storage import get_storage_config
+            storage_cfg = get_storage_config()
+            try:
+                storage = create_storage(storage_cfg)
+            except Exception:
+                storage = create_storage({'report_storage_backend': 'local'})
+
+            report_files = []
+            docx_bytes = await export_docx_async(report_text, table_rows, columns, lang=lang)
+            try:
+                await storage.put(task_id, 'report.docx', docx_bytes)
+                report_files.append({'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes)})
+            except Exception:
+                pass
+
+            pdf_bytes = await export_pdf_async(docx_bytes)
+            try:
+                await storage.put(task_id, 'report.pdf', pdf_bytes)
+                report_files.append({'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes)})
+            except Exception:
+                pass
+
+            set_task_completed(task_id, report_files)
+            if user_id:
+                from sources.long_task.user_queue import complete_user_task
+                try:
+                    next_task_id = complete_user_task(str(user_id), task_id)
+                    if next_task_id:
+                        _dispatch_queued_task(next_task_id, user_id)
+                except Exception:
+                    pass
+            return {'status': 'completed', 'task_id': task_id}
 
         # ═════════════════════════════════════════════════════════════════
         # Phase 2: Generate table columns (Flash LLM)
@@ -2478,6 +2626,12 @@ def execute_china_examination_analysis(self, task_id: str, params: dict):
 
         exec_heading = _t('default_exec_summary_heading', lang)
 
+        # Build claims section
+        claims_md = format_claims_for_report(claims, lang) if claims else ""
+
+        # Build legal status timeline
+        legal_md = build_legal_status_timeline(legal_timeline, lang) if legal_timeline else ""
+
         report_text = (
             f"# {report_title}\n\n"
             f"## {exec_heading}\n\n{exec_text}\n\n"
@@ -2494,6 +2648,12 @@ def execute_china_examination_analysis(self, task_id: str, params: dict):
                 else:
                     heading = f"Decision {event.decision_number} — {event.decision_label_en}"
                 report_text += f"### {heading}\n\n{summary}\n\n"
+
+        # Append claims and legal status at the end
+        if claims_md:
+            report_text += f"\n{claims_md}\n"
+        if legal_md:
+            report_text += f"\n{legal_md}\n"
 
         _pipeline_logger.info(
             f"[task={task_id}] CHINA_EXAM PHASE3 report — "

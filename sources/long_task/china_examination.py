@@ -229,20 +229,28 @@ async def resolve_cn_application_number(
 async def fetch_examination_data(
     cn_app_number: str,
     sipop_client,
-) -> tuple[list[ExaminationEvent], dict[str, Any], dict[str, Any]]:
+) -> tuple[
+    list[ExaminationEvent],
+    dict[str, Any],
+    dict[str, Any],
+    list[str],
+    list[dict[str, Any]],
+]:
     """Fetch all examination-related data for a Chinese patent.
 
     Calls:
     1. ``patentSupport.queryPatentReview`` → list of review decisions
     2. ``patentSupport.queryLawStateInfo`` → legal status summary
     3. ``patentBase.queryBasicInfo`` → patent bibliographic info
+    4. ``patentBase.queryFullTxt`` → claims + description
+    5. ``patentSupport.queryLegalState`` → legal status timeline
 
     Args:
         cn_app_number: Cleaned CN application number.
         sipop_client: ``SipopClient`` instance.
 
     Returns:
-        Tuple of (list_of_ExaminationEvent, law_state_dict, basic_info_dict).
+        Tuple of (events, law_state, basic_info, claims, legal_timeline).
     """
     from sources.sipop_client import SipopAPIError, SipopAuthError
 
@@ -279,7 +287,33 @@ async def fetch_examination_data(
     except Exception as e:
         _logger.warning(f"fetch basic_info failed (non-fatal): {e}")
 
-    return events, law_state, basic_info
+    # Fetch claims
+    claims: list[str] = []
+    try:
+        full_text = await sipop_client.query_full_text(cn_app_number)
+        raw_claims = full_text.get("claim", [])
+        if isinstance(raw_claims, list):
+            claims = [str(c) for c in raw_claims]
+        elif isinstance(raw_claims, str):
+            claims = [raw_claims]
+    except Exception as e:
+        _logger.warning(f"fetch claims failed (non-fatal): {e}")
+
+    # Fetch legal status timeline
+    legal_timeline: list[dict[str, Any]] = []
+    try:
+        legal_timeline = await sipop_client.query_legal_state_timeline(cn_app_number)
+    except Exception as e:
+        _logger.warning(f"fetch legal_timeline failed (non-fatal): {e}")
+
+    _logger.info(
+        f"fetch examination — cn_app={cn_app_number}, "
+        f"events={len(events)}, claims={len(claims)}, "
+        f"legal_events={len(legal_timeline)}, "
+        f"has_law_state={bool(law_state)}, has_basic_info={bool(basic_info)}"
+    )
+
+    return events, law_state, basic_info, claims, legal_timeline
 
 
 def _parse_review_decisions(
@@ -694,3 +728,68 @@ def _short_outcome(event: ExaminationEvent, lang: str = "zh") -> str:
     if lang == "zh":
         return event.decision_label_zh
     return event.decision_label_en
+
+
+# ── Claims formatting ────────────────────────────────────────────────────────────
+
+
+def format_claims_for_report(claims: list[str], lang: str = "zh") -> str:
+    """Format patent claims as a numbered markdown list."""
+    if not claims:
+        return ""
+
+    if lang == "zh":
+        lines = ["## 权利要求\n"]
+    else:
+        lines = ["## Claims\n"]
+
+    for i, claim_text in enumerate(claims):
+        text = claim_text.strip()
+        if not text:
+            continue
+        # Remove leading numbering if already present (e.g. "1. ", "1、")
+        text = re.sub(r'^\d+[\.\、\s]+', '', text)
+        lines.append(f"{i+1}. {text}")
+
+    return "\n".join(lines)
+
+
+# ── Legal status timeline ────────────────────────────────────────────────────────
+
+
+def build_legal_status_timeline(
+    legal_timeline: list[dict[str, Any]],
+    lang: str = "zh",
+) -> str:
+    """Build a markdown table of legal status events from the SIPOP API.
+
+    The ``patentSupport.queryLegalState`` API returns a chronological list
+    of legal events with lawStatusCode, lawStatus, lawStatusDetail etc.
+    """
+    if not legal_timeline:
+        return ""
+
+    if lang == "zh":
+        lines = ["## 法律状态时间线\n"]
+        lines.append("| 日期 | 状态代码 | 法律状态 | 详情 |")
+        lines.append("|------|----------|----------|------|")
+    else:
+        lines = ["## Legal Status Timeline\n"]
+        lines.append("| Date | Code | Status | Detail |")
+        lines.append("|------|------|--------|--------|")
+
+    for evt in legal_timeline:
+        date = evt.get("date", "") or ""
+        if len(date) == 8:
+            date = f"{date[:4]}-{date[4:6]}-{date[6:]}"
+        code = evt.get("lawStatusCode", "") or ""
+        status = evt.get("lawStatus", "") or ""
+        detail = evt.get("lawStatusDetail", "") or ""
+
+        # Escape markdown pipe characters
+        status = status.replace("|", "\\|")
+        detail = detail.replace("|", "\\|")
+
+        lines.append(f"| {date} | {code} | {status} | {detail} |")
+
+    return "\n".join(lines)

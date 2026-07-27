@@ -36,6 +36,7 @@ SIPOP_REQUEST_TIMEOUT = 30
 METHOD_QUERY_BASIC_INFO = "patentBase.queryBasicInfo"
 METHOD_QUERY_FULL_TEXT = "patentBase.queryFullTxt"
 METHOD_QUERY_LAW_STATE = "patentSupport.queryLawStateInfo"
+METHOD_QUERY_LEGAL_STATE = "patentSupport.queryLegalState"
 METHOD_QUERY_PATENT_REVIEW = "patentSupport.queryPatentReview"
 METHOD_QUERY_PATENT_TRANSFER = "patentSupport.queryPatentTransfer"
 METHOD_QUERY_PATENT_LICENSE = "patentSupport.queryPatentLicense"
@@ -132,6 +133,17 @@ class SipopClient:
             raise SipopAuthError(f"SIPOP auth failed (sign error): {msg}")
         if code == "1001":
             raise SipopAuthError(f"SIPOP auth failed (invalid appKey): {msg}")
+
+        # Code 1100 = no results found (query succeeded but data is empty).
+        # This is a normal business case — the patent may not have any
+        # examination review / legal event records on the platform.
+        if code == "1100":
+            _logger.info(
+                f"sipop_response — method={method}, code=1100 (no results), "
+                f"msg={msg}"
+            )
+            return {} if method != METHOD_QUERY_PATENT_REVIEW else []
+
         if code != "1000":
             raise SipopAPIError(f"SIPOP API error code={code}: {msg}")
 
@@ -183,6 +195,46 @@ class SipopClient:
         return await self.call_api(METHOD_QUERY_LAW_STATE, {
             "applicationDocNum": application_doc_num,
         })
+
+    async def query_full_text(
+        self, application_doc_num: str,
+    ) -> dict[str, Any]:
+        """Query full text (claims + description) for a Chinese patent.
+
+        Wraps ``patentBase.queryFullTxt``.
+
+        Returns:
+            Dict with applicationDocNum, claim (list[str]), description (list[str]),
+            descriptionFigure (list[str]) fields.
+        """
+        return await self.call_api(METHOD_QUERY_FULL_TEXT, {
+            "applicationDocNum": application_doc_num,
+        })
+
+    async def query_legal_state_timeline(
+        self, application_doc_num: str, country: str = "CN",
+    ) -> list[dict[str, Any]]:
+        """Query the full legal-status timeline for a patent.
+
+        Wraps ``patentSupport.queryLegalState``.  Unlike ``query_law_state``
+        which returns a single current-status record, this returns the
+        complete history of legal events (designations, grants, withdrawals,
+        etc.) — especially useful for PCT / foreign-origin patents.
+
+        Returns:
+            List of legal-status events, each with date, lawStatusCode,
+            lawStatus, lawStatusDetail, lawStatusEffect.
+        """
+        data = await self.call_api(METHOD_QUERY_LEGAL_STATE, {
+            "applicationDocNum": application_doc_num,
+            "country": country,
+        })
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict) and "data" in data:
+            items = data["data"]
+            return items if isinstance(items, list) else []
+        return []
 
     async def query_basic_info(
         self, application_doc_num: str,
