@@ -82,7 +82,14 @@ def build_routing_candidate_payload(candidates: Iterable[KnowledgeToolCandidate]
                 "This handles BOTH first-time search queries (e.g. 'find patents "
                 "by company/keyword and analyze them') AND follow-up queries on "
                 "existing results. If the user mentions a company name, keyword, "
-                "or patent number and wants analysis, this is the right choice."
+                "or patent number and wants analysis, this is the right choice. "
+                "CRITICAL: ALSO select this for patent examination/prosecution history "
+                "queries — including CN/China patent examination, reexamination, "
+                "invalidation, opposition, review history (审查历史/复审/无效/异议), "
+                "cross-border family analysis (同族/跨国审查). "
+                "Keywords that MUST route here: 审查历史, 审查过程, 审查决定, "
+                "复审, 无效宣告, 异议, 在中国的审查, China examination, "
+                "prosecution history, examination review, reexamination, invalidation."
             )
 
         if tool:
