@@ -1460,6 +1460,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
     )
     from sources.long_task.config import (
         get_long_task_config, get_family_config, get_prosecution_config,
+        get_sipop_config,
         DEFAULT_VISION_PROVIDER, DEFAULT_VISION_MODEL,
     )
     from sources.long_task.patent_family import EPOFamilyClient, EPOError
