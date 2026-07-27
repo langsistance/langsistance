@@ -1523,6 +1523,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
 
     # ── Run pipeline ─────────────────────────────────────────────────────────
     async def _run():
+        import os as _os
         # ═════════════════════════════════════════════════════════════════
         # Phase 0: EPO family lookup → extract US member
         # ═════════════════════════════════════════════════════════════════
