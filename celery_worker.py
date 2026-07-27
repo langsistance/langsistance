@@ -1607,6 +1607,60 @@ def execute_family_analysis(self, task_id: str, params: dict):
                            family_overview=family_overview)
 
         # ═════════════════════════════════════════════════════════════════
+        # Phase 0.3: China examination data (if CN member exists)
+        # ═════════════════════════════════════════════════════════════════
+        cn_exam_data: dict = {}  # stored for report merging later
+        cn_member = family.get_representative('CN')
+        if cn_member:
+            cn_app_number = cn_member.app_number
+            cn_app_number = __import__('re').sub(
+                r'^CN\s*', '', cn_app_number or '', flags=__import__('re').IGNORECASE,
+            ).replace('.', '').replace('-', '').replace(' ', '')
+            _pipeline_logger.info(
+                f"[task={task_id}] FAMILY PHASE0.3 cn_member — "
+                f"cn_app={cn_app_number}, pub={cn_member.pub_number}"
+            )
+
+            sipop_cfg = get_sipop_config()
+            sipop_key = sipop_cfg.get('app_key', '')
+            sipop_secret = sipop_cfg.get('app_secret', '')
+            if sipop_key and sipop_secret and cn_app_number:
+                try:
+                    from sources.sipop_client import SipopClient
+                    sipop = SipopClient(app_key=sipop_key, app_secret=sipop_secret)
+                    from sources.long_task.china_examination import (
+                        fetch_examination_data,
+                        build_examination_timeline,
+                        format_claims_for_report,
+                        build_legal_status_timeline,
+                    )
+                    cn_events, cn_law, cn_info, cn_claims, cn_legal = await fetch_examination_data(
+                        cn_app_number, sipop,
+                    )
+                    cn_exam_data = {
+                        'cn_app_number': cn_app_number,
+                        'events': cn_events,
+                        'law_state': cn_law,
+                        'basic_info': cn_info,
+                        'claims': cn_claims,
+                        'legal_timeline': cn_legal,
+                        'timeline_md': await build_examination_timeline(
+                            cn_events, cn_law, cn_info, lang,
+                        ) if cn_events else '',
+                        'claims_md': format_claims_for_report(cn_claims, lang) if cn_claims else '',
+                        'legal_md': build_legal_status_timeline(cn_legal, lang) if cn_legal else '',
+                    }
+                    _pipeline_logger.info(
+                        f"[task={task_id}] FAMILY PHASE0.3 cn_data — "
+                        f"events={len(cn_events)}, claims={len(cn_claims)}, "
+                        f"legal_events={len(cn_legal)}"
+                    )
+                except Exception as e:
+                    _pipeline_logger.warning(
+                        f"[task={task_id}] FAMILY PHASE0.3 cn_fetch_failed — {e}"
+                    )
+
+        # ═════════════════════════════════════════════════════════════════
         # Phase 0.5: Fetch USPTO document list + classify
         # ═════════════════════════════════════════════════════════════════
         update_task_status(task_id, 'preparing', 8,
@@ -1877,6 +1931,44 @@ def execute_family_analysis(self, task_id: str, params: dict):
             lang=lang,
             summary_updater=summary_updater,
         )
+        # ── Append China examination data if available ──────────────────
+        if cn_exam_data:
+            if cn_exam_data.get('timeline_md') or cn_exam_data.get('claims_md') or cn_exam_data.get('legal_md'):
+                if lang == 'zh':
+                    report_text += f"\n\n---\n\n# 中国审查历史 ({cn_exam_data['cn_app_number']})\n\n"
+                else:
+                    report_text += f"\n\n---\n\n# China Examination History ({cn_exam_data['cn_app_number']})\n\n"
+
+                if cn_exam_data.get('timeline_md'):
+                    report_text += cn_exam_data['timeline_md'] + "\n\n"
+
+                if cn_exam_data['events']:
+                    # Add per-event summaries if the analyzer produced them
+                    for evt in cn_exam_data['events']:
+                        label = evt.decision_label_zh if lang == 'zh' else evt.decision_label_en
+                        report_text += f"### {label} — {evt.decision_number} ({evt.decision_date})\n\n"
+                        if evt.decision_main_point:
+                            report_text += f"{evt.decision_main_point}\n\n"
+                        if evt.reasoning:
+                            report_text += f"{evt.reasoning[:2000]}\n\n"
+                elif not cn_exam_data.get('timeline_md'):
+                    if lang == 'zh':
+                        report_text += "该中国同族专利暂无审查决定记录（可能尚未经历复审、无效或异议程序）。\n\n"
+                    else:
+                        report_text += "No examination review decisions found for this CN family member.\n\n"
+
+                if cn_exam_data.get('claims_md'):
+                    report_text += cn_exam_data['claims_md'] + "\n\n"
+
+                if cn_exam_data.get('legal_md'):
+                    report_text += cn_exam_data['legal_md'] + "\n"
+
+            _pipeline_logger.info(
+                f"[task={task_id}] FAMILY PHASE3 cn_appended — "
+                f"cn_events={len(cn_exam_data.get('events', []))}, "
+                f"report_chars={len(report_text)}"
+            )
+
         _pipeline_logger.info(
             f"[task={task_id}] FAMILY PHASE3 report_generated — "
             f"total_chars={len(report_text)}"
