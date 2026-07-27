@@ -376,6 +376,44 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
         )
     params_data = _coerce_json_object(tool_info.params, "tool_info.params")
     user_params = _coerce_json_object(params or {}, "LLM tool params")
+
+    # ── Flat-params merge ─────────────────────────────────────────
+    # Native function-calling LLMs (OpenRouter via LangChain) ignore
+    # the text template in the system prompt and generate a flat JSON
+    # like {"keyword":"Agentic AI"} or {"q":"Agentic AI"}.
+    #
+    # Detect this by checking whether the LLM output contains the
+    # expected envelope keys (method, body, query, path, header). If
+    # not, treat the entire payload as the body.q value and graft it
+    # into the server-side template.
+    _ENVELOPE_KEYS = frozenset({'method', 'body', 'query', 'path', 'header'})
+    if isinstance(user_params, dict) and user_params and not _ENVELOPE_KEYS.intersection(user_params):
+        template_body = params_data.get('body')
+        if isinstance(template_body, dict):
+            merged_body = dict(template_body)
+            # Extract the first string value from user_params as the
+            # search/query term and inject it as body.q.
+            flat_value = next((v for v in user_params.values() if isinstance(v, str) and v.strip()), None)
+            if flat_value:
+                merged_body['q'] = flat_value
+                logger.info(
+                    f"Flat-params merge: injected {flat_value!r} into "
+                    f"template body.q (LLM keys: {list(user_params.keys())})"
+                )
+            # Also merge any numeric pagination hints
+            for k, v in user_params.items():
+                if isinstance(v, (int, float)) and k in merged_body:
+                    try:
+                        if k == 'offset' or k == 'limit':
+                            merged_body['pagination'] = merged_body.get('pagination', {})
+                            merged_body['pagination'][k] = int(v)
+                        else:
+                            merged_body[k] = v
+                    except (ValueError, TypeError):
+                        pass
+            user_params = dict(params_data)
+            user_params['body'] = merged_body
+
     url = _append_path_to_url(
         tool_info.url,
         user_params.get("path", params_data.get("path", "")),

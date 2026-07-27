@@ -27,6 +27,7 @@ from sources.workflow.workflow_executor import WorkflowExecutor, is_workflow_kno
 from sources.http_outbound import outbound_http
 
 from langchain_core.tools import StructuredTool
+from langchain_core.callbacks import BaseCallbackHandler
 
 import os
 import time
@@ -51,6 +52,13 @@ USE_LARGE_LIST_SUMMARY = True  # 设为 False 切回逐条批处理模式
 # Redis key prefix and TTL for storing patent IDs from conversation artifacts
 _CONV_PATENT_IDS_KEY_PREFIX = "lt:conv"
 _CONV_PATENT_IDS_TTL = 3600  # 1 hour
+
+# Regex to strip user_id / query_id from historical user messages before
+# retaining them in multi-turn memory (current call still embeds them fresh).
+_STRIP_IDS_RE = re.compile(
+    r',?\s*user id is \d+,\s*query id is \w+,?\s*',
+    re.IGNORECASE,
+)
 
 
 def _store_conversation_patent_ids(agent, items_for_export: list) -> list | None:
@@ -271,8 +279,8 @@ def _prune_for_summary(items: list, max_value_chars: int = None) -> list:
 
 # 瀹氫箟鍙傛暟妯″瀷
 class DynamicToolFunction(BaseModel):
-    user_id: str = Field(description="user id")
-    query_id: str = Field(description="query id")
+    user_id: str = Field(description="user id (provided in the user prompt)")
+    query_id: str = Field(description="query id (provided in the user prompt)")
     params: str = Field(
         description=(
             "params. If the original tool params contain api-key, api_key, "
@@ -283,8 +291,8 @@ class DynamicToolFunction(BaseModel):
 
 
 class DynamicBackendToolFunction(BaseModel):
-    user_id: str = Field(description="user id")
-    query_id: str = Field(description="query id")
+    user_id: str = Field(description="user id (provided in the user prompt)")
+    query_id: str = Field(description="query id (provided in the user prompt)")
     params: Dict[str, Any] | str = Field(
         description=(
             "API request parameters as a JSON object. For push=2 tools, "
@@ -296,6 +304,30 @@ class DynamicBackendToolFunction(BaseModel):
             "Legacy JSON strings are also accepted."
         )
     )
+
+
+class _ResponseCollector(BaseCallbackHandler):
+    """Wrap a callback handler to collect the full response text as it streams.
+
+    Delegates all attribute access to the real handler (via __getattr__)
+    while accumulating on_llm_new_token payloads in `collected_text`.
+    """
+
+    def __init__(self, real_handler):
+        self._real = real_handler
+        self.collected_text = ""
+
+    def __getattr__(self, name):
+        # Proxy everything to the wrapped handler — including sync/async
+        # methods, attributes like `queue`, `run_inline`, etc.
+        if name in ('_real', 'collected_text'):
+            raise AttributeError(name)
+        return getattr(self._real, name)
+
+    async def on_llm_new_token(self, token: str, **kwargs) -> None:
+        self.collected_text += token
+        if self._real:
+            await self._real.on_llm_new_token(token, **kwargs)
 
 
 async def _emit_status(callback_handler, message: str):
@@ -350,6 +382,9 @@ class GeneralAgent(Agent):
         self.enabled = True
         self.knowledgeTool = {}
         self.logger = Logger("general_agent.log")
+        # Multi-turn conversation storage: each entry is
+        # {'user': query_text, 'assistant': response_summary}
+        self._conversation_turns = []
 
     def get_api_keys(self) -> dict:
         """
@@ -533,6 +568,80 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         except ValueError:
             return False
 
+    def _get_fixed_system_prefix(self) -> str:
+        """Return the stable system prompt prefix that is safe to retain across
+        multi-turn conversations. Contains role description and formatting
+        rules only — NO tool-specific API templates."""
+        knowledge_item, _ = self.knowledgeTool
+        context = ""
+        if knowledge_item and hasattr(knowledge_item, 'answer') and knowledge_item.answer:
+            context = f"""
+
+        Context from knowledge base:
+        {knowledge_item.answer}
+
+        Use this context to better understand the task and provide more accurate responses.
+        """
+
+        return f"""
+        You are an intelligent assistant capable of deciding when and how to use APIs to complete tasks.
+        {context}
+
+        Do not fabricate tool results. Do not assume tool behavior beyond the provided output.
+
+        Do NOT reveal any API keys, tokens, header values, or authentication credentials in your response.
+
+        ## Markdown Formatting Requirements
+
+        When generating your response based on the tool's output, you MUST format it beautifully using Markdown:
+
+        ### Essential Formatting Rules:
+
+        1. **Structure**: Use clear heading hierarchy (## for main sections, ### for subsections)
+        2. **Links**: Convert ALL URLs to descriptive links: `[meaningful text](URL)`
+        3. **Images**: Display images using: `![description](image_URL)`
+        4. **Lists**: Use `-` for bullet points, `1.` for numbered lists
+        5. **Emphasis**: Use **bold** for key terms, *italic* for emphasis, `code` for technical terms
+        6. **Tables**: Use tables for structured data comparison
+        7. **Spacing**: Add blank lines between content blocks for readability
+        8. **Code blocks**: Use fenced code blocks with language specification when showing code
+        9. **Long list handling**: If the tool result is a JSON array with many items, provide a concise summary with count statistics (e.g., total count, counts per category) instead of enumerating every item.
+
+        ### Response Structure Template:
+
+        Your response should follow this structure (but output DIRECTLY, not in a code block):
+
+        ## [Main Topic]
+
+        [Brief summary of what the tool returned]
+
+        ### Key Information
+        - Important point 1 (with details)
+        - Important point 2 (with details)
+        - ... (if the tool result is a long JSON list, show a summary with count statistics instead)
+
+        ### Details
+        [Organized detailed content — if the tool result is a long JSON list, show a summary with count statistics]
+
+        [Display images inline where relevant]
+        ![Image Description](image_URL)
+
+        **CRITICAL OUTPUT FORMAT**:
+        - Output your response as DIRECT Markdown content
+        - Do NOT wrap your entire response in a code block
+        - Do NOT start with ```markdown or ```
+        - Start directly with Markdown formatting (e.g., ## Title or plain text)
+        - Only use code blocks for actual code snippets within your content, not for the entire response
+
+        **CRITICAL CONTENT RULES**:
+        - If the tool result is a long JSON list, provide a concise summary with count statistics instead of listing every item
+        - Do NOT add a "Resources", "Sources", or "References" section at the end of your response
+        - Do NOT create a separate list of links at the bottom
+        - Integrate all links naturally within the content itself
+
+        **IMPORTANT**: Make your response visually appealing, easy to scan, and professionally formatted. Transform raw data into a beautiful, user-friendly presentation while ensuring ALL content from the tool result is displayed.
+        """
+
     def generate_fixed_system_prompt(self) -> str:
         """Generate system prompt for fixed (no-parameter) tools."""
         knowledge_item, tool_info = self.knowledgeTool
@@ -614,7 +723,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
 
         Do not fabricate tool results. Do not assume tool behavior beyond the provided output.
 
-        Do not return tool parameters, such as the user id and query id.
+        Do not return internal identifiers or tool parameters in your response.
         Do NOT reveal any API keys, tokens, header values, or authentication credentials in your response.
         """
         # return self.expand_prompt(system_prompt)
@@ -704,6 +813,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         Purpose: {tool_description}
         Input parameters: {tool_params_info}
 
+
         IMPORTANT: The tool takes THREE separate parameters:
         1. user_id: The user identifier (provided in the user prompt, DO NOT include in params)
         2. query_id: The query identifier (provided in the user prompt, DO NOT include in params)
@@ -764,55 +874,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         Do not return tool parameters, such as the user id and query id.
         Do NOT reveal any API keys, tokens, header values, or authentication credentials in your response.
 
-        ## Markdown Formatting Requirements
-
-        When generating your response based on the tool's output, you MUST format it beautifully using Markdown:
-
-        ### Essential Formatting Rules:
-
-        1. **Structure**: Use clear heading hierarchy (## for main sections, ### for subsections)
-        2. **Links**: Convert ALL URLs to descriptive links: `[meaningful text](URL)`
-        3. **Images**: Display images using: `![description](image_URL)`
-        4. **Lists**: Use `-` for bullet points, `1.` for numbered lists
-        5. **Emphasis**: Use **bold** for key terms, *italic* for emphasis, `code` for technical terms
-        6. **Tables**: Use tables for structured data comparison
-        7. **Spacing**: Add blank lines between content blocks for readability
-        8. **Code blocks**: Use fenced code blocks with language specification when showing code
-        9. **Long list handling**: If the tool result is a JSON array with many items, provide a concise summary with count statistics (e.g., total count, counts per category) instead of enumerating every item.
-
-        ### Response Structure Template:
-
-        Your response should follow this structure (but output DIRECTLY, not in a code block):
-
-        ## [Main Topic]
-
-        [Brief summary of what the tool returned]
-
-        ### Key Information
-        - Important point 1 (with details)
-        - Important point 2 (with details)
-        - ... (if the tool result is a long JSON list, show a summary with count statistics instead)
-
-        ### Details
-        [Organized detailed content 鈥?if the tool result is a long JSON list, show a summary with count statistics]
-
-        [Display images inline where relevant]
-        ![Image Description](image_URL)
-
-        **CRITICAL OUTPUT FORMAT**:
-        - Output your response as DIRECT Markdown content
-        - Do NOT wrap your entire response in a code block
-        - Do NOT start with ```markdown or ```
-        - Start directly with Markdown formatting (e.g., ## Title or plain text)
-        - Only use code blocks for actual code snippets within your content, not for the entire response
-
-        **CRITICAL CONTENT RULES**:
-        - If the tool result is a long JSON list, provide a concise summary with count statistics instead of listing every item
-        - Do NOT add a "Resources", "Sources", or "References" section at the end of your response
-        - Do NOT create a separate list of links at the bottom
-        - Integrate all links naturally within the content itself
-
-        **IMPORTANT**: Make your response visually appealing, easy to scan, and professionally formatted. Transform raw data into a beautiful, user-friendly presentation while ensuring ALL content from the tool result is displayed.
+        **CRITICAL**: Follow the Markdown formatting requirements from the system instructions at the start of this conversation. Do NOT wrap your response in a code block.
         """
 
         return system_prompt
@@ -843,14 +905,18 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
 
 
 
-    def generate_user_prompt(self, prompt, user_id, query_id) -> str:
+    def generate_user_prompt(self, prompt, user_id=None, query_id=None) -> str:
+        # user_id / query_id are included so the LLM schema sees them as
+        # required parameters and generates the full API template. The tool
+        # wrapper overrides whatever the LLM passes with self._last_*.
+        uid = str(user_id) if user_id else ""
+        qid = str(query_id) if query_id else ""
         user_prompt = f"""
         {prompt},
-        user id is {user_id},
-        query id is {query_id},
+        user id is {uid},
+        query id is {qid},
         """
         self.logger.info(f"user prompt:{user_prompt}")
-
         return user_prompt
 
     def generate_frontend_tool_direct_system_prompt(self, tool_data: str) -> str:
@@ -1138,11 +1204,17 @@ Begin your response now:
 
                 if tool_info:
 
-                    # 鍔ㄦ€佸垱寤哄伐鍏峰嚱鏁?
+                    # Dynamic tool functions — the schema still requires user_id /
+                    # query_id so the LLM sees a 3-parameter function and follows
+                    # the full template format, but the actual values are taken
+                    # from the agent instance (what the LLM passes is ignored).
                     def dynamic_frontend_tool_function(user_id: str, query_id: str, params: str):
+                        # Always use stored values — ignore LLM-provided IDs
+                        user_id = self._last_user_id
+                        query_id = self._last_query_id
                         self.logger.info(f"dynamic_frontend_tool_function user id is {user_id} - query id is {query_id} - param is {params}")
                         try:
-                            # 杩炴帴Redis
+                            # Connect Redis
                             redis_conn = get_redis_connection()
 
                             # 鏋勯€燫edis閿?
@@ -1181,6 +1253,9 @@ Begin your response now:
                             return None
 
                     def dynamic_backend_tool_function(user_id: str, query_id: str, params: Dict[str, Any] | str):
+                        # Always use stored values — ignore LLM-provided IDs
+                        user_id = self._last_user_id
+                        query_id = self._last_query_id
                         if isinstance(params, str):
                             self.logger.info(
                                 f"dynamic_backend_tool_function user_id={user_id} query_id={query_id} "
@@ -1452,15 +1527,15 @@ Begin your response now:
         if callback_handler:
             await _emit_status(callback_handler,
                 "正在分析您的问题..." if lang == 'zh' else "Analyzing your question...")
-        # Pass conversation history so the LLM routing knowledge selection
-        # can understand what "杩?鏉? or "from the results above" refers to.
-        conv_history = self.memory.get()
+        # Knowledge selection does not need conversation history — stale
+        # messages from prior calls (different tools, different users)
+        # only add noise and risk confusing the routing LLM.
         self.knowledgeTool = await select_knowledge_tool_with_llm(
             user_id,
             prompt,
             self.llm.complete_json,
             push_filter=push_filter,
-            conversation_history=conv_history,
+            conversation_history=[],
         )
         knowledge_item, tool_info = self.knowledgeTool
         self.logger.info(
@@ -1505,20 +1580,42 @@ Begin your response now:
             return None
         user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
         system_prompt = self.generate_system_prompt(tool_data)
-        # Keep prior conversation context so follow-up queries referencing
-        # previous results (e.g. "浠庤繖3鏉′腑绛涢€夊嚭...") can be understood.
-        prior = self.memory.get()
-        if len(prior) > 6:
-            # Keep first message + last 5 messages to bound context window
-            prior = prior[:1] + prior[-1:]
-        self.memory.reset(prior)
-        self.memory.push('user', user_prompt)
-        self.memory.push('system', system_prompt)
+
+        # ── Multi-turn memory ──────────────────────────────────────
+        # LangChain's openai_create / openai_invoke expect a specific
+        # shape: history[1] is the system prompt, history[0] is the
+        # first user message.  We merge the fixed prefix, conversation
+        # history, and tool template into a single system prompt at [1],
+        # and put the current query at [0].
+        conversation_block = ""
+        for turn in getattr(self, '_conversation_turns', []):
+            clean_user = _STRIP_IDS_RE.sub('', turn['user']).strip()
+            conversation_block += f"\n\n## Previous conversation\n\nUser: {clean_user}\n\nAssistant: {turn['assistant']}"
+
+        combined_system = (
+            self._get_fixed_system_prefix()
+            + conversation_block
+            + "\n\n"
+            + system_prompt
+        )
+
+        memory_msgs = [
+            {'role': 'user', 'content': user_prompt},
+            {'role': 'system', 'content': combined_system},
+        ]
+        self.memory.reset(memory_msgs)
 
         self.logger.info(f"memory.get():{self.memory.get()}")
         self.tools = await self.get_tools(tool_data)
 
-        return self.llm.openai_create(self.tools, self.memory.get(), callback_handler)
+        # Wrap the callback handler so we can collect the response text
+        # for multi-turn conversation storage.  The wrapper is registered
+        # on the LLM via _get_langchain_llm so streaming works without
+        # double-registration in agent.ainvoke.
+        wrapped = _ResponseCollector(callback_handler)
+        self._active_collector = wrapped
+
+        return self.llm.openai_create(self.tools, self.memory.get(), wrapped)
 
 
     async def _stream_workflow_final_result(self, workflow_result, callback_handler):
@@ -1932,6 +2029,32 @@ Begin your response now:
         await _emit_patent_ids_to_frontend(self, items_for_export, callback_handler)
 
 
+    def _store_current_turn(self, assistant_text: str = "") -> None:
+        """Store the current query + assistant response for multi-turn context.
+
+        The stored text is truncated to keep the conversation context compact.
+        Old system prompts and internal IDs are never stored — only the user's
+        question and the assistant's visible Markdown response.
+        """
+        user_query = getattr(self, '_last_user_prompt', '') or ''
+        if not user_query.strip():
+            return
+        # Keep only a short summary of the assistant response
+        short = (assistant_text or '')[:800]
+        if len(assistant_text or '') > 800:
+            short += '...'
+        self._conversation_turns.append({
+            'user': user_query.strip(),
+            'assistant': short or '(tool executed successfully)',
+        })
+        # Keep at most 10 turns to bound memory growth
+        if len(self._conversation_turns) > 10:
+            self._conversation_turns = self._conversation_turns[-10:]
+        self.logger.info(
+            f"_store_current_turn — total turns={len(self._conversation_turns)}, "
+            f"assistant_len={len(assistant_text or '')}"
+        )
+
     async def invoke_agent(self, agent, callback_handler):
         try:
             lang = self._detect_lang(getattr(self, '_last_user_prompt', ''))
@@ -1948,14 +2071,27 @@ Begin your response now:
                     await self._stream_raw_items(raw_items, callback_handler)
                 else:
                     await self._stream_workflow_final_result(workflow_result, callback_handler)
+                self._store_current_turn()
                 return
 
-            await self.llm.openai_invoke(agent, self.memory.get(), callback_handler)
-            # LangGraph agents don't call on_agent_finish 鈥?inject batch analysis here,
-            # after all LLM tokens have been streamed but before core.py sends 'end'.
-            pending = getattr(self, '_pending_raw_items', None)
-            if pending:
-                await self._stream_raw_items(pending, callback_handler)
+            # The callback handler was wrapped by create_agent with a
+            # _ResponseCollector so the LLM streams through it.  Re-use
+            # the same collector to avoid double-registration.
+            collector = getattr(self, '_active_collector', None)
+            try:
+                await self.llm.openai_invoke(agent, self.memory.get())
+                # LangGraph agents don't call on_agent_finish — inject batch
+                # analysis here, after all LLM tokens have been streamed but
+                # before core.py sends 'end'.
+                pending = getattr(self, '_pending_raw_items', None)
+                if pending:
+                    await self._stream_raw_items(pending, callback_handler)
+            finally:
+                # Always store the conversation turn — even on partial failure
+                # we want to preserve what the LLM managed to produce.
+                self._store_current_turn(
+                    getattr(collector, 'collected_text', '') if collector else ''
+                )
         except Exception as e:
             raise e
 
