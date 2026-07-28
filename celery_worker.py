@@ -1709,7 +1709,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         _update_mysql_progress(task_id, 'generating_columns', 5)
 
         # ═════════════════════════════════════════════════════════════════
-        # Phase 2: Per-document download → analyze → summarize
+        # Phase 2: Parallel download → analyze → summarize
         # ═════════════════════════════════════════════════════════════════
         total_dl = len(docs_to_download)
         _pipeline_logger.info(
@@ -1722,151 +1722,144 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         async def _fetch_prosecution(url: str, hdrs: dict, timeout: int):
             return await _uspto_get_with_retry(url, hdrs, timeout)
 
-        table_rows: list[dict] = []
+        # ── Phase 2a: Download all documents in parallel ──
+        _dl_sem = asyncio.Semaphore(3)  # max 3 concurrent USPTO downloads
         _dl_ok = 0
-        for _i, _doc in enumerate(docs_to_download):
-            doc_index = _i + 1
 
-            # ── Stop / Pause checkpoint (shared long-task helpers) ──
-            _completed = len(table_rows)
-            _result = _handle_task_stop(task_id, user_id, _completed, total_dl)
-            if _result:
-                return _result
-            _result = _handle_task_pause(task_id, user_id, _completed, total_dl, {
-                'completed': [r.get(columns[0], '') for r in table_rows if not r.get('_failed')],
-                'pending': [d.document_code for d in docs_to_download[_i:]],
-                'completed_rows': table_rows,
-                'failed': [r.get(columns[0], '') for r in table_rows if r.get('_failed')],
-                'columns': columns,
-            })
-            if _result:
-                return _result
-
-            # ── Download ──
-            _pct = progress_pct(len(table_rows), total_dl)
-            update_task_status(
-                task_id, 'downloading', _pct,
-                _t('prosecution_downloading', lang, current=doc_index, total=total_dl),
-                table_rows=table_rows,
-            )
-            await download_single_document(_doc, _fetch_prosecution, app_number, headers)
-            if _doc.text:
-                _dl_ok += 1
-
-            # Log every document
-            _pipeline_logger.info(
-                f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] download_done — "
-                f"code={_doc.document_code}, "
-                f"fmt={_doc.file_format}, "
-                f"text_length={len(_doc.text) if _doc.text else 0}, "
-                f"binary_cached={_doc.binary is not None}, "
-                f"binary_len={len(_doc.binary) if _doc.binary else 0}, "
-                f"desc={_doc.description[:60]}"
-            )
-
-            # ── Stop check after download ──
-            _result = _handle_task_stop(task_id, user_id, _completed, total_dl)
-            if _result:
-                return _result
-
-            # ── Vision fallback for scanned PDFs ──
-            if _doc.priority == 1 and _doc.binary and not _doc.text and vision_enabled:
-                update_task_status(
-                    task_id, 'downloading', _pct,
-                    _t('prosecution_ocr', lang, current=doc_index, total=total_dl),
-                    table_rows=table_rows,
+        async def _download_one(_doc: Any, _i: int) -> None:
+            nonlocal _dl_ok
+            async with _dl_sem:
+                await download_single_document(_doc, _fetch_prosecution, app_number, headers)
+                if _doc.text:
+                    _dl_ok += 1
+                _pipeline_logger.info(
+                    f"[task={task_id}] PHASE2a download_done — "
+                    f"code={_doc.document_code}, idx={_i + 1}/{total_dl}, "
+                    f"text_len={len(_doc.text) if _doc.text else 0}"
                 )
-                try:
-                    _text = await _extract_text_via_vision(
-                        _doc.binary, _doc.description, vision_provider,
-                    )
-                    if _text and len(_text.strip()) > 50:
-                        _doc.text = _text.strip()
-                        _pipeline_logger.info(
-                            f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] vision_ok — "
-                            f"code={_doc.document_code}, chars={len(_doc.text)}"
+                # Vision fallback for scanned PDFs
+                if _doc.priority == 1 and _doc.binary and not _doc.text and vision_enabled:
+                    try:
+                        _text = await _extract_text_via_vision(
+                            _doc.binary, _doc.description, vision_provider,
                         )
-                except Exception as _e:
-                    _pipeline_logger.warning(
-                        f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] vision_error — "
-                        f"code={_doc.document_code}, error={type(_e).__name__}: {_e}"
+                        if _text and len(_text.strip()) > 50:
+                            _doc.text = _text.strip()
+                            _pipeline_logger.info(
+                                f"[task={task_id}] PHASE2a vision_ok — "
+                                f"code={_doc.document_code}, chars={len(_doc.text)}"
+                            )
+                    except Exception as _e:
+                        _pipeline_logger.warning(
+                            f"[task={task_id}] PHASE2a vision_error — "
+                            f"code={_doc.document_code}, error={type(_e).__name__}: {_e}"
+                        )
+                update_task_status(
+                    task_id, 'downloading',
+                    progress_pct(_dl_ok, total_dl),
+                    _t('prosecution_downloading', lang, current=_dl_ok, total=total_dl),
+                )
+
+        _download_tasks = [_download_one(_doc, _i) for _i, _doc in enumerate(docs_to_download)]
+        await asyncio.gather(*_download_tasks)
+
+        _pipeline_logger.info(
+            f"[task={task_id}] PHASE2a DOWNLOADS_DONE — "
+            f"ok={_dl_ok}/{total_dl}"
+        )
+
+        if _handle_task_stop(task_id, user_id, 0, total_dl):
+            return {'status': 'cancelled', 'task_id': task_id}
+
+        docs_with_text = [d for d in docs_to_download if d.text and len(d.text.strip()) >= 50]
+
+        # ── Phase 2b: Analyze all documents in parallel ──
+        _table_rows: list[dict] = [None] * total_dl  # preserve order by index
+        _analyze_sem = asyncio.Semaphore(5)  # max 5 concurrent LLM calls
+        _analyzed_count = 0
+        _summary_done_count = 0
+
+        async def _analyze_one(_doc: Any, _i: int) -> None:
+            nonlocal _analyzed_count, _summary_done_count
+            async with _analyze_sem:
+                doc_index = _i + 1
+
+                if not _doc.text or len(_doc.text.strip()) < 50:
+                    row = build_failed_row(_doc.document_code, "text extraction failed", columns, lang)
+                    row["_failed"] = True
+                    row["_summary"] = ""
+                    _table_rows[_i] = row
+                    return
+
+                # ── Analyze ──
+                try:
+                    row = await analyze_single_document(
+                        doc_text=_doc.text,
+                        doc_code=_doc.document_code,
+                        doc_desc=_doc.description,
+                        doc_category=_doc.category,
+                        columns=columns,
+                        query=query,
+                        provider=pro_provider,
+                        lang=lang,
                     )
+                except Exception as e:
+                    _pipeline_logger.warning(
+                        f"[task={task_id}] PHASE2b analyze_error — "
+                        f"code={_doc.document_code}, idx={doc_index}/{total_dl}: "
+                        f"{type(e).__name__}: {e}"
+                    )
+                    row = build_failed_row(_doc.document_code, str(e), columns, lang)
+                    row["_failed"] = True
 
-            # ── Skip analysis if no text after download + vision ──
-            if not _doc.text or len(_doc.text.strip()) < 50:
-                _pipeline_logger.warning(
-                    f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] no_text — "
-                    f"code={_doc.document_code}, skipping analysis"
+                _pipeline_logger.info(
+                    f"[task={task_id}] PHASE2b analyze_done — "
+                    f"code={_doc.document_code}, idx={doc_index}/{total_dl}"
                 )
-                row = build_failed_row(_doc.document_code, "text extraction failed", columns, lang)
-                row["_failed"] = True
-                row["_summary"] = ""
-                table_rows.append(row)
-                continue
+                _analyzed_count += 1
 
-            # ── Stop check before analysis ──
-            _result = _handle_task_stop(task_id, user_id, _completed, total_dl)
-            if _result:
-                return _result
+                # ── Summarize ──
+                try:
+                    summary = await generate_document_summary(
+                        doc_text=_doc.text, row=row, query=query,
+                        provider=pro_provider, lang=lang,
+                    )
+                except Exception as e:
+                    _pipeline_logger.warning(
+                        f"[task={task_id}] PHASE2b summary_error — "
+                        f"code={_doc.document_code}: {type(e).__name__}: {e}"
+                    )
+                    summary = ""
+                row["_summary"] = summary
+                _table_rows[_i] = row
+                _summary_done_count += 1
 
-            # ── Analyze ──
-            update_task_status(
-                task_id, 'analyzing',
-                progress_pct(len(table_rows), total_dl),
-                _t('prosecution_analyzing', lang, current=doc_index, total=total_dl, desc=_doc.description[:40]),
-                table_rows=table_rows,
-            )
-            try:
-                row = await analyze_single_document(
-                    doc_text=_doc.text,
-                    doc_code=_doc.document_code,
-                    doc_desc=_doc.description,
-                    doc_category=_doc.category,
-                    columns=columns,
-                    query=query,
-                    provider=pro_provider,
-                    lang=lang,
+                # Update progress after each document completes
+                update_task_status(
+                    task_id, 'analyzing',
+                    progress_pct(_summary_done_count, total_dl),
+                    _t('prosecution_analyzing', lang,
+                       current=_summary_done_count, total=total_dl,
+                       desc=_doc.description[:40]),
                 )
-            except Exception as e:
-                _pipeline_logger.warning(
-                    f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] analyze_error — "
-                    f"code={_doc.document_code}, error={type(e).__name__}: {e}"
+
+                _pipeline_logger.info(
+                    f"[task={task_id}] PHASE2b summary_done — "
+                    f"code={_doc.document_code}, idx={doc_index}/{total_dl}, "
+                    f"summary_chars={len(summary)}, "
+                    f"done={_summary_done_count}/{total_dl}"
                 )
-                row = build_failed_row(_doc.document_code, str(e), columns, lang)
-                row["_failed"] = True
 
-            _pipeline_logger.info(
-                f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] analyze_done — "
-                f"code={_doc.document_code}, "
-                f"row_keys={list(row.keys()) if row else 'None'}"
-            )
+        # Launch all analysis tasks in parallel (semaphore limits concurrency)
+        _analyze_tasks = [_analyze_one(docs_to_download[_i], _i)
+                          for _i in range(total_dl)
+                          if not _handle_task_stop(task_id, user_id, 0, total_dl)]
+        if _analyze_tasks:
+            await asyncio.gather(*_analyze_tasks)
 
-            # ── Stop check before summary ──
-            _result = _handle_task_stop(task_id, user_id, _completed, total_dl)
-            if _result:
-                return _result
+        # Reconstruct table_rows in original order, filtering out None (cancelled)
+        table_rows = [r for r in _table_rows if r is not None]
 
-            # ── Summarize ──
-            try:
-                summary = await generate_document_summary(
-                    doc_text=_doc.text, row=row, query=query,
-                    provider=pro_provider, lang=lang,
-                )
-            except Exception as e:
-                _pipeline_logger.warning(
-                    f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] summary_error — "
-                    f"code={_doc.document_code}: {e}"
-                )
-                summary = ""
-            row["_summary"] = summary
-            table_rows.append(row)
-
-            _pipeline_logger.info(
-                f"[task={task_id}] PHASE2 doc[{doc_index}/{total_dl}] summary_done — "
-                f"code={_doc.document_code}, summary_chars={len(summary)}"
-            )
-
-        docs_with_text = [d for d in docs_to_download if d.text]
         _pipeline_logger.info(
             f"[task={task_id}] PHASE2 COMPLETE — "
             f"downloaded={_dl_ok}/{total_dl}, "
