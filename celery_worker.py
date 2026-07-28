@@ -1466,6 +1466,24 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
 
     ptc = get_prosecution_config()
     include_priority_2 = ptc.get('include_priority_2', True)
+
+    # ── Streaming provider (report summary + section writing) ──
+    # When configured in [PROSECUTION], overrides pro_provider for the
+    # streaming output phases so users can use their chat model (e.g.
+    # openrouter/openai/gpt-5.4-mini) for the visible streaming text.
+    streaming_provider = None
+    _stream_cfg_provider = ptc.get('streaming_provider')
+    _stream_cfg_model = ptc.get('streaming_model')
+    if _stream_cfg_provider and _stream_cfg_model:
+        streaming_provider = Provider(
+            provider_name=_stream_cfg_provider, model=_stream_cfg_model,
+            server_address='', is_local=False,
+        )
+        _pipeline_logger.info(
+            f"[task={task_id}] CONFIG — streaming_provider="
+            f"{_stream_cfg_provider}/{_stream_cfg_model}"
+        )
+
     vision_enabled = ltc.get('vision_enabled', True)
     vision_provider = None
     if vision_enabled:
@@ -1934,6 +1952,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             pro_provider=pro_provider,
             lang=lang,
             summary_updater=summary_updater,
+            streaming_provider=streaming_provider,
         )
         _pipeline_logger.info(
             f"[task={task_id}] PHASE3 report_generated — "

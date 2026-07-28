@@ -881,12 +881,13 @@ async def generate_prosecution_report(
     pro_provider: Any,
     lang: str = "zh",
     summary_updater: Any | None = None,
+    streaming_provider: Any | None = None,
 ) -> str:
     """Generate the full prosecution history report.
 
     Structure:
-      1. Executive Summary (written by Pro LLM)
-      2. Detailed sections (outline by Flash, sections by Pro)
+      1. Executive Summary (written by streaming LLM)
+      2. Detailed sections (outline by Flash, sections by streaming LLM)
       3. Analysis table appended at the end
 
     Args:
@@ -895,12 +896,15 @@ async def generate_prosecution_report(
         query: User's original query.
         patent_id: USPTO application number.
         flash_provider: LLM provider for outline (Flash tier).
-        pro_provider: LLM provider for writing (Pro tier).
+        pro_provider: LLM provider for claim chart (Pro tier, non-streaming).
         lang: 'zh' or 'en'.
+        streaming_provider: LLM provider for streaming output (summary + sections).
+            Falls back to pro_provider if not set.
 
     Returns:
         Complete Markdown report text.
     """
+    _stream = streaming_provider or pro_provider
     title_template = _REPORT_TITLES.get(lang, _REPORT_TITLES["en"])
     title = title_template.format(patent_id=patent_id)
     exec_heading = _EXEC_HEADINGS.get(lang, _EXEC_HEADINGS["en"])
@@ -936,7 +940,7 @@ async def generate_prosecution_report(
             )
 
     exec_summary = await generate_executive_summary(
-        table_rows, columns, query, patent_id, pro_provider, lang,
+        table_rows, columns, query, patent_id, _stream, lang,
         on_chunk=_exec_chunk if summary_updater else None,
     )
     if summary_updater:
@@ -983,7 +987,7 @@ async def generate_prosecution_report(
             f"[prosecution] section [{idx + 1}/{len(sections)}] — {heading}"
         )
         text = await generate_report_section(
-            section, query, table_rows, columns, pro_provider, lang,
+            section, query, table_rows, columns, _stream, lang,
             on_chunk=_section_chunk if summary_updater else None,
         )
         section_md = f"## {heading}\n\n{text}"
