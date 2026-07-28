@@ -1407,6 +1407,12 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
     import asyncio
     import os as _os
     from typing import Any
+
+    # ── Version marker: proves this is the new code (2026-07-28, streaming_provider) ──
+    _pipeline_logger.info(
+        f"[task={task_id}] BOOTSTRAP — celery_worker version=2026-07-28-streaming"
+    )
+
     from sources.long_task.status_manager import (
         update_task_status, set_task_completed, set_task_failed,
     )
