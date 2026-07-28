@@ -509,8 +509,12 @@ async def download_single_document(
                     elif 'word' in content_type or 'msword' in content_type:
                         doc.file_format = 'DOCX'
 
+                # Skip local text extraction — USPTO prosecution PDFs are
+                # almost always scanned images.  Vision OCR downstream is
+                # both more accurate and avoids 3-8 s of wasted qpdf+pdftotext
+                # per document.
                 extracted = extract_text_from_binary(
-                    resp.content, content_type, url, skip_pdf_extraction=False
+                    resp.content, content_type, url, skip_pdf_extraction=True
                 )
                 if extracted and len(extracted.strip()) > 50:
                     doc.text = extracted.strip()
