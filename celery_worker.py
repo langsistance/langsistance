@@ -1730,11 +1730,11 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         _table_rows: list[dict] = [None] * total_dl  # preserve order by index
         _analyze_sem = asyncio.Semaphore(100)  # caps concurrent OCR + LLM calls
         _pending_tasks = []  # list of asyncio.Task
-        _total_done = 0  # unified: downloads + analyses, total = total_dl * 2
-        _work_total = total_dl * 2
+        _downloaded = 0  # documents downloaded so far
+        _analyzed = 0    # documents with completed (or skipped) analysis
 
         async def _analyze_one(_doc: Any, _i: int) -> None:
-            nonlocal _total_done
+            nonlocal _analyzed
             async with _analyze_sem:
                 doc_index = _i + 1
 
@@ -1763,6 +1763,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                     row["_failed"] = True
                     row["_summary"] = ""
                     _table_rows[_i] = row
+                    _analyzed += 1  # done with this doc (even though it failed)
                     return
 
                 # ── Analyze (LLM) ──
@@ -1805,13 +1806,13 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                     summary = ""
                 row["_summary"] = summary
                 _table_rows[_i] = row
-                _total_done += 1  # one analysis completed
+                _analyzed += 1
 
                 update_task_status(
                     task_id, 'analyzing',
-                    progress_pct(_total_done, _work_total),
+                    progress_pct(_analyzed, total_dl),
                     _t('prosecution_analyzing', lang,
-                       current=_total_done, total=_work_total,
+                       current=_analyzed, total=total_dl,
                        desc=_doc.description[:40]),
                 )
 
@@ -1819,7 +1820,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                     f"[task={task_id}] PHASE2 analysis_complete — "
                     f"code={_doc.document_code}, idx={doc_index}/{total_dl}, "
                     f"summary_chars={len(summary)}, "
-                    f"total_done={_total_done}/{_work_total}"
+                    f"analyzed={_analyzed}/{total_dl}"
                 )
 
         # ── Main pipeline: download sequentially, launch analysis immediately ──
@@ -1827,34 +1828,37 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             doc_index = _i + 1
 
             # ── Stop / Pause checkpoint ──
-            _result = _handle_task_stop(task_id, user_id, _total_done, _work_total)
+            _result = _handle_task_stop(task_id, user_id, _downloaded, total_dl)
             if _result:
                 return _result
-            _result = _handle_task_pause(task_id, user_id, _total_done, _work_total, {
+            _result = _handle_task_pause(task_id, user_id, _downloaded, total_dl, {
                 'completed': [],
                 'pending': [d.document_code for d in docs_to_download[_i:]],
                 'completed_rows': [r for r in _table_rows if r is not None],
                 'failed': [],
                 'columns': columns,
-                'total_done': _total_done,
+                'downloaded': _downloaded,
+                'analyzed': _analyzed,
             })
             if _result:
                 return _result
 
             # ── Download (sequential) ──
+            # Use max(downloaded, analyzed) so progress never drops when
+            # an analysis completes while downloads are still running.
+            _visible_progress = max(_downloaded, _analyzed)
             update_task_status(
                 task_id, 'downloading',
-                progress_pct(_total_done, _work_total),
+                progress_pct(_visible_progress, total_dl),
                 _t('prosecution_downloading', lang, current=doc_index, total=total_dl),
             )
             await download_single_document(_doc, _fetch_prosecution, app_number, headers)
-            _total_done += 1  # one download completed
+            _downloaded += 1
 
             _pipeline_logger.info(
                 f"[task={task_id}] PHASE2 download_done — "
                 f"code={_doc.document_code}, idx={doc_index}/{total_dl}, "
-                f"text_len={len(_doc.text) if _doc.text else 0}, "
-                f"total_done={_total_done}/{_work_total}"
+                f"text_len={len(_doc.text) if _doc.text else 0}"
             )
 
             # ── Launch analysis immediately (OCR + LLM, parallel via semaphore) ──
