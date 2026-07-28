@@ -1734,7 +1734,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         _analyzed = 0    # documents with completed (or skipped) analysis
 
         async def _analyze_one(_doc: Any, _i: int) -> None:
-            nonlocal _analyzed
+            nonlocal _analyzed, _downloaded
             async with _analyze_sem:
                 doc_index = _i + 1
 
@@ -1808,9 +1808,11 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                 _table_rows[_i] = row
                 _analyzed += 1
 
+                # Always use max(downloaded, analyzed) so the bar never dips
+                _p = max(_downloaded, _analyzed)
                 update_task_status(
                     task_id, 'analyzing',
-                    progress_pct(_analyzed, total_dl),
+                    progress_pct(_p, total_dl),
                     _t('prosecution_analyzing', lang,
                        current=_analyzed, total=total_dl,
                        desc=_doc.description[:40]),
