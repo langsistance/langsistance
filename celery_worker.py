@@ -339,6 +339,7 @@ _STATUS_MSGS = {
         "china_report_title": "中国专利 {patent_id} 审查历史分析报告",
         "china_family_overview": "查到 {input_id} 的中国同族申请号 {cn_app}，同族覆盖 {n_juris} 个司法辖区: {juris}",
         "china_fetching_for_family": "正在获取中国同族专利 {cn_app} 的审查数据...",
+        "japan_fetching_for_family": "正在获取日本同族专利 {jp_app} 的审查数据...",
     },
     "en": {
         "preparing": "Preparing patent analysis ({total} patents)...",
@@ -387,6 +388,7 @@ _STATUS_MSGS = {
         "china_report_title": "Chinese Patent {patent_id} Examination History Report",
         "china_family_overview": "Found CN application {cn_app} for {input_id}, family spans {n_juris} jurisdictions: {juris}",
         "china_fetching_for_family": "Fetching CN family member {cn_app} examination data...",
+        "japan_fetching_for_family": "Fetching JP family member {jp_app} examination data...",
     },
 }
 
@@ -1462,7 +1464,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
     )
     from sources.long_task.config import (
         get_long_task_config, get_family_config, get_prosecution_config,
-        get_sipop_config,
+        get_sipop_config, get_jpo_config,
         DEFAULT_VISION_PROVIDER, DEFAULT_VISION_MODEL,
     )
     from sources.long_task.patent_family import EPOFamilyClient, EPOError
@@ -1665,6 +1667,58 @@ def execute_family_analysis(self, task_id: str, params: dict):
                 except Exception as e:
                     _pipeline_logger.warning(
                         f"[task={task_id}] FAMILY PHASE0.3 cn_fetch_failed — {e}"
+                    )
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 0.4: Japan examination data (if JP member exists)
+        # ═════════════════════════════════════════════════════════════════
+        jp_exam_data: dict = {}  # stored for report merging later
+        jp_member = family.get_representative('JP')
+        if jp_member:
+            jp_app_number = jp_member.app_number
+            jp_app_number = __import__('re').sub(
+                r'^JP\s*', '', jp_app_number or '', flags=__import__('re').IGNORECASE,
+            ).replace('.', '').replace('-', '').replace(' ', '')
+            _pipeline_logger.info(
+                f"[task={task_id}] FAMILY PHASE0.4 jp_member — "
+                f"jp_app={jp_app_number}, pub={jp_member.pub_number}"
+            )
+
+            jpo_cfg = get_jpo_config()
+            jpo_user = jpo_cfg.get('username', '')
+            jpo_pass = jpo_cfg.get('password', '')
+            if jpo_user and jpo_pass and jp_app_number:
+                try:
+                    update_task_status(task_id, 'preparing', 6,
+                                       _t('japan_fetching_for_family', lang,
+                                          jp_app=jp_app_number))
+                    from sources.jpo_client import JpoClient
+                    from sources.long_task.japan_examination import (
+                        fetch_examination_data,
+                        build_examination_timeline,
+                        build_registration_summary,
+                        build_citations_summary,
+                    )
+                    jpo = JpoClient(username=jpo_user, password=jpo_pass)
+                    jp_data = await fetch_examination_data(jp_app_number, jpo)
+                    jp_exam_data = {
+                        'jp_app_number': jp_app_number,
+                        'progress': jp_data.get('progress', []),
+                        'registration': jp_data.get('registration'),
+                        'citations': jp_data.get('citations'),
+                        'timeline_md': build_examination_timeline(jp_data, lang),
+                        'registration_md': build_registration_summary(jp_data, lang),
+                        'citations_md': build_citations_summary(jp_data, lang),
+                    }
+                    _pipeline_logger.info(
+                        f"[task={task_id}] FAMILY PHASE0.4 jp_data — "
+                        f"events={jp_data.get('progress_count', 0)}, "
+                        f"has_reg={jp_data.get('has_registration')}, "
+                        f"has_cites={jp_data.get('has_citations')}"
+                    )
+                except Exception as e:
+                    _pipeline_logger.warning(
+                        f"[task={task_id}] FAMILY PHASE0.4 jp_fetch_failed — {e}"
                     )
 
         # ═════════════════════════════════════════════════════════════════
@@ -1941,6 +1995,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
             pro_provider=pro_provider,
             lang=lang,
             cn_exam_data=cn_exam_data if cn_exam_data else None,
+            jp_exam_data=jp_exam_data if jp_exam_data else None,
             family_overview=family_overview,
             summary_updater=summary_updater,
         )

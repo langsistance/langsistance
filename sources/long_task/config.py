@@ -132,6 +132,34 @@ def get_sipop_config(config_path: str = 'config.ini') -> dict:
     }
 
 
+DEFAULT_JPO_USERNAME = ''
+DEFAULT_JPO_PASSWORD = ''
+
+
+def get_jpo_config(config_path: str = 'config.ini') -> dict:
+    """Read [JPO] section from config file, with env var overrides.
+
+    Returns:
+        dict with keys: username (str), password (str)
+    """
+    import os as _os
+    cfg = configparser.ConfigParser()
+    cfg.read(config_path)
+
+    username = _os.getenv('JPO_USERNAME', '')
+    password = _os.getenv('JPO_PASSWORD', '')
+
+    if not username and cfg.has_section('JPO'):
+        username = cfg.get('JPO', 'username', fallback=DEFAULT_JPO_USERNAME)
+    if not password and cfg.has_section('JPO'):
+        password = cfg.get('JPO', 'password', fallback=DEFAULT_JPO_PASSWORD)
+
+    return {
+        'username': username.strip(),
+        'password': password.strip(),
+    }
+
+
 def get_prosecution_config(config_path: str = 'config.ini') -> dict:
     """Read [PROSECUTION] section from config file.
 

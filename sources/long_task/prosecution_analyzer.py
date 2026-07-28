@@ -1068,27 +1068,31 @@ async def generate_family_prosecution_report(
     pro_provider: Any,
     lang: str = "zh",
     cn_exam_data: dict | None = None,
+    jp_exam_data: dict | None = None,
     family_overview: dict | None = None,
     summary_updater: Any | None = None,
 ) -> str:
     """Generate a cross-jurisdiction patent prosecution history analysis report.
 
-    When CN examination data is available, produces an integrated multi-country
-    report following the professional template.  Falls back to the US-only
-    ``generate_prosecution_report()`` when no CN data.
+    When CN or JP examination data is available, produces an integrated
+    multi-country report following the professional template.  Falls back to
+    the US-only ``generate_prosecution_report()`` when no cross-jurisdiction data.
 
     Report structure (cross-jurisdiction):
       1. Patent Prosecution Overview (title, applicant, jurisdictions, summary)
       2. Cross-Jurisdiction Examination Timeline (unified timeline per office)
-      3. Examination Analysis by Jurisdiction (US + CN separately)
+      3. Examination Analysis by Jurisdiction (US + CN + JP separately)
       4. Applicant Response and Claim Strategy
       5. Comparative Jurisdiction Analysis
       6. Final Assessment (grant status, complexity, key insights)
       7. Appendix: analysis tables + claim chart
     """
-    # ── Fallback to US-only when no CN data ──
-    if not cn_exam_data or not cn_exam_data.get('events') and not cn_exam_data.get('timeline_md'):
-        _logger.info("[prosecution] family_report_fallback — no CN data, using US-only report")
+    _has_cn = bool(cn_exam_data and (cn_exam_data.get('events') or cn_exam_data.get('timeline_md')))
+    _has_jp = bool(jp_exam_data and (jp_exam_data.get('progress') or jp_exam_data.get('timeline_md')))
+
+    # ── Fallback to US-only when no cross-jurisdiction data ──
+    if not _has_cn and not _has_jp:
+        _logger.info("[prosecution] family_report_fallback — no CN/JP data, using US-only report")
         return await generate_prosecution_report(
             table_rows, columns, query, patent_id,
             flash_provider, pro_provider, lang,
@@ -1145,6 +1149,24 @@ async def generate_family_prosecution_report(
         else "无中国审查数据。"
     )
 
+    # ── JP data context ──
+    jp_data_text = ""
+    if jp_exam_data:
+        jp_app = jp_exam_data.get("jp_app_number", "")
+        jp_parts = [f"JP Application: {jp_app}" if lang != "zh" else f"日本申请号: {jp_app}"]
+        if jp_exam_data.get("timeline_md"):
+            jp_parts.append(jp_exam_data["timeline_md"])
+        if jp_exam_data.get("registration_md"):
+            jp_parts.append(jp_exam_data["registration_md"])
+        if jp_exam_data.get("citations_md"):
+            jp_parts.append(jp_exam_data["citations_md"])
+        jp_data_text = "\n\n".join(jp_parts)
+    if not jp_data_text:
+        jp_data_text = (
+            "No Japan examination data available." if lang != "zh"
+            else "无日本审查数据。"
+        )
+
     # Family overview
     family_text = ""
     if family_overview:
@@ -1193,13 +1215,15 @@ async def generate_family_prosecution_report(
             "| Priority Date | [date] |\n"
             "| Jurisdictions | [list] |\n"
             "| US Status | [granted/pending/abandoned] |\n"
-            "| CN Status | [granted/pending/abandoned] |\n\n"
+            "| CN Status | [granted/pending/abandoned] |\n"
+            "| JP Status | [granted/pending/abandoned] |\n\n"
             "# 2. Jurisdiction Data Availability\n"
             "⚠️ 不要强行比较数据不对等的司法辖区。先交代数据情况：\n"
             "| Jurisdiction | Available Records | Analysis Depth |\n"
             "|-------------|------------------|----------------|\n"
             "| US | Office Actions, Amendments, Responses, Grant documents | Detailed |\n"
-            "| CN | [实际可用数据] | [Detailed/Limited/Basic] |\n\n"
+            "| CN | [实际可用数据] | [Detailed/Limited/Basic] |\n"
+            "| JP | [实际可用数据] | [Detailed/Limited/Basic] |\n\n"
             "# 3. Global Prosecution Timeline\n"
             "统一时间线表格，每个司法辖区独立行，按时间排列关键事件：\n"
             "| Date | Jurisdiction | Event | Key Significance |\n"
@@ -1229,15 +1253,15 @@ async def generate_family_prosecution_report(
             "```\n\n"
             "# 5. Cross-Jurisdiction Insights\n"
             "📌 这是跨国报告的核心差异化价值。\n\n"
-            "对比表格：\n"
-            "| Aspect | US | CN |\n"
-            "|--------|----|----|\n"
-            "| Examination Detail | High | Limited |\n"
-            "| Office Actions Available | Yes | No |\n"
-            "| Claim Amendment Analysis | Possible | Not available |\n"
-            "| Final Outcome | Granted | Granted |\n"
-            "| Prosecution Complexity | [level] | [level] |\n\n"
-            "然后 2-3 句话总结两国审查差异。\n\n"
+            "对比表格（包含所有有数据的司法辖区）：\n"
+            "| Aspect | US | CN | JP |\n"
+            "|--------|----|----|----|\n"
+            "| Examination Detail | High | Limited | [level] |\n"
+            "| Office Actions Available | Yes | No | [Yes/No] |\n"
+            "| Claim Amendment Analysis | Possible | Not available | [Possible/Not available] |\n"
+            "| Final Outcome | Granted | Granted | [status] |\n"
+            "| Prosecution Complexity | [level] | [level] | [level] |\n\n"
+            "然后 2-3 句话总结各国审查差异。\n\n"
             "# 6. Strategic Insights\n"
             "3-5 个要点，每条一句话。聚焦：\n"
             "- 审查中最关键的驳回和应对策略\n"
@@ -1302,13 +1326,15 @@ async def generate_family_prosecution_report(
             "| Priority Date | [date] |\n"
             "| Jurisdictions | [list] |\n"
             "| US Status | [granted/pending/abandoned] |\n"
-            "| CN Status | [granted/pending/abandoned] |\n\n"
+            "| CN Status | [granted/pending/abandoned] |\n"
+            "| JP Status | [granted/pending/abandoned] |\n\n"
             "# 2. Jurisdiction Data Availability\n"
             "⚠️ Do NOT force comparisons with asymmetric data. State what's available first:\n"
             "| Jurisdiction | Available Records | Analysis Depth |\n"
             "|-------------|------------------|----------------|\n"
             "| US | Office Actions, Amendments, Responses, Grant docs | Detailed |\n"
-            "| CN | [actual available data] | [Detailed/Limited/Basic] |\n\n"
+            "| CN | [actual available data] | [Detailed/Limited/Basic] |\n"
+            "| JP | [actual available data] | [Detailed/Limited/Basic] |\n\n"
             "# 3. Global Prosecution Timeline\n"
             "Unified timeline table, one row per key event, per jurisdiction:\n"
             "| Date | Jurisdiction | Event | Key Significance |\n"
@@ -1336,14 +1362,14 @@ async def generate_family_prosecution_report(
             "```\n\n"
             "# 5. Cross-Jurisdiction Insights\n"
             "📌 Core differentiator of multi-country reports.\n\n"
-            "Comparison table:\n"
-            "| Aspect | US | CN |\n"
-            "|--------|----|----|\n"
-            "| Examination Detail | High | Limited |\n"
-            "| Office Actions Available | Yes | No |\n"
-            "| Claim Amendment Analysis | Possible | Not available |\n"
-            "| Final Outcome | Granted | Granted |\n"
-            "| Prosecution Complexity | [level] | [level] |\n\n"
+            "Comparison table (include all jurisdictions with data):\n"
+            "| Aspect | US | CN | JP |\n"
+            "|--------|----|----|----|\n"
+            "| Examination Detail | High | Limited | [level] |\n"
+            "| Office Actions Available | Yes | No | [Yes/No] |\n"
+            "| Claim Amendment Analysis | Possible | Not available | [Possible/Not available] |\n"
+            "| Final Outcome | Granted | Granted | [status] |\n"
+            "| Prosecution Complexity | [level] | [level] | [level] |\n\n"
             "2-3 sentence cross-jurisdiction summary.\n\n"
             "# 6. Strategic Insights\n"
             "3-5 bullet points, one sentence each. Focus on:\n"
@@ -1390,6 +1416,8 @@ async def generate_family_prosecution_report(
         f"{us_data_text}\n\n"
         f"=== CHINA EXAMINATION DATA ===\n"
         f"{cn_data_text}\n\n"
+        f"=== JAPAN EXAMINATION DATA ===\n"
+        f"{jp_data_text}\n\n"
         f"Generate the Global Patent Prosecution Intelligence Report.\n"
         f"REMEMBER: compress events to one-liners, use confidence markers, "
         f"tables over paragraphs, no document-by-document summaries. "
@@ -1404,6 +1432,8 @@ async def generate_family_prosecution_report(
         f"{us_data_text}\n\n"
         f"=== CHINA EXAMINATION DATA ===\n"
         f"{cn_data_text}\n\n"
+        f"=== JAPAN EXAMINATION DATA ===\n"
+        f"{jp_data_text}\n\n"
         f"Generate the Global Patent Prosecution Intelligence Report.\n"
         f"REMEMBER: compress events to one-liners, use confidence markers, "
         f"tables over paragraphs, no document-by-document summaries. "
