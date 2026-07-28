@@ -995,6 +995,25 @@ input[type="checkbox"] {
   text-align: right;
 }
 
+/* Jurisdiction badges for multi-country family analysis */
+.lt-jurisdictions {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.lt-jurisdiction-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  border: 1.5px solid;
+  background: transparent;
+}
+
 .lt-phases {
   display: flex;
   gap: 6px;

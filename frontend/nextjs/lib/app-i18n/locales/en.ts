@@ -173,6 +173,12 @@ export default {
     phaseAnalyzing: 'Patent Analysis',
     phaseGeneratingReport: 'Writing Report',
     phaseExporting: 'Exporting Files',
+    // Family / multi-country phases
+    phaseFamilyLookup: 'Family Lookup',
+    phaseUsptoFetch: 'USPTO Docs',
+    phaseUsptoAnalysis: 'US Analysis',
+    phaseCnExamination: 'CN Exam',
+    phaseCnAnalysis: 'CN Analysis',
 
     // Card titles
     titleCompleted: 'Analysis Complete',

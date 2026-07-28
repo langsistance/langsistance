@@ -338,6 +338,7 @@ _STATUS_MSGS = {
         "china_no_review_data": "未找到该中国专利的审查决定数据。",
         "china_report_title": "中国专利 {patent_id} 审查历史分析报告",
         "china_family_overview": "查到 {input_id} 的中国同族申请号 {cn_app}，同族覆盖 {n_juris} 个司法辖区: {juris}",
+        "china_fetching_for_family": "正在获取中国同族专利 {cn_app} 的审查数据...",
     },
     "en": {
         "preparing": "Preparing patent analysis ({total} patents)...",
@@ -385,6 +386,7 @@ _STATUS_MSGS = {
         "china_no_review_data": "No examination review data found for this Chinese patent.",
         "china_report_title": "Chinese Patent {patent_id} Examination History Report",
         "china_family_overview": "Found CN application {cn_app} for {input_id}, family spans {n_juris} jurisdictions: {juris}",
+        "china_fetching_for_family": "Fetching CN family member {cn_app} examination data...",
     },
 }
 
@@ -1627,6 +1629,10 @@ def execute_family_analysis(self, task_id: str, params: dict):
             sipop_secret = sipop_cfg.get('app_secret', '')
             if sipop_key and sipop_secret and cn_app_number:
                 try:
+                    # Progress update for frontend — show CN examination phase
+                    update_task_status(task_id, 'preparing', 55,
+                                       _t('china_fetching_for_family', lang,
+                                          cn_app=cn_app_number))
                     from sources.sipop_client import SipopClient
                     sipop = SipopClient(app_key=sipop_key, app_secret=sipop_secret)
                     from sources.long_task.china_examination import (
