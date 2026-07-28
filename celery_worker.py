@@ -1738,25 +1738,37 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             async with _analyze_sem:
                 doc_index = _i + 1
 
-                # ── Vision OCR (if needed, now parallel) ──
-                if (not _doc.text or len(_doc.text.strip()) < 50) \
-                        and _doc.priority == 1 and _doc.binary and vision_enabled:
-                    try:
-                        _text = await _extract_text_via_vision(
-                            _doc.binary, _doc.description, vision_provider,
+                # ── Text extraction (parallel, local-first → Vision fallback) ──
+                if not _doc.text and _doc.binary:
+                    # Step 1: try local qpdf+pdftotext first (fast, no API call)
+                    _local_text = extract_text_from_binary(
+                        _doc.binary, skip_pdf_extraction=False,
+                    )
+                    if _local_text and len(_local_text.strip()) > 50:
+                        _doc.text = _local_text.strip()
+                        _pipeline_logger.info(
+                            f"[task={task_id}] PHASE2 local_extract_ok — "
+                            f"code={_doc.document_code}, idx={doc_index}/{total_dl}, "
+                            f"chars={len(_doc.text)}"
                         )
-                        if _text and len(_text.strip()) > 50:
-                            _doc.text = _text.strip()
-                            _pipeline_logger.info(
-                                f"[task={task_id}] PHASE2 vision_ok — "
-                                f"code={_doc.document_code}, idx={doc_index}/{total_dl}, "
-                                f"chars={len(_doc.text)}"
+                    elif vision_enabled:
+                        # Step 2: Vision LLM OCR (slower but handles scanned PDFs)
+                        try:
+                            _text = await _extract_text_via_vision(
+                                _doc.binary, _doc.description, vision_provider,
                             )
-                    except Exception as _e:
-                        _pipeline_logger.warning(
-                            f"[task={task_id}] PHASE2 vision_error — "
-                            f"code={_doc.document_code}: {type(_e).__name__}: {_e}"
-                        )
+                            if _text and len(_text.strip()) > 50:
+                                _doc.text = _text.strip()
+                                _pipeline_logger.info(
+                                    f"[task={task_id}] PHASE2 vision_ok — "
+                                    f"code={_doc.document_code}, idx={doc_index}/{total_dl}, "
+                                    f"chars={len(_doc.text)}"
+                                )
+                        except Exception as _e:
+                            _pipeline_logger.warning(
+                                f"[task={task_id}] PHASE2 vision_error — "
+                                f"code={_doc.document_code}: {type(_e).__name__}: {_e}"
+                            )
 
                 if not _doc.text or len(_doc.text.strip()) < 50:
                     row = build_failed_row(_doc.document_code, "text extraction failed", columns, lang)
