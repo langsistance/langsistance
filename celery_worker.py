@@ -1912,23 +1912,27 @@ def execute_family_analysis(self, task_id: str, params: dict):
             return {'status': 'failed', 'task_id': task_id, 'error': msg}
 
         # ═════════════════════════════════════════════════════════════════
-        # Phase 3: Generate report (Pro, dynamic outline + sections)
+        # Phase 3: Generate report
         # ═════════════════════════════════════════════════════════════════
         _pipeline_logger.info(
             f"[task={task_id}] FAMILY PHASE3 generate_report — "
-            f"columns={columns}, table_rows_count={len(table_rows)}"
+            f"columns={columns}, table_rows_count={len(table_rows)}, "
+            f"has_cn_data={bool(cn_exam_data and cn_exam_data.get('events') or cn_exam_data and cn_exam_data.get('timeline_md'))}"
         )
         update_task_status(task_id, 'generating_report', 80,
                            _t('writing_summary', lang))
 
         from sources.long_task.status_manager import ThrottledSummaryUpdater
+        from sources.long_task.prosecution_analyzer import generate_family_prosecution_report as _gen_family_report
         summary_updater = ThrottledSummaryUpdater(
             task_id,
             progress=80,
             step_msg=_t('writing_summary', lang),
         )
 
-        report_text = await gen_report(
+        # Use the cross-jurisdiction report generator when CN data exists;
+        # falls back to US-only report internally when no CN data.
+        report_text = await _gen_family_report(
             table_rows=table_rows,
             columns=columns,
             query=query,
@@ -1936,45 +1940,10 @@ def execute_family_analysis(self, task_id: str, params: dict):
             flash_provider=flash_provider,
             pro_provider=pro_provider,
             lang=lang,
+            cn_exam_data=cn_exam_data if cn_exam_data else None,
+            family_overview=family_overview,
             summary_updater=summary_updater,
         )
-        # ── Append China examination data if available ──────────────────
-        if cn_exam_data:
-            if cn_exam_data.get('timeline_md') or cn_exam_data.get('claims_md') or cn_exam_data.get('legal_md'):
-                if lang == 'zh':
-                    report_text += f"\n\n---\n\n# 中国审查历史 ({cn_exam_data['cn_app_number']})\n\n"
-                else:
-                    report_text += f"\n\n---\n\n# China Examination History ({cn_exam_data['cn_app_number']})\n\n"
-
-                if cn_exam_data.get('timeline_md'):
-                    report_text += cn_exam_data['timeline_md'] + "\n\n"
-
-                if cn_exam_data['events']:
-                    # Add per-event summaries if the analyzer produced them
-                    for evt in cn_exam_data['events']:
-                        label = evt.decision_label_zh if lang == 'zh' else evt.decision_label_en
-                        report_text += f"### {label} — {evt.decision_number} ({evt.decision_date})\n\n"
-                        if evt.decision_main_point:
-                            report_text += f"{evt.decision_main_point}\n\n"
-                        if evt.reasoning:
-                            report_text += f"{evt.reasoning[:2000]}\n\n"
-                elif not cn_exam_data.get('timeline_md'):
-                    if lang == 'zh':
-                        report_text += "该中国同族专利暂无审查决定记录（可能尚未经历复审、无效或异议程序）。\n\n"
-                    else:
-                        report_text += "No examination review decisions found for this CN family member.\n\n"
-
-                if cn_exam_data.get('claims_md'):
-                    report_text += cn_exam_data['claims_md'] + "\n\n"
-
-                if cn_exam_data.get('legal_md'):
-                    report_text += cn_exam_data['legal_md'] + "\n"
-
-            _pipeline_logger.info(
-                f"[task={task_id}] FAMILY PHASE3 cn_appended — "
-                f"cn_events={len(cn_exam_data.get('events', []))}, "
-                f"report_chars={len(report_text)}"
-            )
 
         _pipeline_logger.info(
             f"[task={task_id}] FAMILY PHASE3 report_generated — "

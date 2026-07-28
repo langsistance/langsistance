@@ -1052,3 +1052,367 @@ def _build_markdown_table(
         rows.append("| " + " | ".join(cells) + " |")
 
     return header + "\n" + sep + "\n" + "\n".join(rows)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 4: Cross-Jurisdiction Family Prosecution Report
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+async def generate_family_prosecution_report(
+    table_rows: list[dict],
+    columns: list[str],
+    query: str,
+    patent_id: str,
+    flash_provider: Any,
+    pro_provider: Any,
+    lang: str = "zh",
+    cn_exam_data: dict | None = None,
+    family_overview: dict | None = None,
+    summary_updater: Any | None = None,
+) -> str:
+    """Generate a cross-jurisdiction patent prosecution history analysis report.
+
+    When CN examination data is available, produces an integrated multi-country
+    report following the professional template.  Falls back to the US-only
+    ``generate_prosecution_report()`` when no CN data.
+
+    Report structure (cross-jurisdiction):
+      1. Patent Prosecution Overview (title, applicant, jurisdictions, summary)
+      2. Cross-Jurisdiction Examination Timeline (unified timeline per office)
+      3. Examination Analysis by Jurisdiction (US + CN separately)
+      4. Applicant Response and Claim Strategy
+      5. Comparative Jurisdiction Analysis
+      6. Final Assessment (grant status, complexity, key insights)
+      7. Appendix: analysis tables + claim chart
+    """
+    # ── Fallback to US-only when no CN data ──
+    if not cn_exam_data or not cn_exam_data.get('events') and not cn_exam_data.get('timeline_md'):
+        _logger.info("[prosecution] family_report_fallback — no CN data, using US-only report")
+        return await generate_prosecution_report(
+            table_rows, columns, query, patent_id,
+            flash_provider, pro_provider, lang,
+            summary_updater=summary_updater,
+        )
+
+    # ── Build data context ──
+    jurisdictions = family_overview.get("jurisdictions", ["US"]) if family_overview else ["US"]
+    if "CN" not in jurisdictions and cn_exam_data:
+        jurisdictions = list(jurisdictions) + ["CN"]
+
+    # US document entries for LLM context
+    us_entries = []
+    for r in table_rows[:30]:
+        doc_type = r.get(columns[0], "?") if columns else "?"
+        parts = [f"[{doc_type}]"]
+        for col in columns[1:8]:
+            val = str(r.get(col, "")).strip()
+            if val and val != "—" and len(val) < 300:
+                parts.append(f"  {col}: {val}")
+        if r.get("_summary"):
+            parts.append(f"  Summary: {r['_summary']}" if lang != "zh" else f"  摘要: {r['_summary']}")
+        us_entries.append("\n".join(parts))
+    us_data_text = "\n\n".join(us_entries)
+
+    # CN data context
+    cn_parts = []
+    if cn_exam_data.get("cn_app_number"):
+        cn_parts.append(
+            f"CN Application: {cn_exam_data['cn_app_number']}" if lang != "zh"
+            else f"中国申请号: {cn_exam_data['cn_app_number']}"
+        )
+    if cn_exam_data.get("timeline_md"):
+        cn_parts.append(f"### CN Examination Timeline\n{cn_exam_data['timeline_md']}")
+    if cn_exam_data.get("claims_md"):
+        cn_parts.append(f"### CN Claims\n{cn_exam_data['claims_md']}")
+    if cn_exam_data.get("legal_md"):
+        cn_parts.append(f"### CN Legal Status\n{cn_exam_data['legal_md']}")
+    cn_events_list = cn_exam_data.get("events", [])
+    if cn_events_list:
+        event_lines = []
+        for evt in cn_events_list:
+            from sources.long_task.china_examination import ExaminationEvent
+            if isinstance(evt, ExaminationEvent):
+                label = evt.decision_label_zh if lang == "zh" else evt.decision_label_en
+                event_lines.append(
+                    f"- {label} — {evt.decision_number} ({evt.decision_date})"
+                )
+            else:
+                event_lines.append(f"- {evt}")
+        cn_parts.append(f"### CN Review Decisions\n" + "\n".join(event_lines))
+    cn_data_text = "\n\n".join(cn_parts) if cn_parts else (
+        "No China examination data available." if lang != "zh"
+        else "无中国审查数据。"
+    )
+
+    # Family overview
+    family_text = ""
+    if family_overview:
+        if lang == "zh":
+            family_text = (
+                f"输入专利: {family_overview.get('input_id', patent_id)}\n"
+                f"同族覆盖 {len(jurisdictions)} 个司法辖区: {', '.join(jurisdictions)}\n"
+            )
+        else:
+            family_text = (
+                f"Input patent: {family_overview.get('input_id', patent_id)}\n"
+                f"Family spans {len(jurisdictions)} jurisdictions: {', '.join(jurisdictions)}\n"
+            )
+
+    title_template = {
+        "zh": "专利申请 {patent_id} 跨国审查历史分析报告",
+        "en": "Cross-Jurisdiction Patent Prosecution History Analysis Report for {patent_id}",
+    }
+    title = title_template.get(lang, title_template["en"]).format(patent_id=patent_id)
+
+    # ── System prompt ────────────────────────────────────────────────────────
+    if lang == "zh":
+        system_prompt = (
+            # ── Role ──
+            "你是一位资深专利审查分析师，具有国际专利审查实践经验。\n\n"
+            "根据提供的多国专利审查数据，生成一份专业、简洁的跨国专利审查历史分析报告。\n\n"
+            "目标读者：专利专业人员、IP管理者、研究人员。\n\n"
+            # ── Report structure ──
+            "按以下结构撰写报告：\n\n"
+            "# 专利审查概览 (Patent Prosecution Overview)\n"
+            "- 专利标题\n"
+            "- 申请人 / 权利人\n"
+            "- 发明人\n"
+            "- 优先权日\n"
+            "- 涉及司法辖区\n"
+            "- 审查总体状态\n"
+            "- 用 3-5 句话总结全球审查历程\n\n"
+            "# 跨国审查时间线 (Cross-Jurisdiction Examination Timeline)\n"
+            "为每个司法辖区列出：\n"
+            "- 专利局\n"
+            "- 关键审查事件\n"
+            "- 重要日期\n"
+            "- 审查结果\n"
+            "突出重要审查里程碑，不要简单罗列事件。\n\n"
+            "# 分司法辖区审查分析 (Examination Analysis by Jurisdiction)\n"
+            "分别分析每个专利局。每个包含：\n"
+            "## 审查过程\n"
+            "- 审查阶段数\n"
+            "- 主要审查意见或审查事件\n"
+            "- 重要程序步骤\n"
+            "## 审查员关注点\n"
+            "- 新颖性问题\n"
+            "- 创造性 / 显而易见性问题\n"
+            "- 清楚性问题\n"
+            "- 支持 / 公开充分问题\n"
+            "- 其他审查关注\n"
+            "如果详细信息不可用，明确写：\"提供的审查数据中未包含详细的审查文件。\" 不要编造信息。\n\n"
+            "# 申请人答复与权利要求策略 (Applicant Response and Claim Strategy)\n"
+            "- 申请人如何回应审查员异议\n"
+            "- 权利要求是否被修改\n"
+            "- 权利要求范围是否发生变化\n"
+            "- 各司法辖区之间的审查策略差异\n"
+            "仅在数据支持的情况下分析权利要求修改。\n\n"
+            "# 跨司法辖区对比分析 (Comparative Jurisdiction Analysis)\n"
+            "- 哪些司法辖区审查更严格\n"
+            "- 不同审查挑战\n"
+            "- 不同权利要求策略\n"
+            "- 审查结果可能不同的原因\n"
+            "不要在没有证据的情况下排名专利局。\n\n"
+            "# 最终评估 (Final Assessment)\n"
+            "## 专利授权状态\n"
+            "每个司法辖区当前状态。\n"
+            "## 审查复杂度\n"
+            "低 / 中 / 高\n"
+            "简要解释。\n"
+            "## 关键洞察\n"
+            "提供 3-5 个要点总结最重要的审查情报。\n\n"
+            # ── Style rules ──
+            "写作要求：\n"
+            "- 像专业专利分析师一样写作\n"
+            "- 简洁、分析性强\n"
+            "- 不要做逐文件的流水账总结\n"
+            "- 聚焦审查策略和审查逻辑\n"
+            "- 适当使用表格\n"
+            "- 避免不必要的法律解释\n"
+            "- 清楚区分可用数据和不可用信息\n"
+            "- 绝不编造缺失的审查事件\n\n"
+            # ── Legal boundaries ──
+            "🚨 红线：禁止使用「证明」「认可」「接受」「承认」「绝对」「确定」「必然」。\n"
+            "用「审查记录显示」「主要原因」「最可能因素」「根据审查记录推断」。\n\n"
+            "直接输出 Markdown 报告，不要 JSON，不要额外解释。"
+        )
+    else:
+        system_prompt = (
+            "You are a senior patent prosecution analyst with expertise in "
+            "international patent examination practices.\n\n"
+            "Generate a concise and professional Cross-Jurisdiction Patent Prosecution "
+            "History Analysis Report based on the provided patent prosecution data "
+            "from multiple patent offices.\n\n"
+            "The purpose of this report is to help patent professionals, IP managers, "
+            "and researchers understand:\n"
+            "- how the patent was examined in different jurisdictions,\n"
+            "- major examination challenges,\n"
+            "- applicant response strategies,\n"
+            "- claim evolution,\n"
+            "- and the final prosecution outcome.\n\n"
+            "Follow these requirements:\n\n"
+            "# Patent Prosecution Overview\n"
+            "- Patent title\n"
+            "- Applicant / Assignee\n"
+            "- Inventors\n"
+            "- Priority date\n"
+            "- Related jurisdictions\n"
+            "- Overall prosecution status\n"
+            "- Summarize the global prosecution journey in 3-5 sentences.\n\n"
+            "# Cross-Jurisdiction Examination Timeline\n"
+            "Create a unified timeline across all jurisdictions.\n"
+            "For each jurisdiction include:\n"
+            "- Patent Office\n"
+            "- Key examination events\n"
+            "- Important dates\n"
+            "- Examination outcome\n"
+            "Do not simply list events. Highlight important prosecution milestones.\n\n"
+            "# Examination Analysis by Jurisdiction\n"
+            "Analyze each patent office separately.\n"
+            "For each jurisdiction:\n"
+            "## Examination Process\n"
+            "- number of examination stages if available,\n"
+            "- major office actions or examination events,\n"
+            "- important procedural steps.\n"
+            "## Examiner Concerns\n"
+            "- novelty issues,\n"
+            "- inventive step/obviousness issues,\n"
+            "- clarity issues,\n"
+            "- enablement/support issues,\n"
+            "- other examination concerns.\n"
+            "If detailed office action documents are unavailable, clearly state:\n"
+            '"Detailed examination documents were not publicly available in the provided data."\n'
+            "Do not invent missing information.\n\n"
+            "# Applicant Response and Claim Strategy\n"
+            "- How the applicant responded to examiner objections.\n"
+            "- Whether claims were amended.\n"
+            "- Whether claim scope appears to have changed.\n"
+            "- Differences in prosecution strategy between jurisdictions.\n"
+            "Only analyze claim amendments when supporting data exists.\n\n"
+            "# Comparative Jurisdiction Analysis\n"
+            "Compare prosecution outcomes across jurisdictions.\n"
+            "- Which jurisdictions had stricter examination.\n"
+            "- Different examination challenges.\n"
+            "- Different claim strategies.\n"
+            "- Reasons why prosecution results may differ.\n"
+            "Avoid ranking patent offices without evidence.\n\n"
+            "# Final Assessment\n"
+            "## Patent Grant Status\n"
+            "Current status in each jurisdiction.\n"
+            "## Prosecution Complexity\n"
+            "Low / Medium / High. Explain briefly.\n"
+            "## Key Insights\n"
+            "3-5 bullet points of important prosecution intelligence.\n\n"
+            # ── Style rules ──
+            "Writing Style Requirements:\n"
+            "- Write like a professional patent analyst.\n"
+            "- Be concise and analytical.\n"
+            "- Do not produce a document-by-document summary.\n"
+            "- Focus on prosecution strategy and examination logic.\n"
+            "- Use tables where appropriate.\n"
+            "- Avoid unnecessary legal explanations.\n"
+            "- Clearly distinguish between available data and unavailable information.\n"
+            "- Never fabricate missing prosecution events.\n\n"
+            # ── Legal boundaries ──
+            '🚨 RED LINE: NEVER use "proved", "confirmed", "admitted", "agreed", '
+            '"conceded", "accepted", "absolutely", "sole reason", "without doubt".\n'
+            'Use "the record shows", "primary reason", "most likely factor", '
+            '"based on the prosecution record".\n\n'
+            "Output Markdown directly, no JSON, no extra explanations."
+        )
+
+    user_content = (
+        f"Patent ID: {patent_id}\n"
+        f"User query: {query}\n\n"
+        f"{family_text}\n\n"
+        f"=== US PROSECUTION DATA ===\n"
+        f"Analysis dimensions: {', '.join(columns)}\n"
+        f"Documents analyzed: {len(table_rows)}\n\n"
+        f"{us_data_text}\n\n"
+        f"=== CHINA EXAMINATION DATA ===\n"
+        f"{cn_data_text}\n\n"
+        f"Generate the cross-jurisdiction prosecution history report. "
+        f"Focus on comparative analysis between jurisdictions. "
+        f"Clearly mark missing data — do not fabricate."
+    ) if lang == "zh" else (
+        f"Patent ID: {patent_id}\n"
+        f"User query: {query}\n\n"
+        f"{family_text}\n\n"
+        f"=== US PROSECUTION DATA ===\n"
+        f"Analysis dimensions: {', '.join(columns)}\n"
+        f"Documents analyzed: {len(table_rows)}\n\n"
+        f"{us_data_text}\n\n"
+        f"=== CHINA EXAMINATION DATA ===\n"
+        f"{cn_data_text}\n\n"
+        f"Generate the cross-jurisdiction prosecution history report. "
+        f"Focus on comparative analysis between jurisdictions. "
+        f"Clearly mark missing data — do not fabricate."
+    )
+
+    _logger.info(
+        f"[prosecution] family_report_start — patent_id={patent_id}, "
+        f"us_docs={len(table_rows)}, cn_events={len(cn_events_list)}, "
+        f"jurisdictions={jurisdictions}, lang={lang}"
+    )
+
+    try:
+        llm = pro_provider._get_langchain_llm(streaming=True)
+        messages = [("system", system_prompt), ("human", user_content)]
+        chunks = []
+        async for chunk in llm.astream(messages):
+            if chunk.content:
+                chunks.append(chunk.content)
+                if summary_updater:
+                    summary_updater.push(
+                        "".join(chunks),
+                        step_msg=(
+                            "正在撰写跨国审查报告..." if lang == "zh"
+                            else "Writing cross-jurisdiction report..."
+                        ),
+                    )
+        text = "".join(chunks).strip()
+        if "</think>" in text:
+            text = text[text.rfind("</think>") + len("</think>"):].strip()
+            if summary_updater:
+                summary_updater.push(text, force=True)
+
+        # Strip leading title if LLM generated one (we prepend our own)
+        # Remove a leading "# ..." line if present to avoid double titles
+        if text.startswith("# "):
+            first_nl = text.find("\n")
+            if first_nl > 0:
+                text = text[first_nl + 1:].strip()
+
+        # Assemble final report
+        report = f"# {title}\n\n{text}"
+    except Exception as e:
+        _logger.warning(f"[prosecution] family_report_failed: {e}")
+        # Fallback: generate US report + append CN data
+        report = await generate_prosecution_report(
+            table_rows, columns, query, patent_id,
+            flash_provider, pro_provider, lang,
+            summary_updater=summary_updater,
+        )
+        if cn_exam_data:
+            cn_app_num = cn_exam_data.get("cn_app_number", "")
+            if lang == "zh":
+                report += f"\n\n---\n\n# 中国审查历史 ({cn_app_num})\n\n"
+            else:
+                report += f"\n\n---\n\n# China Examination History ({cn_app_num})\n\n"
+            if cn_exam_data.get("timeline_md"):
+                report += cn_exam_data["timeline_md"] + "\n\n"
+            if cn_exam_data.get("legal_md"):
+                report += cn_exam_data["legal_md"] + "\n\n"
+            if cn_exam_data.get("claims_md"):
+                report += cn_exam_data["claims_md"] + "\n"
+
+    # Append US analysis table and claim chart at the end
+    table_md = _build_markdown_table(table_rows, columns, lang)
+    analysis_table_heading = _ANALYSIS_TABLE_HEADINGS.get(lang, _ANALYSIS_TABLE_HEADINGS["en"])
+    report += f"\n\n## {analysis_table_heading}\n\n{table_md}"
+
+    _logger.info(
+        f"[prosecution] family_report_done — total_chars={len(report)}"
+    )
+    return report
