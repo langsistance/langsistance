@@ -1710,13 +1710,12 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         _update_mysql_progress(task_id, 'generating_columns', 5)
 
         # ═════════════════════════════════════════════════════════════════
-        # Phase 2: Sequential download + pipelined parallel LLM analysis
+        # Phase 2: Sequential download + pipelined parallel analysis
         # ═════════════════════════════════════════════════════════════════
-        # Each document is downloaded sequentially.  As soon as a document
-        # has text (native or Vision-OCR), its LLM analysis is launched
-        # immediately via asyncio.create_task().  Multiple LLM analyses run
-        # concurrently, capped by a Semaphore(5).  Downloads continue while
-        # LLM calls are in-flight — no waiting for all downloads to finish.
+        # Each document is downloaded sequentially.  As soon as download
+        # completes, analysis (OCR → LLM analyze → LLM summarize) is launched
+        # immediately via asyncio.create_task().  All analysis steps run under
+        # a Semaphore(5), so multiple OCR + LLM calls execute concurrently.
         total_dl = len(docs_to_download)
         _pipeline_logger.info(
             f"[task={task_id}] PHASE2 START — "
@@ -1729,7 +1728,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             return await _uspto_get_with_retry(url, hdrs, timeout)
 
         _table_rows: list[dict] = [None] * total_dl  # preserve order by index
-        _analyze_sem = asyncio.Semaphore(5)  # max 5 concurrent LLM calls
+        _analyze_sem = asyncio.Semaphore(5)  # caps concurrent OCR + LLM calls
         _pending_tasks = []  # list of asyncio.Task
         _dl_ok = 0
         _analysis_done = 0
@@ -1738,6 +1737,26 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             nonlocal _analysis_done
             async with _analyze_sem:
                 doc_index = _i + 1
+
+                # ── Vision OCR (if needed, now parallel) ──
+                if (not _doc.text or len(_doc.text.strip()) < 50) \
+                        and _doc.priority == 1 and _doc.binary and vision_enabled:
+                    try:
+                        _text = await _extract_text_via_vision(
+                            _doc.binary, _doc.description, vision_provider,
+                        )
+                        if _text and len(_text.strip()) > 50:
+                            _doc.text = _text.strip()
+                            _pipeline_logger.info(
+                                f"[task={task_id}] PHASE2 vision_ok — "
+                                f"code={_doc.document_code}, idx={doc_index}/{total_dl}, "
+                                f"chars={len(_doc.text)}"
+                            )
+                    except Exception as _e:
+                        _pipeline_logger.warning(
+                            f"[task={task_id}] PHASE2 vision_error — "
+                            f"code={_doc.document_code}: {type(_e).__name__}: {_e}"
+                        )
 
                 if not _doc.text or len(_doc.text.strip()) < 50:
                     row = build_failed_row(_doc.document_code, "text extraction failed", columns, lang)
@@ -1803,7 +1822,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                     f"done={_analysis_done}/{total_dl}"
                 )
 
-        # ── Main pipeline: download sequentially, launch LLM immediately ──
+        # ── Main pipeline: download sequentially, launch analysis immediately ──
         for _i, _doc in enumerate(docs_to_download):
             doc_index = _i + 1
 
@@ -1839,33 +1858,10 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                 f"text_len={len(_doc.text) if _doc.text else 0}"
             )
 
-            # ── Vision fallback for scanned PDFs (before launching LLM) ──
-            if _doc.priority == 1 and _doc.binary and not _doc.text and vision_enabled:
-                update_task_status(
-                    task_id, 'downloading',
-                    progress_pct(_dl_ok, total_dl),
-                    _t('prosecution_ocr', lang, current=doc_index, total=total_dl),
-                )
-                try:
-                    _text = await _extract_text_via_vision(
-                        _doc.binary, _doc.description, vision_provider,
-                    )
-                    if _text and len(_text.strip()) > 50:
-                        _doc.text = _text.strip()
-                        _pipeline_logger.info(
-                            f"[task={task_id}] PHASE2 vision_ok — "
-                            f"code={_doc.document_code}, chars={len(_doc.text)}"
-                        )
-                except Exception as _e:
-                    _pipeline_logger.warning(
-                        f"[task={task_id}] PHASE2 vision_error — "
-                        f"code={_doc.document_code}, error={type(_e).__name__}: {_e}"
-                    )
-
-            # ── Launch LLM analysis immediately (non-blocking) ──
+            # ── Launch analysis immediately (OCR + LLM, parallel via semaphore) ──
             _pending_tasks.append(asyncio.create_task(_analyze_one(_doc, _i)))
 
-        # ── Wait for all in-flight LLM analyses to finish ──
+        # ── Wait for all in-flight analyses to finish ──
         _pipeline_logger.info(
             f"[task={task_id}] PHASE2 all_downloads_done — "
             f"ok={_dl_ok}/{total_dl}, waiting_for_{len(_pending_tasks)}_analyses"
