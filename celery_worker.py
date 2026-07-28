@@ -1728,7 +1728,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             return await _uspto_get_with_retry(url, hdrs, timeout)
 
         _table_rows: list[dict] = [None] * total_dl  # preserve order by index
-        _analyze_sem = asyncio.Semaphore(5)  # caps concurrent OCR + LLM calls
+        _analyze_sem = asyncio.Semaphore(100)  # caps concurrent OCR + LLM calls
         _pending_tasks = []  # list of asyncio.Task
         _dl_ok = 0
         _analysis_done = 0
