@@ -1,5 +1,10 @@
 import type { Metadata } from 'next'
 import HomePage from '@/components/app/HomePage'
+import JsonLd, {
+  copiioaiOrganizationJsonLd,
+  copiioaiWebSiteJsonLd,
+  copiioaiSoftwareAppJsonLd,
+} from '@/components/JsonLd'
 
 export const metadata: Metadata = {
   title: 'CopiioAI — AI-Powered API Tool Builder',
@@ -18,9 +23,9 @@ export const metadata: Metadata = {
     type: 'website',
     images: [
       {
-        url: 'https://copiioai.com/og-image.png',
-        width: 1200,
-        height: 630,
+        url: 'https://copiioai.com/icon.png',
+        width: 512,
+        height: 512,
         alt: 'CopiioAI - AI-Powered API Tool Builder',
       },
     ],
@@ -30,7 +35,7 @@ export const metadata: Metadata = {
     title: 'CopiioAI — AI-Powered API Tool Builder',
     description:
       'CopiioAI turns any API into a chat-based interface. Build and share chat tools powered by your APIs.',
-    images: ['https://copiioai.com/og-image.png'],
+    images: ['https://copiioai.com/icon.png'],
   },
   alternates: {
     canonical: 'https://copiioai.com',
@@ -38,5 +43,12 @@ export const metadata: Metadata = {
 }
 
 export default function Home() {
-  return <HomePage />
+  return (
+    <>
+      <JsonLd id="jsonld-org" data={copiioaiOrganizationJsonLd()} />
+      <JsonLd id="jsonld-website" data={copiioaiWebSiteJsonLd()} />
+      <JsonLd id="jsonld-app" data={copiioaiSoftwareAppJsonLd()} />
+      <HomePage />
+    </>
+  )
 }

@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import LandingHeader from '@/components/landing/LandingHeader'
+import JsonLd from '@/components/JsonLd'
 import {
   BILIBILI_USPTO_VIDEO_IDS,
   getBilibiliEmbedUrl,
@@ -12,8 +13,36 @@ export const metadata: Metadata = {
   title: '国内用户使用 CopiioAI 检索 USPTO',
   description:
     '一个面向国内美国专利检索场景的 CopiioAI 使用示例：通过自然语言查询美国专利信息、专利文档、关键词和被转让人结果。',
+  keywords: [
+    'USPTO', '美国专利检索', '专利查询', 'CopiioAI',
+    'AI patent search', 'US patent search', 'patent information',
+  ],
+  openGraph: {
+    title: '国内用户使用 CopiioAI 检索 USPTO | CopiioAI 使用场景',
+    description:
+      '通过自然语言对话方式查询美国专利信息、专利文档、关键词和被转让人结果。无需切换多个页面。',
+    url: 'https://copiioai.com/examples/uspto-china',
+    siteName: 'CopiioAI',
+    type: 'article',
+    locale: 'zh_Hans',
+    images: [
+      {
+        url: 'https://copiioai.com/icon.png',
+        width: 1200,
+        height: 630,
+        alt: 'CopiioAI USPTO 专利检索示例',
+      },
+    ],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: '国内用户使用 CopiioAI 检索 USPTO',
+    description:
+      '通过自然语言对话方式查询美国专利信息、专利文档、关键词和被转让人结果。',
+    images: ['https://copiioai.com/icon.png'],
+  },
   alternates: {
-    canonical: 'https://app-cn.copiioai.com/examples/uspto-china',
+    canonical: 'https://copiioai.com/examples/uspto-china',
   },
 }
 
@@ -36,6 +65,33 @@ function BilibiliVideo({ bvid, title }: { bvid: string; title: string }) {
 export default function UsptoChinaExamplePage() {
   return (
     <>
+      <JsonLd
+        id="jsonld-article"
+        data={{
+          '@context': 'https://schema.org',
+          '@type': 'Article',
+          headline: '国内用户使用 CopiioAI 检索 USPTO',
+          description:
+            '一个面向国内美国专利检索场景的 CopiioAI 使用示例：通过自然语言查询美国专利信息、专利文档、关键词和被转让人结果。',
+          author: {
+            '@type': 'Organization',
+            name: 'CopiioAI',
+            url: 'https://copiioai.com',
+          },
+          publisher: {
+            '@type': 'Organization',
+            name: 'CopiioAI',
+            logo: {
+              '@type': 'ImageObject',
+              url: 'https://copiioai.com/logo.png',
+            },
+          },
+          mainEntityOfPage: {
+            '@type': 'WebPage',
+            '@id': 'https://copiioai.com/examples/uspto-china',
+          },
+        }}
+      />
       <LandingHeader />
       <main className="pt-20 bg-gray-50">
         <section className="bg-white">

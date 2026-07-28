@@ -1,8 +1,19 @@
 import type { Metadata } from 'next'
+import JsonLd from '@/components/JsonLd'
 
 export const metadata: Metadata = {
   title: 'Privacy Policy',
-  description: 'Privacy Policy for CopiioAI — how we collect, use, and protect your data.',
+  description:
+    'Privacy Policy for CopiioAI — how we collect, use, and protect your data. Covers Chrome extension permissions, analytics, and user control.',
+  keywords: ['privacy policy', 'CopiioAI privacy', 'data protection', 'Chrome extension privacy'],
+  openGraph: {
+    title: 'Privacy Policy | CopiioAI',
+    description:
+      'How CopiioAI collects, uses, and protects your data. Transparent privacy policy for our AI-powered API tool builder.',
+    url: 'https://copiioai.com/privacy-policy',
+    siteName: 'CopiioAI',
+    type: 'website',
+  },
   alternates: {
     canonical: 'https://copiioai.com/privacy-policy',
   },
@@ -10,7 +21,23 @@ export const metadata: Metadata = {
 
 export default function PrivacyPolicy() {
   return (
-    <div className="max-w-3xl mx-auto px-6 py-16">
+    <>
+      <JsonLd
+        id="jsonld-webpage"
+        data={{
+          '@context': 'https://schema.org',
+          '@type': 'WebPage',
+          name: 'Privacy Policy',
+          description:
+            'Privacy Policy for CopiioAI — how we collect, use, and protect your data.',
+          publisher: {
+            '@type': 'Organization',
+            name: 'CopiioAI',
+            url: 'https://copiioai.com',
+          },
+        }}
+      />
+      <div className="max-w-3xl mx-auto px-6 py-16">
       <nav className="mb-5 text-sm text-gray-500">
         <a href="/" className="text-blue-600 hover:underline">Home</a>
         {' / '}
@@ -201,5 +228,6 @@ export default function PrivacyPolicy() {
         <strong>Website:</strong> https://copiioai.com/privacy-policy
       </p>
     </div>
+    </>
   )
 }

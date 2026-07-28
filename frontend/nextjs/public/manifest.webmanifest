@@ -1,0 +1,16 @@
+{
+  "name": "CopiioAI — AI-Powered API Tool Builder",
+  "short_name": "CopiioAI",
+  "description": "Build AI-powered tools from your APIs. Convert browser-captured API requests into conversational AI tools.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#0d9488",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
