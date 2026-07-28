@@ -534,6 +534,12 @@ async def generate_executive_summary(
 
     try:
         llm = provider._get_langchain_llm(streaming=True)
+        _logger.info(
+            f"[prosecution] executive_summary streaming — "
+            f"provider={getattr(provider, 'provider_name', '?')}, "
+            f"model={getattr(provider, 'model', '?')}, "
+            f"streaming={True}"
+        )
         messages = [("system", system_prompt), ("human", user_content)]
         chunks = []
         async for chunk in llm.astream(messages):
