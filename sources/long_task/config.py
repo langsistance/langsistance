@@ -61,7 +61,7 @@ def get_long_task_config(config_path: str = 'config.ini') -> dict:
 # ── Prosecution analysis config ───────────────────────────────────────────────
 
 DEFAULT_PROSECUTION_MAX_PAGES_PER_DOC = 100
-DEFAULT_PROSECUTION_INCLUDE_PRIORITY_2 = True
+DEFAULT_PROSECUTION_INCLUDE_PRIORITY_2 = False
 
 
 def get_prosecution_config(config_path: str = 'config.ini') -> dict:
