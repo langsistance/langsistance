@@ -1474,14 +1474,25 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
     streaming_provider = None
     _stream_cfg_provider = ptc.get('streaming_provider')
     _stream_cfg_model = ptc.get('streaming_model')
+    _pipeline_logger.info(
+        f"[task={task_id}] CONFIG — prosecution_config="
+        f"streaming_provider={_stream_cfg_provider!r}, "
+        f"streaming_model={_stream_cfg_model!r}, "
+        f"ptc_keys={list(ptc.keys())}"
+    )
     if _stream_cfg_provider and _stream_cfg_model:
         streaming_provider = Provider(
             provider_name=_stream_cfg_provider, model=_stream_cfg_model,
             server_address='', is_local=False,
         )
         _pipeline_logger.info(
-            f"[task={task_id}] CONFIG — streaming_provider="
+            f"[task={task_id}] CONFIG — streaming_provider CREATED: "
             f"{_stream_cfg_provider}/{_stream_cfg_model}"
+        )
+    else:
+        _pipeline_logger.warning(
+            f"[task={task_id}] CONFIG — streaming_provider SKIPPED: "
+            f"provider={_stream_cfg_provider!r}, model={_stream_cfg_model!r}"
         )
 
     vision_enabled = ltc.get('vision_enabled', True)
