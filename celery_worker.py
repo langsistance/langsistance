@@ -1730,11 +1730,11 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         _table_rows: list[dict] = [None] * total_dl  # preserve order by index
         _analyze_sem = asyncio.Semaphore(100)  # caps concurrent OCR + LLM calls
         _pending_tasks = []  # list of asyncio.Task
-        _dl_ok = 0
-        _analysis_done = 0
+        _total_done = 0  # unified: downloads + analyses, total = total_dl * 2
+        _work_total = total_dl * 2
 
         async def _analyze_one(_doc: Any, _i: int) -> None:
-            nonlocal _analysis_done
+            nonlocal _total_done
             async with _analyze_sem:
                 doc_index = _i + 1
 
@@ -1805,13 +1805,13 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                     summary = ""
                 row["_summary"] = summary
                 _table_rows[_i] = row
-                _analysis_done += 1
+                _total_done += 1  # one analysis completed
 
                 update_task_status(
                     task_id, 'analyzing',
-                    progress_pct(_analysis_done, total_dl),
+                    progress_pct(_total_done, _work_total),
                     _t('prosecution_analyzing', lang,
-                       current=_analysis_done, total=total_dl,
+                       current=_total_done, total=_work_total,
                        desc=_doc.description[:40]),
                 )
 
@@ -1819,7 +1819,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                     f"[task={task_id}] PHASE2 analysis_complete — "
                     f"code={_doc.document_code}, idx={doc_index}/{total_dl}, "
                     f"summary_chars={len(summary)}, "
-                    f"done={_analysis_done}/{total_dl}"
+                    f"total_done={_total_done}/{_work_total}"
                 )
 
         # ── Main pipeline: download sequentially, launch analysis immediately ──
@@ -1827,17 +1827,16 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             doc_index = _i + 1
 
             # ── Stop / Pause checkpoint ──
-            _result = _handle_task_stop(task_id, user_id, _dl_ok, total_dl)
+            _result = _handle_task_stop(task_id, user_id, _total_done, _work_total)
             if _result:
                 return _result
-            _result = _handle_task_pause(task_id, user_id, _dl_ok, total_dl, {
+            _result = _handle_task_pause(task_id, user_id, _total_done, _work_total, {
                 'completed': [],
                 'pending': [d.document_code for d in docs_to_download[_i:]],
                 'completed_rows': [r for r in _table_rows if r is not None],
                 'failed': [],
                 'columns': columns,
-                'dl_ok': _dl_ok,
-                'analysis_done': _analysis_done,
+                'total_done': _total_done,
             })
             if _result:
                 return _result
@@ -1845,37 +1844,37 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             # ── Download (sequential) ──
             update_task_status(
                 task_id, 'downloading',
-                progress_pct(_dl_ok, total_dl),
+                progress_pct(_total_done, _work_total),
                 _t('prosecution_downloading', lang, current=doc_index, total=total_dl),
             )
             await download_single_document(_doc, _fetch_prosecution, app_number, headers)
-            if _doc.text:
-                _dl_ok += 1
+            _total_done += 1  # one download completed
 
             _pipeline_logger.info(
                 f"[task={task_id}] PHASE2 download_done — "
                 f"code={_doc.document_code}, idx={doc_index}/{total_dl}, "
-                f"text_len={len(_doc.text) if _doc.text else 0}"
+                f"text_len={len(_doc.text) if _doc.text else 0}, "
+                f"total_done={_total_done}/{_work_total}"
             )
 
             # ── Launch analysis immediately (OCR + LLM, parallel via semaphore) ──
             _pending_tasks.append(asyncio.create_task(_analyze_one(_doc, _i)))
 
         # ── Wait for all in-flight analyses to finish ──
+        docs_with_text = [d for d in docs_to_download if d.text and len(d.text.strip()) >= 50]
         _pipeline_logger.info(
             f"[task={task_id}] PHASE2 all_downloads_done — "
-            f"ok={_dl_ok}/{total_dl}, waiting_for_{len(_pending_tasks)}_analyses"
+            f"with_text={len(docs_with_text)}/{total_dl}, "
+            f"waiting_for_{len(_pending_tasks)}_analyses"
         )
         if _pending_tasks:
             await asyncio.gather(*_pending_tasks)
 
         # Reconstruct table_rows in original order
         table_rows = [r for r in _table_rows if r is not None]
-        docs_with_text = [d for d in docs_to_download if d.text and len(d.text.strip()) >= 50]
 
         _pipeline_logger.info(
             f"[task={task_id}] PHASE2 COMPLETE — "
-            f"downloaded={_dl_ok}/{total_dl}, "
             f"with_text={len(docs_with_text)}/{total_dl}, "
             f"table_rows={len(table_rows)}, "
             f"failed_rows={sum(1 for r in table_rows if r.get('_failed'))}"
