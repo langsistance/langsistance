@@ -86,18 +86,43 @@ PAGE_SIZE = 100
 MAX_PAGES_PER_COMPANY = 15
 
 COMPANIES: list[dict[str, str]] = [
-    {"name": "Apple", "assignee": '"Apple Inc."'},
-    {"name": "Tesla", "assignee": '"Tesla Inc."'},
-    {"name": "NVIDIA", "assignee": '"NVIDIA Corporation"'},
-    {"name": "SpaceX", "assignee": '"Space Exploration Technologies Corp."'},
-    {"name": "Samsung", "assignee": '"Samsung Electronics Co. Ltd."'},
-    {"name": "Qualcomm", "assignee": '"Qualcomm Incorporated"'},
+    {"name": "Apple", "assignee": "Apple Inc."},
+    {"name": "Tesla", "assignee": "Tesla Inc."},
+    {"name": "NVIDIA", "assignee": "NVIDIA Corporation"},
+    {"name": "SpaceX", "assignee": "Space Exploration Technologies Corp."},
+    {"name": "Samsung", "assignee": "Samsung Electronics Co. Ltd."},
+    {"name": "Qualcomm", "assignee": "Qualcomm Incorporated"},
 ]
 
 USPTO_SEARCH_URL = "https://api.uspto.gov/api/v1/patent/applications/search"
 USPTO_DOCS_URL_TEMPLATE = (
     "https://api.uspto.gov/api/v1/patent/applications/{app_number}/documents"
 )
+
+# ── Field name candidates for assignee ──────────────────────────────────────────
+# The USPTO Patent Applications API uses deeply nested field paths.
+# Reference: production scene-tool knowledge-base templates.
+_ASSIGNEE_FIELD = "assignmentBag.assigneeBag.assigneeNameText"
+
+
+def _build_assignee_query(company_name: str) -> str:
+    """Build a Lucene query for assignee search."""
+    return f'{_ASSIGNEE_FIELD}:"{company_name}"'
+
+
+async def _test_api_connection() -> bool:
+    """Quick check: search for a known patent to verify the API works."""
+    test_body = {
+        "q": 'applicationNumberText:"17429113"',
+        "pagination": {"offset": 0, "limit": 1},
+        "fields": ["applicationNumberText"],
+    }
+    data = await asyncio.to_thread(_http_post, USPTO_SEARCH_URL, test_body)
+    if data is not None:
+        log.info("API connection test PASSED")
+        return True
+    log.error("API connection test FAILED")
+    return False
 
 CUTOFF_DATE = datetime.now(timezone.utc) - timedelta(days=5 * 365)
 
@@ -206,11 +231,16 @@ def _http_post(url: str, json_body: dict, timeout: int = 30) -> Any:
                 return json.loads(body) if body else {}
         except urllib.error.HTTPError as e:
             last_status = e.code
+            # Log response body for diagnostics (first occurrence only)
+            try:
+                err_body = e.read().decode("utf-8", errors="replace")[:500]
+            except Exception:
+                err_body = "(unable to read)"
             if e.code in (400, 429) and attempt + 1 < USPTO_MAX_RETRIES:
                 log.info(f"USPTO {e.code} retry {attempt + 1}/{USPTO_MAX_RETRIES}")
                 time.sleep(USPTO_RETRY_DELAY)
                 continue
-            log.error(f"USPTO HTTP {e.code} for {url[:100]}")
+            log.error(f"USPTO HTTP {e.code} for {url[:120]} — body: {err_body}")
             return None
         except Exception as e:
             log.warning(f"HTTP POST error (attempt {attempt + 1}): {e}")
@@ -238,11 +268,15 @@ def _http_get(url: str, timeout: int = 20) -> Any:
                 return json.loads(body) if body else {}
         except urllib.error.HTTPError as e:
             last_status = e.code
+            try:
+                err_body = e.read().decode("utf-8", errors="replace")[:500]
+            except Exception:
+                err_body = "(unable to read)"
             if e.code in (400, 429) and attempt + 1 < USPTO_MAX_RETRIES:
                 log.info(f"USPTO {e.code} retry {attempt + 1}/{USPTO_MAX_RETRIES}")
                 time.sleep(USPTO_RETRY_DELAY)
                 continue
-            log.warning(f"USPTO HTTP {e.code} for {url[:100]}")
+            log.warning(f"USPTO HTTP {e.code} for {url[:120]} — body: {err_body}")
             return None
         except Exception as e:
             log.warning(f"HTTP GET error (attempt {attempt + 1}): {e}")
@@ -267,10 +301,14 @@ def _extract_items(data: Any) -> list[dict[str, Any]]:
 
 
 async def _search_uspto(
-    assignee_query: str, offset: int = 0, limit: int = PAGE_SIZE
+    assignee_name: str, offset: int = 0, limit: int = PAGE_SIZE
 ) -> list[dict[str, Any]]:
+    # Build query using the correct USPTO field path for assignee
+    q = f'{_ASSIGNEE_FIELD}:"{assignee_name}"'
+    log.info(f"  Query: {q[:150]}")
+
     search_body = {
-        "q": f"assignee:{assignee_query}",
+        "q": q,
         "pagination": {"offset": offset, "limit": limit},
         "fields": [
             "applicationNumberText",
@@ -358,7 +396,9 @@ async def find_patents() -> list[dict[str, Any]]:
                 break
 
             offset = page * PAGE_SIZE
-            results = await _search_uspto(company["assignee"], offset=offset)
+            results = await _search_uspto(
+                company["assignee"], offset=offset,
+            )
 
             if not results:
                 log.info(f"  No results page {page + 1}, company done.")
@@ -450,7 +490,6 @@ async def main() -> None:
 
     api_key = os.getenv("USPTO_API_KEY", "").strip()
     if not api_key:
-        # Debug: show relevant env vars
         relevant = {k: v[:20] + "..." for k, v in os.environ.items()
                     if any(kw in k.upper() for kw in ("USPTO", "API_KEY", "PATENT"))}
         print(f"\nERROR: USPTO_API_KEY not configured.")
@@ -459,6 +498,13 @@ async def main() -> None:
         print(f"  Relevant env vars found: {relevant if relevant else '(none)'}")
         print(f"\nAdd it to .env:  USPTO_API_KEY=your_key_here")
         sys.exit(1)
+
+    # Quick API connectivity test
+    print("Testing USPTO API connection...")
+    if not await _test_api_connection():
+        print("USPTO API is not reachable. Check network and API key.")
+        sys.exit(1)
+    print("API connection OK.\n")
 
     matches = await find_patents()
 
