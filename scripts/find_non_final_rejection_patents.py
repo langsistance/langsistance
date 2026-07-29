@@ -5,28 +5,37 @@ a complete Non-Final Rejection cycle (CTNF → Amendment → NOA).
 
 Outputs: company, patent number, app number, title, grant date.
 
-Reuses existing USPTO infrastructure:
-- outbound_http client (retry + rate limiting)
-- _classify_single_document (patent document type classification)
+Standalone — no dependency on the langsistance sources/ modules.
+Only requires: requests (or httpx), and optionally python-dotenv.
 
 Usage:
     # Add USPTO_API_KEY to .env, then:
-    python scripts/find_non_final_rejection_patents.py
+    python3 scripts/find_non_final_rejection_patents.py
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
+# ── Logging to stdout ───────────────────────────────────────────────────────────
 
-# Load .env (same pattern as api.py and backfill_knowledge_embeddings.py)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    stream=sys.stdout,
+)
+log = logging.getLogger("patent_finder")
+
+# ── .env loading ────────────────────────────────────────────────────────────────
+
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 try:
     from dotenv import load_dotenv
 
@@ -38,20 +47,12 @@ try:
 except ImportError:
     pass
 
-from sources.http_outbound import outbound_http
-from sources.long_task.prosecution_downloader import _classify_single_document
-from sources.logger import Logger
-
-logger = Logger("patent_finder.log")
-
 # ── Configuration ──────────────────────────────────────────────────────────────
 
 TARGET_COUNT = 10
 PAGE_SIZE = 100
-MAX_PAGES_PER_COMPANY = 15  # up to 1500 per company
+MAX_PAGES_PER_COMPANY = 15
 
-# Each entry: display name + USPTO Lucene assignee query string.
-# Using exact-match phrases with the company's current legal entity name.
 COMPANIES: list[dict[str, str]] = [
     {"name": "Apple", "assignee": '"Apple Inc."'},
     {"name": "Tesla", "assignee": '"Tesla Inc."'},
@@ -66,48 +67,171 @@ USPTO_DOCS_URL_TEMPLATE = (
     "https://api.uspto.gov/api/v1/patent/applications/{app_number}/documents"
 )
 
-# Only consider patents granted on or after this date (5 years ago)
 CUTOFF_DATE = datetime.now(timezone.utc) - timedelta(days=5 * 365)
 
+# USPTO rate limiting
+USPTO_RETRY_DELAY = 1.0
+USPTO_MAX_RETRIES = 10
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+
+# ── Document classification (inlined from prosecution_downloader.py) ────────────
+
+def _matches_any_description(description: str, substrings: list[str]) -> bool:
+    desc_lower = description.lower()
+    return any(sub in desc_lower for sub in substrings)
+
+
+def _classify_document(doc: dict) -> dict | None:
+    """Classify a single USPTO documentBag entry into a category.
+
+    Inlined from prosecution_downloader._classify_single_document().
+    Returns dict with keys: category, priority, document_code, description;
+    or None if the document lacks metadata.
+    """
+    code = str(doc.get("documentCode", "") or doc.get("documentTypeCode", "")).strip()
+    desc = str(
+        doc.get("documentCodeDescriptionText", "")
+        or doc.get("documentTypeName", "")
+    ).strip()
+
+    if not code and not desc:
+        return None
+
+    # Priority 1 rules (inlined)
+    p1 = {
+        "office_action": {
+            "codes": {"CTNF", "CTFR", "CTAV", "CTRS", "CTEQ"},
+            "descriptions": [
+                "non-final office action", "final office action", "office action",
+                "restriction requirement", "non-final rejection", "final rejection",
+                "ex parte quayle", "advisory action", "examiner's action",
+            ],
+        },
+        "amendment": {
+            "codes": {"CLM", "WCLM"},
+            "descriptions": [
+                "claims", "amendment", "preliminary amendment",
+                "after final amendment", "amendment after final",
+                "amendment under", "supplemental amendment", "amended",
+            ],
+        },
+        "notice_of_allowance": {
+            "codes": {"NOA"},
+            "descriptions": [
+                "notice of allowance", "notice of allowability", "issue notification",
+            ],
+        },
+    }
+
+    for category, rules in p1.items():
+        codes = rules.get("codes", set())
+        descriptions = rules.get("descriptions", [])
+        if code.upper() in codes or _matches_any_description(desc, descriptions):
+            return {
+                "category": category,
+                "priority": 1,
+                "document_code": code.upper(),
+                "description": desc,
+            }
+
+    # Default — everything else (we don't need priority 2/3 for filtering)
+    return {
+        "category": "other",
+        "priority": 2,
+        "document_code": code.upper(),
+        "description": desc,
+    }
+
+
+# ── HTTP helpers ────────────────────────────────────────────────────────────────
 
 
 def _get_headers(content_type: bool = True) -> dict[str, str]:
-    """Build request headers with USPTO API key from .env."""
     headers: dict[str, str] = {"Accept": "application/json"}
     if content_type:
         headers["Content-Type"] = "application/json"
-    uspto_key = os.getenv("USPTO_API_KEY", "").strip()
-    if uspto_key:
-        headers["X-API-Key"] = uspto_key
+    key = os.getenv("USPTO_API_KEY", "").strip()
+    if key:
+        headers["X-API-Key"] = key
     return headers
 
 
-def _extract_items(data: Any) -> list[dict[str, Any]]:
-    """Extract a list of items from a USPTO API response.
+def _http_post(url: str, json_body: dict, timeout: int = 30) -> Any:
+    """POST with USPTO retry logic."""
+    import requests
 
-    The API wraps results in various top-level keys (e.g. 'patentApplications',
-    'applicationBag', 'results'); this scans for the first non-empty list value.
-    """
+    headers = _get_headers()
+    last_status = None
+    for attempt in range(USPTO_MAX_RETRIES):
+        try:
+            resp = requests.post(url, headers=headers, json=json_body, timeout=timeout)
+        except requests.RequestException as e:
+            log.warning(f"HTTP POST error (attempt {attempt + 1}): {e}")
+            time.sleep(USPTO_RETRY_DELAY)
+            continue
+
+        if resp.status_code in (400, 429) and attempt + 1 < USPTO_MAX_RETRIES:
+            last_status = resp.status_code
+            log.info(f"USPTO {resp.status_code} retry {attempt + 1}/{USPTO_MAX_RETRIES}")
+            time.sleep(USPTO_RETRY_DELAY)
+            continue
+
+        if resp.status_code != 200:
+            log.error(f"USPTO HTTP {resp.status_code} for {url[:100]}")
+            return None
+
+        return resp.json() if resp.text else {}
+
+    log.error(f"USPTO retries exhausted (last status={last_status})")
+    return None
+
+
+def _http_get(url: str, timeout: int = 20) -> Any:
+    """GET with USPTO retry logic."""
+    import requests
+
+    headers = _get_headers(content_type=False)
+    last_status = None
+    for attempt in range(USPTO_MAX_RETRIES):
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout)
+        except requests.RequestException as e:
+            log.warning(f"HTTP GET error (attempt {attempt + 1}): {e}")
+            time.sleep(USPTO_RETRY_DELAY)
+            continue
+
+        if resp.status_code in (400, 429) and attempt + 1 < USPTO_MAX_RETRIES:
+            last_status = resp.status_code
+            log.info(f"USPTO {resp.status_code} retry {attempt + 1}/{USPTO_MAX_RETRIES}")
+            time.sleep(USPTO_RETRY_DELAY)
+            continue
+
+        if resp.status_code != 200:
+            log.warning(f"USPTO HTTP {resp.status_code} for {url[:100]}")
+            return None
+
+        return resp.json() if resp.text else {}
+
+    log.error(f"USPTO retries exhausted (last status={last_status})")
+    return None
+
+
+# ── USPTO API helpers ──────────────────────────────────────────────────────────
+
+
+def _extract_items(data: Any) -> list[dict[str, Any]]:
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
         for v in data.values():
             if isinstance(v, list):
-                items: list[dict[str, Any]] = v
-                return items
+                return v
     return []
 
 
 async def _search_uspto(
     assignee_query: str, offset: int = 0, limit: int = PAGE_SIZE
 ) -> list[dict[str, Any]]:
-    """Search USPTO for patents matching an assignee Lucene query.
-
-    Returns a list of patent application records (may include both pending and
-    granted applications — callers should filter by patentNumber presence).
-    """
     search_body = {
         "q": f"assignee:{assignee_query}",
         "pagination": {"offset": offset, "limit": limit},
@@ -118,67 +242,19 @@ async def _search_uspto(
             "applicationMetaData.patentGrantDate",
         ],
     }
-
-    try:
-        resp = await asyncio.to_thread(
-            outbound_http.post,
-            USPTO_SEARCH_URL,
-            purpose="patent_search",
-            headers=_get_headers(),
-            json=search_body,
-            timeout=30,
-        )
-    except Exception as exc:
-        logger.error(f"USPTO search error: {type(exc).__name__}: {exc}")
-        return []
-
-    if resp.status_code != 200:
-        logger.error(
-            f"USPTO search HTTP {resp.status_code} — "
-            f"assignee={assignee_query}, offset={offset}"
-        )
-        return []
-
-    data = resp.json() if resp.text else {}
-    return _extract_items(data)
+    data = await asyncio.to_thread(_http_post, USPTO_SEARCH_URL, search_body)
+    return _extract_items(data) if data else []
 
 
 async def _get_document_list(app_number: str) -> list[dict[str, Any]]:
-    """Fetch the document bag for a patent application."""
     url = USPTO_DOCS_URL_TEMPLATE.format(app_number=app_number)
-
-    try:
-        resp = await asyncio.to_thread(
-            outbound_http.get,
-            url,
-            purpose="patent_docs",
-            headers=_get_headers(content_type=False),
-            timeout=20,
-        )
-    except Exception as exc:
-        logger.warning(
-            f"Document list error for {app_number}: {type(exc).__name__}: {exc}"
-        )
-        return []
-
-    if resp.status_code != 200:
-        logger.warning(
-            f"Document list HTTP {resp.status_code} for {app_number}"
-        )
-        return []
-
-    data = resp.json() if resp.text else {}
+    data = await asyncio.to_thread(_http_get, url)
     if isinstance(data, dict):
         return data.get("documentBag", [])
     return []
 
 
 def _has_all_document_types(document_bag: list[dict[str, Any]]) -> bool:
-    """Return True if the document bag contains CTNF + Amendment + NOA.
-
-    Uses the project's existing _classify_single_document() so the matching
-    rules stay identical to production prosecution analysis.
-    """
     has_ctnf = False
     has_amendment = False
     has_noa = False
@@ -186,23 +262,18 @@ def _has_all_document_types(document_bag: list[dict[str, Any]]) -> bool:
     for doc in document_bag:
         if not isinstance(doc, dict):
             continue
-        classified = _classify_single_document(doc)
+        classified = _classify_document(doc)
         if classified is None:
             continue
 
-        # CTNF: office_action category with the specific document code
         if (
-            classified.category == "office_action"
-            and classified.document_code.upper() == "CTNF"
+            classified["category"] == "office_action"
+            and classified["document_code"] == "CTNF"
         ):
             has_ctnf = True
-
-        # Amendment: claims filed in response to examination
-        if classified.category == "amendment":
+        if classified["category"] == "amendment":
             has_amendment = True
-
-        # NOA: notice of allowance = grant imminent
-        if classified.category == "notice_of_allowance":
+        if classified["category"] == "notice_of_allowance":
             has_noa = True
 
         if has_ctnf and has_amendment and has_noa:
@@ -212,7 +283,6 @@ def _has_all_document_types(document_bag: list[dict[str, Any]]) -> bool:
 
 
 def _parse_grant_date(raw_date: str | None) -> datetime | None:
-    """Parse a USPTO grant-date string to a timezone-aware UTC datetime."""
     if not raw_date:
         return None
     for fmt in (
@@ -232,7 +302,6 @@ def _parse_grant_date(raw_date: str | None) -> datetime | None:
 
 
 async def find_patents() -> list[dict[str, Any]]:
-    """Search across companies until TARGET_COUNT matches are found."""
     matches: list[dict[str, Any]] = []
 
     for company in COMPANIES:
@@ -240,10 +309,10 @@ async def find_patents() -> list[dict[str, Any]]:
             break
 
         label = f"{company['name']} ({company['assignee']})"
-        logger.info(f"search_start — company={company['name']}")
+        log.info(f"Searching: {label}")
         print(f"\n{'—' * 60}")
         print(f"Searching: {label}")
-        print(f"Progress: {len(matches)}/{TARGET_COUNT} found so far")
+        print(f"Progress: {len(matches)}/{TARGET_COUNT}")
 
         patents_checked = 0
 
@@ -255,15 +324,10 @@ async def find_patents() -> list[dict[str, Any]]:
             results = await _search_uspto(company["assignee"], offset=offset)
 
             if not results:
-                logger.info(
-                    f"search_empty — company={company['name']}, page={page + 1}"
-                )
+                log.info(f"  No results page {page + 1}, company done.")
                 break
 
-            logger.info(
-                f"search_page — company={company['name']}, "
-                f"page={page + 1}, count={len(results)}"
-            )
+            log.info(f"  Page {page + 1}: {len(results)} results")
 
             for item in results:
                 if len(matches) >= TARGET_COUNT:
@@ -271,7 +335,6 @@ async def find_patents() -> list[dict[str, Any]]:
                 if not isinstance(item, dict):
                     continue
 
-                # ── Extract grant number ──
                 app_meta = item.get("applicationMetaData")
                 if isinstance(app_meta, dict):
                     patent_number = app_meta.get("patentNumber", "")
@@ -282,11 +345,9 @@ async def find_patents() -> list[dict[str, Any]]:
                     title = item.get("inventionTitle", "")
                     grant_date_raw = item.get("patentGrantDate", "")
 
-                # Skip non-granted applications
                 if not patent_number:
                     continue
 
-                # ── Extract application number ──
                 app_number = item.get("applicationNumberText", "") or item.get(
                     "appNumberText", ""
                 )
@@ -297,14 +358,12 @@ async def find_patents() -> list[dict[str, Any]]:
                 if not app_number:
                     continue
 
-                # ── Date filter (client-side, safer than relying on API query) ──
                 grant_date = _parse_grant_date(grant_date_raw)
                 if grant_date and grant_date < CUTOFF_DATE:
                     continue
 
                 patents_checked += 1
 
-                # ── Fetch documents and classify ──
                 documents = await _get_document_list(app_number)
                 if not documents:
                     continue
@@ -316,9 +375,7 @@ async def find_patents() -> list[dict[str, Any]]:
                         "app_number": app_number,
                         "title": title,
                         "grant_date": (
-                            grant_date.strftime("%Y-%m-%d")
-                            if grant_date
-                            else "unknown"
+                            grant_date.strftime("%Y-%m-%d") if grant_date else "unknown"
                         ),
                     }
                     matches.append(match)
@@ -329,18 +386,12 @@ async def find_patents() -> list[dict[str, Any]]:
                         f"{match['grant_date']}  |  "
                         f"{match['title'][:70]}"
                     )
-                    logger.info(
-                        f"match — #{len(matches)} company={company['name']} "
-                        f"patent={patent_number} app={app_number} "
-                        f"grant_date={match['grant_date']}"
+                    log.info(
+                        f"MATCH #{len(matches)}: {company['name']} "
+                        f"US{patent_number} / {app_number}"
                     )
 
-            # If API returned fewer results than page size, this company is done
             if len(results) < PAGE_SIZE:
-                logger.info(
-                    f"search_exhausted — company={company['name']}, "
-                    f"total_checked={patents_checked}"
-                )
                 break
 
         print(f"  Checked {patents_checked} patents from {company['name']}")
@@ -354,8 +405,8 @@ async def find_patents() -> list[dict[str, Any]]:
 async def main() -> None:
     print("=" * 80)
     print("Non-Final Rejection Patent Finder")
-    print("Filter: CTNF (Non-Final Rejection) + Amendment + NOA (Notice of Allowance)")
-    print(f"Date range: granted >= {CUTOFF_DATE.strftime('%Y-%m-%d')} (last 5 years)")
+    print("Filter: CTNF + Amendment + NOA")
+    print(f"Date range: granted >= {CUTOFF_DATE.strftime('%Y-%m-%d')}")
     print(f"Companies: {', '.join(c['name'] for c in COMPANIES)}")
     print(f"Target: {TARGET_COUNT} patents")
     print("=" * 80)
@@ -363,13 +414,11 @@ async def main() -> None:
     api_key = os.getenv("USPTO_API_KEY", "").strip()
     if not api_key:
         print("\nERROR: USPTO_API_KEY not configured.")
-        print("Add it to the .env file:")
-        print("    USPTO_API_KEY=your_key_here")
+        print("Add it to .env:  USPTO_API_KEY=your_key_here")
         sys.exit(1)
 
     matches = await find_patents()
 
-    # ── Final report ──
     print()
     print("=" * 100)
     print(f"RESULTS  —  {len(matches)} patents with CTNF + Amendment + NOA")
@@ -390,7 +439,7 @@ async def main() -> None:
         print()
         print(f"Total: {len(matches)} patents found.")
     else:
-        print("\nNo matching patents found across all companies.")
+        print("\nNo matching patents found.")
 
     print("\nDone.")
 

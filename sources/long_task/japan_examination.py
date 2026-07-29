@@ -209,6 +209,218 @@ async def fetch_examination_data(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# AI Analysis
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+async def generate_table_columns(
+    query: str,
+    event_count: int,
+    provider: Any,
+    lang: str = "zh",
+) -> list[str]:
+    """Phase 1: Flash LLM generates table column definitions for JP analysis.
+
+    The JPO progress API provides a chronological list of examination events
+    (filing, examination request, office actions, amendments, decisions).
+    Columns are designed around this event-oriented data.
+    """
+    if lang == "zh":
+        system_prompt = (
+            "你是一个日本专利审查历史分析专家。根据用户的分析问题和JPO数据特征，"
+            "确定分析表格需要哪些列。\n\n"
+            "JPO 可用的数据：\n"
+            "- 审查经过事件列表（出願審査請求、拒絶理由通知、意見書、手続補正書、"
+            "特許査定/拒絶査定、審判請求等）\n"
+            "- 注册信息（登録番号、登録日、権利状態）\n"
+            "- 引用文献列表\n\n"
+            "返回 JSON 格式：{\"columns\": [\"列1\", \"列2\", ...]}\n"
+            "列数控制在 5-8 列。\n\n"
+            "CRITICAL: 以下列每次分析都必须包含：\n"
+            '- "日期" — 事件发生的日期\n'
+            '- "事件类型" — 出願/審査請求/拒絶理由/応答/補正/査定/審判\n'
+            '- "事件详情" — 具体内容概述\n'
+            '- "审查阶段" — 出願/審査/審判/登録\n'
+            '- "关键发现" — 该事件的核心信息\n\n'
+            "根据用户的具体问题可增加列。"
+        )
+    else:
+        system_prompt = (
+            "You are a Japan patent examination history analysis expert. "
+            "Determine the columns needed for an analysis table based on the "
+            "user's question and available JPO data.\n\n"
+            "Available JPO data:\n"
+            "- Examination progress events (filing, examination request, "
+            "office actions, responses, amendments, decisions, appeals)\n"
+            "- Registration information (registration number, date, rights status)\n"
+            "- Citation list\n\n"
+            'Return JSON: {"columns": ["Col1", "Col2", ...]}\n'
+            "Keep to 5-8 columns.\n\n"
+            "CRITICAL required columns:\n"
+            '- "Date" — event date\n'
+            '- "Event Type" — filing/examination request/rejection/response/amendment/decision/appeal\n'
+            '- "Description" — what happened\n'
+            '- "Examination Phase" — application/examination/appeal/registration\n'
+            '- "Key Findings" — core information at this step\n'
+            "All column names MUST be in English."
+        )
+
+    user_content = (
+        f"User question: {query}\n"
+        f"Examination events count: {event_count}\n"
+        f"Determine the table column definitions."
+    )
+
+    result = await provider.complete_json(system_prompt, user_content)
+    return result.get("columns", [
+        "日期", "事件类型", "事件详情", "审查阶段", "关键发现",
+    ])
+
+
+async def analyze_single_event(
+    event: dict[str, Any],
+    columns: list[str],
+    query: str,
+    provider: Any,
+    lang: str = "zh",
+) -> dict:
+    """Phase 2a: AI analyzes one JPO progress event against table columns.
+
+    Args:
+        event: A single JPO progress event dict with keys:
+               event_date, event, event_detail, event_remarks.
+        columns: Table column names from ``generate_table_columns()``.
+        query: User's original question.
+        provider: Pro LLM provider.
+        lang: 'zh' or 'en'.
+    """
+    from sources.jpo_client import translate_jp_event
+
+    cols_str = "\n".join(f'  "{c}": "..."' for c in columns)
+
+    event_name = event.get("event", "")
+    event_date = event.get("event_date", "")
+    event_detail = event.get("event_detail", "") or event.get("event_remarks", "") or ""
+    translated = translate_jp_event(event_name, lang)
+
+    if lang == "zh":
+        system_prompt = (
+            "你是一个日本专利审查历史分析专家。根据提供的事件信息，"
+            "按照以下维度进行分析：\n\n"
+            f"{chr(10).join(f'- {c}' for c in columns)}\n\n"
+            f"返回 JSON：\n{{\n{cols_str}\n}}\n\n"
+            "分析要求：\n"
+            "- 基于实际提供的信息，不要编造\n"
+            "- 每个字段 1-3 句话，要有依据\n"
+            "- 如果某维度在事件中找不到明确信息，填写\"未在此事件中体现\"\n"
+        )
+        user_content = (
+            f"用户问题：{query}\n\n"
+            f"事件日期：{event_date}\n"
+            f"事件名称：{event_name}（{translated}）\n"
+            f"事件详情：{event_detail[:2000]}\n\n"
+            f"按维度分析并返回 JSON。"
+        )
+    else:
+        system_prompt = (
+            "You are a Japan patent examination history analysis expert. "
+            "Analyze the provided event against the following dimensions:\n\n"
+            f"{chr(10).join(f'- {c}' for c in columns)}\n\n"
+            f"Return JSON:\n{{\n{cols_str}\n}}\n\n"
+            "Requirements:\n"
+            "- Base analysis on the actual provided information\n"
+            "- 1-3 specific sentences per field\n"
+            '- If a dimension cannot be determined, write "Not applicable to this event"\n'
+            "Write ALL content in English."
+        )
+        user_content = (
+            f"User question: {query}\n\n"
+            f"Event Date: {event_date}\n"
+            f"Event Name: {event_name} ({translated})\n"
+            f"Event Detail: {event_detail[:2000]}\n\n"
+            f"Analyze by dimension and return JSON."
+        )
+
+    result = await provider.complete_json(system_prompt, user_content)
+
+    row: dict = {"_event_name": event_name, "_event_date": event_date}
+    for col in columns:
+        if col in result:
+            row[col] = result[col]
+        else:
+            row[col] = result.get(
+                col,
+                "未在此事件中体现" if lang == "zh" else "Not applicable to this event",
+            )
+    return row
+
+
+async def generate_event_summary(
+    event: dict[str, Any],
+    row: dict,
+    query: str,
+    provider: Any,
+    lang: str = "zh",
+) -> str:
+    """Phase 2b: Generate a 2-3 sentence summary of one JPO event."""
+    from sources.jpo_client import translate_jp_event
+
+    row_str = "\n".join(
+        f"{k}: {v}" for k, v in row.items()
+        if not k.startswith("_")
+    )
+    event_name = event.get("event", "")
+    translated = translate_jp_event(event_name, lang)
+    event_date = event.get("event_date", "")
+    event_detail = event.get("event_detail", "") or event.get("event_remarks", "") or ""
+
+    if lang == "zh":
+        system_prompt = (
+            "你是一个专利审查分析专家。基于分析结果，用 2-3 句话总结该审查事件的核心发现。"
+            "直接输出总结，不要 JSON。"
+        )
+        user_content = (
+            f"用户问题：{query}\n"
+            f"事件日期：{event_date}\n"
+            f"事件名称：{event_name}（{translated}）\n"
+            f"事件详情：{event_detail[:1000]}\n"
+            f"分析结果：\n{row_str}\n\n"
+            f"请给出简洁总结。"
+        )
+    else:
+        system_prompt = (
+            "You are a patent examination analysis expert. Summarize the core "
+            "findings of this examination event in 2-3 sentences. "
+            "Output directly, no JSON. Write in English."
+        )
+        user_content = (
+            f"User question: {query}\n"
+            f"Event Date: {event_date}\n"
+            f"Event Name: {event_name} ({translated})\n"
+            f"Event Detail: {event_detail[:1000]}\n"
+            f"Analysis results:\n{row_str}\n\n"
+            f"Please provide a concise summary in English."
+        )
+
+    import asyncio
+    llm = provider._get_langchain_llm(streaming=True)
+    messages = [("system", system_prompt), ("human", user_content)]
+    chunks: list[str] = []
+    try:
+        async def _stream():
+            async for chunk in llm.astream(messages):
+                if chunk.content:
+                    chunks.append(chunk.content)
+        await asyncio.wait_for(_stream(), timeout=300)
+    except asyncio.TimeoutError:
+        pass
+    text = "".join(chunks).strip()
+    if "</think>" in text:
+        text = text[text.rfind("</think>") + len("</think>"):].strip()
+    return text or ""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Report formatting
 # ═══════════════════════════════════════════════════════════════════════════════
 

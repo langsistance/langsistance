@@ -256,7 +256,7 @@ async def _classify_long_task_async(
         "- 如果用户提问的意思是「基于之前的结果继续操作」→ 从历史中提取ID\n"
         "- 如果用户提问是一个全新的、独立的话题（与历史无关）→ 不提取任何ID，"
         "patent_ids 返回空数组，系统会自动触发搜索模式\n\n"
-        "## 六种场景\n"
+        "## 八种场景\n"
         "1. prosecution — 用户要分析**单个**专利的审查历史（审查过程、Office Action、"
         "答辩、Claim修改、授权原因等）。\n"
         "   关键词：审查历史、审查过程、审查意见、Office Action、prosecution、"
@@ -298,6 +298,27 @@ async def _classify_long_task_async(
         "   - 例：「分析专利 CN201710216936.1 在中国经历了哪些审查程序」→ china_prosecution\n"
         "   - 例：「这个专利在中国有没有被无效过」→ china_prosecution\n"
         "   - 例：「帮我看看 17429113 在中国的审查历史」→ china_prosecution\n"
+        "6. epo_prosecution — 用户要分析**欧洲专利**的审查历史（检索报告、审查意见、"
+        "授权/驳回等EPO特有的审查程序）。\n"
+        "   **CRITICAL: 只要用户提到「欧洲」/「EPO」+「审查」相关关键词，就匹配此场景。**\n"
+        "   关键词：欧洲专利审查、欧洲审查历史、EPO审查、欧洲检索报告、欧洲同族审查、"
+        "在欧洲的审查、欧洲OA、EPO examination、EPO prosecution、EP patent review、"
+        "examination history Europe、欧洲的审查\n"
+        "   - 即使用户提到的是US专利号（如 US12506212）+「在欧洲」，也匹配此场景\n"
+        "   - patent_ids 中只提取 **1个** 专利号\n"
+        "   - 例：「帮我看看 US12506212 在欧洲的审查历史」→ epo_prosecution\n"
+        "   - 例：「分析 EP4000000 的审查过程」→ epo_prosecution\n"
+        "   - 例：「这个专利在欧洲有没有被异议过」→ epo_prosecution\n"
+        "7. japan_prosecution — 用户要分析**日本专利**的审查历史（拒絶理由通知、意見書、"
+        "手続補正書、特許査定/拒絶査定、審判等日本特有的审查程序）。\n"
+        "   **CRITICAL: 只要用户提到「日本」+「审查」相关关键词，就匹配此场景。**\n"
+        "   关键词：日本专利审查、日本审查历史、日本OA、拒绝理由、JPO审查、"
+        "日本同族审查、在日本的审查、Japan examination、Japan prosecution、"
+        "JP patent review、examination history Japan、日本的审查\n"
+        "   - 即使用户提到的是US专利号（如 US12506212）+「在日本」，也匹配此场景\n"
+        "   - patent_ids 中只提取 **1个** 专利号\n"
+        "   - 例：「帮我看看 US12506212 在日本的审查历史」→ japan_prosecution\n"
+        "   - 例：「分析这个专利在日本被驳回的原因」→ japan_prosecution\n"
         "## 专利ID格式\n"
         "- USPTO（美国）: 纯7-8位数字，如 8388852（7位授权号）, 17429113（8位申请号）\n"
         "- USPTO 授权号（patent number）通常是7位数字，申请号（application number）通常是8位\n"
@@ -1193,7 +1214,9 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         is_prosecution = (scenario == 'prosecution')
                         is_families = (scenario == 'families')
                         is_china_prosecution = (scenario == 'china_prosecution')
-                        is_single_patent = is_prosecution or is_families or is_china_prosecution
+                        is_epo_prosecution = (scenario == 'epo_prosecution')
+                        is_japan_prosecution = (scenario == 'japan_prosecution')
+                        is_single_patent = is_prosecution or is_families or is_china_prosecution or is_epo_prosecution or is_japan_prosecution
                         query_lang = _detect_query_language(request.query)
 
                         celery_params = {
@@ -1205,7 +1228,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                             'scenario': scenario,
                         }
                         celery_params['lang'] = query_lang
-                        if is_prosecution or is_families or is_china_prosecution:
+                        if is_prosecution or is_families or is_china_prosecution or is_epo_prosecution or is_japan_prosecution:
                             celery_params['patent_id'] = patent_ids[0] if patent_ids else ''
                             celery_params['patent_id_type'] = patent_id_type
                         else:
@@ -1227,6 +1250,12 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                             elif is_china_prosecution:
                                 from celery_worker import execute_china_examination_analysis
                                 execute_china_examination_analysis.delay(task_id=task_id, params=celery_params)
+                            elif is_epo_prosecution:
+                                from celery_worker import execute_epo_examination_analysis
+                                execute_epo_examination_analysis.delay(task_id=task_id, params=celery_params)
+                            elif is_japan_prosecution:
+                                from celery_worker import execute_japan_examination_analysis
+                                execute_japan_examination_analysis.delay(task_id=task_id, params=celery_params)
                             else:
                                 from celery_worker import execute_patent_analysis
                                 execute_patent_analysis.delay(task_id=task_id, params=celery_params)
@@ -1274,6 +1303,16 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                             status_msg = (
                                 '中国专利审查历史分析任务已提交' if queue_result == 'running'
                                 else '中国专利审查历史分析任务已排队，将在当前任务完成后自动开始'
+                            )
+                        elif is_epo_prosecution:
+                            status_msg = (
+                                '欧洲专利审查历史分析任务已提交' if queue_result == 'running'
+                                else '欧洲专利审查历史分析任务已排队，将在当前任务完成后自动开始'
+                            )
+                        elif is_japan_prosecution:
+                            status_msg = (
+                                '日本专利审查历史分析任务已提交' if queue_result == 'running'
+                                else '日本专利审查历史分析任务已排队，将在当前任务完成后自动开始'
                             )
                         else:
                             status_msg = (
