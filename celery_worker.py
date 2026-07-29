@@ -3745,6 +3745,12 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
     import asyncio
     import os as _os
     from typing import Any
+
+    # ── Version marker: proves this is the new code (2026-07-28, streaming_provider) ──
+    _pipeline_logger.info(
+        f"[task={task_id}] BOOTSTRAP — celery_worker version=2026-07-28-streaming"
+    )
+
     from sources.long_task.status_manager import (
         update_task_status, set_task_completed, set_task_failed,
     )
@@ -3804,6 +3810,35 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
 
     ptc = get_prosecution_config()
     include_priority_2 = ptc.get('include_priority_2', True)
+
+    # ── Streaming provider (report summary + section writing) ──
+    # When configured in [PROSECUTION], overrides pro_provider for the
+    # streaming output phases so users can use their chat model (e.g.
+    # openrouter/openai/gpt-5.4-mini) for the visible streaming text.
+    streaming_provider = None
+    _stream_cfg_provider = ptc.get('streaming_provider')
+    _stream_cfg_model = ptc.get('streaming_model')
+    _pipeline_logger.info(
+        f"[task={task_id}] CONFIG — prosecution_config="
+        f"streaming_provider={_stream_cfg_provider!r}, "
+        f"streaming_model={_stream_cfg_model!r}, "
+        f"ptc_keys={list(ptc.keys())}"
+    )
+    if _stream_cfg_provider and _stream_cfg_model:
+        streaming_provider = Provider(
+            provider_name=_stream_cfg_provider, model=_stream_cfg_model,
+            server_address='', is_local=False,
+        )
+        _pipeline_logger.info(
+            f"[task={task_id}] CONFIG — streaming_provider CREATED: "
+            f"{_stream_cfg_provider}/{_stream_cfg_model}"
+        )
+    else:
+        _pipeline_logger.warning(
+            f"[task={task_id}] CONFIG — streaming_provider SKIPPED: "
+            f"provider={_stream_cfg_provider!r}, model={_stream_cfg_model!r}"
+        )
+
     vision_enabled = ltc.get('vision_enabled', True)
     vision_provider = None
     if vision_enabled:
@@ -4066,41 +4101,54 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             return await _uspto_get_with_retry(url, hdrs, timeout)
 
         _table_rows: list[dict] = [None] * total_dl  # preserve order by index
-        _analyze_sem = asyncio.Semaphore(5)  # caps concurrent OCR + LLM calls
+        _analyze_sem = asyncio.Semaphore(100)  # caps concurrent OCR + LLM calls
         _pending_tasks = []  # list of asyncio.Task
-        _dl_ok = 0
-        _analysis_done = 0
+        _downloaded = 0  # documents downloaded so far
+        _analyzed = 0    # documents with completed (or skipped) analysis
 
         async def _analyze_one(_doc: Any, _i: int) -> None:
-            nonlocal _analysis_done
+            nonlocal _analyzed, _downloaded
             async with _analyze_sem:
                 doc_index = _i + 1
 
-                # ── Vision OCR (if needed, now parallel) ──
-                if (not _doc.text or len(_doc.text.strip()) < 50) \
-                        and _doc.priority == 1 and _doc.binary and vision_enabled:
-                    try:
-                        _text = await _extract_text_via_vision(
-                            _doc.binary, _doc.description, vision_provider,
+                # ── Text extraction (parallel, local-first → Vision fallback) ──
+                if not _doc.text and _doc.binary:
+                    # Step 1: try local qpdf+pdftotext first (fast, no API call)
+                    _local_text = extract_text_from_binary(
+                        _doc.binary, skip_pdf_extraction=False,
+                    )
+                    if _local_text and len(_local_text.strip()) > 50:
+                        _doc.text = _local_text.strip()
+                        _pipeline_logger.info(
+                            f"[task={task_id}] PHASE2 local_extract_ok — "
+                            f"code={_doc.document_code}, idx={doc_index}/{total_dl}, "
+                            f"chars={len(_doc.text)}"
                         )
-                        if _text and len(_text.strip()) > 50:
-                            _doc.text = _text.strip()
-                            _pipeline_logger.info(
-                                f"[task={task_id}] PHASE2 vision_ok — "
-                                f"code={_doc.document_code}, idx={doc_index}/{total_dl}, "
-                                f"chars={len(_doc.text)}"
+                    elif vision_enabled:
+                        # Step 2: Vision LLM OCR (slower but handles scanned PDFs)
+                        try:
+                            _text = await _extract_text_via_vision(
+                                _doc.binary, _doc.description, vision_provider,
                             )
-                    except Exception as _e:
-                        _pipeline_logger.warning(
-                            f"[task={task_id}] PHASE2 vision_error — "
-                            f"code={_doc.document_code}: {type(_e).__name__}: {_e}"
-                        )
+                            if _text and len(_text.strip()) > 50:
+                                _doc.text = _text.strip()
+                                _pipeline_logger.info(
+                                    f"[task={task_id}] PHASE2 vision_ok — "
+                                    f"code={_doc.document_code}, idx={doc_index}/{total_dl}, "
+                                    f"chars={len(_doc.text)}"
+                                )
+                        except Exception as _e:
+                            _pipeline_logger.warning(
+                                f"[task={task_id}] PHASE2 vision_error — "
+                                f"code={_doc.document_code}: {type(_e).__name__}: {_e}"
+                            )
 
                 if not _doc.text or len(_doc.text.strip()) < 50:
                     row = build_failed_row(_doc.document_code, "text extraction failed", columns, lang)
                     row["_failed"] = True
                     row["_summary"] = ""
                     _table_rows[_i] = row
+                    _analyzed += 1  # done with this doc (even though it failed)
                     return
 
                 # ── Analyze (LLM) ──
@@ -4143,13 +4191,15 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                     summary = ""
                 row["_summary"] = summary
                 _table_rows[_i] = row
-                _analysis_done += 1
+                _analyzed += 1
 
+                # Always use max(downloaded, analyzed) so the bar never dips
+                _p = max(_downloaded, _analyzed)
                 update_task_status(
                     task_id, 'analyzing',
-                    progress_pct(_analysis_done, total_dl),
+                    progress_pct(_p, total_dl),
                     _t('prosecution_analyzing', lang,
-                       current=_analysis_done, total=total_dl,
+                       current=_analyzed, total=total_dl,
                        desc=_doc.description[:40]),
                 )
 
@@ -4157,7 +4207,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                     f"[task={task_id}] PHASE2 analysis_complete — "
                     f"code={_doc.document_code}, idx={doc_index}/{total_dl}, "
                     f"summary_chars={len(summary)}, "
-                    f"done={_analysis_done}/{total_dl}"
+                    f"analyzed={_analyzed}/{total_dl}"
                 )
 
         # ── Main pipeline: download sequentially, launch analysis immediately ──
@@ -4165,30 +4215,32 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             doc_index = _i + 1
 
             # ── Stop / Pause checkpoint ──
-            _result = _handle_task_stop(task_id, user_id, _dl_ok, total_dl)
+            _result = _handle_task_stop(task_id, user_id, _downloaded, total_dl)
             if _result:
                 return _result
-            _result = _handle_task_pause(task_id, user_id, _dl_ok, total_dl, {
+            _result = _handle_task_pause(task_id, user_id, _downloaded, total_dl, {
                 'completed': [],
                 'pending': [d.document_code for d in docs_to_download[_i:]],
                 'completed_rows': [r for r in _table_rows if r is not None],
                 'failed': [],
                 'columns': columns,
-                'dl_ok': _dl_ok,
-                'analysis_done': _analysis_done,
+                'downloaded': _downloaded,
+                'analyzed': _analyzed,
             })
             if _result:
                 return _result
 
             # ── Download (sequential) ──
+            # Use max(downloaded, analyzed) so progress never drops when
+            # an analysis completes while downloads are still running.
+            _visible_progress = max(_downloaded, _analyzed)
             update_task_status(
                 task_id, 'downloading',
-                progress_pct(_dl_ok, total_dl),
+                progress_pct(_visible_progress, total_dl),
                 _t('prosecution_downloading', lang, current=doc_index, total=total_dl),
             )
             await download_single_document(_doc, _fetch_prosecution, app_number, headers)
-            if _doc.text:
-                _dl_ok += 1
+            _downloaded += 1
 
             _pipeline_logger.info(
                 f"[task={task_id}] PHASE2 download_done — "
@@ -4200,20 +4252,20 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             _pending_tasks.append(asyncio.create_task(_analyze_one(_doc, _i)))
 
         # ── Wait for all in-flight analyses to finish ──
+        docs_with_text = [d for d in docs_to_download if d.text and len(d.text.strip()) >= 50]
         _pipeline_logger.info(
             f"[task={task_id}] PHASE2 all_downloads_done — "
-            f"ok={_dl_ok}/{total_dl}, waiting_for_{len(_pending_tasks)}_analyses"
+            f"with_text={len(docs_with_text)}/{total_dl}, "
+            f"waiting_for_{len(_pending_tasks)}_analyses"
         )
         if _pending_tasks:
             await asyncio.gather(*_pending_tasks)
 
         # Reconstruct table_rows in original order
         table_rows = [r for r in _table_rows if r is not None]
-        docs_with_text = [d for d in docs_to_download if d.text and len(d.text.strip()) >= 50]
 
         _pipeline_logger.info(
             f"[task={task_id}] PHASE2 COMPLETE — "
-            f"downloaded={_dl_ok}/{total_dl}, "
             f"with_text={len(docs_with_text)}/{total_dl}, "
             f"table_rows={len(table_rows)}, "
             f"failed_rows={sum(1 for r in table_rows if r.get('_failed'))}"
@@ -4255,6 +4307,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             pro_provider=pro_provider,
             lang=lang,
             summary_updater=summary_updater,
+            streaming_provider=streaming_provider,
         )
         _pipeline_logger.info(
             f"[task={task_id}] PHASE3 report_generated — "

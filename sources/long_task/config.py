@@ -61,7 +61,7 @@ def get_long_task_config(config_path: str = 'config.ini') -> dict:
 # ── Prosecution analysis config ───────────────────────────────────────────────
 
 DEFAULT_PROSECUTION_MAX_PAGES_PER_DOC = 100
-DEFAULT_PROSECUTION_INCLUDE_PRIORITY_2 = True
+DEFAULT_PROSECUTION_INCLUDE_PRIORITY_2 = False
 
 
 # ── Patent family analysis config ───────────────────────────────────────────────
@@ -165,22 +165,32 @@ def get_prosecution_config(config_path: str = 'config.ini') -> dict:
 
     Returns:
         dict with keys:
-            max_pages_per_doc (int)  — max pages to download per document (0 = unlimited)
-            include_priority_2 (bool) — whether to include IDS, Interview Summary etc.
+            max_pages_per_doc (int)      — max pages to download per document (0 = unlimited)
+            include_priority_2 (bool)     — whether to include IDS, Interview Summary etc.
+            streaming_provider (str|None) — override LLM provider for streaming report output
+            streaming_model (str|None)    — override LLM model for streaming report output
     """
     cfg = configparser.ConfigParser()
     cfg.read(config_path)
 
     max_pages_per_doc = DEFAULT_PROSECUTION_MAX_PAGES_PER_DOC
     include_priority_2 = DEFAULT_PROSECUTION_INCLUDE_PRIORITY_2
+    streaming_provider = None
+    streaming_model = None
 
     if cfg.has_section('PROSECUTION'):
         max_pages_per_doc = cfg.getint('PROSECUTION', 'max_pages_per_doc',
                                         fallback=DEFAULT_PROSECUTION_MAX_PAGES_PER_DOC)
         include_priority_2 = cfg.getboolean('PROSECUTION', 'include_priority_2',
                                              fallback=DEFAULT_PROSECUTION_INCLUDE_PRIORITY_2)
+        streaming_provider = cfg.get('PROSECUTION', 'streaming_provider',
+                                      fallback=None) or None
+        streaming_model = cfg.get('PROSECUTION', 'streaming_model',
+                                   fallback=None) or None
 
     return {
         'max_pages_per_doc': max_pages_per_doc,
         'include_priority_2': include_priority_2,
+        'streaming_provider': streaming_provider,
+        'streaming_model': streaming_model,
     }

@@ -123,6 +123,15 @@ PRIORITY_1_RULES: dict[str, dict] = {
             "issue notification",
         ],
     },
+    "interview_summary": {
+        "codes": {"EXIN"},
+        "descriptions": [
+            "interview summary",
+            "examiner interview",
+            "interview agenda",
+            "interview record",
+        ],
+    },
 }
 
 PRIORITY_2_RULES: dict[str, dict] = {
@@ -139,16 +148,6 @@ PRIORITY_2_RULES: dict[str, dict] = {
             "information disclosure statement",
             "information disclosure",
             "disclosure statement",
-        ],
-    },
-    "interview_summary": {
-        "codes": {"EXIN", "INTVW"},
-        "descriptions": [
-            "interview summary",
-            "examiner interview",
-            "interview agenda",
-            "interview record",
-            "intervie",
         ],
     },
     "appeal": {
@@ -375,6 +374,24 @@ def classify_prosecution_documents(document_bag: list[dict]) -> ProsecutionDocMa
         else:
             manifest.skipped.append(classified)
 
+    # Deduplicate FWCLM (Index of Claims) — same code+description from
+    # the same amendment round conveys no additional information.
+    _seen_fwclm = set()
+    _deduped_must: list = []
+    for doc in manifest.must_download:
+        if doc.document_code.upper() == 'FWCLM':
+            _key = (doc.document_code.upper(), doc.description.strip().lower())
+            if _key in _seen_fwclm:
+                _logger.info(
+                    f"[prosecution] dedup_fwclm — skipping duplicate: "
+                    f"desc={doc.description[:60]}"
+                )
+                manifest.skipped.append(doc)
+                continue
+            _seen_fwclm.add(_key)
+        _deduped_must.append(doc)
+    manifest.must_download = _deduped_must
+
     _logger.info(
         f"[prosecution] classified documents — "
         f"total={manifest.total_in_bag}, "
@@ -492,8 +509,12 @@ async def download_single_document(
                     elif 'word' in content_type or 'msword' in content_type:
                         doc.file_format = 'DOCX'
 
+                # Skip local text extraction — USPTO prosecution PDFs are
+                # almost always scanned images.  Vision OCR downstream is
+                # both more accurate and avoids 3-8 s of wasted qpdf+pdftotext
+                # per document.
                 extracted = extract_text_from_binary(
-                    resp.content, content_type, url, skip_pdf_extraction=False
+                    resp.content, content_type, url, skip_pdf_extraction=True
                 )
                 if extracted and len(extracted.strip()) > 50:
                     doc.text = extracted.strip()

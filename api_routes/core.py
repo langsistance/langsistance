@@ -469,34 +469,39 @@ def _prepare_long_task_inputs(
         else:
             patent_ids = list(dict.fromkeys(llm_ids)) if llm_ids else list(dict.fromkeys(regex_ids))
 
-        # ── Always read hidden patent_ids from assistant messages ──
+        # ── Read hidden patent_ids from assistant messages ──
         # (emitted by general_agent SSE / long task completion).
         # This is a reliable signal — the backend explicitly placed these
         # IDs in the message, so they are not random 8-digit noise.
-        # Guard against LLM misclassification (e.g. direct_ids for a
-        # follow-up query) by reading them regardless of scenario.
+        #
+        # ONLY read from history when the LLM classified the scenario as
+        # conversation_refs (the user is referring to prior results).
+        # When scenario is direct_ids with empty patent_ids, the LLM has
+        # explicitly determined this is a new, independent topic that
+        # should trigger search mode — do NOT pull stale IDs from history.
         patent_texts = {}
         _msg_patent_ids_found = 0
-        for msg in conv_history:
-            if msg.get('role') == 'assistant':
-                # Read hidden patent_ids array emitted by general_agent / long task
-                hidden_ids = msg.get('patent_ids')
-                if isinstance(hidden_ids, list) and hidden_ids:
-                    _msg_patent_ids_found += len(hidden_ids)
-                    for pid in hidden_ids:
-                        pid = str(pid).strip()
-                        if pid and pid not in patent_ids:
-                            patent_ids.append(pid)
-                # Read patent_data (richer format with spec_text)
-                if msg.get('patent_data'):
-                    for p in msg['patent_data']:
-                        if isinstance(p, dict) and 'patent_id' in p:
-                            pid = str(p['patent_id'])
-                            if pid not in patent_ids:
+        if scenario == "conversation_refs":
+            for msg in conv_history:
+                if msg.get('role') == 'assistant':
+                    # Read hidden patent_ids array emitted by general_agent / long task
+                    hidden_ids = msg.get('patent_ids')
+                    if isinstance(hidden_ids, list) and hidden_ids:
+                        _msg_patent_ids_found += len(hidden_ids)
+                        for pid in hidden_ids:
+                            pid = str(pid).strip()
+                            if pid and pid not in patent_ids:
                                 patent_ids.append(pid)
-                            st = p.get('spec_text', '')
-                            if st and len(st) > 100:
-                                patent_texts[pid] = st
+                    # Read patent_data (richer format with spec_text)
+                    if msg.get('patent_data'):
+                        for p in msg['patent_data']:
+                            if isinstance(p, dict) and 'patent_id' in p:
+                                pid = str(p['patent_id'])
+                                if pid not in patent_ids:
+                                    patent_ids.append(pid)
+                                st = p.get('spec_text', '')
+                                if st and len(st) > 100:
+                                    patent_texts[pid] = st
         patent_texts = patent_texts if patent_texts else None
 
         if app_logger:
@@ -511,28 +516,6 @@ def _prepare_long_task_inputs(
     else:
         # ── Fallback: regex + keyword detection (no LLM available) ──
         patent_ids = list(dict.fromkeys(regex_ids))
-        patent_texts = {}
-        _msg_patent_ids_found = 0
-        for msg in conv_history:
-            if msg.get('role') == 'assistant':
-                # Read hidden patent_ids array emitted by general_agent / long task
-                hidden_ids = msg.get('patent_ids')
-                if isinstance(hidden_ids, list) and hidden_ids:
-                    _msg_patent_ids_found += len(hidden_ids)
-                    for pid in hidden_ids:
-                        pid = str(pid).strip()
-                        if pid and pid not in patent_ids:
-                            patent_ids.append(pid)
-                # Read patent_data (richer format with spec_text)
-                if msg.get('patent_data'):
-                    for p in msg['patent_data']:
-                        if isinstance(p, dict) and 'patent_id' in p:
-                            pid = p['patent_id']
-                            if pid not in patent_ids:
-                                patent_ids.append(pid)
-                            st = p.get('spec_text', '')
-                            if st and len(st) > 100:
-                                patent_texts[pid] = st
 
         query_uspto = _patent_id_re.findall(r'\b(\d{8})\b', query or "")
         query_slash = _patent_id_re.findall(r'\b(\d{2})/(\d{6})\b', query or "")
@@ -545,11 +528,40 @@ def _prepare_long_task_inputs(
         query_is_followup = any(kw in (query or "") for kw in followup_keywords)
 
         scenario = "direct_ids" if (query_has_ids and not query_is_followup) else "conversation_refs"
+
+        # ── Read hidden patent_ids from assistant messages ──
+        # Only when this is a followup query (conversation_refs scenario).
+        # When query has no IDs and is not a followup, it's a new topic
+        # that should trigger search mode — do NOT pull stale IDs from history.
+        patent_texts = {}
+        _msg_patent_ids_found = 0
+        if scenario == "conversation_refs":
+            for msg in conv_history:
+                if msg.get('role') == 'assistant':
+                    # Read hidden patent_ids array emitted by general_agent / long task
+                    hidden_ids = msg.get('patent_ids')
+                    if isinstance(hidden_ids, list) and hidden_ids:
+                        _msg_patent_ids_found += len(hidden_ids)
+                        for pid in hidden_ids:
+                            pid = str(pid).strip()
+                            if pid and pid not in patent_ids:
+                                patent_ids.append(pid)
+                    # Read patent_data (richer format with spec_text)
+                    if msg.get('patent_data'):
+                        for p in msg['patent_data']:
+                            if isinstance(p, dict) and 'patent_id' in p:
+                                pid = p['patent_id']
+                                if pid not in patent_ids:
+                                    patent_ids.append(pid)
+                                st = p.get('spec_text', '')
+                                if st and len(st) > 100:
+                                    patent_texts[pid] = st
+        patent_texts = patent_texts if patent_texts else None
+
         patent_source = _detect_patent_source(
             scene_id=scene_id, conv_history=conv_history, query=query, app_logger=app_logger,
         )
         patent_id_type = "unknown"
-        patent_texts = patent_texts if patent_texts else None
 
     if app_logger:
         app_logger.info(
