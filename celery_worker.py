@@ -1720,17 +1720,32 @@ def execute_family_analysis(self, task_id: str, params: dict):
                     if jp_data.get('progress_count', 0) == 0:
                         fallback_candidates = []
 
-                        # Candidate 1: insert dash after year (2019159764 → 2019-159764)
-                        if len(jp_app_number) == 10 and jp_app_number.isdigit():
-                            dashed = f"{jp_app_number[:4]}-{jp_app_number[4:]}"
-                            if dashed != jp_app_number:
-                                fallback_candidates.append(('dashed', dashed))
-
-                        # Candidate 2: resolve via publication number
-                        if jp_member.pub_number:
+                        # Candidate 1: try different app_number formats
+                        if len(jp_app_number) >= 10 and jp_app_number[:4].isdigit():
+                            _base = __import__('re').sub(r'[^\d]', '', jp_app_number)
+                            if len(_base) == 10:
+                                fallback_candidates.append(
+                                    ('app_fmt', f"{_base[:4]}-{_base[4:]}")
+                                )  # 2019159764 → 2019-159764
                             fallback_candidates.append(
-                                ('pub_lookup', jp_member.pub_number)
-                            )
+                                ('app_fmt', f"JP{_base}")
+                            )  # → JP2019159764
+                            fallback_candidates.append(
+                                ('app_fmt', f"JP{_base[:4]}-{_base[4:]}")
+                            )  # → JP2019-159764
+
+                        # Candidate 2: resolve via publication number.
+                        # JPO API expects full format: JP{pub_number}{kind}
+                        if jp_member.pub_number:
+                            jp_pub = str(jp_member.pub_number).strip()
+                            jp_kind = str(getattr(jp_member, 'pub_kind', '') or '').strip()
+                            # Try with kind code first, then without
+                            fb_pubs = []
+                            if jp_kind:
+                                fb_pubs.append(f"JP{jp_pub}{jp_kind}")
+                            fb_pubs.append(f"JP{jp_pub}")
+                            for fb_pub in fb_pubs:
+                                fallback_candidates.append(('pub_lookup', fb_pub))
 
                         for fb_type, fb_value in fallback_candidates:
                             _pipeline_logger.info(
@@ -1766,7 +1781,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
                                             f"no app_number, ref_keys={list(ref.keys())}"
                                         )
                                         continue
-                                else:
+                                elif fb_type == 'app_fmt':
                                     fallback_jp_data = await fetch_examination_data(
                                         fb_value, jpo,
                                     )
