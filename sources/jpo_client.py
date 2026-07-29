@@ -286,12 +286,13 @@ class JpoClient:
 
             status_code = str(result.get("statusCode", ""))
             if status_code == "100":
-                # Log response keys for debugging (truncate large values)
-                _keys_dbg = {k: (type(v).__name__ if not isinstance(v, (str, int, float, bool, list)) else (len(v) if isinstance(v, (str, list)) else v)) for k, v in result.items() if k != "statusCode"}
+                # JPO API wraps actual data inside a "data" key.
+                # Unwrap it so callers get the data directly.
+                result_data = result.get("data", result)
                 _logger.info(
-                    f"jpo_response_ok — path={path}, keys={_keys_dbg}"
+                    f"jpo_response_ok — path={path}"
                 )
-                return result
+                return result_data
 
             # statusCode != 100 → API error
             error_msg = result.get("errorMessage", "unknown error")
