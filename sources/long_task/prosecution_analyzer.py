@@ -1162,6 +1162,19 @@ async def generate_family_prosecution_report(
                 event_lines.append(f"- {evt}")
         cn_parts.append(f"### CN Review Decisions\n" + "\n".join(event_lines))
     cn_data_text = "\n\n".join(cn_parts) if cn_parts else ""
+    # Mark data depth: only pass to LLM if there's substantive analysis material
+    _cn_has_deep = bool(cn_exam_data.get("events")) if cn_exam_data else False
+    if not _cn_has_deep and cn_data_text:
+        cn_data_text = (
+            "[BASIC DATA ONLY — no examination events available. "
+            "Do NOT create a separate China analysis section. "
+            "Mention key facts (if any) in the Family Overview only.]\n"
+            + cn_data_text
+        ) if lang != "zh" else (
+            "[仅有基础数据—无审查事件。不要创建独立的中国分析章节。"
+            "仅在专利家族概览中提及关键事实（如有）。]\n"
+            + cn_data_text
+        )
 
     # ── JP data context ──
     jp_data_text = ""
@@ -1184,6 +1197,19 @@ async def generate_family_prosecution_report(
             a_str = str(amendments)[:5000] if not isinstance(amendments, str) else amendments[:5000]
             jp_parts.append(f"### JP Amendments\n{a_str}" if lang != "zh" else f"### 日本意見書・補正書\n{a_str}")
         jp_data_text = "\n\n".join(jp_parts)
+        # Mark data depth
+        _jp_has_deep = bool(jp_exam_data.get("refusal_reasons") or jp_exam_data.get("amendments") or (len(jp_exam_data.get("progress", [])) > 3))
+        if not _jp_has_deep and jp_data_text:
+            jp_data_text = (
+                "[BASIC DATA ONLY — no detailed examination events. "
+                "Do NOT create a separate Japan analysis section. "
+                "Mention key facts in the Family Overview only.]\n"
+                + jp_data_text
+            ) if lang != "zh" else (
+                "[仅有基础数据—无详细审查事件。不要创建独立的日本分析章节。"
+                "仅在专利家族概览中提及关键事实。]\n"
+                + jp_data_text
+            )
     # No filler text — empty means LLM skips the section
     # ── EP data context ──
     ep_data_text = ""
@@ -1208,6 +1234,16 @@ async def generate_family_prosecution_report(
                 else f"状态: {status_label}"
             )
         ep_data_text = "\n\n".join(ep_parts)
+        _ep_has_deep = bool(ep_exam_data.get("search_report_text") if ep_exam_data else False)
+        if not _ep_has_deep and ep_data_text:
+            ep_data_text = (
+                "[BASIC DATA ONLY — no search report or examination events. "
+                "Do NOT create a separate EP analysis section.]\n"
+                + ep_data_text
+            ) if lang != "zh" else (
+                "[仅有基础数据—无检索报告或审查事件。不要创建独立的欧洲分析章节。]\n"
+                + ep_data_text
+            )
     # No filler text — empty means LLM skips the section
 
     # ── EP data context ──
@@ -1235,6 +1271,16 @@ async def generate_family_prosecution_report(
                 else f"状态: {status_label}"
             )
         ep_data_text = "\n\n".join(ep_parts)
+        _ep_has_deep2 = bool(ep_exam_data.get("search_report_text") if ep_exam_data else False)
+        if not _ep_has_deep2 and ep_data_text:
+            ep_data_text = (
+                "[BASIC DATA ONLY — no search report or examination events. "
+                "Do NOT create a separate EP analysis section.]\n"
+                + ep_data_text
+            ) if lang != "zh" else (
+                "[仅有基础数据—无检索报告或审查事件。不要创建独立的欧洲分析章节。]\n"
+                + ep_data_text
+            )
     # No filler text — empty means LLM skips the section
 
     # Family overview
