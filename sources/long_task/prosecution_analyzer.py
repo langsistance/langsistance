@@ -1027,8 +1027,6 @@ async def generate_prosecution_report(
         f"## {exec_heading}\n\n"
         f"{exec_summary}\n\n"
         + "\n\n".join(report_parts)
-        + f"\n\n## {analysis_table_heading}\n\n"
-        + table_md
     )
 
     _logger.info(
@@ -1377,9 +1375,6 @@ async def generate_family_prosecution_report(
             "| 日期 | 事件 | 策略意义 |\n"
             "|------|------|--------|\n"
             "\n"
-            # 附录：审查文件分析数据表
-            "以下是AI对各审查文件的逐件分析结果，作为上述策略分析的支撑数据。\n"
-            "\n"
             # ── LEGAL LANGUAGE ──
             "🔴 法律措辞规则：\n"
             "- ❌ 「审查员认可/接受了修改」→ ✅ 「修改后审查员未再基于已引用对比文件提出驳回」\n"
@@ -1463,9 +1458,6 @@ async def generate_family_prosecution_report(
             "5-8 key events:\n"
             "| Date | Event | Strategic Significance |\n"
             "|------|-------|----------------------|\n"
-            "\n"
-            # Appendix: Document Analysis Table
-            "The following is the AI's per-document analysis results, serving as supporting data for the strategic analysis above.\n"
             "\n"
             # ── LEGAL LANGUAGE ──
             "🔴 Legal phrasing rules:\n"
@@ -1573,11 +1565,6 @@ async def generate_family_prosecution_report(
                 report += cn_exam_data["legal_md"] + "\n\n"
             if cn_exam_data.get("claims_md"):
                 report += cn_exam_data["claims_md"] + "\n"
-
-    # Append US analysis table and claim chart at the end
-    table_md = _build_markdown_table(table_rows, columns, lang)
-    analysis_table_heading = _ANALYSIS_TABLE_HEADINGS.get(lang, _ANALYSIS_TABLE_HEADINGS["en"])
-    report += f"\n\n## {analysis_table_heading}\n\n{table_md}"
 
     _logger.info(
         f"[prosecution] family_report_done — total_chars={len(report)}"
