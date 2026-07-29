@@ -221,6 +221,34 @@ async def fetch_examination_data(
     except JpoAPIError as e:
         _logger.warning(f"japan_fetch_citations_failed — app={jp_app_number}: {e}")
 
+    # ── Refusal Reasons (Office Action documents) ──
+    try:
+        refusal_raw = await jpo_client.get_refusal_reasons(jp_app_number)
+        result["refusal_reasons"] = refusal_raw
+        result["has_refusal_reasons"] = bool(refusal_raw)
+        _logger.info(
+            f"japan_fetch_refusal_reasons — app={jp_app_number}, "
+            f"has_data={bool(refusal_raw)}"
+        )
+    except JpoAPIError as e:
+        _logger.warning(f"japan_fetch_refusal_reasons_failed — app={jp_app_number}: {e}")
+        result["refusal_reasons"] = None
+        result["has_refusal_reasons"] = False
+
+    # ── Amendments / Written Opinions (Applicant responses) ──
+    try:
+        amendment_raw = await jpo_client.get_amendments(jp_app_number)
+        result["amendments"] = amendment_raw
+        result["has_amendments"] = bool(amendment_raw)
+        _logger.info(
+            f"japan_fetch_amendments — app={jp_app_number}, "
+            f"has_data={bool(amendment_raw)}"
+        )
+    except JpoAPIError as e:
+        _logger.warning(f"japan_fetch_amendments_failed — app={jp_app_number}: {e}")
+        result["amendments"] = None
+        result["has_amendments"] = False
+
     return result
 
 

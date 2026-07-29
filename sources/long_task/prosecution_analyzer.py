@@ -1174,6 +1174,15 @@ async def generate_family_prosecution_report(
             jp_parts.append(jp_exam_data["registration_md"])
         if jp_exam_data.get("citations_md"):
             jp_parts.append(jp_exam_data["citations_md"])
+        # Include refusal reasons and amendments for deep analysis
+        refusal = jp_exam_data.get("refusal_reasons")
+        if refusal:
+            r_str = str(refusal)[:5000] if not isinstance(refusal, str) else refusal[:5000]
+            jp_parts.append(f"### JP Refusal Reasons\n{r_str}" if lang != "zh" else f"### 日本拒絶理由通知書\n{r_str}")
+        amendments = jp_exam_data.get("amendments")
+        if amendments:
+            a_str = str(amendments)[:5000] if not isinstance(amendments, str) else amendments[:5000]
+            jp_parts.append(f"### JP Amendments\n{a_str}" if lang != "zh" else f"### 日本意見書・補正書\n{a_str}")
         jp_data_text = "\n\n".join(jp_parts)
     # No filler text — empty means LLM skips the section
     # ── EP data context ──

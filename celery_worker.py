@@ -1812,6 +1812,8 @@ def execute_family_analysis(self, task_id: str, params: dict):
                         'progress': jp_data.get('progress', []),
                         'registration': jp_data.get('registration'),
                         'citations': jp_data.get('citations'),
+                        'refusal_reasons': jp_data.get('refusal_reasons'),
+                        'amendments': jp_data.get('amendments'),
                         'timeline_md': build_examination_timeline(jp_data, lang),
                         'registration_md': build_registration_summary(jp_data, lang),
                         'citations_md': build_citations_summary(jp_data, lang),
@@ -1820,7 +1822,9 @@ def execute_family_analysis(self, task_id: str, params: dict):
                         f"[task={task_id}] FAMILY PHASE0.4 jp_data — "
                         f"events={jp_data.get('progress_count', 0)}, "
                         f"has_reg={jp_data.get('has_registration')}, "
-                        f"has_cites={jp_data.get('has_citations')}"
+                        f"has_cites={jp_data.get('has_citations')}, "
+                        f"has_refusal={jp_data.get('has_refusal_reasons')}, "
+                        f"has_amendments={jp_data.get('has_amendments')}"
                     )
                 except Exception as e:
                     _pipeline_logger.warning(
