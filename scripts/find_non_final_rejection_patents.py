@@ -36,16 +36,48 @@ log = logging.getLogger("patent_finder")
 # ── .env loading ────────────────────────────────────────────────────────────────
 
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-try:
-    from dotenv import load_dotenv
 
-    _env_file = os.path.join(_project_root, ".env")
-    if os.path.isfile(_env_file):
-        load_dotenv(_env_file)
-    else:
-        load_dotenv()
-except ImportError:
-    pass
+
+def _load_env_file(env_path: str) -> None:
+    """Load KEY=VALUE pairs from a .env file into os.environ.
+
+    Handles the common subset of .env syntax: export prefix, single/double quotes,
+    comments, and inline comments after values.  Does NOT require python-dotenv.
+    """
+    if not os.path.isfile(env_path):
+        return
+    with open(env_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            # Strip "export " prefix
+            if line.startswith("export "):
+                line = line[7:]
+            if "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip()
+            # Strip surrounding quotes
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+                value = value[1:-1]
+            # Strip inline comments (but not inside quoted strings — kept simple)
+            if value and "#" in value:
+                # Only strip if # is preceded by space (avoids stripping values with #)
+                for i, ch in enumerate(value):
+                    if ch == "#" and (i == 0 or value[i - 1] == " "):
+                        value = value[:i].rstrip()
+                        break
+            if key and not os.environ.get(key):
+                os.environ[key] = value
+
+
+_env_file = os.path.join(_project_root, ".env")
+_load_env_file(_env_file)
+# Also try current directory
+if not os.path.isfile(_env_file):
+    _load_env_file(".env")
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 
@@ -413,8 +445,14 @@ async def main() -> None:
 
     api_key = os.getenv("USPTO_API_KEY", "").strip()
     if not api_key:
-        print("\nERROR: USPTO_API_KEY not configured.")
-        print("Add it to .env:  USPTO_API_KEY=your_key_here")
+        # Debug: show relevant env vars
+        relevant = {k: v[:20] + "..." for k, v in os.environ.items()
+                    if any(kw in k.upper() for kw in ("USPTO", "API_KEY", "PATENT"))}
+        print(f"\nERROR: USPTO_API_KEY not configured.")
+        print(f"  .env path: {_env_file}")
+        print(f"  .env exists: {os.path.isfile(_env_file)}")
+        print(f"  Relevant env vars found: {relevant if relevant else '(none)'}")
+        print(f"\nAdd it to .env:  USPTO_API_KEY=your_key_here")
         sys.exit(1)
 
     matches = await find_patents()
