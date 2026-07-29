@@ -1713,6 +1713,85 @@ def execute_family_analysis(self, task_id: str, params: dict):
                     )
                     jpo = JpoClient(username=jpo_user, password=jpo_pass)
                     jp_data = await fetch_examination_data(jp_app_number, jpo)
+
+                    # ── Fallback: EPO DOCDB app_number format may not match
+                    # what the JPO API expects.  If the primary fetch returned
+                    # zero progress events, try alternative number formats.
+                    if jp_data.get('progress_count', 0) == 0:
+                        fallback_candidates = []
+
+                        # Candidate 1: insert dash after year (2019159764 → 2019-159764)
+                        if len(jp_app_number) == 10 and jp_app_number.isdigit():
+                            dashed = f"{jp_app_number[:4]}-{jp_app_number[4:]}"
+                            if dashed != jp_app_number:
+                                fallback_candidates.append(('dashed', dashed))
+
+                        # Candidate 2: resolve via publication number
+                        if jp_member.pub_number:
+                            fallback_candidates.append(
+                                ('pub_lookup', jp_member.pub_number)
+                            )
+
+                        for fb_type, fb_value in fallback_candidates:
+                            _pipeline_logger.info(
+                                f"[task={task_id}] FAMILY PHASE0.4 jp_fallback — "
+                                f"type={fb_type}, value={fb_value}"
+                            )
+                            try:
+                                if fb_type == 'pub_lookup':
+                                    from sources.jpo_client import JpoAPIError as _JpoErr
+                                    ref = await jpo.lookup_number_relation(
+                                        'publication', fb_value,
+                                    )
+                                    fb_app = (
+                                        ref.get('applicationNumber')
+                                        or ref.get('applicationDocNum')
+                                        or ref.get('appNumber')
+                                        or ''
+                                    )
+                                    if fb_app:
+                                        fb_app = str(fb_app).strip()
+                                        _pipeline_logger.info(
+                                            f"[task={task_id}] FAMILY PHASE0.4 "
+                                            f"jp_fallback — pub_lookup resolved "
+                                            f"app_number={fb_app}"
+                                        )
+                                        fallback_jp_data = await fetch_examination_data(
+                                            fb_app, jpo,
+                                        )
+                                    else:
+                                        _pipeline_logger.warning(
+                                            f"[task={task_id}] FAMILY PHASE0.4 "
+                                            f"jp_fallback — pub_lookup returned "
+                                            f"no app_number, ref_keys={list(ref.keys())}"
+                                        )
+                                        continue
+                                else:
+                                    fallback_jp_data = await fetch_examination_data(
+                                        fb_value, jpo,
+                                    )
+
+                                if fallback_jp_data.get('progress_count', 0) > 0:
+                                    jp_data = fallback_jp_data
+                                    if fb_type == 'pub_lookup':
+                                        jp_app_number = str(ref.get(
+                                            'applicationNumber',
+                                            ref.get('applicationDocNum', ''),
+                                        )).strip()
+                                    else:
+                                        jp_app_number = fb_value
+                                    _pipeline_logger.info(
+                                        f"[task={task_id}] FAMILY PHASE0.4 "
+                                        f"jp_fallback — SUCCESS with type={fb_type}, "
+                                        f"events={jp_data.get('progress_count', 0)}"
+                                    )
+                                    break
+                            except Exception as _fe:
+                                _pipeline_logger.warning(
+                                    f"[task={task_id}] FAMILY PHASE0.4 "
+                                    f"jp_fallback_{fb_type}_failed — {_fe}"
+                                )
+
                     jp_exam_data = {
                         'jp_app_number': jp_app_number,
                         'progress': jp_data.get('progress', []),
