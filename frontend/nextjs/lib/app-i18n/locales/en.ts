@@ -188,6 +188,10 @@ export default {
     titleSubmitted: 'Analysis Submitted',
     titleRunning: 'Analysis In Progress',
 
+    // Analysis type badges
+    badgeFamily: 'Cross-Jurisdiction',
+    badgeProsecution: 'US Prosecution',
+
     // Action button tooltips
     actionPause: 'Pause',
     actionResume: 'Resume',

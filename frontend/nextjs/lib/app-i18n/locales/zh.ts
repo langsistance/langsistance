@@ -188,6 +188,10 @@ export default {
     titleSubmitted: '深度分析已提交',
     titleRunning: '深度分析进行中',
 
+    // Analysis type badges
+    badgeFamily: '跨国同族分析',
+    badgeProsecution: '美国审查分析',
+
     // Action button tooltips
     actionPause: '暂停',
     actionResume: '继续',

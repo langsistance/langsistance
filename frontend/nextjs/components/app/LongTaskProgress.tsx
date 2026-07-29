@@ -419,15 +419,13 @@ export default function LongTaskProgress({ content, resultSummary, streaming, an
             ? t('longTask.titlePaused')
             : state.phase === 'submitted'
             ? t('longTask.titleSubmitted')
-            : isFamily
-            ? t('longTask.titleRunningFamily')
             : t('longTask.titleRunning')}
         </span>
         {isFamily && (
-          <span className="lt-analysis-badge family">跨国同族分析</span>
+          <span className="lt-analysis-badge family">{t('longTask.badgeFamily')}</span>
         )}
         {analysisType === 'prosecution' && !isFamily && (
-          <span className="lt-analysis-badge prosecution">美国审查分析</span>
+          <span className="lt-analysis-badge prosecution">{t('longTask.badgeProsecution')}</span>
         )}
         {state.taskId && (
           <span className="lt-progress-id">{state.taskId}</span>
