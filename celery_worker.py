@@ -1621,7 +1621,8 @@ def execute_family_analysis(self, task_id: str, params: dict):
         family_overview = _build_family_overview_status(family, lang)
         update_task_status(task_id, 'preparing', 5,
                            family_overview.get('step_msg', ''),
-                           family_overview=family_overview)
+                           family_overview=family_overview,
+                           analysis_type='family')
 
         # ═════════════════════════════════════════════════════════════════
         # Phase 0.3: China examination data (if CN member exists)
@@ -1989,7 +1990,8 @@ def execute_family_analysis(self, task_id: str, params: dict):
         )
         update_task_status(task_id, 'generating_columns', 12,
                            f'分析维度：{" | ".join(columns[1:4])}...',
-                           table_columns=columns)
+                           table_columns=columns,
+                           analysis_type='family')
         _update_mysql_progress(task_id, 'generating_columns', 12)
 
         # ═════════════════════════════════════════════════════════════════
@@ -2107,6 +2109,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
                        current=_analyzed, total=total_dl,
                        desc=_doc.description[:40]),
                     table_rows=[r for r in _table_rows if r is not None],
+                    table_columns=columns,
                 )
                 _pipeline_logger.info(
                     f"[task={task_id}] FAMILY PHASE2 analysis_done — "
@@ -4210,7 +4213,8 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         )
         update_task_status(task_id, 'generating_columns', 5,
                            f'分析维度：{" | ".join(columns[1:4])}...',
-                           table_columns=columns)
+                           table_columns=columns,
+                           analysis_type='prosecution')
         _update_mysql_progress(task_id, 'generating_columns', 5)
 
         # ═════════════════════════════════════════════════════════════════
@@ -4326,12 +4330,15 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
 
                 # Always use max(downloaded, analyzed) so the bar never dips
                 _p = max(_downloaded, _analyzed)
+                _visible_rows = [r for r in _table_rows if r is not None]
                 update_task_status(
                     task_id, 'analyzing',
                     progress_pct(_p, total_dl),
                     _t('prosecution_analyzing', lang,
                        current=_analyzed, total=total_dl,
                        desc=_doc.description[:40]),
+                    table_rows=_visible_rows,
+                    table_columns=columns,
                 )
 
                 _pipeline_logger.info(

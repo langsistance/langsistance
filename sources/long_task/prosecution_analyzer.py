@@ -1387,6 +1387,9 @@ async def generate_family_prosecution_report(
             "置信度标记（每句策略陈述使用）：\n"
             "- ✅ 审查文件记载 | 📋 合理推断 | ❓ 数据不足\n"
             "\n"
+            "🚫 禁止输出：审查文件分析数据表、逐文件明细表、任何形式的 full document-by-document analysis table。\n"
+            "报告只包含策略分析，不包含数据明细。\n"
+            "\n"
             "直接输出 Markdown，不要 JSON。\n"
         )
     else:
@@ -1470,6 +1473,9 @@ async def generate_family_prosecution_report(
             # ── CONFIDENCE ──
             "Confidence markers (use on every strategic statement):\n"
             "- ✅ Documented in file | 📋 Reasonable inference | ❓ Insufficient data\n"
+            "\n"
+            "🚫 DO NOT output: document-by-document analysis tables, full per-document data tables, or any form of appendix with row-by-row analysis data.\n"
+            "Report contains strategic analysis only, NOT data tables.\n"
             "\n"
             "Output Markdown directly, no JSON.\n"
         )
