@@ -286,8 +286,10 @@ class JpoClient:
 
             status_code = str(result.get("statusCode", ""))
             if status_code == "100":
+                # Log response keys for debugging (truncate large values)
+                _keys_dbg = {k: (type(v).__name__ if not isinstance(v, (str, int, float, bool, list)) else (len(v) if isinstance(v, (str, list)) else v)) for k, v in result.items() if k != "statusCode"}
                 _logger.info(
-                    f"jpo_response_ok — path={path}"
+                    f"jpo_response_ok — path={path}, keys={_keys_dbg}"
                 )
                 return result
 

@@ -174,9 +174,15 @@ async def fetch_examination_data(
         events = parse_jp_progress_events(progress_raw)
         result["progress"] = events
         result["progress_count"] = len(events)
-        _logger.info(
-            f"japan_fetch_progress — app={jp_app_number}, events={len(events)}"
-        )
+        if not events:
+            _logger.warning(
+                f"japan_fetch_progress_empty — app={jp_app_number}, "
+                f"raw_keys={list(progress_raw.keys()) if isinstance(progress_raw, dict) else type(progress_raw).__name__}"
+            )
+        else:
+            _logger.info(
+                f"japan_fetch_progress — app={jp_app_number}, events={len(events)}"
+            )
     except JpoAPIError as e:
         _logger.warning(f"japan_fetch_progress_failed — app={jp_app_number}: {e}")
 
