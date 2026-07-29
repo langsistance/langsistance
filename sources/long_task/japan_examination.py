@@ -175,9 +175,19 @@ async def fetch_examination_data(
         result["progress"] = events
         result["progress_count"] = len(events)
         if not events:
+            # Log full data structure to diagnose key mismatches
+            _dbg = {}
+            if isinstance(progress_raw, dict):
+                for k, v in progress_raw.items():
+                    if isinstance(v, dict):
+                        _dbg[k] = f"dict(keys={list(v.keys())[:10]})"
+                    elif isinstance(v, list):
+                        _dbg[k] = f"list(len={len(v)})"
+                    else:
+                        _dbg[k] = type(v).__name__
             _logger.warning(
                 f"japan_fetch_progress_empty — app={jp_app_number}, "
-                f"raw_keys={list(progress_raw.keys()) if isinstance(progress_raw, dict) else type(progress_raw).__name__}"
+                f"data_structure={_dbg}"
             )
         else:
             _logger.info(

@@ -1278,7 +1278,9 @@ async def generate_family_prosecution_report(
             "⚡ 核心原则：事件描述 30% + 策略分析 70%。\n"
             "- 不要逐个文件总结！不要为每个 OA 写 500 字！\n"
             "- 合并同一审查阶段的文件为一个策略事件\n"
-            "- 每个事件 = 日期 + 一句话策略意义（不是什么，而是意味着什么）\n\n"
+            "- 每个事件 = 日期 + 一句话策略意义（不是什么，而是意味着什么）\n"
+            "- ⚠️ 只包含有数据的国家！无数据的国家直接跳过，不写空章节。\n"
+            "- 如果某国数据为空 → 直接不出现该国章节，不写「无XX审查数据」。\n\n"
             # ── Report structure ──
             "按以下结构输出 Markdown 报告：\n\n"
             "# Executive Strategy Summary\n"
@@ -1458,7 +1460,9 @@ async def generate_family_prosecution_report(
             "⚡ CRITICAL: 30% event description + 70% strategy analysis.\n"
             "- Do NOT summarize every document individually!\n"
             "- Merge documents from the same stage into strategy events\n"
-            "- Each event = date + one sentence on strategic significance (not 'what happened' but 'what this MEANS')\n\n"
+            "- Each event = date + one sentence on strategic significance (not 'what happened' but 'what this MEANS')\n"
+            "- ⚠️ ONLY include jurisdictions with actual data! Skip countries with no data entirely.\n"
+            "- If a jurisdiction has zero data → do NOT create a section for it. No 'No data available' filler.\n\n"
             # ── Report structure ──
             "Output the following Markdown structure:\n\n"
             "# Executive Strategy Summary\n"
