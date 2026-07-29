@@ -175,7 +175,7 @@ def _classify_document(doc: dict) -> dict | None:
     }
 
 
-# ── HTTP helpers ────────────────────────────────────────────────────────────────
+# ── HTTP helpers (stdlib only: urllib) ──────────────────────────────────────────
 
 
 def _get_headers(content_type: bool = True) -> dict[str, str]:
@@ -189,60 +189,65 @@ def _get_headers(content_type: bool = True) -> dict[str, str]:
 
 
 def _http_post(url: str, json_body: dict, timeout: int = 30) -> Any:
-    """POST with USPTO retry logic."""
-    import requests
+    """POST with USPTO retry logic — uses stdlib urllib."""
+    import json
+    import urllib.request
+    import urllib.error
 
+    data = json.dumps(json_body).encode("utf-8")
     headers = _get_headers()
     last_status = None
+
     for attempt in range(USPTO_MAX_RETRIES):
         try:
-            resp = requests.post(url, headers=headers, json=json_body, timeout=timeout)
-        except requests.RequestException as e:
+            req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = resp.read().decode("utf-8")
+                return json.loads(body) if body else {}
+        except urllib.error.HTTPError as e:
+            last_status = e.code
+            if e.code in (400, 429) and attempt + 1 < USPTO_MAX_RETRIES:
+                log.info(f"USPTO {e.code} retry {attempt + 1}/{USPTO_MAX_RETRIES}")
+                time.sleep(USPTO_RETRY_DELAY)
+                continue
+            log.error(f"USPTO HTTP {e.code} for {url[:100]}")
+            return None
+        except Exception as e:
             log.warning(f"HTTP POST error (attempt {attempt + 1}): {e}")
             time.sleep(USPTO_RETRY_DELAY)
             continue
-
-        if resp.status_code in (400, 429) and attempt + 1 < USPTO_MAX_RETRIES:
-            last_status = resp.status_code
-            log.info(f"USPTO {resp.status_code} retry {attempt + 1}/{USPTO_MAX_RETRIES}")
-            time.sleep(USPTO_RETRY_DELAY)
-            continue
-
-        if resp.status_code != 200:
-            log.error(f"USPTO HTTP {resp.status_code} for {url[:100]}")
-            return None
-
-        return resp.json() if resp.text else {}
 
     log.error(f"USPTO retries exhausted (last status={last_status})")
     return None
 
 
 def _http_get(url: str, timeout: int = 20) -> Any:
-    """GET with USPTO retry logic."""
-    import requests
+    """GET with USPTO retry logic — uses stdlib urllib."""
+    import json
+    import urllib.request
+    import urllib.error
 
     headers = _get_headers(content_type=False)
     last_status = None
+
     for attempt in range(USPTO_MAX_RETRIES):
         try:
-            resp = requests.get(url, headers=headers, timeout=timeout)
-        except requests.RequestException as e:
+            req = urllib.request.Request(url, headers=headers, method="GET")
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = resp.read().decode("utf-8")
+                return json.loads(body) if body else {}
+        except urllib.error.HTTPError as e:
+            last_status = e.code
+            if e.code in (400, 429) and attempt + 1 < USPTO_MAX_RETRIES:
+                log.info(f"USPTO {e.code} retry {attempt + 1}/{USPTO_MAX_RETRIES}")
+                time.sleep(USPTO_RETRY_DELAY)
+                continue
+            log.warning(f"USPTO HTTP {e.code} for {url[:100]}")
+            return None
+        except Exception as e:
             log.warning(f"HTTP GET error (attempt {attempt + 1}): {e}")
             time.sleep(USPTO_RETRY_DELAY)
             continue
-
-        if resp.status_code in (400, 429) and attempt + 1 < USPTO_MAX_RETRIES:
-            last_status = resp.status_code
-            log.info(f"USPTO {resp.status_code} retry {attempt + 1}/{USPTO_MAX_RETRIES}")
-            time.sleep(USPTO_RETRY_DELAY)
-            continue
-
-        if resp.status_code != 200:
-            log.warning(f"USPTO HTTP {resp.status_code} for {url[:100]}")
-            return None
-
-        return resp.json() if resp.text else {}
 
     log.error(f"USPTO retries exhausted (last status={last_status})")
     return None
