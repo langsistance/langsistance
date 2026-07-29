@@ -2016,8 +2016,9 @@ def execute_family_analysis(self, task_id: str, params: dict):
         _pending_tasks = []  # list of asyncio.Task
         _downloaded = 0  # documents downloaded so far
         _analyzed = 0    # documents with completed (or skipped) analysis
+        from typing import Any as _AnyFam  # for type annotation in inner function
 
-        async def _analyze_one(_doc: Any, _i: int) -> None:
+        async def _analyze_one(_doc: _AnyFam, _i: int) -> None:
             nonlocal _analyzed, _downloaded
             async with _analyze_sem:
                 doc_index = _i + 1
