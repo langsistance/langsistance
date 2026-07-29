@@ -357,24 +357,24 @@ def normalize_jp_application_number(raw: str) -> str:
 def parse_jp_progress_events(progress_data: dict[str, Any]) -> list[dict[str, Any]]:
     """Parse JPO patent progress response into a list of examination events.
 
-    The JPO API returns::
+    The JPO ``app_progress`` API may return two different structures:
+
+    1. With progress events (has ``progressList`` key)::
 
         {"progressList": [
-            {"event": "出願", "eventDate": "2020-08-25", "eventCategory": "A01", ...},
-            {"event": "出願公開", "eventDate": "2021-03-25", ...},
+            {"event": "出願", "eventDate": "2020-08-25", ...},
             ...
         ]}
 
-    Returns a list of events sorted by date, each with:
-      - event: human-readable event name (Japanese)
-      - eventDate: ISO date string
-      - eventCategory: JPO category code
-      - eventDetail: additional detail if available
-      - eventRemarks: remarks if available
+    2. Bibliographic-only (no ``progressList`` — common for PCT national-phase
+       entries).  In this case we synthesize timeline events from the date fields
+       (filing, publication, registration).
+
+    Returns a list of events sorted by date.
     """
     progress_list = progress_data.get("progressList", [])
     if not isinstance(progress_list, list):
-        return []
+        progress_list = []
 
     events = []
     for item in progress_list:
@@ -390,8 +390,59 @@ def parse_jp_progress_events(progress_data: dict[str, Any]) -> list[dict[str, An
             "event_number": item.get("eventNumber", ""),
         })
 
+    # ── Fallback: synthesize from bibliographic dates ──────────────────────
+    if not events:
+        events = _synthesize_progress_from_biblio(progress_data)
+
     # Sort by date
     events.sort(key=lambda e: e.get("event_date", ""))
+    return events
+
+
+def _synthesize_progress_from_biblio(
+    data: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Build a minimal timeline from bibliographic date fields.
+
+    Used when the JPO ``app_progress`` endpoint returns only bibliographic
+    data (no ``progressList``), which is common for PCT national-phase entries.
+    """
+    events: list[dict[str, Any]] = []
+
+    # Filing date
+    filing = data.get("filingDate", "")
+    if filing:
+        events.append({
+            "event": "出願",
+            "event_date": filing,
+            "event_category": "A01",
+            "event_detail": data.get("inventionTitle", ""),
+            "event_remarks": "",
+        })
+
+    # Publication date
+    pub_date = data.get("publicationDate", "")
+    if pub_date:
+        events.append({
+            "event": "出願公開",
+            "event_date": pub_date,
+            "event_category": "B01",
+            "event_detail": data.get("publicationNumber", ""),
+            "event_remarks": "",
+        })
+
+    # Registration (grant) date
+    reg_date = data.get("registrationDate", "")
+    reg_num = data.get("registrationNumber", "")
+    if reg_date:
+        events.append({
+            "event": "特許登録",
+            "event_date": reg_date,
+            "event_category": "G01",
+            "event_detail": reg_num or "",
+            "event_remarks": "",
+        })
+
     return events
 
 

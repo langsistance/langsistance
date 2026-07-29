@@ -1161,10 +1161,7 @@ async def generate_family_prosecution_report(
             else:
                 event_lines.append(f"- {evt}")
         cn_parts.append(f"### CN Review Decisions\n" + "\n".join(event_lines))
-    cn_data_text = "\n\n".join(cn_parts) if cn_parts else (
-        "No China examination data available." if lang != "zh"
-        else "无中国审查数据。"
-    )
+    cn_data_text = "\n\n".join(cn_parts) if cn_parts else ""
 
     # ── JP data context ──
     jp_data_text = ""
@@ -1178,11 +1175,7 @@ async def generate_family_prosecution_report(
         if jp_exam_data.get("citations_md"):
             jp_parts.append(jp_exam_data["citations_md"])
         jp_data_text = "\n\n".join(jp_parts)
-    if not jp_data_text:
-        jp_data_text = (
-            "No Japan examination data available." if lang != "zh"
-            else "无日本审查数据。"
-        )
+    # No filler text — empty means LLM skips the section
     # ── EP data context ──
     ep_data_text = ""
     if ep_exam_data:
@@ -1206,11 +1199,7 @@ async def generate_family_prosecution_report(
                 else f"状态: {status_label}"
             )
         ep_data_text = "\n\n".join(ep_parts)
-    if not ep_data_text:
-        ep_data_text = (
-            "No European examination data available." if lang != "zh"
-            else "无欧洲审查数据。"
-        )
+    # No filler text — empty means LLM skips the section
 
     # ── EP data context ──
     ep_data_text = ""
@@ -1237,11 +1226,7 @@ async def generate_family_prosecution_report(
                 else f"状态: {status_label}"
             )
         ep_data_text = "\n\n".join(ep_parts)
-    if not ep_data_text:
-        ep_data_text = (
-            "No European examination data available." if lang != "zh"
-            else "无欧洲审查数据。"
-        )
+    # No filler text — empty means LLM skips the section
 
     # Family overview
     family_text = ""
@@ -1365,25 +1350,16 @@ async def generate_family_prosecution_report(
             "| Claim 限制 | 对比文献 | 审查员论点 | 申请人回应 | 结果 |\n"
             "|-----------|---------|----------|----------|------|\n"
             "| [具体特征] | [文献号] | [为什么认为覆盖] | [争辩 or 修改] | ✅ 克服 / ❌ 未克服 / ❓ |\n\n"
-            "# 6. China Examination Analysis\n"
-            "⚠️ 中国数据通常不如美国丰富。不要编造。诚实标注数据缺口。\n\n"
-            "## 审查意见通知书分析\n"
-            "如果能获取到中国 OA 信息：\n"
-            "| OA | 日期 | 驳回理由 | 引用文献 | 审查员观点（创造性三步法） |\n"
-            "|----|------|---------|---------|-------------------------|\n"
-            "如果没有 OA 全文 → 直接写「❓ 未获取到中国审查意见通知书全文」。\n\n"
-            "## 区别技术特征分析\n"
-            "如果能获取到答复意见：\n"
-            "| 区别技术特征 | 审查员观点 | 申请人回应 | 最终结果 |\n"
-            "|------------|----------|----------|---------|\n"
-            "如果没有 → 写「❓ 中国审查答复细节未公开」。\n\n"
-            "## 中国审查结论\n"
-            "根据可用数据总结：授权/驳回/待审 + 置信度。\n\n"
-            "# 7. Japan Examination Analysis\n"
-            "日本审查数据（如果有），同样用策略视角分析。\n"
-            "如果没有实质审查数据，诚实标注并给出基本状态。\n\n"
-            "# 8. European Examination Analysis\n"
-            "欧洲审查数据（如果有），重点关注检索意见中的初步可专利性评估。\n\n"
+            "# 6-N. Jurisdiction-Specific Analysis\n"
+            "⚠️ 以下章节仅在有实际数据时才输出。无数据的国家不产生任何章节。\n\n"
+            "## China Examination Analysis（仅当有中国审查数据时）\n"
+            "⚠️ 中国数据通常不如美国丰富。不要编造。诚实标注数据缺口。\n"
+            "如果能获取到中国 OA 信息 → 分析创造性三步法。\n"
+            "如果没有数据 → 完全跳过此章节，不要输出「无中国审查数据」。\n\n"
+            "## Japan Examination Analysis（仅当有日本审查数据时）\n"
+            "有数据时用策略视角分析。无数据 → 完全跳过，不输出空章节。\n\n"
+            "## European Examination Analysis（仅当有欧洲审查数据时）\n"
+            "重点关注检索意见。无数据 → 完全跳过，不输出空章节。\n\n"
             "# 9. Cross-Jurisdiction Comparison\n"
             "对比各国审查差异：\n"
             "| Dimension | US | CN | JP | EP |\n"
@@ -1545,24 +1521,16 @@ async def generate_family_prosecution_report(
             "| Claim Limitation | Prior Art | Examiner's Position | Applicant's Response | Result |\n"
             "|-----------------|-----------|--------------------|---------------------|--------|\n"
             "| [specific feature] | [ref #] | [why it was considered to read on] | [argument or amendment] | ✅/❌/❓ |\n\n"
-            "# 6. China Examination Analysis\n"
-            "⚠️ CN data is typically less detailed than US. DO NOT fabricate. Mark gaps honestly.\n\n"
-            "## Office Action Analysis\n"
-            "If CN OA info is available:\n"
-            "| OA | Date | Rejection Grounds | References | Examiner's View (3-step inventiveness) |\n"
-            "|----|------|-----------------|-----------|--------------------------------------|\n"
-            "If OA full text is not available → state '❓ CN Office Action full text not available'.\n\n"
-            "## Distinguishing Feature Analysis\n"
-            "If response info is available:\n"
-            "| Distinguishing Feature | Examiner's View | Applicant's Response | Outcome |\n"
-            "|----------------------|----------------|---------------------|--------|\n"
-            "If not → state '❓ CN response details not publicly available'.\n\n"
-            "## China Conclusion\n"
-            "Based on available data: granted/refused/pending + confidence level.\n\n"
-            "# 7. Japan Examination Analysis\n"
-            "JP examination data with strategy lens, or honest data-gap marking.\n\n"
-            "# 8. European Examination Analysis\n"
-            "EP examination data — focus on search opinion's preliminary patentability assessment.\n\n"
+            "# 6-N. Jurisdiction-Specific Analysis\n"
+            "⚠️ Only output these sections if actual data exists for that jurisdiction. "
+            "Skip entirely if no data — do NOT create empty placeholder sections.\n\n"
+            "## China Examination Analysis (ONLY if CN data exists)\n"
+            "CN data is typically less detailed than US. DO NOT fabricate.\n"
+            "If NO data → skip this section entirely.\n\n"
+            "## Japan Examination Analysis (ONLY if JP data exists)\n"
+            "Strategy lens if data available. If NOT → skip entirely.\n\n"
+            "## European Examination Analysis (ONLY if EP data exists)\n"
+            "Focus on search opinion. If NOT → skip entirely.\n\n"
             "# 9. Cross-Jurisdiction Comparison\n"
             "| Dimension | US | CN | JP | EP |\n"
             "|-----------|----|----|----|----|\n"
@@ -1631,13 +1599,10 @@ async def generate_family_prosecution_report(
         f"Analysis dimensions: {', '.join(columns)}\n"
         f"Documents analyzed: {len(table_rows)}\n\n"
         f"{us_data_text}\n\n"
-        f"=== CHINA EXAMINATION DATA ===\n"
-        f"{cn_data_text}\n\n"
-        f"=== JAPAN EXAMINATION DATA ===\n"
-        f"{jp_data_text}\n\n"
-        f"=== EUROPEAN EXAMINATION DATA ===\n"
-        f"{ep_data_text}\n\n"
-        f"Generate the AI Patent Prosecution Intelligence Report.\n"
+        + (f"=== CHINA EXAMINATION DATA ===\n{cn_data_text}\n\n" if cn_data_text else "")
+        + (f"=== JAPAN EXAMINATION DATA ===\n{jp_data_text}\n\n" if jp_data_text else "")
+        + (f"=== EUROPEAN EXAMINATION DATA ===\n{ep_data_text}\n\n" if ep_data_text else "")
+        + f"Generate the AI Patent Prosecution Intelligence Report.\n"
         f"CRITICAL: 70% strategy analysis + 30% event description. "
         f"Do NOT describe what happened — reveal WHY and WHAT IT MEANS. "
         f"Focus on: claim evolution, prior art battle, allowance driver, invalidity risk assessment."
@@ -1649,13 +1614,10 @@ async def generate_family_prosecution_report(
         f"Analysis dimensions: {', '.join(columns)}\n"
         f"Documents analyzed: {len(table_rows)}\n\n"
         f"{us_data_text}\n\n"
-        f"=== CHINA EXAMINATION DATA ===\n"
-        f"{cn_data_text}\n\n"
-        f"=== JAPAN EXAMINATION DATA ===\n"
-        f"{jp_data_text}\n\n"
-        f"=== EUROPEAN EXAMINATION DATA ===\n"
-        f"{ep_data_text}\n\n"
-        f"Generate the AI Patent Prosecution Intelligence Report.\n"
+        + (f"=== CHINA EXAMINATION DATA ===\n{cn_data_text}\n\n" if cn_data_text else "")
+        + (f"=== JAPAN EXAMINATION DATA ===\n{jp_data_text}\n\n" if jp_data_text else "")
+        + (f"=== EUROPEAN EXAMINATION DATA ===\n{ep_data_text}\n\n" if ep_data_text else "")
+        + f"Generate the AI Patent Prosecution Intelligence Report.\n"
         f"CRITICAL: 70% strategy analysis + 30% event description. "
         f"Do NOT describe what happened — reveal WHY and WHAT IT MEANS. "
         f"Focus on: claim evolution, prior art battle, allowance driver, invalidity risk assessment."
