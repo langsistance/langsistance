@@ -8,6 +8,9 @@ interface Props {
   content: string
   resultSummary?: string
   streaming: boolean
+  analysisType?: string
+  tableColumns?: string[]
+  familyOverview?: Record<string, any>
 }
 
 interface TaskState {
@@ -331,7 +334,7 @@ async function callLongTaskApi(taskId: string, action: 'pause' | 'resume' | 'sto
 // LongTaskProgress — main component
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export default function LongTaskProgress({ content, resultSummary, streaming }: Props) {
+export default function LongTaskProgress({ content, resultSummary, streaming, analysisType, tableColumns, familyOverview }: Props) {
   const { t } = useI18n()
   const state = parseTaskContent(content)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
@@ -340,10 +343,10 @@ export default function LongTaskProgress({ content, resultSummary, streaming }: 
     [resultSummary],
   )
 
-  // Detect family mode and jurisdictions
+  // Detect family mode: use explicit analysisType from backend, fall back to keyword matching
   const stepLabel = state?.stepLabel || ''
-  const isFamily = isFamilyMode(content, stepLabel)
-  const jurisdictions = isFamily ? extractJurisdictions(content, stepLabel) : []
+  const isFamily = analysisType === 'family' || isFamilyMode(content, stepLabel)
+  const jurisdictions: string[] = (familyOverview?.jurisdictions as string[]) || (isFamily ? extractJurisdictions(content, stepLabel) : [])
 
   const summaryStreaming = Boolean(
     resultSummary
@@ -416,8 +419,16 @@ export default function LongTaskProgress({ content, resultSummary, streaming }: 
             ? t('longTask.titlePaused')
             : state.phase === 'submitted'
             ? t('longTask.titleSubmitted')
+            : isFamily
+            ? t('longTask.titleRunningFamily')
             : t('longTask.titleRunning')}
         </span>
+        {isFamily && (
+          <span className="lt-analysis-badge family">跨国同族分析</span>
+        )}
+        {analysisType === 'prosecution' && !isFamily && (
+          <span className="lt-analysis-badge prosecution">美国审查分析</span>
+        )}
         {state.taskId && (
           <span className="lt-progress-id">{state.taskId}</span>
         )}

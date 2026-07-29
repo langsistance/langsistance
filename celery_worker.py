@@ -5354,27 +5354,6 @@ async def export_docx_async(report_text: str, table_rows: list, columns: list, l
 
         _md_to_docx(doc, report_text)
 
-        # Add analysis table at the end
-        if table_rows and columns:
-            h = doc.add_heading(_t('default_analysis_table', lang), level=2)
-            _set_heading_font(h)
-            tbl = doc.add_table(rows=1, cols=len(columns))
-            tbl.style = 'Table Grid'
-            # Header row
-            for ci, col in enumerate(columns):
-                cell = tbl.rows[0].cells[ci]
-                cell.text = ''
-                run = cell.paragraphs[0].add_run(str(col))
-                _set_run_font(run, bold=True)
-            # Data rows
-            for row_data in table_rows:
-                row = tbl.add_row()
-                for ci, col in enumerate(columns):
-                    cell = row.cells[ci]
-                    cell.text = ''
-                    run = cell.paragraphs[0].add_run(str(row_data.get(col, '')))
-                    _set_run_font(run)
-
         buf = io.BytesIO()
         doc.save(buf)
         return buf.getvalue()
