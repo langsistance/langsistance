@@ -326,6 +326,7 @@ _STATUS_MSGS = {
         "prosecution_framework": "正在生成分析框架（{total} 个审查文件）...",
         "prosecution_downloading": "正在下载审查文件（{current}/{total}）...",
         "prosecution_ocr": "正在OCR识别（{current}/{total}）...",
+        "prosecution_progress": "已分析 {current}/{total} 个文件",
         "prosecution_analyzing": "正在分析（{current}/{total}）：{desc}",
         "prosecution_all_failed": "所有审查文件处理失败。文件可能是扫描件或加密PDF。",
         "prosecution_report_complete": "报告撰写完成",
@@ -387,6 +388,7 @@ _STATUS_MSGS = {
         "prosecution_framework": "Building analysis framework ({total} prosecution documents)...",
         "prosecution_downloading": "Downloading documents ({current}/{total})...",
         "prosecution_ocr": "OCR processing {current}/{total}...",
+        "prosecution_progress": "{current}/{total} documents analyzed",
         "prosecution_analyzing": "Analyzing {current}/{total}: {desc}",
         "prosecution_all_failed": "All prosecution documents failed processing. Files may be scanned images or encrypted PDFs.",
         "prosecution_report_complete": "Report writing complete",
@@ -1657,6 +1659,9 @@ def execute_family_analysis(self, task_id: str, params: dict):
             _priority_order.index(c) if c in _priority_order else 99, c,
         ))
         for _code in _all_codes:
+            # Skip WO/PCT — no prosecution data to analyze
+            if _code == 'WO':
+                continue
             if _code in _EP_MEMBER_STATES:
                 if not _seen_ep:
                     _seen_ep = True
@@ -1744,15 +1749,13 @@ def execute_family_analysis(self, task_id: str, params: dict):
                     # Update CN jurisdiction status
                     for _j in _jurisdictions:
                         if _j['code'] == 'CN':
+                            _j['status'] = 'done'
+                            _j['progress'] = 100
                             if cn_events:
-                                _j['status'] = 'done'
-                                _j['progress'] = 100
                                 _j['detail'] = _t('family_cn_done', lang,
                                                   events=len(cn_events),
                                                   claims=len(cn_claims))
                             else:
-                                _j['status'] = 'done'  # basic data only
-                                _j['progress'] = 70
                                 _j['detail'] = _t('family_cn_basic', lang)
                 except Exception as e:
                     _pipeline_logger.warning(
@@ -1911,11 +1914,10 @@ def execute_family_analysis(self, task_id: str, params: dict):
                     for _j in _jurisdictions:
                         if _j['code'] == 'JP':
                             _pc = jp_data.get('progress_count', 0)
+                            _j['status'] = 'done'; _j['progress'] = 100
                             if _pc > 0 or jp_data.get('has_registration'):
-                                _j['status'] = 'done'; _j['progress'] = 100
                                 _j['detail'] = _t('family_jp_done', lang, events=_pc)
                             else:
-                                _j['status'] = 'done'; _j['progress'] = 70
                                 _j['detail'] = _t('family_jp_basic', lang)
                 except Exception as e:
                     _pipeline_logger.warning(
@@ -1988,12 +1990,11 @@ def execute_family_analysis(self, task_id: str, params: dict):
                     for _j in _jurisdictions:
                         if _j['code'] == 'EP':
                             _tl = len(ep_data.get('timeline_events', []))
+                            _j['status'] = 'done'; _j['progress'] = 100
                             if _tl > 0 or ep_data.get('has_biblio'):
-                                _j['status'] = 'done'; _j['progress'] = 100
                                 _j['detail'] = _t('family_ep_done', lang, steps=_tl,
                                                    status=ep_data.get('status', ''))
                             else:
-                                _j['status'] = 'done'; _j['progress'] = 70
                                 _j['detail'] = _t('family_ep_basic', lang)
                 except Exception as e:
                     _pipeline_logger.warning(
@@ -2239,7 +2240,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
                         if _j['files_done'] >= _j['file_count']:
                             _j['status'] = 'done'
                             _j['progress'] = 100
-                        _j['detail'] = _t('prosecution_analyzing', lang, current=_j['files_done'], total=_j['file_count'])
+                        _j['detail'] = _t('prosecution_progress', lang, current=_j['files_done'], total=_j['file_count'])
 
                 _p = max(_downloaded, _analyzed)
                 update_task_status(
@@ -2281,8 +2282,9 @@ def execute_family_analysis(self, task_id: str, params: dict):
             # Update US jurisdiction detail during download phase
             for _j in _jurisdictions:
                 if _j['code'] == 'US':
+                    _j['files_done'] = _downloaded  # show download count during download phase
                     _j['detail'] = _t('prosecution_downloading', lang, current=doc_index, total=total_dl)
-                    _j['progress'] = int((_downloaded / max(total_dl, 1)) * 15) + 5  # 5-20% during download
+                    _j['progress'] = int((_downloaded / max(total_dl, 1)) * 20) + 5  # 5-25% during download
             update_task_status(
                 task_id, 'downloading',
                 progress_pct(_visible_progress, total_dl),
@@ -2524,6 +2526,8 @@ def _build_family_overview_status(family, lang: str) -> dict:
     display_jurisdictions: list[str] = []
     _seen_ep = False
     for _c in family.jurisdictions:
+        if _c == 'WO':
+            continue  # skip PCT — no prosecution data
         if _c in _EP_MEMBER_CODES:
             if not _seen_ep:
                 display_jurisdictions.append('EP')

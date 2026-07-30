@@ -175,10 +175,8 @@ export default {
     phaseExporting: 'Exporting Files',
     // Family / multi-country phases
     phaseFamilyLookup: 'Family Lookup',
-    phaseUsptoFetch: 'USPTO Docs',
-    phaseUsptoAnalysis: 'US Analysis',
-    phaseCnExamination: 'CN Exam',
-    phaseCnAnalysis: 'CN Analysis',
+    phaseDataFetch: 'Data Fetch',
+    phaseDocumentAnalysis: 'Analysis',
 
     // Card titles
     titleCompleted: 'Analysis Complete',

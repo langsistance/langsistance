@@ -175,10 +175,8 @@ export default {
     phaseExporting: '文件导出',
     // Family / multi-country phases
     phaseFamilyLookup: '查找同族',
-    phaseUsptoFetch: 'USPTO获取',
-    phaseUsptoAnalysis: '美国审查',
-    phaseCnExamination: '中国审查',
-    phaseCnAnalysis: '中国分析',
+    phaseDataFetch: '数据获取',
+    phaseDocumentAnalysis: '专利分析',
 
     // Card titles
     titleCompleted: '深度分析完成',

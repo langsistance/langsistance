@@ -190,29 +190,14 @@ const PHASE_ICONS: Record<string, JSX.Element> = {
       <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
     </svg>
   ),
-  uspto_fetch: (
+  data_fetch: (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
       <line x1="8" y1="21" x2="16" y2="21"/>
       <line x1="12" y1="17" x2="12" y2="21"/>
     </svg>
   ),
-  uspto_analysis: (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21.21 15.89A10 10 0 1 1 8 2.83"/>
-      <path d="M22 12A10 10 0 0 0 12 2v10z"/>
-    </svg>
-  ),
-  cn_examination: (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-      <polyline points="14 2 14 8 20 8"/>
-      <line x1="16" y1="13" x2="8" y2="13"/>
-      <line x1="16" y1="17" x2="8" y2="17"/>
-      <polyline points="10 9 9 9 8 9"/>
-    </svg>
-  ),
-  cn_analysis: (
+  document_analysis: (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21.21 15.89A10 10 0 1 1 8 2.83"/>
       <path d="M22 12A10 10 0 0 0 12 2v10z"/>
@@ -229,10 +214,8 @@ const PHASE_LABEL_KEYS: Record<string, string> = {
   exporting: 'longTask.phaseExporting',
   // Family-specific phase labels
   family_lookup: 'longTask.phaseFamilyLookup',
-  uspto_fetch: 'longTask.phaseUsptoFetch',
-  uspto_analysis: 'longTask.phaseUsptoAnalysis',
-  cn_examination: 'longTask.phaseCnExamination',
-  cn_analysis: 'longTask.phaseCnAnalysis',
+  data_fetch: 'longTask.phaseDataFetch',
+  document_analysis: 'longTask.phaseDocumentAnalysis',
 }
 
 // ── Standard phases (batch / single patent) ──────────────────────────────────
@@ -250,10 +233,8 @@ const STANDARD_PHASES = [
 
 const FAMILY_PHASES = [
   { key: 'family_lookup' },
-  { key: 'uspto_fetch' },
-  { key: 'uspto_analysis' },
-  { key: 'cn_examination' },
-  { key: 'cn_analysis' },
+  { key: 'data_fetch' },
+  { key: 'document_analysis' },
   { key: 'generating_report' },
   { key: 'exporting' },
 ]
@@ -268,10 +249,8 @@ const PHASE_MATCH_KEYWORDS: Record<string, string[]> = {
   generating_report: ['报告', '撰写', 'Report', 'Writing', 'summary', 'outline'],
   exporting: ['Word', 'PDF', '导出', 'Generating Word', 'Converting DOCX', 'Exporting'],
   family_lookup: ['同族', 'family', 'EPO', '司法辖区', 'jurisdiction', 'family member', '同族专利'],
-  uspto_fetch: ['USPTO', 'uspto', '美国专利', 'US application', '美国申请'],
-  uspto_analysis: ['US', '美国', 'us_prosecution', 'US prosecution', 'Office Action'],
-  cn_examination: ['CN', '中国', 'SIPOP', 'sipop', '中国审查', 'China exam', '中国专利'],
-  cn_analysis: ['中国审查决定', '复审', '无效', 'CN analysis', 'China decision', '审查决定分析'],
+  data_fetch: ['获取', 'fetch', 'SIPOP', 'JPO', 'USPTO', '下载审查文件'],
+  document_analysis: ['分析中', 'analyzing', '审查文件', '已分析'],
 }
 
 // ── Family mode detection ────────────────────────────────────────────────────
@@ -397,13 +376,11 @@ export default function LongTaskProgress({ content, resultSummary, streaming, an
     if (isFamily) {
       // Family mode thresholds
       switch (phaseKey) {
-        case 'family_lookup':     return progress >= 8 ? 'done' : progress >= 1 ? 'active' : 'pending'
-        case 'uspto_fetch':       return progress >= 12 ? 'done' : progress >= 8 ? 'active' : 'pending'
-        case 'uspto_analysis':    return progress >= 60 ? 'done' : progress >= 12 ? 'active' : 'pending'
-        case 'cn_examination':     return progress >= 70 ? 'done' : progress >= 60 ? 'active' : 'pending'
-        case 'cn_analysis':        return progress >= 85 ? 'done' : progress >= 70 ? 'active' : 'pending'
-        case 'generating_report':  return progress >= 95 ? 'done' : progress >= 85 ? 'active' : 'pending'
-        case 'exporting':          return progress >= 100 ? 'done' : progress >= 95 ? 'active' : 'pending'
+        case 'family_lookup':       return progress >= 8 ? 'done' : progress >= 1 ? 'active' : 'pending'
+        case 'data_fetch':          return progress >= 15 ? 'done' : progress >= 8 ? 'active' : 'pending'
+        case 'document_analysis':   return progress >= 76 ? 'done' : progress >= 15 ? 'active' : 'pending'
+        case 'generating_report':   return progress >= 90 ? 'done' : progress >= 76 ? 'active' : 'pending'
+        case 'exporting':           return progress >= 100 ? 'done' : progress >= 90 ? 'active' : 'pending'
         default: return 'pending'
       }
     } else {
