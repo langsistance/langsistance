@@ -346,7 +346,12 @@ export default function LongTaskProgress({ content, resultSummary, streaming, an
 
   // Detect family mode: use explicit analysisType from backend, fall back to keyword matching
   const stepLabel = state?.stepLabel || ''
-  const isFamily = analysisType === 'family' || isFamilyMode(content, stepLabel)
+  // Explicit analysisType always wins over keyword guessing.
+  // Keyword-based family detection is only a fallback when the backend
+  // hasn't set analysis_type yet (pre-backend-fix or first poll).
+  const isFamily = analysisType
+    ? analysisType === 'family'
+    : isFamilyMode(content, stepLabel)
   const jurisdictionCodes: string[] = (familyOverview?.jurisdictions as string[]) || (isFamily ? extractJurisdictions(content, stepLabel) : [])
 
   const summaryStreaming = Boolean(

@@ -1452,10 +1452,25 @@ def execute_family_analysis(self, task_id: str, params: dict):
 
     retry_count = self.request.retries
     patent_id = str(params.get('patent_id', '')).strip()
+    patent_source = params.get('patent_source', '')
     query = params.get('query', '')
     lang = params.get('lang', 'zh')
     session_id = params.get('session_id', '')
     user_id = params.get('user_id', '')
+
+    # Normalize bare numeric patent IDs: EPO family API requires a country prefix.
+    # The LLM already identifies patent_source (e.g. "uspto"), so prepend the
+    # country code when the user-provided ID is digits-only.
+    _patent_id_numeric = ''.join(c for c in patent_id if c.isdigit())
+    if patent_id == _patent_id_numeric and len(_patent_id_numeric) >= 6:
+        _source_prefix = {'uspto': 'US', 'cnipa': 'CN', 'epo': 'EP', 'jpo': 'JP',
+                          'wipo': 'WO', 'kpo': 'KR'}.get(patent_source, 'US')
+        patent_id = f'{_source_prefix}{patent_id}'
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY normalize_id — "
+            f"raw={params.get('patent_id', '')}, prefixed={patent_id}, "
+            f"source={patent_source}"
+        )
 
     _pipeline_logger.info(
         f"[task={task_id}] FAMILY START — "
