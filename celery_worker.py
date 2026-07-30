@@ -1570,8 +1570,15 @@ def execute_family_analysis(self, task_id: str, params: dict):
 
     # ── USPTO → publication number resolution (EPO fallback) ────────────────
 
-    async def _resolve_us_app_to_pub_number(app_id: str, tid: str) -> tuple[str | None, str | None, str | None]:
-        """Resolve a US application number → (pub_number, appNumberText, grant_number).
+    async def _resolve_us_app_to_pub_number(
+        app_id: str, tid: str, id_type: str = 'application_number',
+    ) -> tuple[str | None, str | None, str | None]:
+        """Resolve a US patent ID → (pub_number, appNumberText, grant_number).
+
+        Searches USPTO by the field appropriate for *id_type*:
+        - application_number → applicationNumberText
+        - publication_number → earliestPublicationNumber
+        - grant_number → patentNumber
 
         Returns a 3-tuple.  Any element may be None if not found.
         """
@@ -1579,13 +1586,27 @@ def execute_family_analysis(self, task_id: str, params: dict):
             import json as _json, re as _re, os as _os_fb
             import httpx as _httpx
 
-            _digits = ''.join(c for c in app_id if c.isdigit())
+            # Strip kind code (A1, B2, etc.) before extracting digits, so
+            # "US20220294065A1" → "20220294065", not "202202940651".
+            _clean = _re.sub(r'[A-Z]\d*$', '', app_id.upper().replace('US', '', 1))
+            _digits = ''.join(c for c in _clean if c.isdigit())
             if not _digits or len(_digits) < 6:
                 return None, None, None
 
             _esc = _re.sub(r'(["\\+\-!(){}[\]^~*?:/]|&&|\|\|)', r'\\\1', _digits)
+            # Choose the right search field based on what the user provided
+            if id_type == 'grant_number':
+                _query = f'applicationMetaData.patentNumber:"{_esc}"'
+            elif id_type == 'publication_number':
+                _query = f'applicationMetaData.earliestPublicationNumber:"{_esc}"'
+            else:
+                _query = f'applicationNumberText:"{_esc}"'
+            # Always include applicationNumberText as fallback
+            if 'applicationNumberText' not in _query:
+                _query += f' OR applicationNumberText:"{_esc}"'
+
             _body = {
-                "q": f'applicationNumberText:"{_esc}"',
+                "q": _query,
                 "pagination": {"offset": 0, "limit": 1},
                 "fields": [
                     "applicationNumberText",
@@ -1606,7 +1627,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
                 )
             _pipeline_logger.info(
                 f"[task={tid}] uspto_search — status={_resp.status_code}, "
-                f"query=applicationNumberText:\"{_digits}\""
+                f"id_type={id_type}, digits={_digits}"
             )
             if _resp.status_code != 200:
                 _pipeline_logger.warning(
@@ -1665,9 +1686,11 @@ def execute_family_analysis(self, task_id: str, params: dict):
         # Try multiple formats in order until EPO accepts one.
         _epo_candidates = [patent_id]  # start with the original (prefixed) ID
 
-        if patent_source == 'uspto' and patent_id_type == 'application_number':
+        # For any USPTO ID type, try to find the grant number via USPTO search.
+        # Grant numbers are the most reliable format for EPO DOCDB lookups.
+        if patent_source == 'uspto':
             _pub_number, _app_text, _grant_number = await _resolve_us_app_to_pub_number(
-                patent_id, task_id,
+                patent_id, task_id, patent_id_type,
             )
             import re as _re_epo
             if _grant_number:
