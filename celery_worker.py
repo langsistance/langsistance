@@ -1661,41 +1661,36 @@ def execute_family_analysis(self, task_id: str, params: dict):
             consumer_secret=epo_secret,
         )
 
+        # ── Resolve US application number → publication number ──
+        # EPO indexes publication/grant numbers, not bare application numbers.
+        # When the user provides a US application number, resolve it via USPTO
+        # first, then use the publication number for the EPO family lookup.
+        _epo_lookup_id = patent_id
+        if patent_source == 'uspto' and patent_id_type == 'application_number':
+            _pub_number = await _resolve_us_app_to_pub_number(patent_id, task_id)
+            if _pub_number:
+                _pipeline_logger.info(
+                    f"[task={task_id}] FAMILY PHASE0 resolved — "
+                    f"app={patent_id} → pub={_pub_number}"
+                )
+                _epo_lookup_id = _pub_number
+            else:
+                _pipeline_logger.warning(
+                    f"[task={task_id}] FAMILY PHASE0 resolve_failed — "
+                    f"could not find publication number for {patent_id}, "
+                    f"falling back to application number"
+                )
+
         family = None
         try:
-            family = await epo_client.lookup_family(patent_id)
+            family = await epo_client.lookup_family(_epo_lookup_id)
         except EPOError as e:
-            _pipeline_logger.warning(
+            _pipeline_logger.error(
                 f"[task={task_id}] FAMILY PHASE0 epo_error — {e}"
             )
-            # ── Fallback: if EPO doesn't know this application number,
-            # try USPTO PEDS to resolve it to a publication number, then
-            # retry EPO with that.  USPTO application numbers are not
-            # always indexed by EPO until the 18-month publication.
-            if patent_source == 'uspto':
-                _pub_number = await _resolve_us_app_to_pub_number(
-                    patent_id, task_id,
-                )
-                if _pub_number:
-                    _pipeline_logger.info(
-                        f"[task={task_id}] FAMILY PHASE0 fallback — "
-                        f"resolved {patent_id} → {_pub_number}"
-                    )
-                    update_task_status(task_id, 'preparing',
-                                       _advance_progress(3),
-                                       f'EPO未收录申请号，已解析为公开号 {_pub_number}，重试...',
-                                       analysis_type='family')
-                    try:
-                        family = await epo_client.lookup_family(_pub_number)
-                    except EPOError as _e2:
-                        _pipeline_logger.error(
-                            f"[task={task_id}] FAMILY PHASE0 fallback_error — {_e2}"
-                        )
-
-            if family is None:
-                set_task_failed(task_id, f"EPO family lookup failed: {e}")
-                _update_mysql_progress(task_id, 'failed', 0)
-                return {'status': 'failed', 'task_id': task_id, 'error': str(e)}
+            set_task_failed(task_id, f"EPO family lookup failed: {e}")
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': str(e)}
 
         _pipeline_logger.info(
             f"[task={task_id}] FAMILY PHASE0 epo_ok — "
