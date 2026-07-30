@@ -1243,6 +1243,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         if is_prosecution or is_families or is_china_prosecution or is_epo_prosecution or is_japan_prosecution:
                             celery_params['patent_id'] = patent_ids[0] if patent_ids else ''
                             celery_params['patent_id_type'] = patent_id_type
+                            celery_params['patent_source'] = patent_source
                         else:
                             celery_params['patent_ids'] = patent_ids
                             celery_params['patent_source'] = patent_source
