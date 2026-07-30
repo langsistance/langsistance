@@ -234,6 +234,13 @@ export async function pollLongTaskBatchStatus(taskIds: string[]): Promise<Record
   analysis_type?: string
   table_columns?: string[]
   family_overview?: Record<string, any>
+  documents?: Array<{
+    code: string
+    description: string
+    category: string
+    status: string
+    progress: number
+  }>
 }>> {
   const headers = await authHeaders()
   const res = await fetch(`${BASE_URL}/long_task/batch_status`, {

@@ -4,6 +4,14 @@ import { useMemo, useState } from 'react'
 import { useI18n } from '@/lib/app-i18n'
 import { renderMarkdownToHtml } from '@/lib/markdownRender'
 
+interface DocStatus {
+  code: string
+  description: string
+  category: string
+  status: 'pending' | 'downloading' | 'extracting' | 'analyzing' | 'done' | 'failed'
+  progress: number
+}
+
 interface Props {
   content: string
   resultSummary?: string
@@ -11,6 +19,7 @@ interface Props {
   analysisType?: string
   tableColumns?: string[]
   familyOverview?: Record<string, any>
+  documents?: DocStatus[]
 }
 
 interface TaskState {
@@ -311,6 +320,75 @@ const JURISDICTION_COLORS: Record<string, string> = {
   WO: '#10B981',
 }
 
+// ── Document status helpers ──────────────────────────────────────────────────
+
+const DOC_STATUS_ICONS: Record<string, JSX.Element> = {
+  done: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10B981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 6 9 17l-5-5"/>
+    </svg>
+  ),
+  analyzing: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#60A5FA" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="lt-spin">
+      <path d="M21.21 15.89A10 10 0 1 1 8 2.83"/>
+      <path d="M22 12A10 10 0 0 0 12 2v10z"/>
+    </svg>
+  ),
+  downloading: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#60A5FA" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="lt-spin">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+      <polyline points="7 10 12 15 17 10"/>
+      <line x1="12" y1="15" x2="12" y2="3"/>
+    </svg>
+  ),
+  extracting: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#60A5FA" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="lt-spin">
+      <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>
+      <polyline points="13 2 13 9 20 9"/>
+    </svg>
+  ),
+  failed: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#EF4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10"/>
+      <line x1="15" y1="9" x2="9" y2="15"/>
+      <line x1="9" y1="9" x2="15" y2="15"/>
+    </svg>
+  ),
+  pending: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6B7280" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10"/>
+      <line x1="12" y1="8" x2="12" y2="12"/>
+      <line x1="12" y1="16" x2="12.01" y2="16"/>
+    </svg>
+  ),
+}
+
+const DOC_STATUS_LABEL: Record<string, string> = {
+  done: '完成',
+  analyzing: '分析中',
+  downloading: '下载中',
+  extracting: '提取中',
+  failed: '失败',
+  pending: '等待',
+}
+
+const CATEGORY_COLORS: Record<string, string> = {
+  'Office Action': '#3B82F6',
+  'Amendment': '#10B981',
+  'RCE': '#8B5CF6',
+  'IDS': '#F59E0B',
+  'Interview Summary': '#EC4899',
+  'Notice of Allowance': '#10B981',
+  'NPL': '#6B7280',
+  'Specification': '#6366F1',
+  'Other': '#9CA3AF',
+  'Appeal': '#EF4444',
+}
+
+function categoryColor(cat: string): string {
+  return CATEGORY_COLORS[cat] || '#6B7280'
+}
+
 // ── API helpers ──────────────────────────────────────────────────────────────
 
 async function callLongTaskApi(taskId: string, action: 'pause' | 'resume' | 'stop'): Promise<boolean> {
@@ -334,7 +412,7 @@ async function callLongTaskApi(taskId: string, action: 'pause' | 'resume' | 'sto
 // LongTaskProgress — main component
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export default function LongTaskProgress({ content, resultSummary, streaming, analysisType, tableColumns, familyOverview }: Props) {
+export default function LongTaskProgress({ content, resultSummary, streaming, analysisType, tableColumns, familyOverview, documents }: Props) {
   const { t } = useI18n()
   const state = parseTaskContent(content)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
@@ -582,6 +660,49 @@ export default function LongTaskProgress({ content, resultSummary, streaming, an
           <div className="lt-columns-list">
             {tableColumns.map((col) => (
               <span key={col} className="lt-column-tag">{col}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Document-level progress table (family analysis Phase 2) */}
+      {documents && documents.length > 0 && (state.phase === 'running' || state.phase === 'paused') && (
+        <div className="lt-doc-table-wrap">
+          <div className="lt-doc-table-header">
+            <span className="lt-doc-table-title">{t('longTask.docTableTitle')}</span>
+            <span className="lt-doc-table-count">
+              {documents.filter(d => d.status === 'done').length}/{documents.length}
+            </span>
+          </div>
+          <div className="lt-doc-table">
+            {documents.map((doc) => (
+              <div
+                key={doc.code}
+                className={`lt-doc-row status-${doc.status}`}
+              >
+                <span className="lt-doc-code" title={doc.description}>{doc.code}</span>
+                <span
+                  className="lt-doc-category"
+                  style={{ borderColor: categoryColor(doc.category), color: categoryColor(doc.category) }}
+                >
+                  {doc.category}
+                </span>
+                <span className="lt-doc-desc">{doc.description}</span>
+                <span
+                  className="lt-doc-status"
+                  title={DOC_STATUS_LABEL[doc.status] || doc.status}
+                >
+                  {DOC_STATUS_ICONS[doc.status] || DOC_STATUS_ICONS.pending}
+                </span>
+                <span className="lt-doc-bar-wrap">
+                  <span className="lt-doc-bar-track">
+                    <span
+                      className={`lt-doc-bar-fill ${doc.status === 'failed' ? 'failed' : ''}`}
+                      style={{ width: `${Math.max(doc.progress, doc.status === 'pending' ? 0 : 5)}%` }}
+                    />
+                  </span>
+                </span>
+              </div>
             ))}
           </div>
         </div>

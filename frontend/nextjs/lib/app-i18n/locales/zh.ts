@@ -194,6 +194,7 @@ export default {
 
     // Analysis columns
     columnsLabel: '分析维度',
+    docTableTitle: '审查文件处理进度',
 
     // Action button tooltips
     actionPause: '暂停',

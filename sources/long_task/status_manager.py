@@ -12,6 +12,7 @@ _STICKY_FIELDS = frozenset({
     'family_overview',
     'table_columns',
     'result_summary',
+    'documents',
 })
 
 

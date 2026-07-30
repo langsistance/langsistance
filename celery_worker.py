@@ -2008,8 +2008,36 @@ def execute_family_analysis(self, task_id: str, params: dict):
             f"[task={task_id}] FAMILY PHASE2 START — "
             f"pending_count={total_dl}, total={total_dl}"
         )
+
+        # ── Per-document status for frontend table ──
+        _doc_statuses: list[dict] = []
+        for _d in docs_to_download:
+            _doc_statuses.append({
+                'code': _d.document_code,
+                'description': _d.description,
+                'category': _d.category,
+                'status': 'pending',
+                'progress': 0,
+            })
+
+        def _push_doc_statuses():
+            """Push the current document status list to Redis."""
+            # Count by status for the step label
+            _done = sum(1 for d in _doc_statuses if d['status'] == 'done')
+            _failed = sum(1 for d in _doc_statuses if d['status'] == 'failed')
+            _active = sum(1 for d in _doc_statuses if d['status'] in ('downloading', 'extracting', 'analyzing'))
+            _label = _t('prosecution_analyzing', lang, current=_done + _failed + _active, total=total_dl)
+            update_task_status(task_id, 'downloading' if _done == 0 else 'analyzing',
+                               progress_pct(_downloaded + _analyzed, total_dl),
+                               _label,
+                               documents=_doc_statuses,
+                               table_columns=columns)
+
         update_task_status(task_id, 'downloading', 15,
-                           _t('prosecution_downloading', lang, current=0, total=total_dl))
+                           _t('prosecution_downloading', lang, current=0, total=total_dl),
+                           documents=_doc_statuses,
+                           table_columns=columns,
+                           analysis_type='family')
 
         async def _fetch_prosecution(url: str, hdrs: dict, timeout: int):
             return await _uspto_get_with_retry(url, hdrs, timeout)
@@ -2025,6 +2053,8 @@ def execute_family_analysis(self, task_id: str, params: dict):
             nonlocal _analyzed, _downloaded
             async with _analyze_sem:
                 doc_index = _i + 1
+                _doc_statuses[_i]['status'] = 'analyzing'
+                _doc_statuses[_i]['progress'] = 60
 
                 # ── Text extraction (local-first -> Vision fallback) ──
                 if not _doc.text and _doc.binary:
@@ -2063,6 +2093,9 @@ def execute_family_analysis(self, task_id: str, params: dict):
                     row["_summary"] = ""
                     _table_rows[_i] = row
                     _analyzed += 1
+                    _doc_statuses[_i]['status'] = 'failed'
+                    _doc_statuses[_i]['progress'] = 100
+                    _push_doc_statuses()
                     return
 
                 # ── Analyze (LLM) ──
@@ -2101,6 +2134,8 @@ def execute_family_analysis(self, task_id: str, params: dict):
                 row["_summary"] = summary
                 _table_rows[_i] = row
                 _analyzed += 1
+                _doc_statuses[_i]['status'] = 'done' if not row.get('_failed') else 'failed'
+                _doc_statuses[_i]['progress'] = 100
 
                 _p = max(_downloaded, _analyzed)
                 update_task_status(
@@ -2111,6 +2146,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
                        desc=_doc.description[:40]),
                     table_rows=[r for r in _table_rows if r is not None],
                     table_columns=columns,
+                    documents=_doc_statuses,
                 )
                 _pipeline_logger.info(
                     f"[task={task_id}] FAMILY PHASE2 analysis_done — "
@@ -2138,13 +2174,19 @@ def execute_family_analysis(self, task_id: str, params: dict):
                 return _result
 
             _visible_progress = max(_downloaded, _analyzed)
+            _doc_statuses[_i]['status'] = 'downloading'
+            _doc_statuses[_i]['progress'] = 30
             update_task_status(
                 task_id, 'downloading',
                 progress_pct(_visible_progress, total_dl),
                 _t('prosecution_downloading', lang, current=doc_index, total=total_dl),
+                documents=_doc_statuses,
+                table_columns=columns,
             )
             await download_single_document(_doc, _fetch_prosecution, us_app_number, headers)
             _downloaded += 1
+            _doc_statuses[_i]['status'] = 'extracting'
+            _doc_statuses[_i]['progress'] = 50
 
             _pipeline_logger.info(
                 f"[task={task_id}] FAMILY PHASE2 download_done — "
