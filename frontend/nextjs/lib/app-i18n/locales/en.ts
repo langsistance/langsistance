@@ -192,6 +192,9 @@ export default {
     badgeFamily: 'Cross-Jurisdiction',
     badgeProsecution: 'US Prosecution',
 
+    // Analysis columns
+    columnsLabel: 'Analysis Dimensions',
+
     // Action button tooltips
     actionPause: 'Pause',
     actionResume: 'Resume',

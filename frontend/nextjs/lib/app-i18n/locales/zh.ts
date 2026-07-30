@@ -192,6 +192,9 @@ export default {
     badgeFamily: '跨国同族分析',
     badgeProsecution: '美国审查分析',
 
+    // Analysis columns
+    columnsLabel: '分析维度',
+
     // Action button tooltips
     actionPause: '暂停',
     actionResume: '继续',

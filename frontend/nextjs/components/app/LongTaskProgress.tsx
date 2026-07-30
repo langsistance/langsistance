@@ -575,6 +575,18 @@ export default function LongTaskProgress({ content, resultSummary, streaming, an
         <p className="lt-current-step">{state.stepLabel}</p>
       )}
 
+      {/* Analysis structure preview (table columns from backend) */}
+      {tableColumns && tableColumns.length > 0 && (state.phase === 'running' || state.phase === 'paused' || state.phase === 'completed') && (
+        <div className="lt-columns-preview">
+          <span className="lt-columns-label">{t('longTask.columnsLabel')}</span>
+          <div className="lt-columns-list">
+            {tableColumns.map((col) => (
+              <span key={col} className="lt-column-tag">{col}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Report summary preview (streamed during Phase 3, shown before downloads) */}
       {resultSummary && (
         <div className={`lt-summary${summaryStreaming ? ' lt-summary-streaming' : ''}`}>

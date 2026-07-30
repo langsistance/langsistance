@@ -817,7 +817,14 @@ export default function Chat() {
             if (data.analysis_type) extraFields.analysisType = data.analysis_type
             if (data.table_columns) extraFields.tableColumns = data.table_columns
             if (data.family_overview) extraFields.familyOverview = data.family_overview
-            setMessages((m) => findAndUpdate(m, newContent, data.result_summary, extraFields))
+            setMessages((m) => {
+              // Preserve previously-set fields when backend doesn't resend them
+              const prev = m.find(msg => msg.taskId === taskId || msg.id === assistantId) as any
+              if (!extraFields.analysisType && prev?.analysisType) extraFields.analysisType = prev.analysisType
+              if (!extraFields.tableColumns && prev?.tableColumns) extraFields.tableColumns = prev.tableColumns
+              if (!extraFields.familyOverview && prev?.familyOverview) extraFields.familyOverview = prev.familyOverview
+              return findAndUpdate(m, newContent, data.result_summary, extraFields)
+            })
           }
         }
       } catch {
