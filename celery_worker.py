@@ -1570,11 +1570,10 @@ def execute_family_analysis(self, task_id: str, params: dict):
 
     # ── USPTO → publication number resolution (EPO fallback) ────────────────
 
-    async def _resolve_us_app_to_pub_number(app_id: str, tid: str) -> tuple[str | None, str | None]:
-        """Resolve a US application number → (publication_number, applicationNumberText).
+    async def _resolve_us_app_to_pub_number(app_id: str, tid: str) -> tuple[str | None, str | None, str | None]:
+        """Resolve a US application number → (pub_number, appNumberText, grant_number).
 
-        Returns a tuple of (publication_number, applicationNumberText).
-        Both may be None if the lookup fails.
+        Returns a 3-tuple.  Any element may be None if not found.
         """
         try:
             import json as _json, re as _re, os as _os_fb
@@ -1582,7 +1581,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
 
             _digits = ''.join(c for c in app_id if c.isdigit())
             if not _digits or len(_digits) < 6:
-                return None, None
+                return None, None, None
 
             _esc = _re.sub(r'(["\\+\-!(){}[\]^~*?:/]|&&|\|\|)', r'\\\1', _digits)
             _body = {
@@ -1611,10 +1610,9 @@ def execute_family_analysis(self, task_id: str, params: dict):
             )
             if _resp.status_code != 200:
                 _pipeline_logger.warning(
-                    f"[task={tid}] uspto_search failed — status={_resp.status_code}, "
-                    f"body={_resp.text[:300]}"
+                    f"[task={tid}] uspto_search failed — status={_resp.status_code}"
                 )
-                return None, None
+                return None, None, None
 
             _data = _resp.json() if _resp.text else {}
             _results = (
@@ -1622,13 +1620,8 @@ def execute_family_analysis(self, task_id: str, params: dict):
                 or _data.get('results', None)
                 or _data.get('patentFileBag', [])
             )
-            _pipeline_logger.info(
-                f"[task={tid}] uspto_search response — "
-                f"count={_data.get('count', '?')}, "
-                f"result_count={len(_results) if isinstance(_results, list) else '?'}"
-            )
             if not _results:
-                return None, None
+                return None, None, None
 
             _hit = _results[0] if isinstance(_results, list) else _results
             _app_text = _hit.get('applicationNumberText', '') or ''
@@ -1644,15 +1637,14 @@ def execute_family_analysis(self, task_id: str, params: dict):
             ) or ''
             _pipeline_logger.info(
                 f"[task={tid}] uspto_search result — "
-                f"pub={_pub}, grant={_grant}, app_text={_app_text}, "
-                f"top_keys={list(_hit.keys())[:12] if isinstance(_hit, dict) else '?'}"
+                f"pub={_pub}, grant={_grant}, app_text={_app_text}"
             )
-            return _pub or _grant or None, _app_text or None
+            return _pub or None, _app_text or None, _grant or None
         except Exception as _fe:
             _pipeline_logger.warning(
                 f"[task={tid}] uspto_search error — {type(_fe).__name__}: {_fe}"
             )
-            return None, None
+            return None, None, None
 
     # ── Run pipeline ─────────────────────────────────────────────────────────
     async def _run():
@@ -1674,27 +1666,26 @@ def execute_family_analysis(self, task_id: str, params: dict):
         _epo_candidates = [patent_id]  # start with the original (prefixed) ID
 
         if patent_source == 'uspto' and patent_id_type == 'application_number':
-            _pub_number, _app_text = await _resolve_us_app_to_pub_number(
+            _pub_number, _app_text, _grant_number = await _resolve_us_app_to_pub_number(
                 patent_id, task_id,
             )
+            import re as _re_epo
+            if _grant_number:
+                # Grant number is the most reliable format for EPO
+                _epo_candidates.append(f"US{_grant_number}")
             if _pub_number:
                 _pipeline_logger.info(
                     f"[task={task_id}] FAMILY PHASE0 resolved — "
-                    f"app={patent_id} → pub={_pub_number}"
+                    f"app={patent_id} → pub={_pub_number}, grant={_grant_number}"
                 )
-                import re as _re_epo
-                # Try multiple DOCDB formats — EPO is picky about punctuation.
-                # For US pre-grant pubs: compact "US20220294065A1" or dotted "US.20220294065.A1"
                 _no_kind = _re_epo.sub(r'[A-Z]\d*$', '', _pub_number)
-                _kind = _pub_number[len(_no_kind):]  # e.g. "A1", "B2"
+                _kind = _pub_number[len(_no_kind):]
                 _dotted = f"US.{_no_kind[2:]}.{_kind}" if _kind else f"US.{_no_kind[2:]}"
-                _epo_candidates.extend([
-                    _no_kind,       # US20220294065
-                    _pub_number,    # US20220294065A1
-                    _dotted,        # US.20220294065.A1
-                ])
+                for _c in (_no_kind, _pub_number, _dotted):
+                    if _c not in _epo_candidates:
+                        _epo_candidates.append(_c)
             if _app_text and _app_text not in _epo_candidates:
-                _epo_candidates.append(_app_text)     # USPTO's own applicationNumberText
+                _epo_candidates.append(_app_text)
 
         family = None
         _last_error = None
