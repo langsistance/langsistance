@@ -301,17 +301,6 @@ const JURISDICTION_COLORS: Record<string, string> = {
   WO: '#10B981',
 }
 
-// ── Jurisdiction status helpers ──────────────────────────────────────────────
-
-const JUR_STATUS_TEXT: Record<string, string> = {
-  done: '已完成',
-  analyzing: '分析中',
-  fetching: '获取中',
-  pending: '等待中',
-  no_data: '无数据',
-  failed: '失败',
-}
-
 // ── API helpers ──────────────────────────────────────────────────────────────
 
 async function callLongTaskApi(taskId: string, action: 'pause' | 'resume' | 'stop'): Promise<boolean> {
@@ -586,7 +575,7 @@ export default function LongTaskProgress({ content, resultSummary, streaming, an
             const isActive = jur.status === 'analyzing' || jur.status === 'fetching'
             const isDone = jur.status === 'done'
             const isNoData = jur.status === 'no_data' || jur.status === 'failed'
-            const statusText = JUR_STATUS_TEXT[jur.status] || jur.status
+            const statusText = t(`longTask.jurStatus_${jur.status}` as any) || jur.status
             return (
               <div
                 key={jur.code}

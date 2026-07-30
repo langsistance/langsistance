@@ -193,6 +193,12 @@ export default {
     // Analysis columns
     columnsLabel: '分析维度',
     jurTableTitle: '各司法辖区进度',
+    jurStatus_done: '已完成',
+    jurStatus_analyzing: '分析中',
+    jurStatus_fetching: '获取中',
+    jurStatus_pending: '等待中',
+    jurStatus_no_data: '无数据',
+    jurStatus_failed: '失败',
 
     // Action button tooltips
     actionPause: '暂停',

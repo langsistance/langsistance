@@ -193,6 +193,12 @@ export default {
     // Analysis columns
     columnsLabel: 'Analysis Dimensions',
     jurTableTitle: 'Jurisdictions',
+    jurStatus_done: 'Done',
+    jurStatus_analyzing: 'Analyzing',
+    jurStatus_fetching: 'Fetching',
+    jurStatus_pending: 'Pending',
+    jurStatus_no_data: 'No Data',
+    jurStatus_failed: 'Failed',
 
     // Action button tooltips
     actionPause: 'Pause',

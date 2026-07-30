@@ -1829,8 +1829,12 @@ def execute_family_analysis(self, task_id: str, params: dict):
             'LT', 'LU', 'LV', 'MC', 'MK', 'MT', 'NL', 'NO', 'PL', 'PT',
             'RO', 'SE', 'SI', 'SK', 'SM', 'TR',
         })
-        _JUR_LABELS = {'US': '美国 (US)', 'CN': '中国 (CN)', 'JP': '日本 (JP)',
-                       'EP': '欧洲 (EPO)', 'WO': 'PCT (WO)', 'KR': '韩国 (KR)'}
+        _JUR_LABELS_ZH = {'US': '美国 (US)', 'CN': '中国 (CN)', 'JP': '日本 (JP)',
+                          'EP': '欧洲 (EPO)', 'WO': 'PCT (WO)', 'KR': '韩国 (KR)'}
+        _JUR_LABELS_EN = {'US': 'United States (US)', 'CN': 'China (CN)',
+                          'JP': 'Japan (JP)', 'EP': 'Europe (EPO)',
+                          'WO': 'PCT (WO)', 'KR': 'Korea (KR)'}
+        _JUR_LABELS = _JUR_LABELS_ZH if lang == 'zh' else _JUR_LABELS_EN
         _jurisdictions: list[dict] = []
         _seen_ep = False  # merge all EP member states into one row
         _priority_order = ['US', 'CN', 'JP', 'EP', 'WO', 'KR']
