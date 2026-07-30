@@ -1690,7 +1690,13 @@ def execute_family_analysis(self, task_id: str, params: dict):
                     f"[task={task_id}] FAMILY PHASE0 resolved — "
                     f"app={patent_id} → pub={_pub_number}"
                 )
-                _epo_lookup_id = _pub_number
+                # Strip kind code for EPO DOCDB format (e.g. US20220294065A1 → US20220294065)
+                import re as _re_epo
+                _epo_lookup_id = _re_epo.sub(r'[A-Z]\d*$', '', _pub_number)
+                _pipeline_logger.info(
+                    f"[task={task_id}] FAMILY PHASE0 epo_format — "
+                    f"{_pub_number} → {_epo_lookup_id}"
+                )
             else:
                 _pipeline_logger.warning(
                     f"[task={task_id}] FAMILY PHASE0 resolve_failed — "
