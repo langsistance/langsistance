@@ -1586,24 +1586,34 @@ def execute_family_analysis(self, task_id: str, params: dict):
             import json as _json, re as _re, os as _os_fb
             import httpx as _httpx
 
-            # Strip kind code (A1, B2, etc.) before extracting digits, so
-            # "US20220294065A1" → "20220294065", not "202202940651".
-            _clean = _re.sub(r'[A-Z]\d*$', '', app_id.upper().replace('US', '', 1))
-            _digits = ''.join(c for c in _clean if c.isdigit())
+            # Normalise to the format USPTO expects for each field:
+            # - earliestPublicationNumber → WITH "US" prefix + kind code
+            # - patentNumber → bare digits (no prefix, no kind code)
+            # - applicationNumberText → bare digits
+            _up = app_id.upper()
+            _digits = ''.join(c for c in _up if c.isdigit())
             if not _digits or len(_digits) < 6:
                 return None, None, None
 
-            _esc = _re.sub(r'(["\\+\-!(){}[\]^~*?:/]|&&|\|\|)', r'\\\1', _digits)
-            # Choose the right search field based on what the user provided
+            _esc = lambda s: _re.sub(
+                r'(["\\+\-!(){}[\]^~*?:/]|&&|\|\|)', r'\\\1', s,
+            )
+
             if id_type == 'grant_number':
-                _query = f'applicationMetaData.patentNumber:"{_esc}"'
+                _query = f'applicationMetaData.patentNumber:"{_esc(_digits)}"'
             elif id_type == 'publication_number':
-                _query = f'applicationMetaData.earliestPublicationNumber:"{_esc}"'
+                # Publication number WITH US prefix + kind code (e.g. US20220294065A1)
+                _pub_full = _up if _up.startswith('US') else f'US{_up}'
+                _pub_digits = f'US{_digits}'
+                _query = (
+                    f'applicationMetaData.earliestPublicationNumber:"{_esc(_pub_full)}"'
+                    f' OR applicationMetaData.earliestPublicationNumber:"{_esc(_pub_digits)}"'
+                )
             else:
-                _query = f'applicationNumberText:"{_esc}"'
+                _query = f'applicationNumberText:"{_esc(_digits)}"'
             # Always include applicationNumberText as fallback
             if 'applicationNumberText' not in _query:
-                _query += f' OR applicationNumberText:"{_esc}"'
+                _query += f' OR applicationNumberText:"{_esc(_digits)}"'
 
             _body = {
                 "q": _query,
