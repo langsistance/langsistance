@@ -1545,7 +1545,8 @@ def execute_family_analysis(self, task_id: str, params: dict):
         # Phase 0: EPO family lookup → extract US member
         # ═════════════════════════════════════════════════════════════════
         update_task_status(task_id, 'preparing', 1,
-                           _t('family_lookup', lang))
+                           _t('family_lookup', lang),
+                           analysis_type='family')
 
         epo_client = EPOFamilyClient(
             consumer_key=epo_key,
@@ -2641,7 +2642,8 @@ def execute_china_examination_analysis(self, task_id: str, params: dict):
         # Phase 0: Resolve CN application number
         # ═════════════════════════════════════════════════════════════════
         update_task_status(task_id, 'preparing', 1,
-                           _t('china_resolving', lang))
+                           _t('china_resolving', lang),
+                           analysis_type='prosecution')
 
         family_context: dict = {}
         try:
@@ -3202,7 +3204,8 @@ def execute_epo_examination_analysis(self, task_id: str, params: dict):
     async def _run():
         # ── Phase 0: Resolve EP application number ──────────────────
         update_task_status(task_id, 'preparing', 5,
-                           _t('preparing', lang, total=1))
+                           _t('preparing', lang, total=1),
+                           analysis_type='prosecution')
 
         ep_family_cfg = get_family_config()
         ep_ck = ep_family_cfg.get('epo_consumer_key', '')
@@ -3573,7 +3576,8 @@ def execute_japan_examination_analysis(self, task_id: str, params: dict):
     async def _run():
         # ── Phase 0: Resolve JP application number ──────────────────
         update_task_status(task_id, 'preparing', 5,
-                           _t('preparing', lang, total=1))
+                           _t('preparing', lang, total=1),
+                           analysis_type='prosecution')
 
         family_cfg = get_family_config()
         ep_ck = family_cfg.get('epo_consumer_key', '')
@@ -3990,7 +3994,8 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         # fetch USPTO document list + classify by priority.
         # ═════════════════════════════════════════════════════════════════
         update_task_status(task_id, 'preparing', 1,
-                           _t('fetching_uspto', lang))
+                           _t('fetching_uspto', lang),
+                           analysis_type='prosecution')
 
         raw_patent_id = patent_id.strip()
         digits_only = ''.join(c for c in raw_patent_id if c.isdigit())

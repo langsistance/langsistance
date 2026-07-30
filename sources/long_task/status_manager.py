@@ -4,6 +4,16 @@ TASK_STATUS_PREFIX = "lt"
 TASK_CHECKPOINT_PREFIX = "lt"
 TASK_STATUS_TTL = 86400  # 24 hours
 
+# Fields that persist across update_task_status calls.
+# Once set by any call, they survive subsequent calls that don't include them.
+# This prevents Redis-key-overwrite from losing metadata set by earlier phases.
+_STICKY_FIELDS = frozenset({
+    'analysis_type',
+    'family_overview',
+    'table_columns',
+    'result_summary',
+})
+
 
 def _get_redis():
     from sources.knowledge.knowledge import get_redis_connection
@@ -20,9 +30,28 @@ def _checkpoint_key(task_id: str) -> str:
 
 def update_task_status(task_id: str, phase: str, progress: int,
                        step_msg: str, status: str = 'running', **extra) -> None:
-    """Write current task status to Redis."""
+    """Write current task status to Redis.
+
+    Sticky fields (analysis_type, family_overview, table_columns,
+    result_summary) are preserved from the previous status when not
+    explicitly provided in the current call.  This prevents metadata
+    set early in a task lifecycle from being wiped by later updates
+    that only change progress / step label.
+    """
     import time
     r = _get_redis()
+
+    # Preserve sticky fields from any existing status record
+    raw = r.get(_status_key(task_id))
+    if raw is not None:
+        try:
+            existing = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            existing = {}
+        for field in _STICKY_FIELDS:
+            if field not in extra and field in existing:
+                extra[field] = existing[field]
+
     payload = {
         'task_id': task_id,
         'status': status,

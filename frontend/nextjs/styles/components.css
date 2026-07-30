@@ -1014,6 +1014,69 @@ input[type="checkbox"] {
   background: transparent;
 }
 
+/* Analysis type badge (family / prosecution) */
+.lt-analysis-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin-left: 6px;
+}
+
+.lt-analysis-badge.family {
+  background: rgba(139, 92, 246, 0.12);
+  color: #A78BFA;
+  border: 1px solid rgba(139, 92, 246, 0.25);
+}
+
+.lt-analysis-badge.prosecution {
+  background: rgba(59, 130, 246, 0.12);
+  color: #60A5FA;
+  border: 1px solid rgba(59, 130, 246, 0.25);
+}
+
+/* Analysis dimension (columns) preview */
+.lt-columns-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.lt-columns-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #9CA3AF;
+  white-space: nowrap;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.lt-columns-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.lt-column-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  background: rgba(16, 163, 127, 0.1);
+  color: #34D399;
+  border: 1px solid rgba(16, 163, 127, 0.2);
+}
+
 .lt-phases {
   display: flex;
   gap: 6px;
