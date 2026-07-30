@@ -1573,72 +1573,74 @@ def execute_family_analysis(self, task_id: str, params: dict):
     async def _resolve_us_app_to_pub_number(app_id: str, tid: str) -> str | None:
         """Resolve a US application number → earliest publication number.
 
-        Uses the same USPTO search API as the standalone US prosecution
-        analysis (Phase 0).  EPO indexes publication numbers, not bare
-        application numbers, so this lookup is needed when EPO returns
-        404 for the application number.
+        Uses the USPTO patent application search API, same as the standalone
+        US prosecution analysis.  EPO indexes publication numbers, not bare
+        application numbers, so this lookup is needed for the family API.
         """
         try:
-            # Strip US prefix to get the bare digits for the search query
+            import json as _json, re as _re, os as _os_fb
+            import httpx as _httpx
+
             _digits = ''.join(c for c in app_id if c.isdigit())
             if not _digits or len(_digits) < 6:
                 return None
 
-            import json as _json, re as _re
             _esc = _re.sub(r'(["\\+\-!(){}[\]^~*?:/]|&&|\|\|)', r'\\\1', _digits)
-            _search_q = f'applicationNumberText:"{_esc}"'
-
             _body = {
-                "q": _search_q,
-                "pagination": {"offset": 0, "limit": 3},
+                "q": f'applicationNumberText:"{_esc}"',
+                "pagination": {"offset": 0, "limit": 1},
                 "fields": [
                     "applicationNumberText",
-                    "applicationMetaData.earliestPublicationNumber",
                     "applicationMetaData.patentNumber",
+                    "applicationMetaData.earliestPublicationNumber",
                     "applicationMetaData.inventionTitle",
                 ],
             }
             _hdrs = {'Content-Type': 'application/json', 'Accept': 'application/json'}
-            import os as _os_fb
             _uk = _os_fb.getenv('USPTO_API_KEY', '')
             if _uk:
                 _hdrs['X-API-Key'] = _uk
 
-            import httpx as _httpx
             async with _httpx.AsyncClient(timeout=15) as _cl:
                 _resp = await _cl.post(
                     "https://api.uspto.gov/api/v1/patent/applications/search",
                     headers=_hdrs, json=_body,
                 )
+            _pipeline_logger.info(
+                f"[task={tid}] uspto_search — status={_resp.status_code}, "
+                f"query=applicationNumberText:\"{_digits}\""
+            )
             if _resp.status_code != 200:
                 _pipeline_logger.warning(
-                    f"[task={tid}] uspto_search failed — status={_resp.status_code}"
+                    f"[task={tid}] uspto_search failed — status={_resp.status_code}, "
+                    f"body={_resp.text[:300]}"
                 )
                 return None
 
             _data = _resp.json() if _resp.text else {}
-            _hits = (_data.get('results', None) or _data.get('applications', None) or [])
-            if not _hits:
-                _hits = _data.get('patentFileBag', [])  # older API response format
-            if not _hits:
+            _results = _data.get('results', []) or _data.get('patentFileBag', [])
+            if not _results:
                 return None
 
-            _hit = _hits[0] if isinstance(_hits, list) else _hits
-            _pub = (
-                _hit.get('applicationMetaData', {}).get('earliestPublicationNumber', '')
-                if isinstance(_hit, dict) else ''
-            ) or ''
+            _hit = _results[0] if isinstance(_results, list) else _results
+            _meta = _hit.get('applicationMetaData', {}) if isinstance(_hit, dict) else {}
+            _pub = _meta.get('earliestPublicationNumber', '') or ''
             if _pub:
                 _pipeline_logger.info(
-                    f"[task={tid}] uspto_search — "
-                    f"app={app_id} → pub={_pub}"
+                    f"[task={tid}] uspto_search pub={_pub}"
                 )
                 return _pub
+            # Fallback: grant number
+            _grant = _meta.get('patentNumber', '') or ''
+            if _grant:
+                _pipeline_logger.info(
+                    f"[task={tid}] uspto_search grant={_grant}"
+                )
+                return _grant
 
             _pipeline_logger.warning(
                 f"[task={tid}] uspto_search no_pub — "
-                f"hits={len(_hits) if isinstance(_hits, list) else 1}, "
-                f"keys={list(_hit.keys())[:8] if isinstance(_hit, dict) else '?'}"
+                f"result_keys={list(_hit.keys())[:10] if isinstance(_hit, dict) else '?'}"
             )
             return None
         except Exception as _fe:
