@@ -1639,6 +1639,19 @@ def execute_family_analysis(self, task_id: str, params: dict):
                            family_overview=family_overview,
                            analysis_type='family')
 
+        # ── Monotonic pipeline progress ──
+        # The main progress bar must only advance forward, never jump back.
+        # Each pipeline phase has a fixed range; the actual pct is interpolated
+        # within that range based on sub-step completion.
+        _pipeline_progress = 5  # starts at 5 (family lookup done)
+
+        def _advance_progress(target: int) -> int:
+            """Set pipeline progress to *target*, never going backward."""
+            nonlocal _pipeline_progress
+            if target > _pipeline_progress:
+                _pipeline_progress = target
+            return _pipeline_progress
+
         # ── Initialize per-jurisdiction progress tracking ──
         # EP member states (DE, GB, FR, etc.) are merged into a single "EP" row
         # because they share the same EPO examination process.
@@ -1687,8 +1700,14 @@ def execute_family_analysis(self, task_id: str, params: dict):
 
         def _push_jurisdictions(_current_progress: int, _current_phase: str,
                                 _step_label: str):
-            """Push jurisdiction statuses to Redis."""
-            update_task_status(task_id, _current_phase, _current_progress,
+            """Push jurisdiction statuses to Redis.
+
+            The overall pipeline progress is guaranteed to be monotonic:
+            _advance_progress ensures it only moves forward even when
+            switching between jurisdictions.
+            """
+            update_task_status(task_id, _current_phase,
+                               _advance_progress(_current_progress),
                                _step_label,
                                jurisdictions=_jurisdictions,
                                analysis_type='family')
@@ -1714,7 +1733,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
             if sipop_key and sipop_secret and cn_app_number:
                 try:
                     # Progress update for frontend — show CN examination phase
-                    update_task_status(task_id, 'preparing', 55,
+                    update_task_status(task_id, 'preparing', _advance_progress(8),
                                        _t('china_fetching_for_family', lang,
                                           cn_app=cn_app_number))
                     from sources.sipop_client import SipopClient
@@ -1757,6 +1776,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
                                                   claims=len(cn_claims))
                             else:
                                 _j['detail'] = _t('family_cn_basic', lang)
+                    _advance_progress(12)
                 except Exception as e:
                     _pipeline_logger.warning(
                         f"[task={task_id}] FAMILY PHASE0.3 cn_fetch_failed — {e}"
@@ -1786,7 +1806,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
             jpo_pass = jpo_cfg.get('password', '')
             if jpo_user and jpo_pass and jp_app_number:
                 try:
-                    update_task_status(task_id, 'preparing', 6,
+                    update_task_status(task_id, 'preparing', _advance_progress(8),
                                        _t('japan_fetching_for_family', lang,
                                           jp_app=jp_app_number))
                     from sources.jpo_client import JpoClient
@@ -1919,6 +1939,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
                                 _j['detail'] = _t('family_jp_done', lang, events=_pc)
                             else:
                                 _j['detail'] = _t('family_jp_basic', lang)
+                    _advance_progress(13)
                 except Exception as e:
                     _pipeline_logger.warning(
                         f"[task={task_id}] FAMILY PHASE0.4 jp_fetch_failed — {e}"
@@ -1952,7 +1973,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
             ep_cs = _os_ep.getenv('EPO_CONSUMER_SECRET', ep_cs)
             if ep_ck and ep_cs and ep_app_number:
                 try:
-                    update_task_status(task_id, 'preparing', 7,
+                    update_task_status(task_id, 'preparing', _advance_progress(8),
                                        _t('epo_fetching_for_family', lang,
                                           ep_app=ep_app_number))
                     from sources.epo_ops_client import EPOClient
@@ -2008,7 +2029,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
         # ═════════════════════════════════════════════════════════════════
         # Phase 0.5: Fetch USPTO document list + classify
         # ═════════════════════════════════════════════════════════════════
-        update_task_status(task_id, 'preparing', 8,
+        update_task_status(task_id, 'preparing', _advance_progress(15),
                            _t('fetching_uspto', lang))
 
         headers = {'Accept': 'application/json'}
@@ -2146,7 +2167,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
                 for _j in _jurisdictions:
                     if _j['code'] == 'US':
                         _j['detail'] = _t('prosecution_analyzing', lang, current=_j['files_done'], total=_j['file_count'], desc=_doc.description[:30])
-                        _j['progress'] = int((_j['files_done'] / max(_j['file_count'], 1)) * 90) + 5
+                        _j['progress'] = int((_j['files_done'] / max(_j['file_count'], 1)) * 55) + 45
 
                 # ── Text extraction (local-first -> Vision fallback) ──
                 if not _doc.text and _doc.binary:
@@ -2189,7 +2210,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
                         if _j['code'] == 'US':
                             _j['files_done'] += 1
                             _j['detail'] = _t('prosecution_analyzing', lang, current=_j['files_done'], total=_j['file_count'], desc=_doc.description[:30])
-                            _j['progress'] = int((_j['files_done'] / max(_j['file_count'], 1)) * 90) + 5
+                            _j['progress'] = int((_j['files_done'] / max(_j['file_count'], 1)) * 55) + 45
                     _push_jurisdictions(
                         int((_analyzed + _downloaded) / max(total_dl, 1) * 70) + 15,
                         'analyzing',
@@ -2236,7 +2257,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
                 for _j in _jurisdictions:
                     if _j['code'] == 'US':
                         _j['files_done'] += 1
-                        _j['progress'] = int((_j['files_done'] / max(_j['file_count'], 1)) * 90) + 5
+                        _j['progress'] = int((_j['files_done'] / max(_j['file_count'], 1)) * 55) + 45
                         if _j['files_done'] >= _j['file_count']:
                             _j['status'] = 'done'
                             _j['progress'] = 100
@@ -2282,12 +2303,11 @@ def execute_family_analysis(self, task_id: str, params: dict):
             # Update US jurisdiction detail during download phase
             for _j in _jurisdictions:
                 if _j['code'] == 'US':
-                    _j['files_done'] = _downloaded  # show download count during download phase
                     _j['detail'] = _t('prosecution_downloading', lang, current=doc_index, total=total_dl)
-                    _j['progress'] = int((_downloaded / max(total_dl, 1)) * 20) + 5  # 5-25% during download
+                    _j['progress'] = int((doc_index / max(total_dl, 1)) * 40) + 5  # 5-45% during download
             update_task_status(
                 task_id, 'downloading',
-                progress_pct(_visible_progress, total_dl),
+                _advance_progress(15 + int((_visible_progress / max(total_dl, 1)) * 40)),
                 _t('prosecution_downloading', lang, current=doc_index, total=total_dl),
                 jurisdictions=_jurisdictions,
                 table_columns=columns,
