@@ -1453,6 +1453,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
     retry_count = self.request.retries
     patent_id = str(params.get('patent_id', '')).strip()
     patent_source = params.get('patent_source', '')
+    patent_id_type = params.get('patent_id_type', '')
     query = params.get('query', '')
     lang = params.get('lang', 'zh')
     session_id = params.get('session_id', '')
