@@ -1618,16 +1618,21 @@ def execute_family_analysis(self, task_id: str, params: dict):
                 return None
 
             _data = _resp.json() if _resp.text else {}
-            _results = _data.get('results', []) or _data.get('patentFileBag', [])
+            # USPTO search wraps results in patentFileWrapperDataBag
+            _results = (
+                _data.get('patentFileWrapperDataBag', None)
+                or _data.get('results', None)
+                or _data.get('patentFileBag', [])
+            )
             _pipeline_logger.info(
                 f"[task={tid}] uspto_search response — "
-                f"totalHits={_data.get('totalHits', '?')}, "
+                f"count={_data.get('count', '?')}, "
                 f"result_count={len(_results) if isinstance(_results, list) else '?'}, "
                 f"top_keys={list(_data.keys())[:8]}"
             )
             if not _results:
                 _pipeline_logger.warning(
-                    f"[task={tid}] uspto_search empty — raw_keys={list(_data.keys())[:12]}"
+                    f"[task={tid}] uspto_search empty — count={_data.get('count','?')}"
                 )
                 return None
 
