@@ -1567,6 +1567,85 @@ def execute_family_analysis(self, task_id: str, params: dict):
         return {'status': 'failed', 'task_id': task_id,
                 'error': 'EPO credentials not configured'}
 
+    # ── USPTO → publication number resolution (EPO fallback) ────────────────
+
+    async def _resolve_us_app_to_pub_number(app_id: str, tid: str) -> str | None:
+        """Resolve a US application number → earliest publication number.
+
+        Uses the same USPTO search API as the standalone US prosecution
+        analysis (Phase 0).  EPO indexes publication numbers, not bare
+        application numbers, so this lookup is needed when EPO returns
+        404 for the application number.
+        """
+        try:
+            # Strip US prefix to get the bare digits for the search query
+            _digits = ''.join(c for c in app_id if c.isdigit())
+            if not _digits or len(_digits) < 6:
+                return None
+
+            import json as _json, re as _re
+            _esc = _re.sub(r'(["\\+\-!(){}[\]^~*?:/]|&&|\|\|)', r'\\\1', _digits)
+            _search_q = f'applicationNumberText:"{_esc}"'
+
+            _body = {
+                "q": _search_q,
+                "pagination": {"offset": 0, "limit": 3},
+                "fields": [
+                    "applicationNumberText",
+                    "applicationMetaData.earliestPublicationNumber",
+                    "applicationMetaData.patentNumber",
+                    "applicationMetaData.inventionTitle",
+                ],
+            }
+            _hdrs = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+            import os as _os_fb
+            _uk = _os_fb.getenv('USPTO_API_KEY', '')
+            if _uk:
+                _hdrs['X-API-Key'] = _uk
+
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=15) as _cl:
+                _resp = await _cl.post(
+                    "https://api.uspto.gov/api/v1/patent/applications/search",
+                    headers=_hdrs, json=_body,
+                )
+            if _resp.status_code != 200:
+                _pipeline_logger.warning(
+                    f"[task={tid}] uspto_search failed — status={_resp.status_code}"
+                )
+                return None
+
+            _data = _resp.json() if _resp.text else {}
+            _hits = (_data.get('results', None) or _data.get('applications', None) or [])
+            if not _hits:
+                _hits = _data.get('patentFileBag', [])  # older API response format
+            if not _hits:
+                return None
+
+            _hit = _hits[0] if isinstance(_hits, list) else _hits
+            _pub = (
+                _hit.get('applicationMetaData', {}).get('earliestPublicationNumber', '')
+                if isinstance(_hit, dict) else ''
+            ) or ''
+            if _pub:
+                _pipeline_logger.info(
+                    f"[task={tid}] uspto_search — "
+                    f"app={app_id} → pub={_pub}"
+                )
+                return _pub
+
+            _pipeline_logger.warning(
+                f"[task={tid}] uspto_search no_pub — "
+                f"hits={len(_hits) if isinstance(_hits, list) else 1}, "
+                f"keys={list(_hit.keys())[:8] if isinstance(_hit, dict) else '?'}"
+            )
+            return None
+        except Exception as _fe:
+            _pipeline_logger.warning(
+                f"[task={tid}] uspto_search error — {type(_fe).__name__}: {_fe}"
+            )
+            return None
+
     # ── Run pipeline ─────────────────────────────────────────────────────────
     async def _run():
         import os as _os
@@ -1582,15 +1661,41 @@ def execute_family_analysis(self, task_id: str, params: dict):
             consumer_secret=epo_secret,
         )
 
+        family = None
         try:
             family = await epo_client.lookup_family(patent_id)
         except EPOError as e:
-            _pipeline_logger.error(
+            _pipeline_logger.warning(
                 f"[task={task_id}] FAMILY PHASE0 epo_error — {e}"
             )
-            set_task_failed(task_id, f"EPO family lookup failed: {e}")
-            _update_mysql_progress(task_id, 'failed', 0)
-            return {'status': 'failed', 'task_id': task_id, 'error': str(e)}
+            # ── Fallback: if EPO doesn't know this application number,
+            # try USPTO PEDS to resolve it to a publication number, then
+            # retry EPO with that.  USPTO application numbers are not
+            # always indexed by EPO until the 18-month publication.
+            if patent_source == 'uspto':
+                _pub_number = await _resolve_us_app_to_pub_number(
+                    patent_id, task_id,
+                )
+                if _pub_number:
+                    _pipeline_logger.info(
+                        f"[task={task_id}] FAMILY PHASE0 fallback — "
+                        f"resolved {patent_id} → {_pub_number}"
+                    )
+                    update_task_status(task_id, 'preparing',
+                                       _advance_progress(3),
+                                       f'EPO未收录申请号，已解析为公开号 {_pub_number}，重试...',
+                                       analysis_type='family')
+                    try:
+                        family = await epo_client.lookup_family(_pub_number)
+                    except EPOError as _e2:
+                        _pipeline_logger.error(
+                            f"[task={task_id}] FAMILY PHASE0 fallback_error — {_e2}"
+                        )
+
+            if family is None:
+                set_task_failed(task_id, f"EPO family lookup failed: {e}")
+                _update_mysql_progress(task_id, 'failed', 0)
+                return {'status': 'failed', 'task_id': task_id, 'error': str(e)}
 
         _pipeline_logger.info(
             f"[task={task_id}] FAMILY PHASE0 epo_ok — "
