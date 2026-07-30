@@ -194,7 +194,7 @@ export default {
 
     // Analysis columns
     columnsLabel: 'Analysis Dimensions',
-    docTableTitle: 'Document Processing',
+    jurTableTitle: 'Jurisdictions',
 
     // Action button tooltips
     actionPause: 'Pause',

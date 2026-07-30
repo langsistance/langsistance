@@ -339,7 +339,13 @@ _STATUS_MSGS = {
         "china_report_title": "中国专利 {patent_id} 审查历史分析报告",
         "china_family_overview": "查到 {input_id} 的中国同族申请号 {cn_app}，同族覆盖 {n_juris} 个司法辖区: {juris}",
         "china_fetching_for_family": "正在获取中国同族专利 {cn_app} 的审查数据...",
+        "family_cn_done": "已获取 {events} 条审查决定 / {claims} 项权利要求",
+        "family_cn_basic": "仅有著录项目数据",
         "japan_fetching_for_family": "正在获取日本同族专利 {jp_app} 的审查数据...",
+        "family_jp_done": "已获取 {events} 条审查进度事件",
+        "family_jp_basic": "仅有著录项目数据",
+        "family_ep_done": "已获取 {steps} 个审查步骤 ({status})",
+        "family_ep_basic": "仅有著录项目数据",
         "epo_fetching_for_family": "正在获取欧洲同族专利 EP{ep_app} 的审查数据...",
         "epo_no_ep_member": "未找到该专利的欧洲同族成员，无法进行EPO审查历史分析。",
         "epo_no_review_data": "未找到该欧洲专利的审查数据。",
@@ -394,7 +400,13 @@ _STATUS_MSGS = {
         "china_report_title": "Chinese Patent {patent_id} Examination History Report",
         "china_family_overview": "Found CN application {cn_app} for {input_id}, family spans {n_juris} jurisdictions: {juris}",
         "china_fetching_for_family": "Fetching CN family member {cn_app} examination data...",
+        "family_cn_done": "Fetched {events} decisions / {claims} claims",
+        "family_cn_basic": "Bibliographic data only",
         "japan_fetching_for_family": "Fetching JP family member {jp_app} examination data...",
+        "family_jp_done": "Fetched {events} progress events",
+        "family_jp_basic": "Bibliographic data only",
+        "family_ep_done": "Fetched {steps} procedural steps ({status})",
+        "family_ep_basic": "Bibliographic data only",
         "epo_fetching_for_family": "Fetching EP family member EP{ep_app} examination data...",
         "epo_no_ep_member": "No European family member found for this patent.",
         "epo_no_review_data": "No examination data found for this European patent.",
@@ -1625,6 +1637,57 @@ def execute_family_analysis(self, task_id: str, params: dict):
                            family_overview=family_overview,
                            analysis_type='family')
 
+        # ── Initialize per-jurisdiction progress tracking ──
+        # EP member states (DE, GB, FR, etc.) are merged into a single "EP" row
+        # because they share the same EPO examination process.
+        _EP_MEMBER_STATES = frozenset({
+            'AT', 'BE', 'BG', 'CH', 'CY', 'CZ', 'DE', 'DK', 'EE', 'ES',
+            'FI', 'FR', 'GB', 'GR', 'HR', 'HU', 'IE', 'IS', 'IT', 'LI',
+            'LT', 'LU', 'LV', 'MC', 'MK', 'MT', 'NL', 'NO', 'PL', 'PT',
+            'RO', 'SE', 'SI', 'SK', 'SM', 'TR',
+        })
+        _JUR_LABELS = {'US': '美国 (US)', 'CN': '中国 (CN)', 'JP': '日本 (JP)',
+                       'EP': '欧洲 (EPO)', 'WO': 'PCT (WO)', 'KR': '韩国 (KR)'}
+        _jurisdictions: list[dict] = []
+        _seen_ep = False  # merge all EP member states into one row
+        _priority_order = ['US', 'CN', 'JP', 'EP', 'WO', 'KR']
+        _all_codes = list(family.jurisdictions)
+        # Sort: priority countries first, then by code
+        _all_codes.sort(key=lambda c: (
+            _priority_order.index(c) if c in _priority_order else 99, c,
+        ))
+        for _code in _all_codes:
+            if _code in _EP_MEMBER_STATES:
+                if not _seen_ep:
+                    _seen_ep = True
+                    _jurisdictions.append({
+                        'code': 'EP',
+                        'label': _JUR_LABELS.get('EP', 'EP'),
+                        'status': 'pending',
+                        'progress': 0,
+                        'detail': '',
+                        'file_count': 0,
+                        'files_done': 0,
+                    })
+                continue  # skip individual member states
+            _jurisdictions.append({
+                'code': _code,
+                'label': _JUR_LABELS.get(_code, _code),
+                'status': 'pending',
+                'progress': 0,
+                'detail': '',
+                'file_count': 0,
+                'files_done': 0,
+            })
+
+        def _push_jurisdictions(_current_progress: int, _current_phase: str,
+                                _step_label: str):
+            """Push jurisdiction statuses to Redis."""
+            update_task_status(task_id, _current_phase, _current_progress,
+                               _step_label,
+                               jurisdictions=_jurisdictions,
+                               analysis_type='family')
+
         # ═════════════════════════════════════════════════════════════════
         # Phase 0.3: China examination data (if CN member exists)
         # ═════════════════════════════════════════════════════════════════
@@ -1678,10 +1741,27 @@ def execute_family_analysis(self, task_id: str, params: dict):
                         f"events={len(cn_events)}, claims={len(cn_claims)}, "
                         f"legal_events={len(cn_legal)}"
                     )
+                    # Update CN jurisdiction status
+                    for _j in _jurisdictions:
+                        if _j['code'] == 'CN':
+                            if cn_events:
+                                _j['status'] = 'done'
+                                _j['progress'] = 100
+                                _j['detail'] = _t('family_cn_done', lang,
+                                                  events=len(cn_events),
+                                                  claims=len(cn_claims))
+                            else:
+                                _j['status'] = 'done'  # basic data only
+                                _j['progress'] = 70
+                                _j['detail'] = _t('family_cn_basic', lang)
                 except Exception as e:
                     _pipeline_logger.warning(
                         f"[task={task_id}] FAMILY PHASE0.3 cn_fetch_failed — {e}"
                     )
+                    for _j in _jurisdictions:
+                        if _j['code'] == 'CN':
+                            _j['status'] = 'no_data'
+                            _j['detail'] = str(e)[:60]
 
         # ═════════════════════════════════════════════════════════════════
         # Phase 0.4: Japan examination data (if JP member exists)
@@ -1828,10 +1908,23 @@ def execute_family_analysis(self, task_id: str, params: dict):
                         f"has_refusal={jp_data.get('has_refusal_reasons')}, "
                         f"has_amendments={jp_data.get('has_amendments')}"
                     )
+                    for _j in _jurisdictions:
+                        if _j['code'] == 'JP':
+                            _pc = jp_data.get('progress_count', 0)
+                            if _pc > 0 or jp_data.get('has_registration'):
+                                _j['status'] = 'done'; _j['progress'] = 100
+                                _j['detail'] = _t('family_jp_done', lang, events=_pc)
+                            else:
+                                _j['status'] = 'done'; _j['progress'] = 70
+                                _j['detail'] = _t('family_jp_basic', lang)
                 except Exception as e:
                     _pipeline_logger.warning(
                         f"[task={task_id}] FAMILY PHASE0.4 jp_fetch_failed — {e}"
                     )
+                    for _j in _jurisdictions:
+                        if _j['code'] == 'JP':
+                            _j['status'] = 'no_data'
+                            _j['detail'] = str(e)[:60]
 
         # ═════════════════════════════════════════════════════════════════
         # Phase 0.45: EPO examination data (if EP member exists)
@@ -1892,10 +1985,24 @@ def execute_family_analysis(self, task_id: str, params: dict):
                         f"has_search_report={ep_data.get('has_search_report')}, "
                         f"status={ep_data.get('status')}"
                     )
+                    for _j in _jurisdictions:
+                        if _j['code'] == 'EP':
+                            _tl = len(ep_data.get('timeline_events', []))
+                            if _tl > 0 or ep_data.get('has_biblio'):
+                                _j['status'] = 'done'; _j['progress'] = 100
+                                _j['detail'] = _t('family_ep_done', lang, steps=_tl,
+                                                   status=ep_data.get('status', ''))
+                            else:
+                                _j['status'] = 'done'; _j['progress'] = 70
+                                _j['detail'] = _t('family_ep_basic', lang)
                 except Exception as e:
                     _pipeline_logger.warning(
                         f"[task={task_id}] FAMILY PHASE0.45 ep_fetch_failed — {e}"
                     )
+                    for _j in _jurisdictions:
+                        if _j['code'] == 'EP':
+                            _j['status'] = 'no_data'
+                            _j['detail'] = str(e)[:60]
 
         # ═════════════════════════════════════════════════════════════════
         # Phase 0.5: Fetch USPTO document list + classify
@@ -2009,35 +2116,16 @@ def execute_family_analysis(self, task_id: str, params: dict):
             f"pending_count={total_dl}, total={total_dl}"
         )
 
-        # ── Per-document status for frontend table ──
-        _doc_statuses: list[dict] = []
-        for _d in docs_to_download:
-            _doc_statuses.append({
-                'code': _d.document_code,
-                'description': _d.description,
-                'category': _d.category,
-                'status': 'pending',
-                'progress': 0,
-            })
+        # ── Activate US jurisdiction for Phase 2 document analysis ──
+        for _j in _jurisdictions:
+            if _j['code'] == 'US':
+                _j['status'] = 'analyzing'
+                _j['detail'] = _t('prosecution_downloading', lang, current=0, total=total_dl)
+                _j['file_count'] = total_dl
+                _j['files_done'] = 0
 
-        def _push_doc_statuses():
-            """Push the current document status list to Redis."""
-            # Count by status for the step label
-            _done = sum(1 for d in _doc_statuses if d['status'] == 'done')
-            _failed = sum(1 for d in _doc_statuses if d['status'] == 'failed')
-            _active = sum(1 for d in _doc_statuses if d['status'] in ('downloading', 'extracting', 'analyzing'))
-            _label = _t('prosecution_analyzing', lang, current=_done + _failed + _active, total=total_dl)
-            update_task_status(task_id, 'downloading' if _done == 0 else 'analyzing',
-                               progress_pct(_downloaded + _analyzed, total_dl),
-                               _label,
-                               documents=_doc_statuses,
-                               table_columns=columns)
-
-        update_task_status(task_id, 'downloading', 15,
-                           _t('prosecution_downloading', lang, current=0, total=total_dl),
-                           documents=_doc_statuses,
-                           table_columns=columns,
-                           analysis_type='family')
+        _push_jurisdictions(15, 'downloading',
+                            _t('prosecution_downloading', lang, current=0, total=total_dl))
 
         async def _fetch_prosecution(url: str, hdrs: dict, timeout: int):
             return await _uspto_get_with_retry(url, hdrs, timeout)
@@ -2053,8 +2141,11 @@ def execute_family_analysis(self, task_id: str, params: dict):
             nonlocal _analyzed, _downloaded
             async with _analyze_sem:
                 doc_index = _i + 1
-                _doc_statuses[_i]['status'] = 'analyzing'
-                _doc_statuses[_i]['progress'] = 60
+                # Update US jurisdiction progress
+                for _j in _jurisdictions:
+                    if _j['code'] == 'US':
+                        _j['detail'] = _t('prosecution_analyzing', lang, current=_j['files_done'], total=_j['file_count'], desc=_doc.description[:30])
+                        _j['progress'] = int((_j['files_done'] / max(_j['file_count'], 1)) * 90) + 5
 
                 # ── Text extraction (local-first -> Vision fallback) ──
                 if not _doc.text and _doc.binary:
@@ -2093,9 +2184,15 @@ def execute_family_analysis(self, task_id: str, params: dict):
                     row["_summary"] = ""
                     _table_rows[_i] = row
                     _analyzed += 1
-                    _doc_statuses[_i]['status'] = 'failed'
-                    _doc_statuses[_i]['progress'] = 100
-                    _push_doc_statuses()
+                    for _j in _jurisdictions:
+                        if _j['code'] == 'US':
+                            _j['files_done'] += 1
+                            _j['detail'] = _t('prosecution_analyzing', lang, current=_j['files_done'], total=_j['file_count'], desc=_doc.description[:30])
+                            _j['progress'] = int((_j['files_done'] / max(_j['file_count'], 1)) * 90) + 5
+                    _push_jurisdictions(
+                        int((_analyzed + _downloaded) / max(total_dl, 1) * 70) + 15,
+                        'analyzing',
+                        _t('prosecution_analyzing', lang, current=_analyzed, total=total_dl))
                     return
 
                 # ── Analyze (LLM) ──
@@ -2134,8 +2231,15 @@ def execute_family_analysis(self, task_id: str, params: dict):
                 row["_summary"] = summary
                 _table_rows[_i] = row
                 _analyzed += 1
-                _doc_statuses[_i]['status'] = 'done' if not row.get('_failed') else 'failed'
-                _doc_statuses[_i]['progress'] = 100
+                # Update US jurisdiction: increment files_done, update progress
+                for _j in _jurisdictions:
+                    if _j['code'] == 'US':
+                        _j['files_done'] += 1
+                        _j['progress'] = int((_j['files_done'] / max(_j['file_count'], 1)) * 90) + 5
+                        if _j['files_done'] >= _j['file_count']:
+                            _j['status'] = 'done'
+                            _j['progress'] = 100
+                        _j['detail'] = _t('prosecution_analyzing', lang, current=_j['files_done'], total=_j['file_count'])
 
                 _p = max(_downloaded, _analyzed)
                 update_task_status(
@@ -2146,7 +2250,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
                        desc=_doc.description[:40]),
                     table_rows=[r for r in _table_rows if r is not None],
                     table_columns=columns,
-                    documents=_doc_statuses,
+                    jurisdictions=_jurisdictions,
                 )
                 _pipeline_logger.info(
                     f"[task={task_id}] FAMILY PHASE2 analysis_done — "
@@ -2174,19 +2278,20 @@ def execute_family_analysis(self, task_id: str, params: dict):
                 return _result
 
             _visible_progress = max(_downloaded, _analyzed)
-            _doc_statuses[_i]['status'] = 'downloading'
-            _doc_statuses[_i]['progress'] = 30
+            # Update US jurisdiction detail during download phase
+            for _j in _jurisdictions:
+                if _j['code'] == 'US':
+                    _j['detail'] = _t('prosecution_downloading', lang, current=doc_index, total=total_dl)
+                    _j['progress'] = int((_downloaded / max(total_dl, 1)) * 15) + 5  # 5-20% during download
             update_task_status(
                 task_id, 'downloading',
                 progress_pct(_visible_progress, total_dl),
                 _t('prosecution_downloading', lang, current=doc_index, total=total_dl),
-                documents=_doc_statuses,
+                jurisdictions=_jurisdictions,
                 table_columns=columns,
             )
             await download_single_document(_doc, _fetch_prosecution, us_app_number, headers)
             _downloaded += 1
-            _doc_statuses[_i]['status'] = 'extracting'
-            _doc_statuses[_i]['progress'] = 50
 
             _pipeline_logger.info(
                 f"[task={task_id}] FAMILY PHASE2 download_done — "
@@ -2408,24 +2513,42 @@ def _build_family_overview_status(family, lang: str) -> dict:
             'title': m.title,
         })
 
+    # Merge EP member states (DE, GB, FR, AT, …) into a single "EP" entry
+    # for the frontend jurisdiction badges — same logic as the progress table.
+    _EP_MEMBER_CODES = frozenset({
+        'AT', 'BE', 'BG', 'CH', 'CY', 'CZ', 'DE', 'DK', 'EE', 'ES',
+        'FI', 'FR', 'GB', 'GR', 'HR', 'HU', 'IE', 'IS', 'IT', 'LI',
+        'LT', 'LU', 'LV', 'MC', 'MK', 'MT', 'NL', 'NO', 'PL', 'PT',
+        'RO', 'SE', 'SI', 'SK', 'SM', 'TR',
+    })
+    display_jurisdictions: list[str] = []
+    _seen_ep = False
+    for _c in family.jurisdictions:
+        if _c in _EP_MEMBER_CODES:
+            if not _seen_ep:
+                display_jurisdictions.append('EP')
+                _seen_ep = True
+        else:
+            display_jurisdictions.append(_c)
+
     if lang == 'zh':
         step_msg = (
             f"查到 {family.query_pub_number} 的同族专利，"
             f"共 {len(family.deduplicated_members)} 个成员，"
-            f"涉及 {len(family.jurisdictions)} 个司法辖区: "
-            f"{', '.join(family.jurisdictions)}"
+            f"涉及 {len(display_jurisdictions)} 个司法辖区: "
+            f"{', '.join(display_jurisdictions)}"
         )
     else:
         step_msg = (
             f"Found {len(family.deduplicated_members)} family members for "
-            f"{family.query_pub_number} across {len(family.jurisdictions)} "
-            f"jurisdictions: {', '.join(family.jurisdictions)}"
+            f"{family.query_pub_number} across {len(display_jurisdictions)} "
+            f"jurisdictions: {', '.join(display_jurisdictions)}"
         )
 
     return {
         'family_id': family.family_id,
         'total_count': family.total_count,
-        'jurisdictions': family.jurisdictions,
+        'jurisdictions': display_jurisdictions,
         'members': members_data,
         'step_msg': step_msg,
     }

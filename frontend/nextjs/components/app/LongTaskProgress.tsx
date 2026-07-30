@@ -4,12 +4,14 @@ import { useMemo, useState } from 'react'
 import { useI18n } from '@/lib/app-i18n'
 import { renderMarkdownToHtml } from '@/lib/markdownRender'
 
-interface DocStatus {
+interface JurisdictionStatus {
   code: string
-  description: string
-  category: string
-  status: 'pending' | 'downloading' | 'extracting' | 'analyzing' | 'done' | 'failed'
+  label: string
+  status: string  // 'done' | 'analyzing' | 'fetching' | 'pending' | 'no_data' | 'failed'
   progress: number
+  detail: string
+  file_count: number
+  files_done: number
 }
 
 interface Props {
@@ -19,7 +21,7 @@ interface Props {
   analysisType?: string
   tableColumns?: string[]
   familyOverview?: Record<string, any>
-  documents?: DocStatus[]
+  jurisdictions?: JurisdictionStatus[]
 }
 
 interface TaskState {
@@ -320,73 +322,15 @@ const JURISDICTION_COLORS: Record<string, string> = {
   WO: '#10B981',
 }
 
-// ── Document status helpers ──────────────────────────────────────────────────
+// ── Jurisdiction status helpers ──────────────────────────────────────────────
 
-const DOC_STATUS_ICONS: Record<string, JSX.Element> = {
-  done: (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10B981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M20 6 9 17l-5-5"/>
-    </svg>
-  ),
-  analyzing: (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#60A5FA" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="lt-spin">
-      <path d="M21.21 15.89A10 10 0 1 1 8 2.83"/>
-      <path d="M22 12A10 10 0 0 0 12 2v10z"/>
-    </svg>
-  ),
-  downloading: (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#60A5FA" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="lt-spin">
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-      <polyline points="7 10 12 15 17 10"/>
-      <line x1="12" y1="15" x2="12" y2="3"/>
-    </svg>
-  ),
-  extracting: (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#60A5FA" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="lt-spin">
-      <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>
-      <polyline points="13 2 13 9 20 9"/>
-    </svg>
-  ),
-  failed: (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#EF4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="10"/>
-      <line x1="15" y1="9" x2="9" y2="15"/>
-      <line x1="9" y1="9" x2="15" y2="15"/>
-    </svg>
-  ),
-  pending: (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6B7280" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="10"/>
-      <line x1="12" y1="8" x2="12" y2="12"/>
-      <line x1="12" y1="16" x2="12.01" y2="16"/>
-    </svg>
-  ),
-}
-
-const DOC_STATUS_LABEL: Record<string, string> = {
-  done: '完成',
+const JUR_STATUS_TEXT: Record<string, string> = {
+  done: '已完成',
   analyzing: '分析中',
-  downloading: '下载中',
-  extracting: '提取中',
+  fetching: '获取中',
+  pending: '等待中',
+  no_data: '无数据',
   failed: '失败',
-  pending: '等待',
-}
-
-const CATEGORY_COLORS: Record<string, string> = {
-  'Office Action': '#3B82F6',
-  'Amendment': '#10B981',
-  'RCE': '#8B5CF6',
-  'IDS': '#F59E0B',
-  'Interview Summary': '#EC4899',
-  'Notice of Allowance': '#10B981',
-  'NPL': '#6B7280',
-  'Specification': '#6366F1',
-  'Other': '#9CA3AF',
-  'Appeal': '#EF4444',
-}
-
-function categoryColor(cat: string): string {
-  return CATEGORY_COLORS[cat] || '#6B7280'
 }
 
 // ── API helpers ──────────────────────────────────────────────────────────────
@@ -412,7 +356,7 @@ async function callLongTaskApi(taskId: string, action: 'pause' | 'resume' | 'sto
 // LongTaskProgress — main component
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export default function LongTaskProgress({ content, resultSummary, streaming, analysisType, tableColumns, familyOverview, documents }: Props) {
+export default function LongTaskProgress({ content, resultSummary, streaming, analysisType, tableColumns, familyOverview, jurisdictions }: Props) {
   const { t } = useI18n()
   const state = parseTaskContent(content)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
@@ -424,7 +368,7 @@ export default function LongTaskProgress({ content, resultSummary, streaming, an
   // Detect family mode: use explicit analysisType from backend, fall back to keyword matching
   const stepLabel = state?.stepLabel || ''
   const isFamily = analysisType === 'family' || isFamilyMode(content, stepLabel)
-  const jurisdictions: string[] = (familyOverview?.jurisdictions as string[]) || (isFamily ? extractJurisdictions(content, stepLabel) : [])
+  const jurisdictionCodes: string[] = (familyOverview?.jurisdictions as string[]) || (isFamily ? extractJurisdictions(content, stepLabel) : [])
 
   const summaryStreaming = Boolean(
     resultSummary
@@ -511,9 +455,9 @@ export default function LongTaskProgress({ content, resultSummary, streaming, an
       </div>
 
       {/* Jurisdiction badges (family mode) */}
-      {isFamily && jurisdictions.length > 0 && (
+      {isFamily && jurisdictionCodes.length > 0 && (
         <div className="lt-jurisdictions">
-          {jurisdictions.map((code) => (
+          {jurisdictionCodes.map((code) => (
             <span
               key={code}
               className="lt-jurisdiction-badge"
@@ -665,46 +609,50 @@ export default function LongTaskProgress({ content, resultSummary, streaming, an
         </div>
       )}
 
-      {/* Document-level progress table (family analysis Phase 2) */}
-      {documents && documents.length > 0 && (state.phase === 'running' || state.phase === 'paused') && (
-        <div className="lt-doc-table-wrap">
-          <div className="lt-doc-table-header">
-            <span className="lt-doc-table-title">{t('longTask.docTableTitle')}</span>
-            <span className="lt-doc-table-count">
-              {documents.filter(d => d.status === 'done').length}/{documents.length}
-            </span>
-          </div>
-          <div className="lt-doc-table">
-            {documents.map((doc) => (
+      {/* Jurisdiction-level progress table (family analysis) */}
+      {jurisdictions && jurisdictions.length > 0 && (state.phase === 'running' || state.phase === 'paused') && (
+        <div className="lt-jur-table">
+          {jurisdictions.map((jur) => {
+            const isActive = jur.status === 'analyzing' || jur.status === 'fetching'
+            const isDone = jur.status === 'done'
+            const isNoData = jur.status === 'no_data' || jur.status === 'failed'
+            const statusText = JUR_STATUS_TEXT[jur.status] || jur.status
+            return (
               <div
-                key={doc.code}
-                className={`lt-doc-row status-${doc.status}`}
+                key={jur.code}
+                className={`lt-jur-row ${isActive ? 'active' : ''} ${isDone ? 'done' : ''} ${isNoData ? 'no-data' : ''}`}
               >
-                <span className="lt-doc-code" title={doc.description}>{doc.code}</span>
-                <span
-                  className="lt-doc-category"
-                  style={{ borderColor: categoryColor(doc.category), color: categoryColor(doc.category) }}
-                >
-                  {doc.category}
+                <span className="lt-jur-flag">{jur.code}</span>
+                <span className="lt-jur-label">{jur.label}</span>
+                <span className={`lt-jur-status ${jur.status}`}>
+                  {isActive && <span className="lt-jur-pulse" />}
+                  {isDone && (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#10B981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M20 6 9 17l-5-5"/>
+                    </svg>
+                  )}
+                  {isNoData && (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6B7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                  )}
+                  {statusText}
                 </span>
-                <span className="lt-doc-desc">{doc.description}</span>
-                <span
-                  className="lt-doc-status"
-                  title={DOC_STATUS_LABEL[doc.status] || doc.status}
-                >
-                  {DOC_STATUS_ICONS[doc.status] || DOC_STATUS_ICONS.pending}
-                </span>
-                <span className="lt-doc-bar-wrap">
-                  <span className="lt-doc-bar-track">
+                <span className="lt-jur-detail">{jur.detail}</span>
+                <span className="lt-jur-bar-wrap">
+                  <span className="lt-jur-bar-track">
                     <span
-                      className={`lt-doc-bar-fill ${doc.status === 'failed' ? 'failed' : ''}`}
-                      style={{ width: `${Math.max(doc.progress, doc.status === 'pending' ? 0 : 5)}%` }}
+                      className={`lt-jur-bar-fill ${jur.status}`}
+                      style={{ width: `${Math.max(jur.progress, isActive ? 8 : 0)}%` }}
                     />
                   </span>
+                  {jur.file_count > 0 && (
+                    <span className="lt-jur-bar-count">{jur.files_done}/{jur.file_count}</span>
+                  )}
                 </span>
               </div>
-            ))}
-          </div>
+            )
+          })}
         </div>
       )}
 
