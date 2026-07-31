@@ -1194,11 +1194,36 @@ async def _run_pipeline(
     )
     _update_mysql_progress(task_id, 'analyzing', 75)
 
-    # ==== Phase 3: Generate report (Pro, dynamic) ====
+    # ==== Phase 3: Generate report (Pro, dynamic, streaming) ====
+    # ── Streaming provider: use [PROSECUTION] streaming_provider/model for
+    # visible streaming text (executive summary + sections), same as
+    # execute_prosecution_analysis. Falls back to pro_provider if unset.
+    from sources.long_task.config import get_prosecution_config
+    _ptc = get_prosecution_config()
+    _stream_cfg_provider = _ptc.get('streaming_provider')
+    _stream_cfg_model = _ptc.get('streaming_model')
+    _streaming_provider = None
+    if _stream_cfg_provider and _stream_cfg_model:
+        from sources.llm_provider import Provider
+        _streaming_provider = Provider(
+            provider_name=_stream_cfg_provider, model=_stream_cfg_model,
+            server_address='', is_local=False,
+        )
+        _pipeline_logger.info(
+            f"[task={task_id}] CONFIG — streaming_provider CREATED: "
+            f"{_stream_cfg_provider}/{_stream_cfg_model}"
+        )
+    else:
+        _pipeline_logger.info(
+            f"[task={task_id}] CONFIG — streaming_provider not configured, "
+            f"using pro_provider={pro_provider.model if hasattr(pro_provider, 'model') else 'pro'}"
+        )
+    _stream = _streaming_provider or pro_provider
+
     _pipeline_logger.info(
         f"[task={task_id}] PHASE3 generate_report — "
         f"columns={columns}, table_rows_count={len(table_rows)}, "
-        f"provider={pro_provider.model if hasattr(pro_provider, 'model') else 'pro'}"
+        f"stream_provider={_stream.model if hasattr(_stream, 'model') else 'pro'}"
     )
 
     from sources.long_task.status_manager import ThrottledSummaryUpdater
@@ -1237,7 +1262,7 @@ async def _run_pipeline(
             table_rows=table_rows,
             columns=columns,
             query=params['query'],
-            provider=pro_provider,
+            provider=_stream,
             lang=batch_lang,
             on_chunk=_exec_chunk,
         )
@@ -1306,7 +1331,7 @@ async def _run_pipeline(
             text = await generate_report_section(
                 section=section, query=params['query'],
                 columns=columns, table_rows=table_rows,
-                provider=pro_provider,
+                provider=_stream,
                 lang=batch_lang,
                 on_chunk=_section_chunk,
             )
