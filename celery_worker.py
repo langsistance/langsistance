@@ -941,10 +941,19 @@ async def _run_pipeline(
     _analyze_sem = asyncio.Semaphore(100)  # caps concurrent OCR + LLM calls
     _pending_tasks: list = []  # list of asyncio.Task
     _analyzed = _base_idx  # count of analyses completed (includes resume rows)
+    _downloaded = _base_idx  # count of downloads completed (for monotonic progress)
+    _phase2_progress = progress_pct(_base_idx, total)  # monotonic guard for progress bar
+
+    def _advance_progress(target: int) -> int:
+        """Set Phase 2 progress to *target*, never going backward."""
+        nonlocal _phase2_progress
+        if target > _phase2_progress:
+            _phase2_progress = target
+        return _phase2_progress
 
     async def _analyze_one(_patent_id: str, _i: int, _patent_text,
                            _fallback_binary, _is_upload: bool) -> None:
-        nonlocal _analyzed
+        nonlocal _analyzed, _downloaded, _phase2_progress
 
         async with _analyze_sem:
             _patent_idx = _i + 1
@@ -1054,13 +1063,14 @@ async def _run_pipeline(
             _table_rows[_i] = _row
             _analyzed += 1
 
-            # ── Progress update ──
+            # ── Progress update (monotonic: max of downloaded and analyzed) ──
+            _visible = max(_downloaded, _analyzed)
             _pipeline_logger.info(
                 f"[task={task_id}] PHASE2 table_updated — "
-                f"analyzed={_analyzed}/{total}"
+                f"analyzed={_analyzed}/{total}, downloaded={_downloaded}/{total}"
             )
             update_task_status(task_id, 'analyzing',
-                               progress_pct(_analyzed, total),
+                               _advance_progress(progress_pct(_visible, total)),
                                _t('analysis_completed_count', batch_lang,
                                   current=_analyzed, total=total),
                                table_rows=[r for r in _table_rows if r is not None])
@@ -1095,10 +1105,10 @@ async def _run_pipeline(
             return _result
 
         try:
-            # Use patent_index-based progress so resumed tasks show correct %
-            completed_before = len([r for r in _table_rows if r is not None])
+            # Monotonic progress: show max of downloads started vs analyses finished
+            _visible = max(_downloaded, _analyzed)
             update_task_status(task_id, 'analyzing',
-                               progress_pct(completed_before + i, total),
+                               _advance_progress(progress_pct(_visible, total)),
                                _t('downloading_patent', batch_lang,
                                   current=patent_index, total=total),
                                table_rows=[r for r in _table_rows if r is not None])
@@ -1136,6 +1146,7 @@ async def _run_pipeline(
                 asyncio.create_task(_analyze_one(patent_id, _base_idx + i, _download_text,
                                                   _download_binary, is_file_upload_mode))
             )
+            _downloaded += 1
 
             # Periodic checkpoint save
             save_checkpoint(task_id, {
@@ -1149,11 +1160,12 @@ async def _run_pipeline(
                 'columns': columns,
             })
 
+            # Post-download progress: max of downloaded and analyzed (monotonic)
+            _visible = max(_downloaded, _analyzed)
             update_task_status(task_id, 'analyzing',
-                               progress_pct(completed_before + i + 1, total),
+                               _advance_progress(progress_pct(_visible, total)),
                                _t('analysis_completed_count', batch_lang,
-                                  current=len([r for r in _table_rows if r is not None]),
-                                  total=total),
+                                  current=_analyzed, total=total),
                                table_rows=[r for r in _table_rows if r is not None])
 
         except Exception as e:
@@ -1163,7 +1175,14 @@ async def _run_pipeline(
             )
             _row = build_failed_row(patent_id, str(e), lang=batch_lang)
             _table_rows[_base_idx + i] = _row
+            _downloaded += 1
             _analyzed += 1
+            _visible = max(_downloaded, _analyzed)
+            update_task_status(task_id, 'analyzing',
+                               _advance_progress(progress_pct(_visible, total)),
+                               _t('analysis_completed_count', batch_lang,
+                                  current=_analyzed, total=total),
+                               table_rows=[r for r in _table_rows if r is not None])
 
     # ── Wait for all in-flight analyses to finish ──
     _pipeline_logger.info(
