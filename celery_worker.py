@@ -923,17 +923,154 @@ async def _run_pipeline(
         # Update MySQL long_tasks table after phase 1
         _update_mysql_progress(task_id, 'generating_columns', 5)
 
-    # ==== Phase 2: Per-patent download -> analyze -> summarize ====
+    # ==== Phase 2: Sequential download + pipelined concurrent analysis ====
+    # Each patent is downloaded sequentially (rate-limited API calls).  As soon
+    # as download completes, analysis (text check → vision/OCR → LLM analyze →
+    # LLM summarize) is launched immediately via asyncio.create_task().  All
+    # analysis steps run under a Semaphore(100), so multiple LLM calls execute
+    # concurrently.  (Same pattern as execute_prosecution_analysis Phase 2.)
     _pipeline_logger.info(
         f"[task={task_id}] PHASE2 START — pending_count={len(pending)}, "
         f"total={total}"
     )
-    for i, patent_id in enumerate(pending):
-        patent_index = len(table_rows) + 1
 
-        # ── Pause / Stop checkpoint ──────────────────────────────────────
+    _base_idx = len(table_rows)  # already-completed rows (0 for fresh start, >0 for resume)
+    _table_rows: list[dict] = [None] * total  # preserve order by index
+    for _idx, _crow in enumerate(table_rows):
+        _table_rows[_idx] = _crow  # pre-fill completed rows from checkpoint
+    _analyze_sem = asyncio.Semaphore(100)  # caps concurrent OCR + LLM calls
+    _pending_tasks: list = []  # list of asyncio.Task
+    _analyzed = _base_idx  # count of analyses completed (includes resume rows)
+
+    async def _analyze_one(_patent_id: str, _i: int, _patent_text,
+                           _fallback_binary, _is_upload: bool) -> None:
+        nonlocal _analyzed
+
+        async with _analyze_sem:
+            _patent_idx = _i + 1
+            _pipeline_logger.info(
+                f"[task={task_id}] PHASE2 analyze_start — "
+                f"patent_id={_patent_id}, idx={_patent_idx}/{total}"
+            )
+
+            _text_ok = _patent_text and len(_patent_text) >= 1000
+            _want_vision = vision_provider is not None
+
+            if _text_ok:
+                _row = await analyze_single_patent(
+                    patent_id=_patent_id, patent_text=_patent_text,
+                    columns=columns, query=params['query'],
+                    provider=pro_provider, timeout=60, lang=batch_lang,
+                )
+                _pipeline_logger.info(
+                    f"[task={task_id}] PHASE2 analyze_done — "
+                    f"patent_id={_patent_id}, idx={_patent_idx}/{total}, "
+                    f"row_keys={list(_row.keys()) if _row else 'None'}"
+                )
+            else:
+                _pdf_bytes = None
+                if _fallback_binary is not None:
+                    _pdf_bytes = _fallback_binary
+                    _pipeline_logger.info(
+                        f"[task={task_id}] PHASE2 vision_using_cached_binary — "
+                        f"patent_id={_patent_id}, len={len(_pdf_bytes)}"
+                    )
+                elif _is_upload:
+                    _ref = next(
+                        (r for r in patent_file_refs
+                         if r['filename'].rsplit('.', 1)[0] == _patent_id),
+                        None,
+                    )
+                    if _ref:
+                        try:
+                            with open(_ref['path'], 'rb') as _fh:
+                                _pdf_bytes = _fh.read()
+                            _pipeline_logger.info(
+                                f"[task={task_id}] PHASE2 file_upload_binary_read — "
+                                f"patent_id={_patent_id}, file={_ref['filename']}, "
+                                f"len={len(_pdf_bytes)}"
+                            )
+                        except Exception as _e:
+                            _pipeline_logger.warning(
+                                f"[task={task_id}] PHASE2 file_upload_binary_read_failed — "
+                                f"patent_id={_patent_id}, error={_e}"
+                            )
+                elif params.get('patent_source') == 'uspto':
+                    _pdf_bytes = await _download_uspto_binary_for_vision(
+                        _patent_id, flash_provider,
+                    )
+
+                if not _pdf_bytes:
+                    _row = build_failed_row(_patent_id,
+                        "PDF text extraction failed and could not download binary",
+                        lang=batch_lang)
+                elif _want_vision:
+                    from sources.long_task.patent_analyzer import analyze_patent_with_vision
+                    _row = await analyze_patent_with_vision(
+                        pdf_bytes=_pdf_bytes, patent_id=_patent_id,
+                        columns=columns, query=params['query'],
+                        vision_provider=vision_provider, lang=batch_lang,
+                    )
+                    if _row.get('_failed'):
+                        _pipeline_logger.info(
+                            f"[task={task_id}] PHASE2 vision_failed_fallback_to_ocr — "
+                            f"patent_id={_patent_id}"
+                        )
+                        _ocr_text = _ocr_from_pdf_reader(_pdf_bytes)
+                        if _ocr_text and len(_ocr_text) >= 1000:
+                            _row = await analyze_single_patent(
+                                patent_id=_patent_id, patent_text=_ocr_text,
+                                columns=columns, query=params['query'],
+                                provider=pro_provider, timeout=60, lang=batch_lang,
+                            )
+                else:
+                    _pipeline_logger.info(
+                        f"[task={task_id}] PHASE2 vision_disabled_ocr — "
+                        f"patent_id={_patent_id}"
+                    )
+                    _ocr_text = _ocr_from_pdf_reader(_pdf_bytes)
+                    if _ocr_text and len(_ocr_text) >= 1000:
+                        _row = await analyze_single_patent(
+                            patent_id=_patent_id, patent_text=_ocr_text,
+                            columns=columns, query=params['query'],
+                            provider=pro_provider, timeout=60, lang=batch_lang,
+                        )
+                    else:
+                        _row = build_failed_row(_patent_id,
+                            f"Text extraction and OCR both failed ({len(_ocr_text) if _ocr_text else 0} chars)",
+                            lang=batch_lang)
+
+            # ── Summarize (LLM) ──
+            _row['_summary'] = await generate_patent_summary(
+                patent_id=_patent_id, row=_row, query=params['query'],
+                provider=pro_provider, lang=batch_lang,
+            )
+            _pipeline_logger.info(
+                f"[task={task_id}] PHASE2 summary_done — "
+                f"patent_id={_patent_id}, idx={_patent_idx}/{total}, "
+                f"summary_length={len(_row.get('_summary', '')) if _row.get('_summary') else 0}"
+            )
+
+            _table_rows[_i] = _row
+            _analyzed += 1
+
+            # ── Progress update ──
+            _pipeline_logger.info(
+                f"[task={task_id}] PHASE2 table_updated — "
+                f"analyzed={_analyzed}/{total}"
+            )
+            update_task_status(task_id, 'analyzing',
+                               progress_pct(_analyzed, total),
+                               _t('analysis_completed_count', batch_lang,
+                                  current=_analyzed, total=total),
+                               table_rows=[r for r in _table_rows if r is not None])
+
+    for i, patent_id in enumerate(pending):
+        patent_index = len([r for r in _table_rows if r is not None]) + 1
+
+        # ── Pause / Stop checkpoint ──
         _uid = params.get('user_id', '')
-        _completed = len(table_rows)
+        _completed = len([r for r in _table_rows if r is not None])
 
         _result = _handle_task_stop(task_id, _uid, _completed, total)
         if _result:
@@ -947,11 +1084,11 @@ async def _run_pipeline(
             return _result
 
         _result = _handle_task_pause(task_id, _uid, _completed, total, {
-            'completed': [r.get('专利号', '') for r in table_rows if not r.get('_failed')],
+            'completed': [r.get('专利号', '') for r in _table_rows if r is not None and not r.get('_failed')],
             'current': patent_id,
             'pending': pending[i:],
-            'completed_rows': table_rows,
-            'failed': [r.get('专利号', '') for r in table_rows if r.get('_failed')],
+            'completed_rows': [r for r in _table_rows if r is not None],
+            'failed': [r.get('专利号', '') for r in _table_rows if r is not None and r.get('_failed')],
             'columns': columns,
         })
         if _result:
@@ -959,24 +1096,24 @@ async def _run_pipeline(
 
         try:
             # Use patent_index-based progress so resumed tasks show correct %
-            completed_before = len(table_rows)
+            completed_before = len([r for r in _table_rows if r is not None])
             update_task_status(task_id, 'analyzing',
                                progress_pct(completed_before + i, total),
-                               _t('downloading_patent', batch_lang, current=patent_index, total=total),
-                               table_rows=table_rows)
+                               _t('downloading_patent', batch_lang,
+                                  current=patent_index, total=total),
+                               table_rows=[r for r in _table_rows if r is not None])
 
-            # Try scene tool download first, fall back to hardcoded download
-            # In file-upload mode, use pre-extracted text from conversation_history
-            fallback_binary = None
+            # ── Download (sequential, rate-limited) ──
+            _download_binary = None
             if is_file_upload_mode:
-                patent_text = patent_texts.get(patent_id, '')
+                _download_text = patent_texts.get(patent_id, '')
                 _pipeline_logger.info(
                     f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] — "
                     f"patent_id={patent_id}, using_uploaded_text, "
-                    f"text_length={len(patent_text)}"
+                    f"text_length={len(_download_text)}"
                 )
             else:
-                patent_text, fallback_binary = await _download_patent_via_scene_or_fallback(
+                _download_text, _download_binary = await _download_patent_via_scene_or_fallback(
                     patent_id=patent_id,
                     params=params,
                     scene_candidates=scene_candidates,
@@ -989,151 +1126,56 @@ async def _run_pipeline(
             _pipeline_logger.info(
                 f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] download_done — "
                 f"patent_id={patent_id}, "
-                f"text_length={len(patent_text) if patent_text else 0}, "
-                f"binary_cached={fallback_binary is not None}, "
-                f"binary_len={len(fallback_binary) if fallback_binary else 0}"
+                f"text_length={len(_download_text) if _download_text else 0}, "
+                f"binary_cached={_download_binary is not None}, "
+                f"binary_len={len(_download_binary) if _download_binary else 0}"
             )
+
+            # ── Launch analysis immediately (concurrent via semaphore) ──
+            _pending_tasks.append(
+                asyncio.create_task(_analyze_one(patent_id, _base_idx + i, _download_text,
+                                                  _download_binary, is_file_upload_mode))
+            )
+
+            # Periodic checkpoint save
+            save_checkpoint(task_id, {
+                'completed': [r.get('专利号', patent_id) for r in _table_rows
+                              if r is not None and not r.get('_failed')],
+                'current': patent_id,
+                'pending': pending[i+1:],
+                'completed_rows': [r for r in _table_rows if r is not None],
+                'failed': [r.get('专利号', patent_id) for r in _table_rows
+                           if r is not None and r.get('_failed')],
+                'columns': columns,
+            })
 
             update_task_status(task_id, 'analyzing',
-                               progress_pct(completed_before + i, total),
-                               _t('analyzing', batch_lang, current=patent_index, total=total),
-                               table_rows=table_rows)
-
-            # ── Text extraction may be incomplete for short patents or
-            #     scanned/image PDFs (pypdf returns little/nothing).  Threshold
-            #     at 10k chars ensures we have enough text for meaningful analysis.
-            #     Strategy: try vision (MiniMax-M3) first, then OCR as fallback.
-            #     When vision_enabled=false, skip straight to OCR.
-            text_ok = patent_text and len(patent_text) >= 1000
-            want_vision = vision_provider is not None
-
-            if text_ok:
-                row = await analyze_single_patent(
-                    patent_id=patent_id, patent_text=patent_text,
-                    columns=columns, query=params['query'],
-                    provider=pro_provider, timeout=60, lang=batch_lang,
-                )
-                _pipeline_logger.info(
-                    f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] analyze_done — "
-                    f"patent_id={patent_id}, row_keys={list(row.keys()) if row else 'None'}"
-                )
-            else:
-                # Text insufficient — need binary for vision or OCR
-                pdf_bytes = None
-                if fallback_binary is not None:
-                    # Reuse binary already downloaded during text extraction
-                    pdf_bytes = fallback_binary
-                    _pipeline_logger.info(
-                        f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
-                        f"vision_using_cached_binary — patent_id={patent_id}, "
-                        f"len={len(pdf_bytes)}"
-                    )
-                elif is_file_upload_mode:
-                    # Read the uploaded file from disk for vision/OCR
-                    ref = next(
-                        (r for r in patent_file_refs
-                         if r['filename'].rsplit('.', 1)[0] == patent_id),
-                        None,
-                    )
-                    if ref:
-                        try:
-                            with open(ref['path'], 'rb') as fh:
-                                pdf_bytes = fh.read()
-                            _pipeline_logger.info(
-                                f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
-                                f"file_upload_binary_read — patent_id={patent_id}, "
-                                f"file={ref['filename']}, "
-                                f"len={len(pdf_bytes)}"
-                            )
-                        except Exception as e:
-                            _pipeline_logger.warning(
-                                f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
-                                f"file_upload_binary_read_failed — patent_id={patent_id}, "
-                                f"error={e}"
-                            )
-                elif params.get('patent_source') == 'uspto':
-                    pdf_bytes = await _download_uspto_binary_for_vision(
-                        patent_id, flash_provider,
-                    )
-                if not pdf_bytes:
-                    row = build_failed_row(patent_id,
-                        "PDF text extraction failed and could not download binary",
-                        lang=batch_lang)
-                elif want_vision:
-                    # Path A: MiniMax-M3 vision → OCR fallback
-                    from sources.long_task.patent_analyzer import analyze_patent_with_vision
-                    row = await analyze_patent_with_vision(
-                        pdf_bytes=pdf_bytes, patent_id=patent_id,
-                        columns=columns, query=params['query'],
-                        vision_provider=vision_provider, lang=batch_lang,
-                    )
-                    if row.get('_failed'):
-                        _pipeline_logger.info(
-                            f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
-                            f"vision_failed_fallback_to_ocr — patent_id={patent_id}"
-                        )
-                        ocr_text = _ocr_from_pdf_reader(pdf_bytes)
-                        if ocr_text and len(ocr_text) >= 1000:
-                            row = await analyze_single_patent(
-                                patent_id=patent_id, patent_text=ocr_text,
-                                columns=columns, query=params['query'],
-                                provider=pro_provider, timeout=60, lang=batch_lang,
-                            )
-                else:
-                    # Path B: Vision disabled — straight to OCR
-                    _pipeline_logger.info(
-                        f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
-                        f"vision_disabled_ocr — patent_id={patent_id}"
-                    )
-                    ocr_text = _ocr_from_pdf_reader(pdf_bytes)
-                    if ocr_text and len(ocr_text) >= 1000:
-                        row = await analyze_single_patent(
-                            patent_id=patent_id, patent_text=ocr_text,
-                            columns=columns, query=params['query'],
-                            provider=pro_provider, timeout=60, lang=batch_lang,
-                        )
-                    else:
-                        row = build_failed_row(patent_id,
-                            f"Text extraction and OCR both failed ({len(ocr_text) if ocr_text else 0} chars)",
-                            lang=batch_lang)
-
-            row['_summary'] = await generate_patent_summary(
-                patent_id=patent_id, row=row, query=params['query'],
-                provider=pro_provider, lang=batch_lang,
-            )
-            _pipeline_logger.info(
-                f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] summary_done — "
-                f"patent_id={patent_id}, "
-                f"summary_length={len(row.get('_summary', '')) if row.get('_summary') else 0}"
-            )
+                               progress_pct(completed_before + i + 1, total),
+                               _t('analysis_completed_count', batch_lang,
+                                  current=len([r for r in _table_rows if r is not None]),
+                                  total=total),
+                               table_rows=[r for r in _table_rows if r is not None])
 
         except Exception as e:
             _pipeline_logger.error(
-                f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] FAILED — "
+                f"[task={task_id}] PHASE2 patent[{_base_idx + i + 1}/{total}] FAILED — "
                 f"patent_id={patent_id}, error={e}"
             )
-            row = build_failed_row(patent_id, str(e), lang=batch_lang)
+            _row = build_failed_row(patent_id, str(e), lang=batch_lang)
+            _table_rows[_base_idx + i] = _row
+            _analyzed += 1
 
-        table_rows.append(row)
-        _pipeline_logger.info(
-            f"[task={task_id}] PHASE2 table_updated — "
-            f"completed={len(table_rows)}/{total}, "
-            f"successful={len([r for r in table_rows if not r.get('_failed')])}, "
-            f"failed={len([r for r in table_rows if r.get('_failed')])}"
-        )
-        save_checkpoint(task_id, {
-            'completed': [r.get('专利号', patent_id) for r in table_rows if not r.get('_failed')],
-            'current': patent_id,
-            'pending': pending[i+1:],
-            'completed_rows': table_rows,
-            'failed': [r.get('专利号', patent_id) for r in table_rows if r.get('_failed')],
-            'columns': columns,
-        })
+    # ── Wait for all in-flight analyses to finish ──
+    _pipeline_logger.info(
+        f"[task={task_id}] PHASE2 all_downloads_done — "
+        f"waiting_for_{len(_pending_tasks)}_analyses"
+    )
+    if _pending_tasks:
+        await asyncio.gather(*_pending_tasks)
 
-        update_task_status(task_id, 'analyzing',
-                           progress_pct(completed_before + i + 1, total),
-                           _t('analysis_completed_count', batch_lang, current=len(table_rows), total=total),
-                           table_rows=table_rows)
+    # Reconstruct table_rows in original order
+    table_rows = [r for r in _table_rows if r is not None]
+
     # Clean up temp upload directory after Phase 2 (vision fallback may have read files)
     if patent_file_refs:
         import shutil as _shutil
