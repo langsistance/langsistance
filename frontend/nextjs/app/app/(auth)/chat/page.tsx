@@ -746,13 +746,19 @@ export default function Chat() {
                   : msg
               )
             }
-            // Fallback: try assistantId
+            // Fallback: try assistantId (new task — clear stale metadata from
+            // previous tasks so family labels don't leak into batch analysis etc.)
             return messages.map(msg =>
               msg.id === assistantId
                 ? {
                     ...msg,
                     content: newContent,
                     resultSummary: summary ?? msg.resultSummary,
+                    analysisType: undefined,
+                    jurisdictions: undefined,
+                    familyOverview: undefined,
+                    tableColumns: undefined,
+                    ...(extraFields || {}),
                   }
                 : msg
             )
@@ -819,12 +825,13 @@ export default function Chat() {
             if (data.family_overview) extraFields.familyOverview = data.family_overview
             if (data.jurisdictions) extraFields.jurisdictions = data.jurisdictions
             setMessages((m) => {
-              // Preserve previously-set fields when backend doesn't resend them
-              const prev = m.find(msg => msg.taskId === taskId || msg.id === assistantId) as any
-              if (!extraFields.analysisType && prev?.analysisType) extraFields.analysisType = prev.analysisType
-              if (!extraFields.tableColumns && prev?.tableColumns) extraFields.tableColumns = prev.tableColumns
-              if (!extraFields.familyOverview && prev?.familyOverview) extraFields.familyOverview = prev.familyOverview
-              if (!extraFields.jurisdictions && prev?.jurisdictions) extraFields.jurisdictions = prev.jurisdictions
+              // Preserve previously-set fields when backend doesn't resend them,
+              // BUT only from the SAME task — never leak metadata across tasks.
+              const sameTask = m.find(msg => msg.taskId === taskId) as any
+              if (!extraFields.analysisType && sameTask?.analysisType) extraFields.analysisType = sameTask.analysisType
+              if (!extraFields.tableColumns && sameTask?.tableColumns) extraFields.tableColumns = sameTask.tableColumns
+              if (!extraFields.familyOverview && sameTask?.familyOverview) extraFields.familyOverview = sameTask.familyOverview
+              if (!extraFields.jurisdictions && sameTask?.jurisdictions) extraFields.jurisdictions = sameTask.jurisdictions
               return findAndUpdate(m, newContent, data.result_summary, extraFields)
             })
           }

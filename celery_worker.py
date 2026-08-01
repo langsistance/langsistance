@@ -919,7 +919,8 @@ async def _run_pipeline(
         )
         update_task_status(task_id, 'generating_columns', 5,
                            f'分析维度：{" | ".join(columns[1:4])}...',
-                           table_columns=columns)
+                           table_columns=columns,
+                           analysis_type='batch')
         # Update MySQL long_tasks table after phase 1
         _update_mysql_progress(task_id, 'generating_columns', 5)
 
