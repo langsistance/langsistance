@@ -4,18 +4,19 @@ import Script from 'next/script'
 export const metadata: Metadata = {
   metadataBase: new URL('https://copiioai.com'),
   title: {
-    default: 'CopiioAI — AI-Powered API Tool Builder',
+    default: 'CopiioAI — AI-Powered Patent Intelligence',
     template: '%s | CopiioAI',
   },
   description:
-    'Build AI-powered tools from your APIs. CopiioAI converts browser-captured API requests into conversational AI tools.',
+    'AI-powered patent search, family analysis, and prosecution insights across USPTO, CNIPA, EPO, and more. Chat with patent data — no manual search required.',
   applicationName: 'CopiioAI',
   creator: 'CopiioAI',
   publisher: 'CopiioAI',
   keywords: [
-    'API to chat', 'conversational AI', 'API tools', 'no-code API',
-    'chat-based API', 'developer tools', 'AI assistant', 'natural language API',
-    'Chrome extension', 'API builder',
+    'patent search', 'patent analysis', 'AI patent', 'patent family analysis',
+    'patent prosecution', 'USPTO search', 'CNIPA', 'EPO patent', 'IP intelligence',
+    'patent AI', 'cross-jurisdiction patent', 'patent document analysis',
+    'Chrome extension', 'AI assistant',
   ],
   robots: {
     index: true,

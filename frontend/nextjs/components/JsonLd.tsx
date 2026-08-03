@@ -43,7 +43,7 @@ export function copiioaiWebSiteJsonLd() {
     name: 'CopiioAI',
     url: 'https://copiioai.com',
     description:
-      'Build AI-powered tools from your APIs. CopiioAI converts browser-captured API requests into conversational AI tools.',
+      'AI-powered patent search, family analysis, and prosecution insights across USPTO, CNIPA, EPO, and more. Chat with patent data using natural language.',
     inLanguage: ['en', 'zh-Hans', 'ja', 'ko', 'es', 'fr', 'de'],
     potentialAction: {
       '@type': 'SearchAction',
@@ -61,7 +61,7 @@ export function copiioaiSoftwareAppJsonLd() {
     '@context': 'https://schema.org',
     '@type': 'SoftwareApplication',
     name: 'CopiioAI',
-    applicationCategory: 'DeveloperApplication',
+    applicationCategory: 'BusinessApplication',
     operatingSystem: 'Chrome',
     offers: {
       '@type': 'Offer',
@@ -70,6 +70,6 @@ export function copiioaiSoftwareAppJsonLd() {
     },
     url: 'https://copiioai.com',
     description:
-      'CopiioAI turns any API into a chat-based interface. Build and share chat tools powered by your APIs so anyone can access real-time data with natural language.',
+      'AI-powered patent intelligence platform. Search, analyze, and compare patents across USPTO, CNIPA, EPO, and more using natural language AI.',
   }
 }

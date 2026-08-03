@@ -1,7 +1,7 @@
 {
-  "name": "CopiioAI — AI-Powered API Tool Builder",
+  "name": "CopiioAI — AI-Powered Patent Intelligence",
   "short_name": "CopiioAI",
-  "description": "Build AI-powered tools from your APIs. Convert browser-captured API requests into conversational AI tools.",
+  "description": "AI-powered patent search, family analysis, and prosecution insights across USPTO, CNIPA, EPO, and more.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",
