@@ -51,6 +51,11 @@ class ResetPasswordRequest(BaseModel):
     email: EmailStr
 
 
+class GoogleAuthRequest(BaseModel):
+    googleIdToken: str
+    requestUri: str = ""
+
+
 async def _firebase_post(url: str, payload: dict) -> dict:
     params = {"key": _api_key()}
     try:
@@ -161,3 +166,55 @@ async def auth_reset(body: ResetPasswordRequest):
         {"requestType": "PASSWORD_RESET", "email": body.email},
     )
     return {"ok": True}
+
+
+@router.post("/auth/google")
+async def auth_google(body: GoogleAuthRequest):
+    """Exchange a Google OAuth idToken (from signInWithPopup) for Firebase tokens.
+
+    The client calls Firebase SDK signInWithPopup(GoogleAuthProvider), which
+    returns a Google OAuth idToken.  We exchange it server-side via the Firebase
+    REST identity toolkit so we get back both a Firebase idToken AND a
+    refreshToken — the same shape the existing email/password endpoints return.
+
+    This keeps the frontend token‑refresh flow unchanged: persist() still works
+    because it receives idToken + refreshToken.
+
+    The Google OAuth popup itself does require reaching Google, so mainland‑China
+    users who cannot reach Google at all still cannot use this flow.  The proxy
+    benefit here is getting the refreshToken without the client ever calling
+    identitytoolkit.googleapis.com directly.
+    """
+    logger.info(f"/auth/google attempt — Google idToken length={len(body.googleIdToken)}")
+
+    post_body = f"id_token={body.googleIdToken}&providerId=google.com"
+    if body.requestUri:
+        post_body += f"&requestUri={body.requestUri}"
+
+    data = await _firebase_post(
+        f"{IDENTITY_TOOLKIT}:signInWithIdp",
+        {
+            "postBody": post_body,
+            "requestUri": body.requestUri or "http://localhost",
+            "returnSecureToken": True,
+        },
+    )
+    uid = data["localId"]
+    email = data.get("email", "")
+    logger.info(f"/auth/google ok: {email} -> {uid}")
+
+    ensure_local_user_record(
+        uid,
+        email,
+        redis_client=getattr(passport_module, "redis_client", None),
+        use_cache=False,
+    )
+    track_event("auth:google", user_id=uid, email=email,
+                extra={"source": "google"})
+    return {
+        "idToken": data["idToken"],
+        "refreshToken": data["refreshToken"],
+        "expiresIn": int(data["expiresIn"]),
+        "localId": data["localId"],
+        "email": data["email"],
+    }
