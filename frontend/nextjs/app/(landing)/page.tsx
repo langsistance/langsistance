@@ -7,17 +7,17 @@ import JsonLd, {
 } from '@/components/JsonLd'
 
 export const metadata: Metadata = {
-  title: 'CopiioAI — AI-Powered API Tool Builder',
+  title: 'CopiioAI — AI-Powered Patent Intelligence',
   description:
-    'CopiioAI turns any API into a chat-based interface. Build and share chat tools powered by your APIs so anyone can access real-time data with natural language.',
+    'AI-powered patent search, family analysis, and prosecution insights. Query patents from USPTO, CNIPA, EPO, and more using natural language — no manual database search required.',
   keywords: [
-    'API', 'chat interface', 'conversational AI', 'API tools', 'no-code API',
-    'chat-based API', 'API to chat', 'developer tools', 'AI assistant', 'natural language API',
+    'patent search', 'patent AI', 'patent analysis', 'patent family', 'USPTO', 'CNIPA',
+    'EPO patent', 'IP intelligence', 'patent prosecution', 'cross-jurisdiction patent',
   ],
   openGraph: {
-    title: 'CopiioAI — AI-Powered API Tool Builder',
+    title: 'CopiioAI — AI-Powered Patent Intelligence',
     description:
-      'CopiioAI turns any API into a chat-based interface. Build and share chat tools powered by your APIs.',
+      'AI-powered patent search, family analysis, and prosecution insights across USPTO, CNIPA, EPO, and more.',
     url: 'https://copiioai.com',
     siteName: 'CopiioAI',
     type: 'website',
@@ -26,15 +26,15 @@ export const metadata: Metadata = {
         url: 'https://copiioai.com/icon.png',
         width: 512,
         height: 512,
-        alt: 'CopiioAI - AI-Powered API Tool Builder',
+        alt: 'CopiioAI - AI-Powered Patent Intelligence',
       },
     ],
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'CopiioAI — AI-Powered API Tool Builder',
+    title: 'CopiioAI — AI-Powered Patent Intelligence',
     description:
-      'CopiioAI turns any API into a chat-based interface. Build and share chat tools powered by your APIs.',
+      'AI-powered patent search, family analysis, and prosecution insights across USPTO, CNIPA, EPO, and more.',
     images: ['https://copiioai.com/icon.png'],
   },
   alternates: {

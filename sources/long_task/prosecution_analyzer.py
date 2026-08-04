@@ -1027,8 +1027,6 @@ async def generate_prosecution_report(
         f"## {exec_heading}\n\n"
         f"{exec_summary}\n\n"
         + "\n\n".join(report_parts)
-        + f"\n\n## {analysis_table_heading}\n\n"
-        + table_md
     )
 
     _logger.info(
@@ -1062,3 +1060,519 @@ def _build_markdown_table(
         rows.append("| " + " | ".join(cells) + " |")
 
     return header + "\n" + sep + "\n" + "\n".join(rows)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 4: Cross-Jurisdiction Family Prosecution Report
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+async def generate_family_prosecution_report(
+    table_rows: list[dict],
+    columns: list[str],
+    query: str,
+    patent_id: str,
+    flash_provider: Any,
+    pro_provider: Any,
+    lang: str = "zh",
+    cn_exam_data: dict | None = None,
+    jp_exam_data: dict | None = None,
+    ep_exam_data: dict | None = None,
+    family_overview: dict | None = None,
+    summary_updater: Any | None = None,
+) -> str:
+    """Generate a cross-jurisdiction patent prosecution history analysis report.
+
+    When CN, JP, or EP examination data is available, produces an integrated
+    multi-country report following the professional template.  Falls back to
+    the US-only ``generate_prosecution_report()`` when no cross-jurisdiction data.
+
+    Report structure (cross-jurisdiction):
+      1. Patent Prosecution Overview (title, applicant, jurisdictions, summary)
+      2. Cross-Jurisdiction Examination Timeline (unified timeline per office)
+      3. Examination Analysis by Jurisdiction (US + CN + JP + EP separately)
+      4. Applicant Response and Claim Strategy
+      5. Comparative Jurisdiction Analysis
+      6. Final Assessment (grant status, complexity, key insights)
+      7. Appendix: analysis tables + claim chart
+    """
+    _has_cn = bool(cn_exam_data and (cn_exam_data.get('events') or cn_exam_data.get('timeline_md')))
+    _has_ep = bool(ep_exam_data and (ep_exam_data.get('events') or ep_exam_data.get('timeline_md')))
+    _has_jp = bool(jp_exam_data and (jp_exam_data.get('progress') or jp_exam_data.get('timeline_md')))
+    _has_ep = bool(ep_exam_data and (ep_exam_data.get('events') or ep_exam_data.get('timeline_md')))
+
+    # ── Fallback to US-only when no cross-jurisdiction data ──
+    if not _has_cn and not _has_jp and not _has_ep:
+        _logger.info("[prosecution] family_report_fallback — no CN/JP/EP data, using US-only report")
+        return await generate_prosecution_report(
+            table_rows, columns, query, patent_id,
+            flash_provider, pro_provider, lang,
+            summary_updater=summary_updater,
+        )
+
+    # ── Build data context ──
+    jurisdictions = family_overview.get("jurisdictions", ["US"]) if family_overview else ["US"]
+    if "CN" not in jurisdictions and cn_exam_data:
+        jurisdictions = list(jurisdictions) + ["CN"]
+    if "EP" not in jurisdictions and ep_exam_data:
+        jurisdictions = list(jurisdictions) + ["EP"]
+    if "EP" not in jurisdictions and ep_exam_data:
+        jurisdictions = list(jurisdictions) + ["EP"]
+
+    # US document entries for LLM context
+    us_entries = []
+    for r in table_rows[:30]:
+        doc_type = r.get(columns[0], "?") if columns else "?"
+        parts = [f"[{doc_type}]"]
+        for col in columns[1:8]:
+            val = str(r.get(col, "")).strip()
+            if val and val != "—" and len(val) < 300:
+                parts.append(f"  {col}: {val}")
+        if r.get("_summary"):
+            parts.append(f"  Summary: {r['_summary']}" if lang != "zh" else f"  摘要: {r['_summary']}")
+        us_entries.append("\n".join(parts))
+    us_data_text = "\n\n".join(us_entries)
+
+    # CN data context
+    cn_parts = []
+    if cn_exam_data.get("cn_app_number"):
+        cn_parts.append(
+            f"CN Application: {cn_exam_data['cn_app_number']}" if lang != "zh"
+            else f"中国申请号: {cn_exam_data['cn_app_number']}"
+        )
+    if cn_exam_data.get("timeline_md"):
+        cn_parts.append(f"### CN Examination Timeline\n{cn_exam_data['timeline_md']}")
+    if cn_exam_data.get("claims_md"):
+        cn_parts.append(f"### CN Claims\n{cn_exam_data['claims_md']}")
+    if cn_exam_data.get("legal_md"):
+        cn_parts.append(f"### CN Legal Status\n{cn_exam_data['legal_md']}")
+    cn_events_list = cn_exam_data.get("events", [])
+    if cn_events_list:
+        event_lines = []
+        for evt in cn_events_list:
+            from sources.long_task.china_examination import ExaminationEvent
+            if isinstance(evt, ExaminationEvent):
+                label = evt.decision_label_zh if lang == "zh" else evt.decision_label_en
+                event_lines.append(
+                    f"- {label} — {evt.decision_number} ({evt.decision_date})"
+                )
+            else:
+                event_lines.append(f"- {evt}")
+        cn_parts.append(f"### CN Review Decisions\n" + "\n".join(event_lines))
+    cn_data_text = "\n\n".join(cn_parts) if cn_parts else ""
+    # Mark data depth: only pass to LLM if there's substantive analysis material
+    _cn_has_deep = bool(cn_exam_data.get("events")) if cn_exam_data else False
+    if not _cn_has_deep and cn_data_text:
+        cn_data_text = (
+            "[BASIC DATA ONLY — no examination events available. "
+            "Do NOT create a separate China analysis section. "
+            "Mention key facts (if any) in the Family Overview only.]\n"
+            + cn_data_text
+        ) if lang != "zh" else (
+            "[仅有基础数据—无审查事件。不要创建独立的中国分析章节。"
+            "仅在专利家族概览中提及关键事实（如有）。]\n"
+            + cn_data_text
+        )
+
+    # ── JP data context ──
+    jp_data_text = ""
+    if jp_exam_data:
+        jp_app = jp_exam_data.get("jp_app_number", "")
+        jp_parts = [f"JP Application: {jp_app}" if lang != "zh" else f"日本申请号: {jp_app}"]
+        if jp_exam_data.get("timeline_md"):
+            jp_parts.append(jp_exam_data["timeline_md"])
+        if jp_exam_data.get("registration_md"):
+            jp_parts.append(jp_exam_data["registration_md"])
+        if jp_exam_data.get("citations_md"):
+            jp_parts.append(jp_exam_data["citations_md"])
+        # Include refusal reasons and amendments for deep analysis
+        refusal = jp_exam_data.get("refusal_reasons")
+        if refusal:
+            r_str = str(refusal)[:5000] if not isinstance(refusal, str) else refusal[:5000]
+            jp_parts.append(f"### JP Refusal Reasons\n{r_str}" if lang != "zh" else f"### 日本拒絶理由通知書\n{r_str}")
+        amendments = jp_exam_data.get("amendments")
+        if amendments:
+            a_str = str(amendments)[:5000] if not isinstance(amendments, str) else amendments[:5000]
+            jp_parts.append(f"### JP Amendments\n{a_str}" if lang != "zh" else f"### 日本意見書・補正書\n{a_str}")
+        jp_data_text = "\n\n".join(jp_parts)
+        # Mark data depth
+        _jp_has_deep = bool(jp_exam_data.get("refusal_reasons") or jp_exam_data.get("amendments") or (len(jp_exam_data.get("progress", [])) > 3))
+        if not _jp_has_deep and jp_data_text:
+            jp_data_text = (
+                "[BASIC DATA ONLY — no detailed examination events. "
+                "Do NOT create a separate Japan analysis section. "
+                "Mention key facts in the Family Overview only.]\n"
+                + jp_data_text
+            ) if lang != "zh" else (
+                "[仅有基础数据—无详细审查事件。不要创建独立的日本分析章节。"
+                "仅在专利家族概览中提及关键事实。]\n"
+                + jp_data_text
+            )
+    # No filler text — empty means LLM skips the section
+    # ── EP data context ──
+    ep_data_text = ""
+    if ep_exam_data:
+        ep_app = ep_exam_data.get("ep_app_number", "")
+        ep_parts = [f"EP Application: EP{ep_app}" if lang != "zh" else f"欧洲申请号: EP{ep_app}"]
+        if ep_exam_data.get("timeline_md"):
+            ep_parts.append("### EP Examination Timeline\n" + ep_exam_data['timeline_md'])
+        if ep_exam_data.get("search_report_text"):
+            sr_text = ep_exam_data["search_report_text"][:3000]
+            sr_heading = "### EP Search Opinion\n" if lang != "zh" else "### 欧洲检索意见\n"
+            ep_parts.append(sr_heading + sr_text)
+        if ep_exam_data.get("status"):
+            status = ep_exam_data["status"]
+            status_zh = {
+                "GRANTED": "已授权", "PENDING": "审查中",
+                "REFUSED": "已驳回", "WITHDRAWN": "已撤回",
+            }
+            status_label = status_zh.get(status, status) if lang == "zh" else status
+            ep_parts.append(
+                f"Status: {status_label}" if lang != "zh"
+                else f"状态: {status_label}"
+            )
+        ep_data_text = "\n\n".join(ep_parts)
+        _ep_has_deep = bool(ep_exam_data.get("search_report_text") if ep_exam_data else False)
+        if not _ep_has_deep and ep_data_text:
+            ep_data_text = (
+                "[BASIC DATA ONLY — no search report or examination events. "
+                "Do NOT create a separate EP analysis section.]\n"
+                + ep_data_text
+            ) if lang != "zh" else (
+                "[仅有基础数据—无检索报告或审查事件。不要创建独立的欧洲分析章节。]\n"
+                + ep_data_text
+            )
+    # No filler text — empty means LLM skips the section
+
+    # ── EP data context ──
+    ep_data_text = ""
+    if ep_exam_data:
+        ep_app = ep_exam_data.get("ep_app_number", "")
+        ep_parts = [f"EP Application: EP{ep_app}" if lang != "zh" else f"欧洲申请号: EP{ep_app}"]
+        if ep_exam_data.get("timeline_md"):
+            ep_parts.append(f"### EP Examination Timeline\n{ep_exam_data['timeline_md']}")
+        if ep_exam_data.get("search_report_text"):
+            sr_text = ep_exam_data["search_report_text"][:3000]
+            ep_parts.append(
+                f"### EP Search Opinion\n{sr_text}" if lang != "zh"
+                else f"### 欧洲检索意见\n{sr_text}"
+            )
+        if ep_exam_data.get("status"):
+            status = ep_exam_data["status"]
+            status_zh = {
+                "GRANTED": "已授权", "PENDING": "审查中",
+                "REFUSED": "已驳回", "WITHDRAWN": "已撤回",
+            }
+            status_label = status_zh.get(status, status) if lang == "zh" else status
+            ep_parts.append(
+                f"Status: {status_label}" if lang != "zh"
+                else f"状态: {status_label}"
+            )
+        ep_data_text = "\n\n".join(ep_parts)
+        _ep_has_deep2 = bool(ep_exam_data.get("search_report_text") if ep_exam_data else False)
+        if not _ep_has_deep2 and ep_data_text:
+            ep_data_text = (
+                "[BASIC DATA ONLY — no search report or examination events. "
+                "Do NOT create a separate EP analysis section.]\n"
+                + ep_data_text
+            ) if lang != "zh" else (
+                "[仅有基础数据—无检索报告或审查事件。不要创建独立的欧洲分析章节。]\n"
+                + ep_data_text
+            )
+    # No filler text — empty means LLM skips the section
+
+    # Family overview
+    family_text = ""
+    if family_overview:
+        if lang == "zh":
+            family_text = (
+                f"输入专利: {family_overview.get('input_id', patent_id)}\n"
+                f"同族覆盖 {len(jurisdictions)} 个司法辖区: {', '.join(jurisdictions)}\n"
+            )
+        else:
+            family_text = (
+                f"Input patent: {family_overview.get('input_id', patent_id)}\n"
+                f"Family spans {len(jurisdictions)} jurisdictions: {', '.join(jurisdictions)}\n"
+            )
+
+    title_template = {
+        "zh": "专利 {patent_id} 审查策略简报",
+        "en": "Patent Prosecution Strategy Brief — {patent_id}",
+    }
+    title = title_template.get(lang, title_template["en"]).format(patent_id=patent_id)
+
+    # ── System prompt ────────────────────────────────────────────────────────
+    if lang == "zh":
+        system_prompt = (
+                                    # ── ROLE ──
+            "你是一位专利审查策略分析师。输出一份面向企业IP负责人和高管的**商业简报**。\n"
+            "目标：5-8页。每句话都提供决策价值。\n"
+            "\n"
+            # ── TONE (CRITICAL) ──
+            "🚨 禁止AI腔调。以下表达绝对禁止：\n"
+            "- 「圆满终结」「全面的专利保护」「取得了全面的保护」「顺利获得授权」\n"
+            "- 「深入剖析」「系统性分析」「全方位评估」「具有重要意义」\n"
+            "- 「值得注意的是」「此外」「首先…其次…最后」\n"
+            "- 任何感叹号、任何营销性形容词\n"
+            "✅ 正确语气：客观、克制、数据驱动。像投行行研报告，不像宣传文案。\n"
+            "\n"
+            # ── DATA RULES ──
+            "- 只输出有实质数据的国家。无数据 → 完全不写该国家。\n"
+            "- 表格优于段落。一句一行优于长篇叙述。\n"
+            "- 报告总长 5-8 页（Markdown）。超过8页=不合格。\n"
+            "\n"
+            # ── Report structure ──
+            "按以下结构输出：\n"
+            "\n"
+            # 1. Patent Strategy Summary
+            "一句话总结本专利在各国审查的核心结论。直接陈述，不铺垫。\n"
+            "\n"
+            # 2. Global Prosecution Overview
+            "四列表格（只列有数据的国家）：\n"
+            "| 国家 | 结果 | 审查难度 | 核心原因 |\n"
+            "|------|------|---------|--------|\n"
+            "\n"
+            # 3. Key Claim Amendment
+            "用 Before → After 格式展示最重要的那次修改。\n"
+            "\n"
+            "**Before:**\n"
+            "[修改前 claim 1 的核心限制]\n"
+            "**After:**\n"
+            "[修改后 claim 1 的核心限制，标注新增特征]\n"
+            "**影响：** 一句话。\n"
+            "\n"
+            "**Claims Affected（本次修改涉及的权利要求）：**\n"
+            "| Claim | Before | After | Impact |\n"
+            "|-------|--------|-------|--------|\n"
+            "| 1 | [broad scope] | [narrowed scope] | Major narrowing / Minor adjustment / No change |\n"
+            "| 3 | [dependent] | Cancelled | Lost protection |\n"
+            "| 20 | (new) | [fallback scope] | Added fallback |\n"
+            "\n"
+            # 4. Examiner Position Evolution ⭐
+            "这是报告最有价值的部分。追踪审查员立场如何随每次OA改变。\n"
+            "\n"
+            "| 阶段 | OA日期 | 审查员立场 | 核心依据 |\n"
+            "|------|--------|----------|--------|\n"
+            "| 阶段1 | [date] | Broad interpretation covers claim | Ogawa教导了body+battery housing |\n"
+            "| 阶段2 | [date] | Final rejection, argument not persuasive | 申请人未提供足够结构区别 |\n"
+            "| 阶段3 | [date] | No further rejection | 修改后未再基于已引用对比文件提出驳回 |\n"
+            "\n"
+            "每个阶段用一句话直接引用或概括审查员的原话论点。\n"
+            "\n"
+            # 5. Prior Art Challenge Map
+            "列出关键对比文献及应对结果（只列有战略意义的）：\n"
+            "| 对比文献 | 审查员论点 | 应对方式 | 结果 |\n"
+            "|---------|----------|---------|------|\n"
+            "\n"
+            # 6. Risk Assessment
+            "**无效风险：** 低/中/高\n"
+            "- 最脆弱点：一句话\n"
+            "**规避难度：** 易/中/难\n"
+            "- 关键限制特征：一句话\n"
+            "\n"
+            # 7. Prosecution Timeline（仅当有丰富审查数据时）
+            "5-8行关键事件：\n"
+            "| 日期 | 事件 | 策略意义 |\n"
+            "|------|------|--------|\n"
+            "\n"
+            # ── LEGAL LANGUAGE ──
+            "🔴 法律措辞规则：\n"
+            "- ❌ 「审查员认可/接受了修改」→ ✅ 「修改后审查员未再基于已引用对比文件提出驳回」\n"
+            "- ❌ 「申请人通过争辩成功克服驳回」→ ✅ 「申请人提交修改和论证后，审查员未维持该驳回」\n"
+            "- ❌ 「获得了全面/强有力的保护」→ ✅ 「授权权利要求在修改后的范围内提供可执行的保护」\n"
+            "- Notice of Allowance：「基于授权通知及后续无驳回记录，可以推断审查员接受修改后的权利要求，但具体授权理由未在公开文件中明确说明」\n"
+            "- 对授权专利不做有效性结论。不提供法律建议。只提供策略情报。\n"
+            "\n"
+            # ── CONFIDENCE ──
+            "置信度标记（每句策略陈述使用）：\n"
+            "- ✅ 审查文件记载 | 📋 合理推断 | ❓ 数据不足\n"
+            "\n"
+            "🚫 禁止输出：审查文件分析数据表、逐文件明细表、任何形式的 full document-by-document analysis table。\n"
+            "报告只包含策略分析，不包含数据明细。\n"
+            "\n"
+            "直接输出 Markdown，不要 JSON。\n"
+        )
+    else:
+        system_prompt = (
+            # ── ROLE ──
+            "You are a patent prosecution strategy analyst. Output a **business brief** for IP directors and executives.\n"
+            "Target: 5-8 pages. Every sentence delivers decision value.\n"
+            "\n"
+            # ── TONE (CRITICAL) ──
+            "🚨 BANNED AI-flavored language. The following expressions are FORBIDDEN:\n"
+            "- \"comprehensive patent protection\", \"successfully obtained\", \"thoroughly analyzed\"\n"
+            "- \"it is worth noting that\", \"furthermore\", \"additionally\", \"in conclusion\"\n"
+            "- Any exclamation marks, any marketing adjectives\n"
+            "✅ Correct tone: objective, restrained, data-driven. Like an investment bank research note, not marketing copy.\n"
+            "\n"
+            # ── DATA RULES ──
+            "- Only output jurisdictions with substantive data. No data → skip entirely.\n"
+            "- Tables > paragraphs. One line per insight > long narratives.\n"
+            "- Total report: 5-8 pages (Markdown). Over 8 pages = FAIL.\n"
+            "\n"
+            # ── Report structure ──
+            "Output the following structure:\n"
+            "\n"
+            # 1. Patent Strategy Summary
+            "One-sentence conclusion. Direct, no preamble.\n"
+            "\n"
+            # 2. Global Prosecution Overview
+            "Four-column table (only jurisdictions with data):\n"
+            "| Jurisdiction | Outcome | Difficulty | Key Reason |\n"
+            "|-------------|---------|-----------|------------|\n"
+            "\n"
+            # 3. Key Claim Amendment
+            "Before → After format for the most significant amendment:\n"
+            "\n"
+            "**Before:**\n"
+            "[core limitations of claim 1 before amendment]\n"
+            "**After:**\n"
+            "[core limitations after, highlight what was ADDED]\n"
+            "**Impact:** One sentence.\n"
+            "\n"
+            "**Claims Affected:**\n"
+            "| Claim | Before | After | Impact |\n"
+            "|-------|--------|-------|--------|\n"
+            "| 1 | [broad scope] | [narrowed scope] | Major narrowing / Minor adjustment / No change |\n"
+            "| 3 | [dependent] | Cancelled | Lost protection |\n"
+            "| 20 | (new) | [fallback scope] | Added fallback |\n"
+            "\n"
+            # 4. Examiner Position Evolution ⭐
+            "HIGHEST VALUE section. Track how the examiner's stance shifted across OAs.\n"
+            "\n"
+            "| Stage | OA Date | Examiner Position | Key Basis |\n"
+            "|-------|---------|------------------|-----------|\n"
+            "| Stage 1 | [date] | Broad interpretation covers claim | Ogawa teaches body+battery housing |\n"
+            "| Stage 2 | [date] | Final rejection, argument not persuasive | Applicant did not provide sufficient structural distinction |\n"
+            "| Stage 3 | [date] | No further rejection | After amendment, no rejection based on cited references |\n"
+            "\n"
+            "Use direct quotes or summaries of the examiner's actual arguments at each stage.\n"
+            "\n"
+            # 5. Prior Art Challenge Map
+            "Key references and outcomes (strategically significant only):\n"
+            "| Reference | Examiner Position | Response | Result |\n"
+            "|-----------|------------------|----------|--------|\n"
+            "\n"
+            # 6. Risk Assessment
+            "**Invalidity Risk:** Low/Medium/High - Weakest point: one sentence\n"
+            "**Design-Around Difficulty:** Easy/Medium/Hard - Key limiting feature: one sentence\n"
+            "\n"
+            # 7. Prosecution Timeline (only when rich data available)
+            "5-8 key events:\n"
+            "| Date | Event | Strategic Significance |\n"
+            "|------|-------|----------------------|\n"
+            "\n"
+            # ── LEGAL LANGUAGE ──
+            "🔴 Legal phrasing rules:\n"
+            "- ❌ \"the examiner accepted/agreed with the amendments\" → ✅ \"the record shows no further rejection was raised after the amendment\"\n"
+            "- ❌ \"the applicant successfully overcame the rejection\" → ✅ \"after the applicant submitted amendments and arguments, the examiner did not maintain the rejection\"\n"
+            "- ❌ \"obtained comprehensive/strong protection\" → ✅ \"the granted claims provide enforceable protection within the amended scope\"\n"
+            "- For Notice of Allowance: \"Based on the allowance and absence of further rejection, the examiner appears to have accepted the amended claims, but the specific reasons for allowance are not explicitly stated in the public record.\"\n"
+            "- Do not make validity conclusions about granted patents. Do not provide legal advice. Provide strategic intelligence only.\n"
+            "\n"
+            # ── CONFIDENCE ──
+            "Confidence markers (use on every strategic statement):\n"
+            "- ✅ Documented in file | 📋 Reasonable inference | ❓ Insufficient data\n"
+            "\n"
+            "🚫 DO NOT output: document-by-document analysis tables, full per-document data tables, or any form of appendix with row-by-row analysis data.\n"
+            "Report contains strategic analysis only, NOT data tables.\n"
+            "\n"
+            "Output Markdown directly, no JSON.\n"
+        )
+
+
+
+
+    user_content = (
+        f"Patent ID: {patent_id}\n"
+        f"User query: {query}\n\n"
+        f"{family_text}\n\n"
+        f"=== US PROSECUTION DATA ===\n"
+        f"Analysis dimensions: {', '.join(columns)}\n"
+        f"Documents analyzed: {len(table_rows)}\n\n"
+        f"{us_data_text}\n\n"
+        + (f"=== CHINA EXAMINATION DATA ===\n{cn_data_text}\n\n" if cn_data_text else "")
+        + (f"=== JAPAN EXAMINATION DATA ===\n{jp_data_text}\n\n" if jp_data_text else "")
+        + (f"=== EUROPEAN EXAMINATION DATA ===\n{ep_data_text}\n\n" if ep_data_text else "")
+        + f"Generate the AI Patent Prosecution Intelligence Report.\n"
+        f"CRITICAL: 70% strategy analysis + 30% event description. "
+        f"Do NOT describe what happened — reveal WHY and WHAT IT MEANS. "
+        f"Focus on: claim evolution, prior art battle, allowance driver, invalidity risk assessment."
+    ) if lang == "zh" else (
+        f"Patent ID: {patent_id}\n"
+        f"User query: {query}\n\n"
+        f"{family_text}\n\n"
+        f"=== US PROSECUTION DATA ===\n"
+        f"Analysis dimensions: {', '.join(columns)}\n"
+        f"Documents analyzed: {len(table_rows)}\n\n"
+        f"{us_data_text}\n\n"
+        + (f"=== CHINA EXAMINATION DATA ===\n{cn_data_text}\n\n" if cn_data_text else "")
+        + (f"=== JAPAN EXAMINATION DATA ===\n{jp_data_text}\n\n" if jp_data_text else "")
+        + (f"=== EUROPEAN EXAMINATION DATA ===\n{ep_data_text}\n\n" if ep_data_text else "")
+        + f"Generate the AI Patent Prosecution Intelligence Report.\n"
+        f"CRITICAL: 70% strategy analysis + 30% event description. "
+        f"Do NOT describe what happened — reveal WHY and WHAT IT MEANS. "
+        f"Focus on: claim evolution, prior art battle, allowance driver, invalidity risk assessment."
+    )
+
+    _logger.info(
+        f"[prosecution] family_report_start — patent_id={patent_id}, "
+        f"us_docs={len(table_rows)}, cn_events={len(cn_events_list)}, "
+        f"jurisdictions={jurisdictions}, lang={lang}"
+    )
+
+    try:
+        llm = pro_provider._get_langchain_llm(streaming=True)
+        messages = [("system", system_prompt), ("human", user_content)]
+        chunks = []
+        async for chunk in llm.astream(messages):
+            if chunk.content:
+                chunks.append(chunk.content)
+                if summary_updater:
+                    summary_updater.push(
+                        "".join(chunks),
+                        step_msg=(
+                            "正在撰写跨国审查报告..." if lang == "zh"
+                            else "Writing cross-jurisdiction report..."
+                        ),
+                    )
+        text = "".join(chunks).strip()
+        if "</think>" in text:
+            text = text[text.rfind("</think>") + len("</think>"):].strip()
+            if summary_updater:
+                summary_updater.push(text, force=True)
+
+        # Strip leading title if LLM generated one (we prepend our own)
+        # Remove a leading "# ..." line if present to avoid double titles
+        if text.startswith("# "):
+            first_nl = text.find("\n")
+            if first_nl > 0:
+                text = text[first_nl + 1:].strip()
+
+        # Assemble final report
+        report = f"# {title}\n\n{text}"
+    except Exception as e:
+        _logger.warning(f"[prosecution] family_report_failed: {e}")
+        # Fallback: generate US report + append CN data
+        report = await generate_prosecution_report(
+            table_rows, columns, query, patent_id,
+            flash_provider, pro_provider, lang,
+            summary_updater=summary_updater,
+        )
+        if cn_exam_data:
+            cn_app_num = cn_exam_data.get("cn_app_number", "")
+            if lang == "zh":
+                report += f"\n\n---\n\n# 中国审查历史 ({cn_app_num})\n\n"
+            else:
+                report += f"\n\n---\n\n# China Examination History ({cn_app_num})\n\n"
+            if cn_exam_data.get("timeline_md"):
+                report += cn_exam_data["timeline_md"] + "\n\n"
+            if cn_exam_data.get("legal_md"):
+                report += cn_exam_data["legal_md"] + "\n\n"
+            if cn_exam_data.get("claims_md"):
+                report += cn_exam_data["claims_md"] + "\n"
+
+    _logger.info(
+        f"[prosecution] family_report_done — total_chars={len(report)}"
+    )
+    return report

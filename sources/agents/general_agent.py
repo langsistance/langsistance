@@ -385,6 +385,8 @@ class GeneralAgent(Agent):
         # Multi-turn conversation storage: each entry is
         # {'user': query_text, 'assistant': response_summary}
         self._conversation_turns = []
+        # Detected language of the current user query ('zh' or 'en')
+        self._lang = 'zh'
 
     def get_api_keys(self) -> dict:
         """
@@ -640,6 +642,16 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         - Integrate all links naturally within the content itself
 
         **IMPORTANT**: Make your response visually appealing, easy to scan, and professionally formatted. Transform raw data into a beautiful, user-friendly presentation while ensuring ALL content from the tool result is displayed.
+
+        ## Language Rule (CRITICAL — NEVER VIOLATE)
+
+        The user's question determines the response language. This is an ABSOLUTE rule:
+
+        - If the user asks in **Chinese (中文)**, you MUST respond entirely in Chinese.
+        - If the user asks in **English**, you MUST respond entirely in English.
+
+        Do NOT mix languages. Do NOT answer an English question with Chinese text
+        or vice versa. Match the user's language exactly throughout your entire response.
         """
 
     def generate_fixed_system_prompt(self) -> str:
@@ -1473,6 +1485,7 @@ Begin your response now:
             return "general Agent is disabled."
         self._last_user_prompt = prompt
         self._last_query_id = query_id
+        self._lang = self._detect_lang(prompt)
         conv_history = self.memory.get()
         self.knowledgeTool = await select_knowledge_tool_with_llm(
             user_id,
@@ -1484,6 +1497,9 @@ Begin your response now:
         # user_prompt = self.expand_prompt(prompt)
         user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
         system_prompt = self.generate_system_prompt()
+        # Append language rule for CLI/terminal path (create_agent uses _get_fixed_system_prefix instead)
+        lang_rule = self._get_language_rule()
+        system_prompt += lang_rule
         prior = self.memory.get()
         if len(prior) > 6:
             prior = prior[:1] + prior[-1:]
@@ -1518,12 +1534,36 @@ Begin your response now:
             return 'zh'
         return 'zh' if cjk / max(total, 1) > 0.15 else 'en'
 
+    def _get_language_rule(self) -> str:
+        """Return a language-enforcement rule based on the detected user language.
+
+        The rule is appended to system prompts to ensure the LLM responds
+        in the same language the user wrote their question in.
+        """
+        lang = getattr(self, '_lang', 'zh')
+        if lang == 'en':
+            return (
+                "\n\n## Language Rule (CRITICAL — NEVER VIOLATE)\n\n"
+                "The user asked their question in English. "
+                "You MUST respond entirely in English. "
+                "Do NOT use any Chinese characters, phrases, or mixed-language output. "
+                "Every heading, paragraph, list item, and label must be in English.\n"
+            )
+        else:
+            return (
+                "\n\n## 语言规则（极其重要 — 绝对禁止违反）\n\n"
+                "用户使用中文提问，你必须全程使用中文回答。"
+                "禁止在回答中出现任何英文单词、短语或中英混杂的输出。"
+                "所有标题、段落、列表项和标签都必须使用中文。\n"
+            )
+
     async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler, push_filter=None):
         #self.knowledgeTool = get_knowledge_tool(user_id,  prompt)
         self._last_user_prompt = prompt
         self._last_query_id = query_id
         self._last_user_id = user_id
         lang = self._detect_lang(prompt)
+        self._lang = lang
         if callback_handler:
             await _emit_status(callback_handler,
                 "正在分析您的问题..." if lang == 'zh' else "Analyzing your question...")
@@ -1651,7 +1691,9 @@ Begin your response now:
                 "look similar, include BOTH if they point to different resources. "
                 "Use descriptive link text: [Title](URL) for documents, "
                 "![Description](URL) for images. This rule overrides rule #2 鈥?never "
-                "merge or skip URLs."
+                "merge or skip URLs.\n"
+                "9. LANGUAGE: Match the user's question language. If they asked in Chinese, "
+                "output in Chinese. If they asked in English, output in English."
             )
             # Include raw_items from each step so links/images are not lost
             payload = {
@@ -1673,7 +1715,8 @@ Begin your response now:
                 "CRITICAL: Every document URL, image URL, and external link in the "
                 "workflow result MUST appear in your output. Use descriptive link text: "
                 "[Title](URL) for documents, ![Description](URL) for images. "
-                "Never omit a link that exists in the source data."
+                "Never omit a link that exists in the source data.\n"
+                "LANGUAGE: Match the user's question language."
             )
             payload = {
                 "user_request": getattr(self, "_last_user_prompt", ""),
@@ -1806,7 +1849,11 @@ Begin your response now:
             )
             pruned = [_prune_item_for_llm(item) for item in raw_items]
             items_for_export = list(raw_items)
-            heading = f"## Results ({original_total} items)"
+            lang = getattr(self, '_lang', 'zh')
+            if lang == 'en':
+                heading = f"## Results ({original_total} items)"
+            else:
+                heading = f"## 结果（{original_total} 项）"
             await callback_handler.on_llm_new_token(
                 f"\n\n---\n\n{heading}\n\n"
             )
@@ -1822,41 +1869,85 @@ Begin your response now:
                     f"- {k}" for k in first_keys
                 )
 
-                faithful_system_prompt = (
-                    "You are a professional data presenter serving non-technical readers. "
-                    "Your output must be readable, well-structured, and free of jargon.\n\n"
-                    "CRITICAL RULES:\n\n"
-                    "1. TRANSLATE field codes into clear Chinese labels. "
-                    "For example: 'apc'鈫?鐢宠浜?, 'ad'鈫?鐢宠鏃?, 'pdt'鈫?涓撳埄绫诲瀷', "
-                    "'pk'鈫?鏂囩尞绉嶇被', 'pns'鈫?涓撳埄鍙?, 'lsscn'鈫?娉曞緥鐘舵€?. "
-                    "Use your knowledge to interpret every code.\n\n"
-                    "2. FILTER noise: skip fields whose value is empty, '0', '鍚?, "
-                    "or clearly an internal system ID (like 'pid'). "
-                    "Also skip the top-level API wrapper fields (errorCode, errorDesc, "
-                    "page_row, page, total, sort_column) 鈥?they are not part of the data.\n\n"
-                    "3. GROUP related fields logically: "
-                    "titles together, abstracts together, dates together, "
-                    "people & organizations together, legal/classification together.\n\n"
-                    "4. PRESENT as a reader-friendly document with clear section headings, "
-                    "NOT as a flat key-value dump. Use comparison tables when comparing "
-                    "multiple records with shared fields.\n\n"
-                    "5. ALL meaningful data must be preserved 鈥?do not summarize, "
-                    "abbreviate, or skip any non-noise field. If a field has a real value, "
-                    "it belongs in the output.\n\n"
-                    "6. Every URL must be copied exactly and verbatim. "
-                    "Image URLs MUST use ![description](URL) syntax.\n\n"
-                    "7. Do NOT add a concluding summary 鈥?let the data speak for itself."
-                )
-                faithful_user_content = (
-                    f"Here are {len(pruned)} data item(s) to present for non-technical readers. "
-                    f"Translate all field codes into plain Chinese labels. "
-                    f"Group related information logically. "
-                    f"Skip empty/noise fields. Keep ALL meaningful data.\n\n"
-                    f"Reference 鈥?all fields present in the data:\n"
-                    f"{field_checklist}\n\n"
-                    f"{url_checklist}"
-                    f"{batch_json}"
-                )
+                lang = getattr(self, '_lang', 'zh')
+                if lang == 'en':
+                    faithful_system_prompt = (
+                        "You are a professional data presenter serving non-technical readers. "
+                        "Your output must be readable, well-structured, and free of jargon.\n\n"
+                        "CRITICAL RULES:\n\n"
+                        "1. TRANSLATE field codes into clear English labels. "
+                        "For example: 'apc' \u2192 'Applicant', 'ad' \u2192 'Application Date', "
+                        "'pdt' \u2192 'Patent Type', 'pk' \u2192 'Document Kind', "
+                        "'pns' \u2192 'Patent Number', 'lsscn' \u2192 'Legal Status'. "
+                        "Use your knowledge to interpret every code.\n\n"
+                        "2. FILTER noise: skip fields whose value is empty, '0', '\u5426', "
+                        "or clearly an internal system ID (like 'pid'). "
+                        "Also skip the top-level API wrapper fields (errorCode, errorDesc, "
+                        "page_row, page, total, sort_column) \u2014 they are not part of the data.\n\n"
+                        "3. GROUP related fields logically: "
+                        "titles together, abstracts together, dates together, "
+                        "people & organizations together, legal/classification together.\n\n"
+                        "4. PRESENT as a reader-friendly document with clear section headings, "
+                        "NOT as a flat key-value dump. Use comparison tables when comparing "
+                        "multiple records with shared fields.\n\n"
+                        "5. ALL meaningful data must be preserved \u2014 do not summarize, "
+                        "abbreviate, or skip any non-noise field. If a field has a real value, "
+                        "it belongs in the output.\n\n"
+                        "6. Every URL must be copied exactly and verbatim. "
+                        "Image URLs MUST use ![description](URL) syntax.\n\n"
+                        "7. Do NOT add a concluding summary \u2014 let the data speak for itself.\n\n"
+                        "8. LANGUAGE: The user asked in English \u2014 you MUST output "
+                        "everything in English. All labels, headings, and descriptions "
+                        "must be in English."
+                    )
+                    faithful_user_content = (
+                        f"Here are {len(pruned)} data item(s) to present for non-technical readers. "
+                        f"Translate all field codes into plain English labels. "
+                        f"Group related information logically. "
+                        f"Skip empty/noise fields. Keep ALL meaningful data.\n\n"
+                        f"Reference \u2014 all fields present in the data:\n"
+                        f"{field_checklist}\n\n"
+                        f"{url_checklist}"
+                        f"{batch_json}"
+                    )
+                else:
+                    faithful_system_prompt = (
+                        "You are a professional data presenter serving non-technical readers. "
+                        "Your output must be readable, well-structured, and free of jargon.\n\n"
+                        "CRITICAL RULES:\n\n"
+                        "1. TRANSLATE field codes into clear Chinese labels. "
+                        "For example: 'apc'\u2192\u7533\u8bf7\u4eba, 'ad'\u2192\u7533\u8bf7\u65e5, 'pdt'\u2192\u4e13\u5229\u7c7b\u578b, "
+                        "'pk'\u2192\u6587\u732e\u79cd\u7c7b, 'pns'\u2192\u4e13\u5229\u53f7, 'lsscn'\u2192\u6cd5\u5f8b\u72b6\u6001. "
+                        "Use your knowledge to interpret every code.\n\n"
+                        "2. FILTER noise: skip fields whose value is empty, '0', '\u5426', "
+                        "or clearly an internal system ID (like 'pid'). "
+                        "Also skip the top-level API wrapper fields (errorCode, errorDesc, "
+                        "page_row, page, total, sort_column) \u2014 they are not part of the data.\n\n"
+                        "3. GROUP related fields logically: "
+                        "titles together, abstracts together, dates together, "
+                        "people & organizations together, legal/classification together.\n\n"
+                        "4. PRESENT as a reader-friendly document with clear section headings, "
+                        "NOT as a flat key-value dump. Use comparison tables when comparing "
+                        "multiple records with shared fields.\n\n"
+                        "5. ALL meaningful data must be preserved \u2014 do not summarize, "
+                        "abbreviate, or skip any non-noise field. If a field has a real value, "
+                        "it belongs in the output.\n\n"
+                        "6. Every URL must be copied exactly and verbatim. "
+                        "Image URLs MUST use ![description](URL) syntax.\n\n"
+                        "7. Do NOT add a concluding summary \u2014 let the data speak for itself.\n\n"
+                        "8. LANGUAGE: \u7528\u6237\u4f7f\u7528\u4e2d\u6587\u63d0\u95ee \u2014 \u4f60\u5fc5\u987b\u5168\u7a0b\u4f7f\u7528\u4e2d\u6587\u8f93\u51fa\u3002"
+                        "\u6240\u6709\u6807\u7b7e\u3001\u6807\u9898\u548c\u63cf\u8ff0\u90fd\u5fc5\u987b\u4f7f\u7528\u4e2d\u6587\u3002"
+                    )
+                    faithful_user_content = (
+                        f"Here are {len(pruned)} data item(s) to present for non-technical readers. "
+                        f"Translate all field codes into plain Chinese labels. "
+                        f"Group related information logically. "
+                        f"Skip empty/noise fields. Keep ALL meaningful data.\n\n"
+                        f"Reference \u2014 all fields present in the data:\n"
+                        f"{field_checklist}\n\n"
+                        f"{url_checklist}"
+                        f"{batch_json}"
+                    )
                 try:
                     await self.llm.stream_simple(
                         system_prompt=faithful_system_prompt,
@@ -1915,18 +2006,33 @@ Begin your response now:
         # ── 大列表摘要模式：剔除超长字段后做整体总结，跳过逐条批处理 ──
         if USE_LARGE_LIST_SUMMARY:
             summary_items = _prune_for_summary(pending)
-            heading = f"## Results — Summary ({len(pending)} items)"
+            lang = getattr(self, '_lang', 'zh')
+            if lang == 'en':
+                heading = f"## Results — Summary ({len(pending)} items)"
+            else:
+                heading = f"## 结果摘要 ({len(pending)} 项)"
             await callback_handler.on_llm_new_token(
                 f"\n\n---\n\n{heading}\n\n"
             )
 
-            summary_system_prompt = (
-                "You are a professional data analyst. Create a concise, well-structured summary of the data items below. "
-                "Group similar items, highlight key patterns or trends, and present information clearly for non-technical readers. "
-                "Use Markdown formatting — including tables where appropriate. Keep it under 600 words. "
-                "Do NOT list every item individually; synthesize and summarize. "
-                "Focus on: what the data shows overall, key differences between items, any notable outliers."
-            )
+            if lang == 'en':
+                summary_system_prompt = (
+                    "You are a professional data analyst. Create a concise, well-structured summary of the data items below. "
+                    "Group similar items, highlight key patterns or trends, and present information clearly for non-technical readers. "
+                    "Use Markdown formatting — including tables where appropriate. Keep it under 600 words. "
+                    "Do NOT list every item individually; synthesize and summarize. "
+                    "Focus on: what the data shows overall, key differences between items, any notable outliers. "
+                    "IMPORTANT: The user asked in English — respond entirely in English."
+                )
+            else:
+                summary_system_prompt = (
+                    "你是一名专业的数据分析师。请对以下数据项创建一个简洁、结构清晰的摘要。"
+                    "将相似的项目分组，突出关键模式或趋势，并以非技术读者易于理解的方式呈现。"
+                    "使用 Markdown 格式——包括适当的表格。保持在 600 字以内。"
+                    "不要逐项列出；综合和总结。"
+                    "重点关注：数据整体显示的内容、项目之间的关键差异、任何值得注意的异常值。"
+                    "重要：用户使用中文提问——请用中文回答。"
+                )
 
             try:
                 await self.llm.stream_simple(
@@ -1942,9 +2048,15 @@ Begin your response now:
                     "\n\n*Summary generation failed. Please download the data file below.*"
                 )
 
-            await callback_handler.on_llm_new_token(
-                "\n\n> \U0001f4e5 For complete data, please download the Excel or CSV file below.\n\n"
-            )
+            lang = getattr(self, '_lang', 'zh')
+            if lang == 'en':
+                await callback_handler.on_llm_new_token(
+                    "\n\n> \U0001f4e5 For complete data, please download the Excel or CSV file below.\n\n"
+                )
+            else:
+                await callback_handler.on_llm_new_token(
+                    "\n\n> \U0001f4e5 如需完整数据，请下载下方的 Excel 或 CSV 文件。\n\n"
+                )
 
             on_artifacts = getattr(callback_handler, "on_artifacts", None)
             if on_artifacts:
@@ -1980,33 +2092,61 @@ Begin your response now:
             )
 
         total = len(pending)
-        heading = (
-            f"## Filtered Results ({filter_result.filtered_count} of {filter_result.original_count} items)"
-            if filter_result.applied
-            else f"## Full Results ({original_total} items)"
-        )
+        lang = getattr(self, '_lang', 'zh')
+        if lang == 'en':
+            heading = (
+                f"## Filtered Results ({filter_result.filtered_count} of {filter_result.original_count} items)"
+                if filter_result.applied
+                else f"## Full Results ({original_total} items)"
+            )
+        else:
+            heading = (
+                f"## 筛选结果（{filter_result.filtered_count}/{filter_result.original_count} 项）"
+                if filter_result.applied
+                else f"## 完整结果（{original_total} 项）"
+            )
         await callback_handler.on_llm_new_token(
             f"\n\n---\n\n{heading}\n\n"
         )
-        system_prompt = (
-            "You are presenting search result items clearly and concisely. "
-            "For each item, extract and present the most important information as clean Markdown. "
-            "Use **bold** for field names. Number each item. "
-            "Every URL is mandatory: copy every URL from the input exactly and verbatim. "
-            "Do not omit, shorten, summarize, translate, decode, re-encode, or alter any URL. "
-            "If an item has multiple URLs, include all of them under that item. "
-            "If a URL is an image URL, display it using Markdown image syntax exactly as "
-            "![alt text](image_URL) so the frontend can render the image inline. "
-            "Do NOT add any preamble, summary, or conclusion - output only the formatted items."
-        )
+        if lang == 'en':
+            system_prompt = (
+                "You are presenting search result items clearly and concisely. "
+                "For each item, extract and present the most important information as clean Markdown. "
+                "Use **bold** for field names. Number each item. "
+                "Every URL is mandatory: copy every URL from the input exactly and verbatim. "
+                "Do not omit, shorten, summarize, translate, decode, re-encode, or alter any URL. "
+                "If an item has multiple URLs, include all of them under that item. "
+                "If a URL is an image URL, display it using Markdown image syntax exactly as "
+                "![alt text](image_URL) so the frontend can render the image inline. "
+                "Do NOT add any preamble, summary, or conclusion - output only the formatted items. "
+                "IMPORTANT: The user asked in English — all labels and descriptions must be in English."
+            )
+        else:
+            system_prompt = (
+                "你正在清晰简洁地展示搜索结果项目。"
+                "对于每个项目，提取并呈现最重要的信息，使用干净的 Markdown 格式。"
+                "使用 **粗体** 标记字段名。给每个项目编号。"
+                "每个 URL 都是强制性的：从输入中准确且逐字复制每个 URL。"
+                "不要省略、缩短、总结、翻译、解码、重新编码或更改任何 URL。"
+                "如果一个项目有多个 URL，请在该项目下包含所有 URL。"
+                "如果 URL 是图像 URL，请使用 Markdown 图像语法显示："
+                "![替代文本](image_URL)，以便前端可以内联渲染图像。"
+                "不要添加任何前言、总结或结论——只输出格式化的项目。"
+                "重要：用户使用中文提问——所有标签和描述必须使用中文。"
+            )
         for batch_start in range(0, total, batch_size):
             batch = pending[batch_start:batch_start + batch_size]
             self.logger.info(f"batch: {batch}")
             _replace_uspto_download_urls_for_batch(batch)
             batch_end = min(batch_start + batch_size, total)
-            await callback_handler.on_llm_new_token(
-                f"### Items {batch_start + 1}-{batch_end}\n\n"
-            )
+            if lang == 'en':
+                await callback_handler.on_llm_new_token(
+                    f"### Items {batch_start + 1}-{batch_end}\n\n"
+                )
+            else:
+                await callback_handler.on_llm_new_token(
+                    f"### 项目 {batch_start + 1}-{batch_end}\n\n"
+                )
             await self._stream_batch_with_retries(batch, system_prompt, callback_handler)
             await callback_handler.on_llm_new_token("\n\n")
 

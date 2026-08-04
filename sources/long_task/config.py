@@ -64,6 +64,102 @@ DEFAULT_PROSECUTION_MAX_PAGES_PER_DOC = 100
 DEFAULT_PROSECUTION_INCLUDE_PRIORITY_2 = False
 
 
+# ── Patent family analysis config ───────────────────────────────────────────────
+
+DEFAULT_EPO_CONSUMER_KEY = ''
+DEFAULT_EPO_CONSUMER_SECRET = ''
+DEFAULT_FAMILY_MAX_JURISDICTIONS = 1  # start with US only
+
+
+def get_family_config(config_path: str = 'config.ini') -> dict:
+    """Read [FAMILY] section from config file.
+
+    Returns:
+        dict with keys:
+            epo_consumer_key (str)
+            epo_consumer_secret (str)
+            max_jurisdictions (int)
+    """
+    cfg = configparser.ConfigParser()
+    cfg.read(config_path)
+
+    epo_consumer_key = DEFAULT_EPO_CONSUMER_KEY
+    epo_consumer_secret = DEFAULT_EPO_CONSUMER_SECRET
+    max_jurisdictions = DEFAULT_FAMILY_MAX_JURISDICTIONS
+
+    if cfg.has_section('FAMILY'):
+        epo_consumer_key = cfg.get('FAMILY', 'epo_consumer_key',
+                                   fallback=DEFAULT_EPO_CONSUMER_KEY)
+        epo_consumer_secret = cfg.get('FAMILY', 'epo_consumer_secret',
+                                      fallback=DEFAULT_EPO_CONSUMER_SECRET)
+        max_jurisdictions = cfg.getint('FAMILY', 'max_jurisdictions',
+                                        fallback=DEFAULT_FAMILY_MAX_JURISDICTIONS)
+
+    return {
+        'epo_consumer_key': epo_consumer_key,
+        'epo_consumer_secret': epo_consumer_secret,
+        'max_jurisdictions': max_jurisdictions,
+    }
+
+
+# ── SIPOP (China patent open data platform) config ──────────────────────────
+
+DEFAULT_SIPOP_APP_KEY = ''
+DEFAULT_SIPOP_APP_SECRET = ''
+
+
+def get_sipop_config(config_path: str = 'config.ini') -> dict:
+    """Read [SIPOP] section from config file, with env var overrides.
+
+    Returns:
+        dict with keys: app_key (str), app_secret (str)
+    """
+    import os as _os
+    cfg = configparser.ConfigParser()
+    cfg.read(config_path)
+
+    app_key = _os.getenv('SIPOP_APP_KEY', '')
+    app_secret = _os.getenv('SIPOP_APP_SECRET', '')
+
+    if not app_key and cfg.has_section('SIPOP'):
+        app_key = cfg.get('SIPOP', 'app_key', fallback=DEFAULT_SIPOP_APP_KEY)
+    if not app_secret and cfg.has_section('SIPOP'):
+        app_secret = cfg.get('SIPOP', 'app_secret', fallback=DEFAULT_SIPOP_APP_SECRET)
+
+    return {
+        'app_key': app_key.strip(),
+        'app_secret': app_secret.strip(),
+    }
+
+
+DEFAULT_JPO_USERNAME = ''
+DEFAULT_JPO_PASSWORD = ''
+
+
+def get_jpo_config(config_path: str = 'config.ini') -> dict:
+    """Read [JPO] section from config file, with env var overrides.
+
+    Returns:
+        dict with keys: username (str), password (str)
+    """
+    import os as _os
+    cfg = configparser.ConfigParser()
+    cfg.read(config_path)
+
+    username = _os.getenv('JPO_USERNAME', '')
+    password = _os.getenv('JPO_PASSWORD', '')
+
+    if not username and cfg.has_section('JPO'):
+        username = cfg.get('JPO', 'username', fallback=DEFAULT_JPO_USERNAME)
+    if not password and cfg.has_section('JPO'):
+        password = cfg.get('JPO', 'password', fallback=DEFAULT_JPO_PASSWORD)
+
+    return {
+        'username': username.strip(),
+        'password': password.strip(),
+    }
+
+
 def get_prosecution_config(config_path: str = 'config.ini') -> dict:
     """Read [PROSECUTION] section from config file.
 

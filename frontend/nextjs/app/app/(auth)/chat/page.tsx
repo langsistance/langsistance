@@ -732,7 +732,7 @@ export default function Chat() {
           const phaseLabel = data.current_step || data.current_phase || ''
           const progress = data.progress != null ? `[${data.progress}%]` : ''
 
-          function findAndUpdate(messages: any[], newContent: string, summary?: string) {
+          function findAndUpdate(messages: any[], newContent: string, summary?: string, extraFields?: Record<string, any>) {
             const idx = messages.findIndex(msg => msg.taskId === taskId)
             if (idx >= 0) {
               return messages.map((msg, i) =>
@@ -741,17 +741,24 @@ export default function Chat() {
                       ...msg,
                       content: newContent,
                       resultSummary: summary ?? msg.resultSummary,
+                      ...(extraFields || {}),
                     }
                   : msg
               )
             }
-            // Fallback: try assistantId
+            // Fallback: try assistantId (new task — clear stale metadata from
+            // previous tasks so family labels don't leak into batch analysis etc.)
             return messages.map(msg =>
               msg.id === assistantId
                 ? {
                     ...msg,
                     content: newContent,
                     resultSummary: summary ?? msg.resultSummary,
+                    analysisType: undefined,
+                    jurisdictions: undefined,
+                    familyOverview: undefined,
+                    tableColumns: undefined,
+                    ...(extraFields || {}),
                   }
                 : msg
             )
@@ -812,7 +819,21 @@ export default function Chat() {
               .replace('{progress}', progress)
               .replace('{phase}', phaseLabel)
               + ` Task ID: ${taskId}`
-            setMessages((m) => findAndUpdate(m, newContent, data.result_summary))
+            const extraFields: Record<string, any> = {}
+            if (data.analysis_type) extraFields.analysisType = data.analysis_type
+            if (data.table_columns) extraFields.tableColumns = data.table_columns
+            if (data.family_overview) extraFields.familyOverview = data.family_overview
+            if (data.jurisdictions) extraFields.jurisdictions = data.jurisdictions
+            setMessages((m) => {
+              // Preserve previously-set fields when backend doesn't resend them,
+              // BUT only from the SAME task — never leak metadata across tasks.
+              const sameTask = m.find(msg => msg.taskId === taskId) as any
+              if (!extraFields.analysisType && sameTask?.analysisType) extraFields.analysisType = sameTask.analysisType
+              if (!extraFields.tableColumns && sameTask?.tableColumns) extraFields.tableColumns = sameTask.tableColumns
+              if (!extraFields.familyOverview && sameTask?.familyOverview) extraFields.familyOverview = sameTask.familyOverview
+              if (!extraFields.jurisdictions && sameTask?.jurisdictions) extraFields.jurisdictions = sameTask.jurisdictions
+              return findAndUpdate(m, newContent, data.result_summary, extraFields)
+            })
           }
         }
       } catch {
@@ -911,6 +932,10 @@ export default function Chat() {
                   resultSummary={msg.resultSummary}
                   streaming={streaming && streamingId === msg.id}
                   transientStatus={streaming && streamingId === msg.id ? transientStatus : ''}
+                  analysisType={(msg as any).analysisType}
+                  tableColumns={(msg as any).tableColumns}
+                  familyOverview={(msg as any).familyOverview}
+                  jurisdictions={(msg as any).jurisdictions}
                 />
               ) : (
                 <div className="chat-message user">

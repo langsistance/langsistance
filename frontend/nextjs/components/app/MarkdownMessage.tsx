@@ -19,6 +19,18 @@ interface Props {
   resultSummary?: string
   streaming: boolean
   transientStatus?: string
+  analysisType?: string
+  tableColumns?: string[]
+  familyOverview?: Record<string, any>
+  jurisdictions?: Array<{
+    code: string
+    label: string
+    status: string
+    progress: number
+    detail: string
+    file_count: number
+    files_done: number
+  }>
 }
 
 interface ChatArtifact {
@@ -80,7 +92,7 @@ function base64ChunksToBlob(chunks: string[], mimeType: string) {
   return new Blob(byteArrays, { type: mimeType })
 }
 
-export default function MarkdownMessage({ content, artifacts = [], resultSummary, streaming, transientStatus = '' }: Props) {
+export default function MarkdownMessage({ content, artifacts = [], resultSummary, streaming, transientStatus = '', analysisType, tableColumns, familyOverview, jurisdictions }: Props) {
   const { t } = useI18n()
   const [copied, setCopied] = useState(false)
   const [downloaded, setDownloaded] = useState(false)
@@ -211,7 +223,7 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
         </div>
       )}
       {(content.includes('🔬') || content.includes('✅') || content.includes('❌') || content.includes('⏸') || content.includes('⏹') || /\[\d+%\]/.test(content)) ? (
-        <LongTaskProgress content={content} resultSummary={resultSummary} streaming={streaming} />
+        <LongTaskProgress content={content} resultSummary={resultSummary} streaming={streaming} analysisType={analysisType} tableColumns={tableColumns} familyOverview={familyOverview} jurisdictions={jurisdictions} />
       ) : (
         <div dangerouslySetInnerHTML={{ __html: html || '▋' }} />
       )}

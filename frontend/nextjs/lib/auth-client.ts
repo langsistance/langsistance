@@ -231,6 +231,36 @@ function persist(r: AuthResponse, email: string) {
   return stored
 }
 
+/**
+ * Sign in with Google via Firebase SDK popup, then exchange the Google
+ * idToken for Firebase tokens via the backend proxy so we also get a
+ * refreshToken — keeping the existing persist() / getValidToken() flow
+ * unchanged.
+ */
+export async function loginWithGoogle(): Promise<AuthUser> {
+  const { getFirebaseAuth } = await import('@/lib/firebase')
+  const { signInWithPopup, GoogleAuthProvider } = await import('firebase/auth')
+
+  const auth = getFirebaseAuth()
+  const provider = new GoogleAuthProvider()
+  const result = await signInWithPopup(auth, provider)
+
+  // Extract the Google OAuth idToken (NOT the Firebase idToken —
+  // we need the Google token so the backend can exchange it via
+  // signInWithIdp and get back a Firebase refreshToken).
+  const credential = GoogleAuthProvider.credentialFromResult(result)
+  if (!credential?.idToken) {
+    throw new Error('GOOGLE_SIGN_IN_NO_ID_TOKEN')
+  }
+
+  const r = await call<AuthResponse>('/auth/google', {
+    googleIdToken: credential.idToken,
+    requestUri: window.location.origin,
+  })
+  const s = persist(r, r.email ?? '')
+  return { uid: s.uid, email: s.email }
+}
+
 export async function login(email: string, password: string): Promise<AuthUser> {
   const encryptedPassword = await encryptPassword(password)
   const r = await call<AuthResponse>('/auth/login', { email, encryptedPassword })

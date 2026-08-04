@@ -326,9 +326,33 @@ _STATUS_MSGS = {
         "prosecution_framework": "正在生成分析框架（{total} 个审查文件）...",
         "prosecution_downloading": "正在下载审查文件（{current}/{total}）...",
         "prosecution_ocr": "正在OCR识别（{current}/{total}）...",
+        "prosecution_progress": "已分析 {current}/{total} 个文件",
         "prosecution_analyzing": "正在分析（{current}/{total}）：{desc}",
         "prosecution_all_failed": "所有审查文件处理失败。文件可能是扫描件或加密PDF。",
         "prosecution_report_complete": "报告撰写完成",
+        "family_lookup": "正在查询EPO同族专利...",
+        "china_resolving": "正在解析中国专利申请号...",
+        "china_fetching_review": "正在获取中国审查决定数据...",
+        "china_analyzing_decisions": "正在分析审查决定（{current}/{total}）...",
+        "china_generating_timeline": "正在生成审查时间线...",
+        "china_no_cn_member": "未找到该专利的中国同族成员，无法进行中国审查历史分析。",
+        "china_no_review_data": "未找到该中国专利的审查决定数据。",
+        "china_report_title": "中国专利 {patent_id} 审查历史分析报告",
+        "china_family_overview": "查到 {input_id} 的中国同族申请号 {cn_app}，同族覆盖 {n_juris} 个司法辖区: {juris}",
+        "china_fetching_for_family": "正在获取中国同族专利 {cn_app} 的审查数据...",
+        "family_cn_done": "已获取 {events} 条审查决定 / {claims} 项权利要求",
+        "family_cn_basic": "仅有著录项目数据",
+        "japan_fetching_for_family": "正在获取日本同族专利 {jp_app} 的审查数据...",
+        "family_jp_done": "已获取 {events} 条审查进度事件",
+        "family_jp_basic": "仅有著录项目数据",
+        "family_ep_done": "已获取 {steps} 个审查步骤 ({status})",
+        "family_ep_basic": "仅有著录项目数据",
+        "epo_fetching_for_family": "正在获取欧洲同族专利 EP{ep_app} 的审查数据...",
+        "epo_no_ep_member": "未找到该专利的欧洲同族成员，无法进行EPO审查历史分析。",
+        "epo_no_review_data": "未找到该欧洲专利的审查数据。",
+        "epo_report_title": "欧洲专利 {patent_id} 审查历史分析报告",
+        "japan_no_review_data": "未找到该日本专利的审查数据。",
+        "japan_report_title": "日本专利 {patent_id} 审查历史分析报告",
     },
     "en": {
         "preparing": "Preparing patent analysis ({total} patents)...",
@@ -364,9 +388,33 @@ _STATUS_MSGS = {
         "prosecution_framework": "Building analysis framework ({total} prosecution documents)...",
         "prosecution_downloading": "Downloading documents ({current}/{total})...",
         "prosecution_ocr": "OCR processing {current}/{total}...",
+        "prosecution_progress": "{current}/{total} documents analyzed",
         "prosecution_analyzing": "Analyzing {current}/{total}: {desc}",
         "prosecution_all_failed": "All prosecution documents failed processing. Files may be scanned images or encrypted PDFs.",
         "prosecution_report_complete": "Report writing complete",
+        "family_lookup": "Looking up patent family via EPO...",
+        "china_resolving": "Resolving Chinese patent application number...",
+        "china_fetching_review": "Fetching Chinese examination review data...",
+        "china_analyzing_decisions": "Analyzing examination decisions ({current}/{total})...",
+        "china_generating_timeline": "Building examination timeline...",
+        "china_no_cn_member": "No Chinese family member found for this patent.",
+        "china_no_review_data": "No examination review data found for this Chinese patent.",
+        "china_report_title": "Chinese Patent {patent_id} Examination History Report",
+        "china_family_overview": "Found CN application {cn_app} for {input_id}, family spans {n_juris} jurisdictions: {juris}",
+        "china_fetching_for_family": "Fetching CN family member {cn_app} examination data...",
+        "family_cn_done": "Fetched {events} decisions / {claims} claims",
+        "family_cn_basic": "Bibliographic data only",
+        "japan_fetching_for_family": "Fetching JP family member {jp_app} examination data...",
+        "family_jp_done": "Fetched {events} progress events",
+        "family_jp_basic": "Bibliographic data only",
+        "family_ep_done": "Fetched {steps} procedural steps ({status})",
+        "family_ep_basic": "Bibliographic data only",
+        "epo_fetching_for_family": "Fetching EP family member EP{ep_app} examination data...",
+        "epo_no_ep_member": "No European family member found for this patent.",
+        "epo_no_review_data": "No examination data found for this European patent.",
+        "epo_report_title": "European Patent {patent_id} Examination History Report",
+        "japan_no_review_data": "No examination data found for this Japanese patent.",
+        "japan_report_title": "Japanese Patent {patent_id} Examination History Report",
     },
 }
 
@@ -871,21 +919,169 @@ async def _run_pipeline(
         )
         update_task_status(task_id, 'generating_columns', 5,
                            f'分析维度：{" | ".join(columns[1:4])}...',
-                           table_columns=columns)
+                           table_columns=columns,
+                           analysis_type='batch')
         # Update MySQL long_tasks table after phase 1
         _update_mysql_progress(task_id, 'generating_columns', 5)
 
-    # ==== Phase 2: Per-patent download -> analyze -> summarize ====
+    # ==== Phase 2: Sequential download + pipelined concurrent analysis ====
+    # Each patent is downloaded sequentially (rate-limited API calls).  As soon
+    # as download completes, analysis (text check → vision/OCR → LLM analyze →
+    # LLM summarize) is launched immediately via asyncio.create_task().  All
+    # analysis steps run under a Semaphore(100), so multiple LLM calls execute
+    # concurrently.  (Same pattern as execute_prosecution_analysis Phase 2.)
     _pipeline_logger.info(
         f"[task={task_id}] PHASE2 START — pending_count={len(pending)}, "
         f"total={total}"
     )
-    for i, patent_id in enumerate(pending):
-        patent_index = len(table_rows) + 1
 
-        # ── Pause / Stop checkpoint ──────────────────────────────────────
+    _base_idx = len(table_rows)  # already-completed rows (0 for fresh start, >0 for resume)
+    _table_rows: list[dict] = [None] * total  # preserve order by index
+    for _idx, _crow in enumerate(table_rows):
+        _table_rows[_idx] = _crow  # pre-fill completed rows from checkpoint
+    _analyze_sem = asyncio.Semaphore(100)  # caps concurrent OCR + LLM calls
+    _pending_tasks: list = []  # list of asyncio.Task
+    _analyzed = _base_idx  # count of analyses completed (includes resume rows)
+    _downloaded = _base_idx  # count of downloads completed (for monotonic progress)
+    _phase2_progress = progress_pct(_base_idx, total)  # monotonic guard for progress bar
+
+    def _advance_progress(target: int) -> int:
+        """Set Phase 2 progress to *target*, never going backward."""
+        nonlocal _phase2_progress
+        if target > _phase2_progress:
+            _phase2_progress = target
+        return _phase2_progress
+
+    async def _analyze_one(_patent_id: str, _i: int, _patent_text,
+                           _fallback_binary, _is_upload: bool) -> None:
+        nonlocal _analyzed, _downloaded, _phase2_progress
+
+        async with _analyze_sem:
+            _patent_idx = _i + 1
+            _pipeline_logger.info(
+                f"[task={task_id}] PHASE2 analyze_start — "
+                f"patent_id={_patent_id}, idx={_patent_idx}/{total}"
+            )
+
+            _text_ok = _patent_text and len(_patent_text) >= 1000
+            _want_vision = vision_provider is not None
+
+            if _text_ok:
+                _row = await analyze_single_patent(
+                    patent_id=_patent_id, patent_text=_patent_text,
+                    columns=columns, query=params['query'],
+                    provider=pro_provider, timeout=60, lang=batch_lang,
+                )
+                _pipeline_logger.info(
+                    f"[task={task_id}] PHASE2 analyze_done — "
+                    f"patent_id={_patent_id}, idx={_patent_idx}/{total}, "
+                    f"row_keys={list(_row.keys()) if _row else 'None'}"
+                )
+            else:
+                _pdf_bytes = None
+                if _fallback_binary is not None:
+                    _pdf_bytes = _fallback_binary
+                    _pipeline_logger.info(
+                        f"[task={task_id}] PHASE2 vision_using_cached_binary — "
+                        f"patent_id={_patent_id}, len={len(_pdf_bytes)}"
+                    )
+                elif _is_upload:
+                    _ref = next(
+                        (r for r in patent_file_refs
+                         if r['filename'].rsplit('.', 1)[0] == _patent_id),
+                        None,
+                    )
+                    if _ref:
+                        try:
+                            with open(_ref['path'], 'rb') as _fh:
+                                _pdf_bytes = _fh.read()
+                            _pipeline_logger.info(
+                                f"[task={task_id}] PHASE2 file_upload_binary_read — "
+                                f"patent_id={_patent_id}, file={_ref['filename']}, "
+                                f"len={len(_pdf_bytes)}"
+                            )
+                        except Exception as _e:
+                            _pipeline_logger.warning(
+                                f"[task={task_id}] PHASE2 file_upload_binary_read_failed — "
+                                f"patent_id={_patent_id}, error={_e}"
+                            )
+                elif params.get('patent_source') == 'uspto':
+                    _pdf_bytes = await _download_uspto_binary_for_vision(
+                        _patent_id, flash_provider,
+                    )
+
+                if not _pdf_bytes:
+                    _row = build_failed_row(_patent_id,
+                        "PDF text extraction failed and could not download binary",
+                        lang=batch_lang)
+                elif _want_vision:
+                    from sources.long_task.patent_analyzer import analyze_patent_with_vision
+                    _row = await analyze_patent_with_vision(
+                        pdf_bytes=_pdf_bytes, patent_id=_patent_id,
+                        columns=columns, query=params['query'],
+                        vision_provider=vision_provider, lang=batch_lang,
+                    )
+                    if _row.get('_failed'):
+                        _pipeline_logger.info(
+                            f"[task={task_id}] PHASE2 vision_failed_fallback_to_ocr — "
+                            f"patent_id={_patent_id}"
+                        )
+                        _ocr_text = _ocr_from_pdf_reader(_pdf_bytes)
+                        if _ocr_text and len(_ocr_text) >= 1000:
+                            _row = await analyze_single_patent(
+                                patent_id=_patent_id, patent_text=_ocr_text,
+                                columns=columns, query=params['query'],
+                                provider=pro_provider, timeout=60, lang=batch_lang,
+                            )
+                else:
+                    _pipeline_logger.info(
+                        f"[task={task_id}] PHASE2 vision_disabled_ocr — "
+                        f"patent_id={_patent_id}"
+                    )
+                    _ocr_text = _ocr_from_pdf_reader(_pdf_bytes)
+                    if _ocr_text and len(_ocr_text) >= 1000:
+                        _row = await analyze_single_patent(
+                            patent_id=_patent_id, patent_text=_ocr_text,
+                            columns=columns, query=params['query'],
+                            provider=pro_provider, timeout=60, lang=batch_lang,
+                        )
+                    else:
+                        _row = build_failed_row(_patent_id,
+                            f"Text extraction and OCR both failed ({len(_ocr_text) if _ocr_text else 0} chars)",
+                            lang=batch_lang)
+
+            # ── Summarize (LLM) ──
+            _row['_summary'] = await generate_patent_summary(
+                patent_id=_patent_id, row=_row, query=params['query'],
+                provider=pro_provider, lang=batch_lang,
+            )
+            _pipeline_logger.info(
+                f"[task={task_id}] PHASE2 summary_done — "
+                f"patent_id={_patent_id}, idx={_patent_idx}/{total}, "
+                f"summary_length={len(_row.get('_summary', '')) if _row.get('_summary') else 0}"
+            )
+
+            _table_rows[_i] = _row
+            _analyzed += 1
+
+            # ── Progress update (monotonic: max of downloaded and analyzed) ──
+            _visible = max(_downloaded, _analyzed)
+            _pipeline_logger.info(
+                f"[task={task_id}] PHASE2 table_updated — "
+                f"analyzed={_analyzed}/{total}, downloaded={_downloaded}/{total}"
+            )
+            update_task_status(task_id, 'analyzing',
+                               _advance_progress(progress_pct(_visible, total)),
+                               _t('analysis_completed_count', batch_lang,
+                                  current=_analyzed, total=total),
+                               table_rows=[r for r in _table_rows if r is not None])
+
+    for i, patent_id in enumerate(pending):
+        patent_index = len([r for r in _table_rows if r is not None]) + 1
+
+        # ── Pause / Stop checkpoint ──
         _uid = params.get('user_id', '')
-        _completed = len(table_rows)
+        _completed = len([r for r in _table_rows if r is not None])
 
         _result = _handle_task_stop(task_id, _uid, _completed, total)
         if _result:
@@ -899,36 +1095,36 @@ async def _run_pipeline(
             return _result
 
         _result = _handle_task_pause(task_id, _uid, _completed, total, {
-            'completed': [r.get('专利号', '') for r in table_rows if not r.get('_failed')],
+            'completed': [r.get('专利号', '') for r in _table_rows if r is not None and not r.get('_failed')],
             'current': patent_id,
             'pending': pending[i:],
-            'completed_rows': table_rows,
-            'failed': [r.get('专利号', '') for r in table_rows if r.get('_failed')],
+            'completed_rows': [r for r in _table_rows if r is not None],
+            'failed': [r.get('专利号', '') for r in _table_rows if r is not None and r.get('_failed')],
             'columns': columns,
         })
         if _result:
             return _result
 
         try:
-            # Use patent_index-based progress so resumed tasks show correct %
-            completed_before = len(table_rows)
+            # Monotonic progress: show max of downloads started vs analyses finished
+            _visible = max(_downloaded, _analyzed)
             update_task_status(task_id, 'analyzing',
-                               progress_pct(completed_before + i, total),
-                               _t('downloading_patent', batch_lang, current=patent_index, total=total),
-                               table_rows=table_rows)
+                               _advance_progress(progress_pct(_visible, total)),
+                               _t('downloading_patent', batch_lang,
+                                  current=patent_index, total=total),
+                               table_rows=[r for r in _table_rows if r is not None])
 
-            # Try scene tool download first, fall back to hardcoded download
-            # In file-upload mode, use pre-extracted text from conversation_history
-            fallback_binary = None
+            # ── Download (sequential, rate-limited) ──
+            _download_binary = None
             if is_file_upload_mode:
-                patent_text = patent_texts.get(patent_id, '')
+                _download_text = patent_texts.get(patent_id, '')
                 _pipeline_logger.info(
                     f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] — "
                     f"patent_id={patent_id}, using_uploaded_text, "
-                    f"text_length={len(patent_text)}"
+                    f"text_length={len(_download_text)}"
                 )
             else:
-                patent_text, fallback_binary = await _download_patent_via_scene_or_fallback(
+                _download_text, _download_binary = await _download_patent_via_scene_or_fallback(
                     patent_id=patent_id,
                     params=params,
                     scene_candidates=scene_candidates,
@@ -941,151 +1137,65 @@ async def _run_pipeline(
             _pipeline_logger.info(
                 f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] download_done — "
                 f"patent_id={patent_id}, "
-                f"text_length={len(patent_text) if patent_text else 0}, "
-                f"binary_cached={fallback_binary is not None}, "
-                f"binary_len={len(fallback_binary) if fallback_binary else 0}"
+                f"text_length={len(_download_text) if _download_text else 0}, "
+                f"binary_cached={_download_binary is not None}, "
+                f"binary_len={len(_download_binary) if _download_binary else 0}"
             )
 
+            # ── Launch analysis immediately (concurrent via semaphore) ──
+            _pending_tasks.append(
+                asyncio.create_task(_analyze_one(patent_id, _base_idx + i, _download_text,
+                                                  _download_binary, is_file_upload_mode))
+            )
+            _downloaded += 1
+
+            # Periodic checkpoint save
+            save_checkpoint(task_id, {
+                'completed': [r.get('专利号', patent_id) for r in _table_rows
+                              if r is not None and not r.get('_failed')],
+                'current': patent_id,
+                'pending': pending[i+1:],
+                'completed_rows': [r for r in _table_rows if r is not None],
+                'failed': [r.get('专利号', patent_id) for r in _table_rows
+                           if r is not None and r.get('_failed')],
+                'columns': columns,
+            })
+
+            # Post-download progress: max of downloaded and analyzed (monotonic)
+            _visible = max(_downloaded, _analyzed)
             update_task_status(task_id, 'analyzing',
-                               progress_pct(completed_before + i, total),
-                               _t('analyzing', batch_lang, current=patent_index, total=total),
-                               table_rows=table_rows)
-
-            # ── Text extraction may be incomplete for short patents or
-            #     scanned/image PDFs (pypdf returns little/nothing).  Threshold
-            #     at 10k chars ensures we have enough text for meaningful analysis.
-            #     Strategy: try vision (MiniMax-M3) first, then OCR as fallback.
-            #     When vision_enabled=false, skip straight to OCR.
-            text_ok = patent_text and len(patent_text) >= 1000
-            want_vision = vision_provider is not None
-
-            if text_ok:
-                row = await analyze_single_patent(
-                    patent_id=patent_id, patent_text=patent_text,
-                    columns=columns, query=params['query'],
-                    provider=pro_provider, timeout=60, lang=batch_lang,
-                )
-                _pipeline_logger.info(
-                    f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] analyze_done — "
-                    f"patent_id={patent_id}, row_keys={list(row.keys()) if row else 'None'}"
-                )
-            else:
-                # Text insufficient — need binary for vision or OCR
-                pdf_bytes = None
-                if fallback_binary is not None:
-                    # Reuse binary already downloaded during text extraction
-                    pdf_bytes = fallback_binary
-                    _pipeline_logger.info(
-                        f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
-                        f"vision_using_cached_binary — patent_id={patent_id}, "
-                        f"len={len(pdf_bytes)}"
-                    )
-                elif is_file_upload_mode:
-                    # Read the uploaded file from disk for vision/OCR
-                    ref = next(
-                        (r for r in patent_file_refs
-                         if r['filename'].rsplit('.', 1)[0] == patent_id),
-                        None,
-                    )
-                    if ref:
-                        try:
-                            with open(ref['path'], 'rb') as fh:
-                                pdf_bytes = fh.read()
-                            _pipeline_logger.info(
-                                f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
-                                f"file_upload_binary_read — patent_id={patent_id}, "
-                                f"file={ref['filename']}, "
-                                f"len={len(pdf_bytes)}"
-                            )
-                        except Exception as e:
-                            _pipeline_logger.warning(
-                                f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
-                                f"file_upload_binary_read_failed — patent_id={patent_id}, "
-                                f"error={e}"
-                            )
-                elif params.get('patent_source') == 'uspto':
-                    pdf_bytes = await _download_uspto_binary_for_vision(
-                        patent_id, flash_provider,
-                    )
-                if not pdf_bytes:
-                    row = build_failed_row(patent_id,
-                        "PDF text extraction failed and could not download binary",
-                        lang=batch_lang)
-                elif want_vision:
-                    # Path A: MiniMax-M3 vision → OCR fallback
-                    from sources.long_task.patent_analyzer import analyze_patent_with_vision
-                    row = await analyze_patent_with_vision(
-                        pdf_bytes=pdf_bytes, patent_id=patent_id,
-                        columns=columns, query=params['query'],
-                        vision_provider=vision_provider, lang=batch_lang,
-                    )
-                    if row.get('_failed'):
-                        _pipeline_logger.info(
-                            f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
-                            f"vision_failed_fallback_to_ocr — patent_id={patent_id}"
-                        )
-                        ocr_text = _ocr_from_pdf_reader(pdf_bytes)
-                        if ocr_text and len(ocr_text) >= 1000:
-                            row = await analyze_single_patent(
-                                patent_id=patent_id, patent_text=ocr_text,
-                                columns=columns, query=params['query'],
-                                provider=pro_provider, timeout=60, lang=batch_lang,
-                            )
-                else:
-                    # Path B: Vision disabled — straight to OCR
-                    _pipeline_logger.info(
-                        f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] "
-                        f"vision_disabled_ocr — patent_id={patent_id}"
-                    )
-                    ocr_text = _ocr_from_pdf_reader(pdf_bytes)
-                    if ocr_text and len(ocr_text) >= 1000:
-                        row = await analyze_single_patent(
-                            patent_id=patent_id, patent_text=ocr_text,
-                            columns=columns, query=params['query'],
-                            provider=pro_provider, timeout=60, lang=batch_lang,
-                        )
-                    else:
-                        row = build_failed_row(patent_id,
-                            f"Text extraction and OCR both failed ({len(ocr_text) if ocr_text else 0} chars)",
-                            lang=batch_lang)
-
-            row['_summary'] = await generate_patent_summary(
-                patent_id=patent_id, row=row, query=params['query'],
-                provider=pro_provider, lang=batch_lang,
-            )
-            _pipeline_logger.info(
-                f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] summary_done — "
-                f"patent_id={patent_id}, "
-                f"summary_length={len(row.get('_summary', '')) if row.get('_summary') else 0}"
-            )
+                               _advance_progress(progress_pct(_visible, total)),
+                               _t('analysis_completed_count', batch_lang,
+                                  current=_analyzed, total=total),
+                               table_rows=[r for r in _table_rows if r is not None])
 
         except Exception as e:
             _pipeline_logger.error(
-                f"[task={task_id}] PHASE2 patent[{patent_index}/{total}] FAILED — "
+                f"[task={task_id}] PHASE2 patent[{_base_idx + i + 1}/{total}] FAILED — "
                 f"patent_id={patent_id}, error={e}"
             )
-            row = build_failed_row(patent_id, str(e), lang=batch_lang)
+            _row = build_failed_row(patent_id, str(e), lang=batch_lang)
+            _table_rows[_base_idx + i] = _row
+            _downloaded += 1
+            _analyzed += 1
+            _visible = max(_downloaded, _analyzed)
+            update_task_status(task_id, 'analyzing',
+                               _advance_progress(progress_pct(_visible, total)),
+                               _t('analysis_completed_count', batch_lang,
+                                  current=_analyzed, total=total),
+                               table_rows=[r for r in _table_rows if r is not None])
 
-        table_rows.append(row)
-        _pipeline_logger.info(
-            f"[task={task_id}] PHASE2 table_updated — "
-            f"completed={len(table_rows)}/{total}, "
-            f"successful={len([r for r in table_rows if not r.get('_failed')])}, "
-            f"failed={len([r for r in table_rows if r.get('_failed')])}"
-        )
-        save_checkpoint(task_id, {
-            'completed': [r.get('专利号', patent_id) for r in table_rows if not r.get('_failed')],
-            'current': patent_id,
-            'pending': pending[i+1:],
-            'completed_rows': table_rows,
-            'failed': [r.get('专利号', patent_id) for r in table_rows if r.get('_failed')],
-            'columns': columns,
-        })
+    # ── Wait for all in-flight analyses to finish ──
+    _pipeline_logger.info(
+        f"[task={task_id}] PHASE2 all_downloads_done — "
+        f"waiting_for_{len(_pending_tasks)}_analyses"
+    )
+    if _pending_tasks:
+        await asyncio.gather(*_pending_tasks)
 
-        update_task_status(task_id, 'analyzing',
-                           progress_pct(completed_before + i + 1, total),
-                           _t('analysis_completed_count', batch_lang, current=len(table_rows), total=total),
-                           table_rows=table_rows)
+    # Reconstruct table_rows in original order
+    table_rows = [r for r in _table_rows if r is not None]
+
     # Clean up temp upload directory after Phase 2 (vision fallback may have read files)
     if patent_file_refs:
         import shutil as _shutil
@@ -1104,11 +1214,36 @@ async def _run_pipeline(
     )
     _update_mysql_progress(task_id, 'analyzing', 75)
 
-    # ==== Phase 3: Generate report (Pro, dynamic) ====
+    # ==== Phase 3: Generate report (Pro, dynamic, streaming) ====
+    # ── Streaming provider: use [PROSECUTION] streaming_provider/model for
+    # visible streaming text (executive summary + sections), same as
+    # execute_prosecution_analysis. Falls back to pro_provider if unset.
+    from sources.long_task.config import get_prosecution_config
+    _ptc = get_prosecution_config()
+    _stream_cfg_provider = _ptc.get('streaming_provider')
+    _stream_cfg_model = _ptc.get('streaming_model')
+    _streaming_provider = None
+    if _stream_cfg_provider and _stream_cfg_model:
+        from sources.llm_provider import Provider
+        _streaming_provider = Provider(
+            provider_name=_stream_cfg_provider, model=_stream_cfg_model,
+            server_address='', is_local=False,
+        )
+        _pipeline_logger.info(
+            f"[task={task_id}] CONFIG — streaming_provider CREATED: "
+            f"{_stream_cfg_provider}/{_stream_cfg_model}"
+        )
+    else:
+        _pipeline_logger.info(
+            f"[task={task_id}] CONFIG — streaming_provider not configured, "
+            f"using pro_provider={pro_provider.model if hasattr(pro_provider, 'model') else 'pro'}"
+        )
+    _stream = _streaming_provider or pro_provider
+
     _pipeline_logger.info(
         f"[task={task_id}] PHASE3 generate_report — "
         f"columns={columns}, table_rows_count={len(table_rows)}, "
-        f"provider={pro_provider.model if hasattr(pro_provider, 'model') else 'pro'}"
+        f"stream_provider={_stream.model if hasattr(_stream, 'model') else 'pro'}"
     )
 
     from sources.long_task.status_manager import ThrottledSummaryUpdater
@@ -1147,7 +1282,7 @@ async def _run_pipeline(
             table_rows=table_rows,
             columns=columns,
             query=params['query'],
-            provider=pro_provider,
+            provider=_stream,
             lang=batch_lang,
             on_chunk=_exec_chunk,
         )
@@ -1216,7 +1351,7 @@ async def _run_pipeline(
             text = await generate_report_section(
                 section=section, query=params['query'],
                 columns=columns, table_rows=table_rows,
-                provider=pro_provider,
+                provider=_stream,
                 lang=batch_lang,
                 on_chunk=_section_chunk,
             )
@@ -1389,7 +1524,2796 @@ async def _run_pipeline(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Prosecution History Analysis Task (single patent)
+# Patent Family Analysis Task (cross-jurisdiction, US first)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.task(bind=True, max_retries=2, default_retry_delay=60, time_limit=3600, soft_time_limit=3540)
+def execute_family_analysis(self, task_id: str, params: dict):
+    """Cross-jurisdiction patent family prosecution analysis.
+
+    Phase 0: EPO OPS family lookup → extract US member → normalize app_number.
+    Phase 1-4: Same US prosecution pipeline as ``execute_prosecution_analysis``.
+    """
+    import asyncio as _asyncio
+
+    retry_count = self.request.retries
+    patent_id = str(params.get('patent_id', '')).strip()
+    patent_source = params.get('patent_source', '')
+    patent_id_type = params.get('patent_id_type', '')
+    query = params.get('query', '')
+    lang = params.get('lang', 'zh')
+    session_id = params.get('session_id', '')
+    user_id = params.get('user_id', '')
+
+    # Normalize bare numeric patent IDs: EPO family API requires a country prefix.
+    # The LLM already identifies patent_source (e.g. "uspto"), so prepend the
+    # country code when the user-provided ID is digits-only.
+    _patent_id_numeric = ''.join(c for c in patent_id if c.isdigit())
+    if patent_id == _patent_id_numeric and len(_patent_id_numeric) >= 6:
+        _source_prefix = {'uspto': 'US', 'cnipa': 'CN', 'epo': 'EP', 'jpo': 'JP',
+                          'wipo': 'WO', 'kpo': 'KR'}.get(patent_source, 'US')
+        patent_id = f'{_source_prefix}{patent_id}'
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY normalize_id — "
+            f"raw={params.get('patent_id', '')}, prefixed={patent_id}, "
+            f"source={patent_source}"
+        )
+
+    _pipeline_logger.info(
+        f"[task={task_id}] FAMILY START — "
+        f"patent_id={patent_id}, "
+        f"query={query[:120]}, "
+        f"lang={lang}, "
+        f"session_id={session_id}, "
+        f"retry={retry_count}/{self.max_retries}"
+    )
+
+    if retry_count >= self.max_retries:
+        _pipeline_logger.error(
+            f"[task={task_id}] FAMILY HARD_STOP — retry_count={retry_count} >= {self.max_retries}"
+        )
+        if user_id:
+            from sources.long_task.user_queue import complete_user_task
+            try:
+                complete_user_task(str(user_id), task_id)
+            except Exception:
+                pass
+        return {'status': 'failed', 'task_id': task_id,
+                'error': f'Max retries ({self.max_retries}) exceeded'}
+
+    if not patent_id:
+        _pipeline_logger.error(f"[task={task_id}] FAMILY no patent_id provided")
+        _update_mysql_progress(task_id, 'failed', 0)
+        return {'status': 'failed', 'task_id': task_id, 'error': 'No patent_id'}
+
+    # ── Imports ──────────────────────────────────────────────────────────────
+    from sources.long_task.status_manager import (
+        update_task_status, set_task_completed, set_task_failed,
+    )
+    from sources.long_task.config import (
+        get_long_task_config, get_family_config, get_prosecution_config,
+        get_sipop_config, get_jpo_config,
+        DEFAULT_VISION_PROVIDER, DEFAULT_VISION_MODEL,
+    )
+    from sources.long_task.patent_family import EPOFamilyClient, EPOError
+    from sources.long_task.family_member import PatentFamily
+    from sources.long_task.prosecution_downloader import (
+        classify_prosecution_documents,
+        download_single_document,
+    )
+    from sources.long_task.storage import create_storage
+    from sources.llm_provider import Provider
+
+    # ── Provider setup ───────────────────────────────────────────────────────
+    ltc = get_long_task_config()
+    model_family = ltc['provider_family']
+
+    if model_family == 'minimax':
+        flash_provider = Provider(
+            provider_name='minimax', model='MiniMax-M2.7-highspeed',
+            server_address='', is_local=False,
+        )
+        pro_provider = Provider(
+            provider_name='minimax', model='MiniMax-M3',
+            server_address='', is_local=False,
+        )
+    else:
+        flash_provider = Provider(
+            provider_name='deepseek', model='deepseek-v4-flash',
+            server_address='', is_local=False,
+        )
+        pro_provider = Provider(
+            provider_name='deepseek', model='deepseek-v4-pro',
+            server_address='', is_local=False,
+        )
+
+    ptc = get_prosecution_config()
+    include_priority_2 = ptc.get('include_priority_2', True)
+    vision_enabled = ltc.get('vision_enabled', True)
+    vision_provider = None
+    if vision_enabled:
+        vision_cfg_provider = ltc.get('vision_provider', DEFAULT_VISION_PROVIDER)
+        vision_cfg_model = ltc.get('vision_model', DEFAULT_VISION_MODEL)
+        vision_provider = Provider(
+            provider_name=vision_cfg_provider, model=vision_cfg_model,
+            server_address='', is_local=False,
+        )
+
+    # ── Family config ────────────────────────────────────────────────────────
+    fc = get_family_config()
+    epo_key = fc.get('epo_consumer_key', '')
+    epo_secret = fc.get('epo_consumer_secret', '')
+
+    if not epo_key or not epo_secret:
+        _pipeline_logger.error(
+            f"[task={task_id}] FAMILY missing EPO credentials — "
+            f"set [FAMILY] epo_consumer_key / epo_consumer_secret in config.ini"
+        )
+        set_task_failed(task_id, "EPO API credentials not configured")
+        _update_mysql_progress(task_id, 'failed', 0)
+        return {'status': 'failed', 'task_id': task_id,
+                'error': 'EPO credentials not configured'}
+
+    # ── USPTO → publication number resolution (EPO fallback) ────────────────
+
+    async def _resolve_us_app_to_pub_number(
+        app_id: str, tid: str, id_type: str = 'application_number',
+    ) -> tuple[str | None, str | None, str | None]:
+        """Resolve a US patent ID → (pub_number, appNumberText, grant_number).
+
+        Searches USPTO by the field appropriate for *id_type*:
+        - application_number → applicationNumberText
+        - publication_number → earliestPublicationNumber
+        - grant_number → patentNumber
+
+        Returns a 3-tuple.  Any element may be None if not found.
+        """
+        try:
+            import json as _json, re as _re, os as _os_fb
+            import httpx as _httpx
+
+            # Normalise to the format USPTO expects for each field:
+            # - earliestPublicationNumber → WITH "US" prefix + kind code
+            # - patentNumber → bare digits (no prefix, no kind code)
+            # - applicationNumberText → bare digits
+            _up = app_id.upper()
+            _digits = ''.join(c for c in _up if c.isdigit())
+            if not _digits or len(_digits) < 6:
+                return None, None, None
+
+            _esc = lambda s: _re.sub(
+                r'(["\\+\-!(){}[\]^~*?:/]|&&|\|\|)', r'\\\1', s,
+            )
+
+            if id_type == 'grant_number':
+                _query = f'applicationMetaData.patentNumber:"{_esc(_digits)}"'
+            elif id_type == 'publication_number':
+                # Publication number WITH US prefix + kind code (e.g. US20220294065A1)
+                _pub_full = _up if _up.startswith('US') else f'US{_up}'
+                _pub_digits = f'US{_digits}'
+                _query = (
+                    f'applicationMetaData.earliestPublicationNumber:"{_esc(_pub_full)}"'
+                    f' OR applicationMetaData.earliestPublicationNumber:"{_esc(_pub_digits)}"'
+                )
+            else:
+                _query = f'applicationNumberText:"{_esc(_digits)}"'
+            # Always include applicationNumberText as fallback
+            if 'applicationNumberText' not in _query:
+                _query += f' OR applicationNumberText:"{_esc(_digits)}"'
+
+            _body = {
+                "q": _query,
+                "pagination": {"offset": 0, "limit": 1},
+                "fields": [
+                    "applicationNumberText",
+                    "applicationMetaData.patentNumber",
+                    "applicationMetaData.earliestPublicationNumber",
+                    "applicationMetaData.inventionTitle",
+                ],
+            }
+            _hdrs = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+            _uk = _os_fb.getenv('USPTO_API_KEY', '')
+            if _uk:
+                _hdrs['X-API-Key'] = _uk
+
+            async with _httpx.AsyncClient(timeout=15) as _cl:
+                _resp = await _cl.post(
+                    "https://api.uspto.gov/api/v1/patent/applications/search",
+                    headers=_hdrs, json=_body,
+                )
+            _pipeline_logger.info(
+                f"[task={tid}] uspto_search — status={_resp.status_code}, "
+                f"id_type={id_type}, digits={_digits}"
+            )
+            if _resp.status_code != 200:
+                _pipeline_logger.warning(
+                    f"[task={tid}] uspto_search failed — status={_resp.status_code}"
+                )
+                return None, None, None
+
+            _data = _resp.json() if _resp.text else {}
+            _results = (
+                _data.get('patentFileWrapperDataBag', None)
+                or _data.get('results', None)
+                or _data.get('patentFileBag', [])
+            )
+            if not _results:
+                return None, None, None
+
+            _hit = _results[0] if isinstance(_results, list) else _results
+            _app_text = _hit.get('applicationNumberText', '') or ''
+            # patentNumber may be at top level OR nested in applicationMetaData
+            _pub = (
+                _hit.get('applicationMetaData', {}).get('earliestPublicationNumber', '')
+                if isinstance(_hit, dict) else ''
+            ) or ''
+            _grant = (
+                _hit.get('patentNumber', '')  # top-level first
+                or (_hit.get('applicationMetaData', {}).get('patentNumber', '')
+                    if isinstance(_hit, dict) else '')
+            ) or ''
+            _pipeline_logger.info(
+                f"[task={tid}] uspto_search result — "
+                f"pub={_pub}, grant={_grant}, app_text={_app_text}"
+            )
+            return _pub or None, _app_text or None, _grant or None
+        except Exception as _fe:
+            _pipeline_logger.warning(
+                f"[task={tid}] uspto_search error — {type(_fe).__name__}: {_fe}"
+            )
+            return None, None, None
+
+    # ── Run pipeline ─────────────────────────────────────────────────────────
+    async def _run():
+        import os as _os
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 0: EPO family lookup → extract US member
+        # ═════════════════════════════════════════════════════════════════
+        update_task_status(task_id, 'preparing', 1,
+                           _t('family_lookup', lang),
+                           analysis_type='family')
+
+        epo_client = EPOFamilyClient(
+            consumer_key=epo_key,
+            consumer_secret=epo_secret,
+        )
+
+        # ── Normalise patent ID for EPO family lookup ──
+        # Try multiple formats in order until EPO accepts one.
+        _epo_candidates = [patent_id]  # start with the original (prefixed) ID
+
+        # For any USPTO ID type, try to find the grant number via USPTO search.
+        # Grant numbers are the most reliable format for EPO DOCDB lookups.
+        if patent_source == 'uspto':
+            _pub_number, _app_text, _grant_number = await _resolve_us_app_to_pub_number(
+                patent_id, task_id, patent_id_type,
+            )
+            import re as _re_epo
+            if _grant_number:
+                # Grant number is the most reliable format for EPO
+                _epo_candidates.append(f"US{_grant_number}")
+            if _pub_number:
+                _pipeline_logger.info(
+                    f"[task={task_id}] FAMILY PHASE0 resolved — "
+                    f"app={patent_id} → pub={_pub_number}, grant={_grant_number}"
+                )
+                _no_kind = _re_epo.sub(r'[A-Z]\d*$', '', _pub_number)
+                _kind = _pub_number[len(_no_kind):]
+                _dotted = f"US.{_no_kind[2:]}.{_kind}" if _kind else f"US.{_no_kind[2:]}"
+                for _c in (_no_kind, _pub_number, _dotted):
+                    if _c not in _epo_candidates:
+                        _epo_candidates.append(_c)
+            if _app_text and _app_text not in _epo_candidates:
+                _epo_candidates.append(_app_text)
+
+        family = None
+        _last_error = None
+        for _cand in _epo_candidates:
+            try:
+                family = await epo_client.lookup_family(_cand)
+                _pipeline_logger.info(
+                    f"[task={task_id}] FAMILY PHASE0 epo_ok with {_cand}"
+                )
+                break
+            except EPOError as _e:
+                _last_error = _e
+                _pipeline_logger.warning(
+                    f"[task={task_id}] FAMILY PHASE0 epo_try {_cand} — {_e}"
+                )
+
+        if family is None:
+            set_task_failed(
+                task_id,
+                f"EPO family lookup failed for all formats "
+                f"({_epo_candidates}): {_last_error}"
+            )
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id,
+                    'error': str(_last_error)}
+
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE0 epo_ok — "
+            f"family_id={family.family_id}, "
+            f"total_count={family.total_count}, "
+            f"jurisdictions={family.jurisdictions}, "
+            f"dedup_members={len(family.deduplicated_members)}"
+        )
+
+        # ── Extract US member ────────────────────────────────────────────
+        us_member = family.get_representative('US')
+        if not us_member:
+            _pipeline_logger.warning(
+                f"[task={task_id}] FAMILY PHASE0 no_us_member — "
+                f"jurisdictions={family.jurisdictions}"
+            )
+            if lang == 'zh':
+                msg = (
+                    f"在EPO同族专利数据库中未找到 {patent_id} 的美国同族成员。"
+                    f"该专利的同族覆盖: {', '.join(family.jurisdictions)}。"
+                )
+            else:
+                msg = (
+                    f"No US family member found for {patent_id} in the EPO "
+                    f"family database. Jurisdictions found: {', '.join(family.jurisdictions)}."
+                )
+            set_task_failed(task_id, msg)
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
+        us_pub_number = us_member.pub_number
+        us_app_number = us_member.normalized_app_number
+
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE0 us_member — "
+            f"pub_number={us_pub_number}, "
+            f"pub_kind={us_member.pub_kind}, "
+            f"is_granted={us_member.is_granted}, "
+            f"app_number_raw={us_member.app_number}, "
+            f"app_number_normalized={us_app_number}, "
+            f"title={us_member.title[:80] if us_member.title else '(none)'}"
+        )
+
+        if not us_app_number or len(us_app_number) < 8:
+            _pipeline_logger.error(
+                f"[task={task_id}] FAMILY PHASE0 invalid_app_number — "
+                f"raw={us_member.app_number}, normalized={us_app_number}"
+            )
+            if lang == 'zh':
+                msg = f"无法从EPO同族数据中提取有效的美国专利申请号 (原始: {us_member.app_number})"
+            else:
+                msg = f"Cannot extract valid US application number from EPO family data (raw: {us_member.app_number})"
+            set_task_failed(task_id, msg)
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
+        # Update status with family overview for frontend
+        family_overview = _build_family_overview_status(family, lang)
+        update_task_status(task_id, 'preparing', 5,
+                           family_overview.get('step_msg', ''),
+                           family_overview=family_overview,
+                           analysis_type='family')
+
+        # ── Monotonic pipeline progress ──
+        # The main progress bar must only advance forward, never jump back.
+        # Each pipeline phase has a fixed range; the actual pct is interpolated
+        # within that range based on sub-step completion.
+        _pipeline_progress = 5  # starts at 5 (family lookup done)
+
+        def _advance_progress(target: int) -> int:
+            """Set pipeline progress to *target*, never going backward."""
+            nonlocal _pipeline_progress
+            if target > _pipeline_progress:
+                _pipeline_progress = target
+            return _pipeline_progress
+
+        # ── Initialize per-jurisdiction progress tracking ──
+        # EP member states (DE, GB, FR, etc.) are merged into a single "EP" row
+        # because they share the same EPO examination process.
+        _EP_MEMBER_STATES = frozenset({
+            'AT', 'BE', 'BG', 'CH', 'CY', 'CZ', 'DE', 'DK', 'EE', 'ES',
+            'FI', 'FR', 'GB', 'GR', 'HR', 'HU', 'IE', 'IS', 'IT', 'LI',
+            'LT', 'LU', 'LV', 'MC', 'MK', 'MT', 'NL', 'NO', 'PL', 'PT',
+            'RO', 'SE', 'SI', 'SK', 'SM', 'TR',
+        })
+        _JUR_LABELS_ZH = {'US': '美国 (US)', 'CN': '中国 (CN)', 'JP': '日本 (JP)',
+                          'EP': '欧洲 (EPO)', 'WO': 'PCT (WO)', 'KR': '韩国 (KR)'}
+        _JUR_LABELS_EN = {'US': 'United States (US)', 'CN': 'China (CN)',
+                          'JP': 'Japan (JP)', 'EP': 'Europe (EPO)',
+                          'WO': 'PCT (WO)', 'KR': 'Korea (KR)'}
+        _JUR_LABELS = _JUR_LABELS_ZH if lang == 'zh' else _JUR_LABELS_EN
+        _jurisdictions: list[dict] = []
+        _seen_ep = False  # merge all EP member states into one row
+        _priority_order = ['US', 'CN', 'JP', 'EP', 'WO', 'KR']
+        _all_codes = list(family.jurisdictions)
+        # Sort: priority countries first, then by code
+        _all_codes.sort(key=lambda c: (
+            _priority_order.index(c) if c in _priority_order else 99, c,
+        ))
+        for _code in _all_codes:
+            # Skip WO/PCT — no prosecution data to analyze
+            if _code == 'WO':
+                continue
+            if _code in _EP_MEMBER_STATES:
+                if not _seen_ep:
+                    _seen_ep = True
+                    _jurisdictions.append({
+                        'code': 'EP',
+                        'label': _JUR_LABELS.get('EP', 'EP'),
+                        'status': 'pending',
+                        'progress': 0,
+                        'detail': '',
+                        'file_count': 0,
+                        'files_done': 0,
+                    })
+                continue  # skip individual member states
+            _jurisdictions.append({
+                'code': _code,
+                'label': _JUR_LABELS.get(_code, _code),
+                'status': 'pending',
+                'progress': 0,
+                'detail': '',
+                'file_count': 0,
+                'files_done': 0,
+            })
+
+        def _push_jurisdictions(_current_progress: int, _current_phase: str,
+                                _step_label: str):
+            """Push jurisdiction statuses to Redis.
+
+            The overall pipeline progress is guaranteed to be monotonic:
+            _advance_progress ensures it only moves forward even when
+            switching between jurisdictions.
+            """
+            update_task_status(task_id, _current_phase,
+                               _advance_progress(_current_progress),
+                               _step_label,
+                               jurisdictions=_jurisdictions,
+                               analysis_type='family')
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 0.3: China examination data (if CN member exists)
+        # ═════════════════════════════════════════════════════════════════
+        cn_exam_data: dict = {}  # stored for report merging later
+        cn_member = family.get_representative('CN')
+        if cn_member:
+            cn_app_number = cn_member.app_number
+            cn_app_number = __import__('re').sub(
+                r'^CN\s*', '', cn_app_number or '', flags=__import__('re').IGNORECASE,
+            ).replace('.', '').replace('-', '').replace(' ', '')
+            _pipeline_logger.info(
+                f"[task={task_id}] FAMILY PHASE0.3 cn_member — "
+                f"cn_app={cn_app_number}, pub={cn_member.pub_number}"
+            )
+
+            sipop_cfg = get_sipop_config()
+            sipop_key = sipop_cfg.get('app_key', '')
+            sipop_secret = sipop_cfg.get('app_secret', '')
+            if sipop_key and sipop_secret and cn_app_number:
+                try:
+                    # Progress update for frontend — show CN examination phase
+                    update_task_status(task_id, 'preparing', _advance_progress(8),
+                                       _t('china_fetching_for_family', lang,
+                                          cn_app=cn_app_number))
+                    from sources.sipop_client import SipopClient
+                    sipop = SipopClient(app_key=sipop_key, app_secret=sipop_secret)
+                    from sources.long_task.china_examination import (
+                        fetch_examination_data,
+                        build_examination_timeline,
+                        format_claims_for_report,
+                        build_legal_status_timeline,
+                    )
+                    cn_events, cn_law, cn_info, cn_claims, cn_legal = await fetch_examination_data(
+                        cn_app_number, sipop,
+                    )
+                    cn_exam_data = {
+                        'cn_app_number': cn_app_number,
+                        'events': cn_events,
+                        'law_state': cn_law,
+                        'basic_info': cn_info,
+                        'claims': cn_claims,
+                        'legal_timeline': cn_legal,
+                        'timeline_md': await build_examination_timeline(
+                            cn_events, cn_law, cn_info, lang,
+                        ) if cn_events else '',
+                        'claims_md': format_claims_for_report(cn_claims, lang) if cn_claims else '',
+                        'legal_md': build_legal_status_timeline(cn_legal, lang) if cn_legal else '',
+                    }
+                    _pipeline_logger.info(
+                        f"[task={task_id}] FAMILY PHASE0.3 cn_data — "
+                        f"events={len(cn_events)}, claims={len(cn_claims)}, "
+                        f"legal_events={len(cn_legal)}"
+                    )
+                    # Update CN jurisdiction status
+                    for _j in _jurisdictions:
+                        if _j['code'] == 'CN':
+                            _j['status'] = 'done'
+                            _j['progress'] = 100
+                            if cn_events:
+                                _j['detail'] = _t('family_cn_done', lang,
+                                                  events=len(cn_events),
+                                                  claims=len(cn_claims))
+                            else:
+                                _j['detail'] = _t('family_cn_basic', lang)
+                    _advance_progress(12)
+                except Exception as e:
+                    _pipeline_logger.warning(
+                        f"[task={task_id}] FAMILY PHASE0.3 cn_fetch_failed — {e}"
+                    )
+                    for _j in _jurisdictions:
+                        if _j['code'] == 'CN':
+                            _j['status'] = 'no_data'
+                            _j['detail'] = str(e)[:60]
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 0.4: Japan examination data (if JP member exists)
+        # ═════════════════════════════════════════════════════════════════
+        jp_exam_data: dict = {}  # stored for report merging later
+        jp_member = family.get_representative('JP')
+        if jp_member:
+            jp_app_number = jp_member.app_number
+            jp_app_number = __import__('re').sub(
+                r'^JP\s*', '', jp_app_number or '', flags=__import__('re').IGNORECASE,
+            ).replace('.', '').replace('-', '').replace(' ', '')
+            _pipeline_logger.info(
+                f"[task={task_id}] FAMILY PHASE0.4 jp_member — "
+                f"jp_app={jp_app_number}, pub={jp_member.pub_number}"
+            )
+
+            jpo_cfg = get_jpo_config()
+            jpo_user = jpo_cfg.get('username', '')
+            jpo_pass = jpo_cfg.get('password', '')
+            if jpo_user and jpo_pass and jp_app_number:
+                try:
+                    update_task_status(task_id, 'preparing', _advance_progress(8),
+                                       _t('japan_fetching_for_family', lang,
+                                          jp_app=jp_app_number))
+                    from sources.jpo_client import JpoClient
+                    from sources.long_task.japan_examination import (
+                        fetch_examination_data,
+                        build_examination_timeline,
+                        build_registration_summary,
+                        build_citations_summary,
+                    )
+                    jpo = JpoClient(username=jpo_user, password=jpo_pass)
+                    jp_data = await fetch_examination_data(jp_app_number, jpo)
+
+                    # ── Fallback: EPO DOCDB app_number format may not match
+                    # what the JPO API expects.  If the primary fetch returned
+                    # zero progress events, try alternative number formats.
+                    if jp_data.get('progress_count', 0) == 0:
+                        fallback_candidates = []
+
+                        # Candidate 1: try different app_number formats
+                        if len(jp_app_number) >= 10 and jp_app_number[:4].isdigit():
+                            _base = __import__('re').sub(r'[^\d]', '', jp_app_number)
+                            if len(_base) == 10:
+                                fallback_candidates.append(
+                                    ('app_fmt', f"{_base[:4]}-{_base[4:]}")
+                                )  # 2019159764 → 2019-159764
+                            fallback_candidates.append(
+                                ('app_fmt', f"JP{_base}")
+                            )  # → JP2019159764
+                            fallback_candidates.append(
+                                ('app_fmt', f"JP{_base[:4]}-{_base[4:]}")
+                            )  # → JP2019-159764
+
+                        # Candidate 2: resolve via publication number.
+                        # JPO API expects full format: JP{pub_number}{kind}
+                        if jp_member.pub_number:
+                            jp_pub = str(jp_member.pub_number).strip()
+                            jp_kind = str(getattr(jp_member, 'pub_kind', '') or '').strip()
+                            # Try with kind code first, then without
+                            fb_pubs = []
+                            if jp_kind:
+                                fb_pubs.append(f"JP{jp_pub}{jp_kind}")
+                            fb_pubs.append(f"JP{jp_pub}")
+                            for fb_pub in fb_pubs:
+                                fallback_candidates.append(('pub_lookup', fb_pub))
+
+                        for fb_type, fb_value in fallback_candidates:
+                            _pipeline_logger.info(
+                                f"[task={task_id}] FAMILY PHASE0.4 jp_fallback — "
+                                f"type={fb_type}, value={fb_value}"
+                            )
+                            try:
+                                if fb_type == 'pub_lookup':
+                                    from sources.jpo_client import JpoAPIError as _JpoErr
+                                    ref = await jpo.lookup_number_relation(
+                                        'publication', fb_value,
+                                    )
+                                    fb_app = (
+                                        ref.get('applicationNumber')
+                                        or ref.get('applicationDocNum')
+                                        or ref.get('appNumber')
+                                        or ''
+                                    )
+                                    if fb_app:
+                                        fb_app = str(fb_app).strip()
+                                        _pipeline_logger.info(
+                                            f"[task={task_id}] FAMILY PHASE0.4 "
+                                            f"jp_fallback — pub_lookup resolved "
+                                            f"app_number={fb_app}"
+                                        )
+                                        fallback_jp_data = await fetch_examination_data(
+                                            fb_app, jpo,
+                                        )
+                                    else:
+                                        _pipeline_logger.warning(
+                                            f"[task={task_id}] FAMILY PHASE0.4 "
+                                            f"jp_fallback — pub_lookup returned "
+                                            f"no app_number, ref_keys={list(ref.keys())}"
+                                        )
+                                        continue
+                                elif fb_type == 'app_fmt':
+                                    fallback_jp_data = await fetch_examination_data(
+                                        fb_value, jpo,
+                                    )
+
+                                if fallback_jp_data.get('progress_count', 0) > 0:
+                                    jp_data = fallback_jp_data
+                                    if fb_type == 'pub_lookup':
+                                        jp_app_number = str(ref.get(
+                                            'applicationNumber',
+                                            ref.get('applicationDocNum', ''),
+                                        )).strip()
+                                    else:
+                                        jp_app_number = fb_value
+                                    _pipeline_logger.info(
+                                        f"[task={task_id}] FAMILY PHASE0.4 "
+                                        f"jp_fallback — SUCCESS with type={fb_type}, "
+                                        f"events={jp_data.get('progress_count', 0)}"
+                                    )
+                                    break
+                            except Exception as _fe:
+                                _pipeline_logger.warning(
+                                    f"[task={task_id}] FAMILY PHASE0.4 "
+                                    f"jp_fallback_{fb_type}_failed — {_fe}"
+                                )
+
+                    jp_exam_data = {
+                        'jp_app_number': jp_app_number,
+                        'progress': jp_data.get('progress', []),
+                        'registration': jp_data.get('registration'),
+                        'citations': jp_data.get('citations'),
+                        'refusal_reasons': jp_data.get('refusal_reasons'),
+                        'amendments': jp_data.get('amendments'),
+                        'timeline_md': build_examination_timeline(jp_data, lang),
+                        'registration_md': build_registration_summary(jp_data, lang),
+                        'citations_md': build_citations_summary(jp_data, lang),
+                    }
+                    _pipeline_logger.info(
+                        f"[task={task_id}] FAMILY PHASE0.4 jp_data — "
+                        f"events={jp_data.get('progress_count', 0)}, "
+                        f"has_reg={jp_data.get('has_registration')}, "
+                        f"has_cites={jp_data.get('has_citations')}, "
+                        f"has_refusal={jp_data.get('has_refusal_reasons')}, "
+                        f"has_amendments={jp_data.get('has_amendments')}"
+                    )
+                    for _j in _jurisdictions:
+                        if _j['code'] == 'JP':
+                            _pc = jp_data.get('progress_count', 0)
+                            _j['status'] = 'done'; _j['progress'] = 100
+                            if _pc > 0 or jp_data.get('has_registration'):
+                                _j['detail'] = _t('family_jp_done', lang, events=_pc)
+                            else:
+                                _j['detail'] = _t('family_jp_basic', lang)
+                    _advance_progress(13)
+                except Exception as e:
+                    _pipeline_logger.warning(
+                        f"[task={task_id}] FAMILY PHASE0.4 jp_fetch_failed — {e}"
+                    )
+                    for _j in _jurisdictions:
+                        if _j['code'] == 'JP':
+                            _j['status'] = 'no_data'
+                            _j['detail'] = str(e)[:60]
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 0.45: EPO examination data (if EP member exists)
+        # ═════════════════════════════════════════════════════════════════
+        ep_exam_data: dict = {}
+        ep_member = family.get_representative('EP')
+        if ep_member:
+            ep_app_number = ep_member.app_number
+            ep_app_number = __import__('re').sub(
+                r'^EP\s*', '', ep_app_number or '', flags=__import__('re').IGNORECASE,
+            ).replace('.', '').replace('-', '').replace(' ', '')
+            _pipeline_logger.info(
+                f"[task={task_id}] FAMILY PHASE0.45 ep_member — "
+                f"ep_app={ep_app_number}, pub={ep_member.pub_number}"
+            )
+
+            ep_family_cfg = get_family_config()
+            ep_ck = ep_family_cfg.get('epo_consumer_key', '')
+            ep_cs = ep_family_cfg.get('epo_consumer_secret', '')
+            # Also check env vars (same fallback as EPOFamilyClient)
+            import os as _os_ep
+            ep_ck = _os_ep.getenv('EPO_CONSUMER_KEY', ep_ck)
+            ep_cs = _os_ep.getenv('EPO_CONSUMER_SECRET', ep_cs)
+            if ep_ck and ep_cs and ep_app_number:
+                try:
+                    update_task_status(task_id, 'preparing', _advance_progress(8),
+                                       _t('epo_fetching_for_family', lang,
+                                          ep_app=ep_app_number))
+                    from sources.epo_ops_client import EPOClient
+                    epo_client = EPOClient(
+                        consumer_key=ep_ck, consumer_secret=ep_cs,
+                    )
+                    from sources.long_task.epo_examination import (
+                        fetch_examination_data,
+                        build_examination_timeline,
+                    )
+                    ep_data = await fetch_examination_data(ep_app_number, epo_client)
+                    ep_exam_data = {
+                        'ep_app_number': ep_app_number,
+                        'biblio': ep_data.get('biblio'),
+                        'events': ep_data.get('events', []),
+                        'procedural_steps': ep_data.get('procedural_steps', []),
+                        'claims_text': ep_data.get('claims_text', ''),
+                        'search_report_text': ep_data.get('search_report_text', ''),
+                        'timeline_events': ep_data.get('timeline_events', []),
+                        'timeline_md': build_examination_timeline(
+                            ep_data.get('timeline_events', []),
+                            ep_data.get('biblio'),
+                            lang,
+                        ),
+                        'status': ep_data.get('status', 'UNKNOWN'),
+                    }
+                    _pipeline_logger.info(
+                        f"[task={task_id}] FAMILY PHASE0.45 ep_data — "
+                        f"events={len(ep_data.get('events', []))}, "
+                        f"steps={len(ep_data.get('procedural_steps', []))}, "
+                        f"timeline={len(ep_data.get('timeline_events', []))}, "
+                        f"has_search_report={ep_data.get('has_search_report')}, "
+                        f"status={ep_data.get('status')}"
+                    )
+                    for _j in _jurisdictions:
+                        if _j['code'] == 'EP':
+                            _tl = len(ep_data.get('timeline_events', []))
+                            _j['status'] = 'done'; _j['progress'] = 100
+                            if _tl > 0 or ep_data.get('has_biblio'):
+                                _j['detail'] = _t('family_ep_done', lang, steps=_tl,
+                                                   status=ep_data.get('status', ''))
+                            else:
+                                _j['detail'] = _t('family_ep_basic', lang)
+                except Exception as e:
+                    _pipeline_logger.warning(
+                        f"[task={task_id}] FAMILY PHASE0.45 ep_fetch_failed — {e}"
+                    )
+                    for _j in _jurisdictions:
+                        if _j['code'] == 'EP':
+                            _j['status'] = 'no_data'
+                            _j['detail'] = str(e)[:60]
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 0.5: Fetch USPTO document list + classify
+        # ═════════════════════════════════════════════════════════════════
+        update_task_status(task_id, 'preparing', _advance_progress(15),
+                           _t('fetching_uspto', lang))
+
+        headers = {'Accept': 'application/json'}
+        uspto_key = _os.getenv('USPTO_API_KEY', '')
+        if uspto_key:
+            headers['X-API-Key'] = uspto_key
+
+        doc_list_url = (
+            f"https://api.uspto.gov/api/v1/patent/applications/"
+            f"{us_app_number}/documents"
+        )
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE0 fetch_doc_list — "
+            f"app_number={us_app_number}, url={doc_list_url}"
+        )
+        resp = await _uspto_get_with_retry(doc_list_url, headers, timeout=20)
+        if resp.status_code != 200:
+            _pipeline_logger.error(
+                f"[task={task_id}] FAMILY PHASE0 doc_list_failed — status={resp.status_code}"
+            )
+            set_task_failed(task_id, f"USPTO API returned HTTP {resp.status_code}")
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id,
+                    'error': f'USPTO API status {resp.status_code}'}
+
+        doc_list = resp.json() if resp.text else {}
+        documents = (
+            doc_list.get('documentBag', [])
+            if isinstance(doc_list, dict)
+            else []
+        )
+        if not documents:
+            if lang == 'zh':
+                msg = f"USPTO未返回专利申请 {us_app_number} 的任何文件。可能原因：申请号不存在、无权访问、或尚未公开。"
+            else:
+                msg = f"USPTO returned no documents for application {us_app_number}. The application may not exist, may not be accessible, or may not yet be published."
+            set_task_failed(task_id, msg)
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
+        manifest = classify_prosecution_documents(documents)
+        docs_to_download = manifest.must_download.copy()
+        if include_priority_2:
+            docs_to_download.extend(manifest.recommended)
+
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE0 classified — "
+            f"total_in_bag={len(documents)}, "
+            f"must_download={len(manifest.must_download)}, "
+            f"recommended={len(manifest.recommended)}, "
+            f"skipped={len(manifest.skipped)}, "
+            f"to_download={len(docs_to_download)}"
+        )
+
+        if not docs_to_download:
+            if lang == 'zh':
+                msg = "未找到可分析的审查文件（无 Office Action、Response 或 Amendment）。可能该专利尚未进入实质审查阶段。"
+            else:
+                msg = "No analyzable prosecution documents found (no Office Actions, Responses, or Amendments). The patent may not have entered substantive examination."
+            set_task_failed(task_id, msg)
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 1: Generate table columns (Flash LLM)
+        # ═════════════════════════════════════════════════════════════════
+        from sources.long_task.prosecution_analyzer import (
+            generate_table_columns,
+            analyze_single_document,
+            generate_document_summary,
+            build_failed_row,
+            generate_prosecution_report as gen_report,
+        )
+
+        update_task_status(task_id, 'generating_columns', 10,
+                           _t('prosecution_framework', lang, total=len(docs_to_download)))
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE1 generate_table_columns — "
+            f"query={query[:100]}, doc_count={len(docs_to_download)}"
+        )
+        columns = await generate_table_columns(
+            query=query, doc_count=len(docs_to_download),
+            provider=flash_provider, lang=lang,
+        )
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE1 columns_generated — "
+            f"column_count={len(columns)}, columns={columns}"
+        )
+        update_task_status(task_id, 'generating_columns', 12,
+                           f'分析维度：{" | ".join(columns[1:4])}...',
+                           table_columns=columns,
+                           analysis_type='family')
+        _update_mysql_progress(task_id, 'generating_columns', 12)
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 2: Sequential download + pipelined parallel analysis
+        # ═════════════════════════════════════════════════════════════════
+        # Each document is downloaded sequentially.  As soon as download
+        # completes, analysis (OCR -> LLM analyze -> LLM summarize) is launched
+        # immediately via asyncio.create_task().  All analysis steps run under
+        # a Semaphore(100), so multiple OCR + LLM calls execute concurrently.
+        # (Same pattern as execute_prosecution_analysis Phase 2.)
+        total_dl = len(docs_to_download)
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE2 START — "
+            f"pending_count={total_dl}, total={total_dl}"
+        )
+
+        # ── Activate US jurisdiction for Phase 2 document analysis ──
+        for _j in _jurisdictions:
+            if _j['code'] == 'US':
+                _j['status'] = 'analyzing'
+                _j['detail'] = _t('prosecution_downloading', lang, current=0, total=total_dl)
+                _j['file_count'] = total_dl
+                _j['files_done'] = 0
+
+        _push_jurisdictions(15, 'downloading',
+                            _t('prosecution_downloading', lang, current=0, total=total_dl))
+
+        async def _fetch_prosecution(url: str, hdrs: dict, timeout: int):
+            return await _uspto_get_with_retry(url, hdrs, timeout)
+
+        _table_rows: list[dict] = [None] * total_dl  # preserve order by index
+        _analyze_sem = asyncio.Semaphore(100)  # caps concurrent OCR + LLM calls
+        _pending_tasks = []  # list of asyncio.Task
+        _downloaded = 0  # documents downloaded so far
+        _analyzed = 0    # documents with completed (or skipped) analysis
+        from typing import Any as _AnyFam  # for type annotation in inner function
+
+        async def _analyze_one(_doc: _AnyFam, _i: int) -> None:
+            nonlocal _analyzed, _downloaded
+            async with _analyze_sem:
+                doc_index = _i + 1
+                # Update US jurisdiction progress
+                for _j in _jurisdictions:
+                    if _j['code'] == 'US':
+                        _j['detail'] = _t('prosecution_analyzing', lang, current=_j['files_done'], total=_j['file_count'], desc=_doc.description[:30])
+                        _j['progress'] = int((_j['files_done'] / max(_j['file_count'], 1)) * 55) + 45
+
+                # ── Text extraction (local-first -> Vision fallback) ──
+                if not _doc.text and _doc.binary:
+                    from sources.long_task.text_extractor import extract_text_from_binary
+                    _local_text = extract_text_from_binary(
+                        _doc.binary, skip_pdf_extraction=False,
+                    )
+                    if _local_text and len(_local_text.strip()) > 50:
+                        _doc.text = _local_text.strip()
+                        _pipeline_logger.info(
+                            f"[task={task_id}] FAMILY PHASE2 local_extract_ok — "
+                            f"code={_doc.document_code}, idx={doc_index}/{total_dl}, "
+                            f"chars={len(_doc.text)}"
+                        )
+                    elif vision_enabled:
+                        try:
+                            _text = await _extract_text_via_vision(
+                                _doc.binary, _doc.description, vision_provider,
+                            )
+                            if _text and len(_text.strip()) > 50:
+                                _doc.text = _text.strip()
+                                _pipeline_logger.info(
+                                    f"[task={task_id}] FAMILY PHASE2 vision_ok — "
+                                    f"code={_doc.document_code}, idx={doc_index}/{total_dl}, "
+                                    f"chars={len(_doc.text)}"
+                                )
+                        except Exception as _e:
+                            _pipeline_logger.warning(
+                                f"[task={task_id}] FAMILY PHASE2 vision_error — "
+                                f"code={_doc.document_code}: {type(_e).__name__}: {_e}"
+                            )
+
+                if not _doc.text or len(_doc.text.strip()) < 50:
+                    row = build_failed_row(_doc.document_code, "text extraction failed", columns, lang)
+                    row["_failed"] = True
+                    row["_summary"] = ""
+                    _table_rows[_i] = row
+                    _analyzed += 1
+                    for _j in _jurisdictions:
+                        if _j['code'] == 'US':
+                            _j['files_done'] += 1
+                            _j['detail'] = _t('prosecution_analyzing', lang, current=_j['files_done'], total=_j['file_count'], desc=_doc.description[:30])
+                            _j['progress'] = int((_j['files_done'] / max(_j['file_count'], 1)) * 55) + 45
+                    _push_jurisdictions(
+                        int((_analyzed + _downloaded) / max(total_dl, 1) * 70) + 15,
+                        'analyzing',
+                        _t('prosecution_analyzing', lang, current=_analyzed, total=total_dl))
+                    return
+
+                # ── Analyze (LLM) ──
+                try:
+                    row = await analyze_single_document(
+                        doc_text=_doc.text,
+                        doc_code=_doc.document_code,
+                        doc_desc=_doc.description,
+                        doc_category=_doc.category,
+                        columns=columns,
+                        query=query,
+                        provider=pro_provider,
+                        lang=lang,
+                    )
+                except Exception as e:
+                    _pipeline_logger.warning(
+                        f"[task={task_id}] FAMILY PHASE2 analyze_error — "
+                        f"code={_doc.document_code}, idx={doc_index}/{total_dl}: "
+                        f"{type(e).__name__}: {e}"
+                    )
+                    row = build_failed_row(_doc.document_code, str(e), columns, lang)
+                    row["_failed"] = True
+
+                # ── Summarize (LLM) ──
+                try:
+                    summary = await generate_document_summary(
+                        doc_text=_doc.text, row=row, query=query,
+                        provider=pro_provider, lang=lang,
+                    )
+                except Exception as e:
+                    _pipeline_logger.warning(
+                        f"[task={task_id}] FAMILY PHASE2 summary_error — "
+                        f"code={_doc.document_code}: {type(e).__name__}: {e}"
+                    )
+                    summary = ""
+                row["_summary"] = summary
+                _table_rows[_i] = row
+                _analyzed += 1
+                # Update US jurisdiction: increment files_done, update progress
+                for _j in _jurisdictions:
+                    if _j['code'] == 'US':
+                        _j['files_done'] += 1
+                        _j['progress'] = int((_j['files_done'] / max(_j['file_count'], 1)) * 55) + 45
+                        if _j['files_done'] >= _j['file_count']:
+                            _j['status'] = 'done'
+                            _j['progress'] = 100
+                        _j['detail'] = _t('prosecution_progress', lang, current=_j['files_done'], total=_j['file_count'])
+
+                _p = max(_downloaded, _analyzed)
+                update_task_status(
+                    task_id, 'analyzing',
+                    progress_pct(_p, total_dl),
+                    _t('prosecution_analyzing', lang,
+                       current=_analyzed, total=total_dl,
+                       desc=_doc.description[:40]),
+                    table_rows=[r for r in _table_rows if r is not None],
+                    table_columns=columns,
+                    jurisdictions=_jurisdictions,
+                )
+                _pipeline_logger.info(
+                    f"[task={task_id}] FAMILY PHASE2 analysis_done — "
+                    f"code={_doc.document_code}, idx={doc_index}/{total_dl}, "
+                    f"analyzed={_analyzed}/{total_dl}"
+                )
+
+        # ── Main pipeline: download sequentially, launch analysis immediately ──
+        for _i, _doc in enumerate(docs_to_download):
+            doc_index = _i + 1
+
+            _result = _handle_task_stop(task_id, user_id, _downloaded, total_dl)
+            if _result:
+                return _result
+            _result = _handle_task_pause(task_id, user_id, _downloaded, total_dl, {
+                'completed': [r.get(columns[0], '') for r in _table_rows if r is not None and not r.get('_failed')],
+                'pending': [d.document_code for d in docs_to_download[_i:]],
+                'completed_rows': [r for r in _table_rows if r is not None],
+                'failed': [r.get(columns[0], '') for r in _table_rows if r is not None and r.get('_failed')],
+                'columns': columns,
+                'downloaded': _downloaded,
+                'analyzed': _analyzed,
+            })
+            if _result:
+                return _result
+
+            _visible_progress = max(_downloaded, _analyzed)
+            # Update US jurisdiction detail during download phase
+            for _j in _jurisdictions:
+                if _j['code'] == 'US':
+                    _j['detail'] = _t('prosecution_downloading', lang, current=doc_index, total=total_dl)
+                    _j['progress'] = int((doc_index / max(total_dl, 1)) * 40) + 5  # 5-45% during download
+            update_task_status(
+                task_id, 'downloading',
+                _advance_progress(15 + int((_visible_progress / max(total_dl, 1)) * 40)),
+                _t('prosecution_downloading', lang, current=doc_index, total=total_dl),
+                jurisdictions=_jurisdictions,
+                table_columns=columns,
+            )
+            await download_single_document(_doc, _fetch_prosecution, us_app_number, headers)
+            _downloaded += 1
+
+            _pipeline_logger.info(
+                f"[task={task_id}] FAMILY PHASE2 download_done — "
+                f"code={_doc.document_code}, idx={doc_index}/{total_dl}, "
+                f"text_len={len(_doc.text) if _doc.text else 0}"
+            )
+
+            _pending_tasks.append(asyncio.create_task(_analyze_one(_doc, _i)))
+
+        # ── Wait for all in-flight analyses to finish ──
+        docs_with_text = [d for d in docs_to_download if d.text and len(d.text.strip()) >= 50]
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE2 all_downloads_done — "
+            f"with_text={len(docs_with_text)}/{total_dl}, "
+            f"waiting_for_{len(_pending_tasks)}_analyses"
+        )
+        if _pending_tasks:
+            await asyncio.gather(*_pending_tasks)
+
+        # Reconstruct table_rows in original order
+        table_rows = [r for r in _table_rows if r is not None]
+
+        if not table_rows:
+            if lang == 'zh':
+                msg = "所有审查文件处理失败。文件可能是扫描件或加密PDF。"
+            else:
+                msg = "All prosecution documents failed processing. Files may be scanned images or encrypted PDFs."
+            set_task_failed(task_id, msg)
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 3: Generate report
+        # ═════════════════════════════════════════════════════════════════
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE3 generate_report — "
+            f"columns={columns}, table_rows_count={len(table_rows)}, "
+            f"has_cn_data={bool(cn_exam_data and cn_exam_data.get('events') or cn_exam_data and cn_exam_data.get('timeline_md'))}"
+        )
+        update_task_status(task_id, 'generating_report', 80,
+                           _t('writing_summary', lang))
+
+        from sources.long_task.status_manager import ThrottledSummaryUpdater
+        from sources.long_task.prosecution_analyzer import generate_family_prosecution_report as _gen_family_report
+        summary_updater = ThrottledSummaryUpdater(
+            task_id,
+            progress=80,
+            step_msg=_t('writing_summary', lang),
+        )
+
+        # Use the cross-jurisdiction report generator when CN data exists;
+        # falls back to US-only report internally when no CN data.
+        report_text = await _gen_family_report(
+            table_rows=table_rows,
+            columns=columns,
+            query=query,
+            patent_id=patent_id,
+            flash_provider=flash_provider,
+            pro_provider=pro_provider,
+            lang=lang,
+            cn_exam_data=cn_exam_data if cn_exam_data else None,
+            jp_exam_data=jp_exam_data if jp_exam_data else None,
+            ep_exam_data=ep_exam_data if ep_exam_data else None,
+            family_overview=family_overview,
+            summary_updater=summary_updater,
+        )
+
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE3 report_generated — "
+            f"total_chars={len(report_text)}"
+        )
+        update_task_status(task_id, 'generating_report', 90,
+                           _t('prosecution_report_complete', lang),
+                           result_summary=report_text)
+        _update_mysql_progress(task_id, 'generating_report', 90, result_summary=report_text)
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 4: Export files (DOCX + PDF)
+        # ═════════════════════════════════════════════════════════════════
+        from sources.long_task.storage import get_storage_config
+
+        storage_cfg = get_storage_config()
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE4 export — "
+            f"storage_backend={storage_cfg.get('report_storage_backend', 'local')}"
+        )
+        try:
+            storage = create_storage(storage_cfg)
+        except Exception as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] FAMILY PHASE4 storage_init FAILED — {e}, falling back to local"
+            )
+            storage = create_storage({'report_storage_backend': 'local'})
+
+        report_files = []
+        local_storage = None
+
+        async def _get_local_storage():
+            nonlocal local_storage
+            if local_storage is None:
+                from sources.long_task.storage import create_storage as _create
+                local_storage = _create({'report_storage_backend': 'local'})
+            return local_storage
+
+        update_task_status(task_id, 'exporting', 90, _t('generating_word', lang))
+        docx_bytes = await export_docx_async(report_text, table_rows, columns, lang=lang)
+        try:
+            await storage.put(task_id, 'report.docx', docx_bytes)
+            _pipeline_logger.info(
+                f"[task={task_id}] FAMILY PHASE4 docx — size_bytes={len(docx_bytes)}"
+            )
+            report_files.append({
+                'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes),
+            })
+        except Exception as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] FAMILY PHASE4 docx upload FAILED — {e}, falling back to local"
+            )
+            try:
+                await (await _get_local_storage()).put(task_id, 'report.docx', docx_bytes)
+                _pipeline_logger.info(
+                    f"[task={task_id}] FAMILY PHASE4 docx — local fallback OK, size_bytes={len(docx_bytes)}"
+                )
+                report_files.append({
+                    'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes),
+                })
+            except Exception as e2:
+                _pipeline_logger.error(
+                    f"[task={task_id}] FAMILY PHASE4 docx local fallback ALSO FAILED — {e2}"
+                )
+
+        update_task_status(task_id, 'exporting', 95, _t('generating_pdf', lang))
+        pdf_bytes = await export_pdf_async(docx_bytes)
+        try:
+            await storage.put(task_id, 'report.pdf', pdf_bytes)
+            _pipeline_logger.info(
+                f"[task={task_id}] FAMILY PHASE4 pdf — size_bytes={len(pdf_bytes)}"
+            )
+            report_files.append({
+                'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes),
+            })
+        except Exception as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] FAMILY PHASE4 pdf upload FAILED — {e}, falling back to local"
+            )
+            try:
+                await (await _get_local_storage()).put(task_id, 'report.pdf', pdf_bytes)
+                _pipeline_logger.info(
+                    f"[task={task_id}] FAMILY PHASE4 pdf — local fallback OK, size_bytes={len(pdf_bytes)}"
+                )
+                report_files.append({
+                    'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes),
+                })
+            except Exception as e2:
+                _pipeline_logger.error(
+                    f"[task={task_id}] FAMILY PHASE4 pdf local fallback ALSO FAILED — {e2}"
+                )
+
+        # ── Complete ──
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY COMPLETED — "
+            f"patent_id={patent_id}, "
+            f"us_pub={us_pub_number}, "
+            f"docs_analyzed={len(table_rows)}, "
+            f"report_chars={len(report_text)}, "
+            f"report_files={[f['format'] for f in report_files]}"
+        )
+        _update_mysql_progress(task_id, 'exporting', 100)
+        set_task_completed(task_id, report_files)
+
+        if user_id:
+            from sources.long_task.user_queue import complete_user_task
+            try:
+                next_task_id = complete_user_task(str(user_id), task_id)
+                if next_task_id:
+                    _dispatch_queued_task(next_task_id, user_id)
+            except Exception as e:
+                _pipeline_logger.warning(
+                    f"[task={task_id}] FAMILY QUEUE_DISPATCH_FAILED — {e}"
+                )
+
+        return {'status': 'completed', 'task_id': task_id}
+
+    loop = _asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(_run())
+    except Exception as e:
+        import traceback
+        _pipeline_logger.error(
+            f"[task={task_id}] FAMILY UNHANDLED_ERROR — "
+            f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
+        )
+        if user_id:
+            try:
+                from sources.long_task.user_queue import complete_user_task
+                complete_user_task(str(user_id), task_id)
+            except Exception:
+                pass
+        set_task_failed(task_id, f"{type(e).__name__}: {e}")
+        _update_mysql_progress(task_id, 'failed', 0)
+        return {'status': 'failed', 'task_id': task_id,
+                'error': f'{type(e).__name__}: {e}'}
+    finally:
+        loop.close()
+
+
+# ── Family helpers ─────────────────────────────────────────────────────────────
+
+
+def _build_family_overview_status(family, lang: str) -> dict:
+    """Build a family_overview dict for the frontend progress card."""
+    members_data = []
+    for m in family.deduplicated_members:
+        members_data.append({
+            'country': m.country,
+            'pub_number': m.pub_number,
+            'kind': m.pub_kind,
+            'is_granted': m.is_granted,
+            'title': m.title,
+        })
+
+    # Merge EP member states (DE, GB, FR, AT, …) into a single "EP" entry
+    # for the frontend jurisdiction badges — same logic as the progress table.
+    _EP_MEMBER_CODES = frozenset({
+        'AT', 'BE', 'BG', 'CH', 'CY', 'CZ', 'DE', 'DK', 'EE', 'ES',
+        'FI', 'FR', 'GB', 'GR', 'HR', 'HU', 'IE', 'IS', 'IT', 'LI',
+        'LT', 'LU', 'LV', 'MC', 'MK', 'MT', 'NL', 'NO', 'PL', 'PT',
+        'RO', 'SE', 'SI', 'SK', 'SM', 'TR',
+    })
+    display_jurisdictions: list[str] = []
+    _seen_ep = False
+    for _c in family.jurisdictions:
+        if _c == 'WO':
+            continue  # skip PCT — no prosecution data
+        if _c in _EP_MEMBER_CODES:
+            if not _seen_ep:
+                display_jurisdictions.append('EP')
+                _seen_ep = True
+        else:
+            display_jurisdictions.append(_c)
+
+    if lang == 'zh':
+        step_msg = (
+            f"查到 {family.query_pub_number} 的同族专利，"
+            f"共 {len(family.deduplicated_members)} 个成员，"
+            f"涉及 {len(display_jurisdictions)} 个司法辖区: "
+            f"{', '.join(display_jurisdictions)}"
+        )
+    else:
+        step_msg = (
+            f"Found {len(family.deduplicated_members)} family members for "
+            f"{family.query_pub_number} across {len(display_jurisdictions)} "
+            f"jurisdictions: {', '.join(display_jurisdictions)}"
+        )
+
+    return {
+        'family_id': family.family_id,
+        'total_count': family.total_count,
+        'jurisdictions': display_jurisdictions,
+        'members': members_data,
+        'step_msg': step_msg,
+    }
+
+
+# ── China Examination helpers ──────────────────────────────────────────────────
+
+
+def _build_markdown_table(
+    table_rows: list[dict], columns: list[str], lang: str = "zh",
+) -> str:
+    """Build a markdown table from analysis rows and columns."""
+    if not table_rows or not columns:
+        return ""
+
+    lines: list[str] = []
+    # Header
+    header = "| " + " | ".join(columns) + " |"
+    separator = "|" + "|".join("------" for _ in columns) + "|"
+    lines.append(header)
+    lines.append(separator)
+
+    for row in table_rows:
+        cells = []
+        for col in columns:
+            val = row.get(col, "")
+            val = str(val).replace("|", "\\|").replace("\n", " ")
+            if len(val) > 120:
+                val = val[:117] + "..."
+            cells.append(val)
+        lines.append("| " + " | ".join(cells) + " |")
+
+    if lang == "zh":
+        lines.insert(0, "## 审查决定分析表\n")
+    else:
+        lines.insert(0, "## Examination Decision Analysis Table\n")
+
+    return "\n".join(lines)
+
+
+def _build_events_summary_text(
+    events: list, lang: str = "zh",
+) -> str:
+    """Build a condensed text summary of all examination events for the LLM."""
+    from sources.long_task.china_examination import (
+        ExaminationEvent, _format_event_for_llm,
+    )
+    parts: list[str] = []
+    for i, evt in enumerate(events):
+        if not isinstance(evt, ExaminationEvent):
+            continue
+        label = evt.decision_label_zh if lang == "zh" else evt.decision_label_en
+        parts.append(
+            f"### {i+1}. {label} — {evt.decision_number} ({evt.decision_date})\n\n"
+            f"{_format_event_for_llm(evt)[:4000]}"
+        )
+    return "\n\n".join(parts)
+
+
+def _build_basic_info_timeline(
+    basic_info: dict, law_state: dict, lang: str = "zh",
+) -> str:
+    """Build a basic info + law-state summary markdown block."""
+    lines: list[str] = []
+    if lang == "zh":
+        lines.append("## 专利基本信息\n")
+    else:
+        lines.append("## Patent Basic Information\n")
+
+    title = basic_info.get("title", "")
+    app_num = basic_info.get("applicationDocNum", "")
+    app_date = basic_info.get("applicationDate", "")
+    pub_num = basic_info.get("publicationDocNum", "")
+    pub_date = basic_info.get("publicationDate", "")
+    applicants = basic_info.get("applicant", [])
+    applicant_str = ", ".join(applicants) if isinstance(applicants, list) else str(applicants or "")
+    inventors = basic_info.get("inventor", [])
+    inventor_str = ", ".join(inventors) if isinstance(inventors, list) else str(inventors or "")
+    ipc_main = basic_info.get("ipcMain", "")
+    abstract = basic_info.get("abstractDesc", "")
+
+    if lang == "zh":
+        if title:
+            lines.append(f"**专利名称**：{title}")
+        if app_num:
+            lines.append(f"**申请号**：{app_num}")
+        if app_date:
+            lines.append(f"**申请日**：{app_date}")
+        if pub_num:
+            lines.append(f"**公开号**：{pub_num}")
+        if pub_date:
+            lines.append(f"**公开日**：{pub_date}")
+        if applicant_str:
+            lines.append(f"**申请人**：{applicant_str}")
+        if inventor_str:
+            lines.append(f"**发明人**：{inventor_str}")
+        if ipc_main:
+            lines.append(f"**主分类号**：{ipc_main}")
+        if abstract:
+            lines.append(f"\n**摘要**：{abstract}")
+
+        law_status = law_state.get("lawStatus", "")
+        law_date = law_state.get("date", "")
+        if law_status or law_date:
+            lines.append(f"\n**当前法律状态**：{law_status}（{law_date}）")
+    else:
+        if title:
+            lines.append(f"**Title**: {title}")
+        if app_num:
+            lines.append(f"**Application Number**: {app_num}")
+        if app_date:
+            lines.append(f"**Filing Date**: {app_date}")
+        if pub_num:
+            lines.append(f"**Publication Number**: {pub_num}")
+        if pub_date:
+            lines.append(f"**Publication Date**: {pub_date}")
+        if applicant_str:
+            lines.append(f"**Applicant**: {applicant_str}")
+        if inventor_str:
+            lines.append(f"**Inventor**: {inventor_str}")
+        if ipc_main:
+            lines.append(f"**IPC Main**: {ipc_main}")
+        if abstract:
+            lines.append(f"\n**Abstract**: {abstract}")
+
+        law_status = law_state.get("lawStatus", "")
+        law_date = law_state.get("date", "")
+        if law_status or law_date:
+            lines.append(f"\n**Current Legal Status**: {law_status} ({law_date})")
+
+    return "\n".join(lines) + "\n"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# China Patent Examination History Analysis Task (single patent)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.task(bind=True, max_retries=2, default_retry_delay=60, time_limit=1800, soft_time_limit=1770)
+def execute_china_examination_analysis(self, task_id: str, params: dict):
+    """Analyze Chinese patent examination history via sipop.cn open data platform.
+
+    Phase 0: US/EP patent → CN application number via EPO family
+    Phase 1: Fetch examination data via SIPOP API (queryPatentReview + lawState + basicInfo)
+    Phase 2: AI analysis of examination events (Flash columns → Pro per-event analysis)
+    Phase 3: Generate report (DOCX + PDF)
+
+    Unlike USPTO prosecution analysis which downloads documents, this task works
+    with *structured* review decision data returned by the SIPOP API.
+    """
+    import asyncio as _asyncio
+    import os as _os
+
+    retry_count = self.request.retries
+    patent_id = str(params.get('patent_id', '')).strip()
+    query = params.get('query', '')
+    lang = params.get('lang', 'zh')
+    session_id = params.get('session_id', '')
+    user_id = params.get('user_id', '')
+
+    _pipeline_logger.info(
+        f"[task={task_id}] CHINA_EXAM START — "
+        f"patent_id={patent_id}, query={query[:120]}, lang={lang}, "
+        f"retry={retry_count}/{self.max_retries}"
+    )
+
+    if retry_count >= self.max_retries:
+        _pipeline_logger.error(
+            f"[task={task_id}] CHINA_EXAM HARD_STOP — retry_count={retry_count}"
+        )
+        if user_id:
+            from sources.long_task.user_queue import complete_user_task
+            try:
+                complete_user_task(str(user_id), task_id)
+            except Exception:
+                pass
+        return {'status': 'failed', 'task_id': task_id,
+                'error': f'Max retries ({self.max_retries}) exceeded'}
+
+    if not patent_id:
+        _pipeline_logger.error(f"[task={task_id}] CHINA_EXAM no patent_id provided")
+        return {'status': 'failed', 'task_id': task_id, 'error': 'No patent_id'}
+
+    # ── Imports ──────────────────────────────────────────────────────────────
+    from sources.long_task.status_manager import (
+        update_task_status, set_task_completed, set_task_failed,
+    )
+    from sources.long_task.config import (
+        get_long_task_config, get_sipop_config, get_family_config,
+    )
+    from sources.long_task.patent_family import EPOFamilyClient, EPOError
+    from sources.long_task.china_examination import (
+        resolve_cn_application_number,
+        fetch_examination_data,
+        generate_table_columns,
+        analyze_single_event,
+        generate_event_summary,
+        build_examination_timeline,
+        format_claims_for_report,
+        build_legal_status_timeline,
+    )
+    from sources.sipop_client import SipopClient, SipopError
+    from sources.long_task.storage import create_storage
+    from sources.llm_provider import Provider
+
+    # ── Provider setup ───────────────────────────────────────────────────────
+    ltc = get_long_task_config()
+    model_family = ltc['provider_family']
+
+    if model_family == 'minimax':
+        flash_provider = Provider(
+            provider_name='minimax', model='MiniMax-M2.7-highspeed',
+            server_address='', is_local=False,
+        )
+        pro_provider = Provider(
+            provider_name='minimax', model='MiniMax-M3',
+            server_address='', is_local=False,
+        )
+    else:
+        flash_provider = Provider(
+            provider_name='deepseek', model='deepseek-v4-flash',
+            server_address='', is_local=False,
+        )
+        pro_provider = Provider(
+            provider_name='deepseek', model='deepseek-v4-pro',
+            server_address='', is_local=False,
+        )
+
+    # ── SIPOP config ─────────────────────────────────────────────────────────
+    sipop_cfg = get_sipop_config()
+    sipop_app_key = sipop_cfg.get('app_key', '')
+    sipop_app_secret = sipop_cfg.get('app_secret', '')
+
+    if not sipop_app_key or not sipop_app_secret:
+        _pipeline_logger.error(
+            f"[task={task_id}] CHINA_EXAM missing SIPOP credentials"
+        )
+        set_task_failed(task_id, "SIPOP API credentials not configured")
+        _update_mysql_progress(task_id, 'failed', 0)
+        return {'status': 'failed', 'task_id': task_id,
+                'error': 'SIPOP credentials not configured'}
+
+    sipop_client = SipopClient(app_key=sipop_app_key, app_secret=sipop_app_secret)
+
+    # ── Family config (for EPO family lookup) ────────────────────────────────
+    fc = get_family_config()
+    epo_key = fc.get('epo_consumer_key', '')
+    epo_secret = fc.get('epo_consumer_secret', '')
+    epo_client = EPOFamilyClient(
+        consumer_key=epo_key, consumer_secret=epo_secret,
+    ) if epo_key and epo_secret else None
+
+    # ── Run pipeline ─────────────────────────────────────────────────────────
+    async def _run():
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 0: Resolve CN application number
+        # ═════════════════════════════════════════════════════════════════
+        update_task_status(task_id, 'preparing', 1,
+                           _t('china_resolving', lang),
+                           analysis_type='prosecution')
+
+        family_context: dict = {}
+        try:
+            cn_app_number, family_context = await resolve_cn_application_number(
+                patent_id, epo_client,
+            )
+        except ValueError as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] CHINA_EXAM PHASE0 resolve_failed — {e}"
+            )
+            set_task_failed(task_id, str(e))
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': str(e)}
+
+        _pipeline_logger.info(
+            f"[task={task_id}] CHINA_EXAM PHASE0 resolved — "
+            f"input={patent_id}, cn_app={cn_app_number}, "
+            f"direct_cn={family_context.get('direct_cn', False)}, "
+            f"jurisdictions={family_context.get('jurisdictions', [])}"
+        )
+
+        # If we used EPO family, build an overview for the frontend
+        if not family_context.get('direct_cn'):
+            jurisdictions = family_context.get('jurisdictions', [])
+            update_task_status(
+                task_id, 'preparing', 5,
+                _t('china_family_overview', lang,
+                   input_id=patent_id, cn_app=cn_app_number,
+                   n_juris=len(jurisdictions),
+                   juris=', '.join(jurisdictions)),
+                family_overview={
+                    'input_id': patent_id,
+                    'cn_app_number': cn_app_number,
+                    'jurisdictions': jurisdictions,
+                    'members': family_context.get('members', []),
+                },
+            )
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 1: Fetch examination data from SIPOP API
+        # ═════════════════════════════════════════════════════════════════
+        update_task_status(task_id, 'preparing', 10,
+                           _t('china_fetching_review', lang))
+
+        try:
+            events, law_state, basic_info, claims, legal_timeline = await fetch_examination_data(
+                cn_app_number, sipop_client,
+            )
+        except SipopError as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] CHINA_EXAM PHASE1 fetch_failed — {e}"
+            )
+            set_task_failed(task_id, f"SIPOP API error: {e}")
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': str(e)}
+
+        total_events = len(events)
+        _pipeline_logger.info(
+            f"[task={task_id}] CHINA_EXAM PHASE1 data_fetched — "
+            f"events={total_events}, claims={len(claims)}, "
+            f"legal_events={len(legal_timeline)}, "
+            f"has_law_state={bool(law_state)}, "
+            f"has_basic_info={bool(basic_info)}"
+        )
+
+        if not events:
+            # No examination review decisions — but we may still have claims
+            # and legal status data to build a useful report.
+            title = basic_info.get("title", "") or patent_id
+            report_title = _t('china_report_title', lang, patent_id=title)
+            claims_md = format_claims_for_report(claims, lang) if claims else ""
+            legal_md = build_legal_status_timeline(legal_timeline, lang) if legal_timeline else ""
+
+            # Build timeline from basic info
+            basic_timeline = _build_basic_info_timeline(basic_info, law_state, lang)
+
+            if not claims_md and not legal_md:
+                # Truly nothing — fail gracefully
+                if lang == 'zh':
+                    msg = (
+                        f"未找到中国专利申请 {cn_app_number} 的审查决定、权利要求"
+                        f"或法律状态数据。可能该专利数据尚未录入平台。"
+                    )
+                else:
+                    msg = (
+                        f"No examination review, claims, or legal status data "
+                        f"found for CN application {cn_app_number}."
+                    )
+                set_task_failed(task_id, msg)
+                _update_mysql_progress(task_id, 'failed', 0)
+                return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
+            if lang == 'zh':
+                exec_text = (
+                    f"中国专利申请 {cn_app_number} 暂无复审、无效或异议审查决定记录。"
+                    f"以下为专利的基本信息、权利要求及法律状态时间线。"
+                )
+            else:
+                exec_text = (
+                    f"No reexamination, invalidation, or opposition decisions "
+                    f"found for CN application {cn_app_number}. "
+                    f"Below are the patent's basic information, claims, and "
+                    f"legal status timeline."
+                )
+
+            exec_heading = _t('default_exec_summary_heading', lang)
+            report_text = (
+                f"# {report_title}\n\n"
+                f"## {exec_heading}\n\n{exec_text}\n\n"
+                f"{basic_timeline}\n\n"
+                f"{claims_md}\n\n"
+                f"{legal_md}\n"
+            )
+
+            # Export
+            table_rows = []
+            columns = ["决定号"]
+            _update_mysql_progress(task_id, 'generating_report', 90, result_summary=report_text)
+
+            from sources.long_task.storage import get_storage_config
+            storage_cfg = get_storage_config()
+            try:
+                storage = create_storage(storage_cfg)
+            except Exception:
+                storage = create_storage({'report_storage_backend': 'local'})
+
+            report_files = []
+            docx_bytes = await export_docx_async(report_text, table_rows, columns, lang=lang)
+            try:
+                await storage.put(task_id, 'report.docx', docx_bytes)
+                report_files.append({'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes)})
+            except Exception:
+                pass
+
+            pdf_bytes = await export_pdf_async(docx_bytes)
+            try:
+                await storage.put(task_id, 'report.pdf', pdf_bytes)
+                report_files.append({'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes)})
+            except Exception:
+                pass
+
+            set_task_completed(task_id, report_files)
+            if user_id:
+                from sources.long_task.user_queue import complete_user_task
+                try:
+                    next_task_id = complete_user_task(str(user_id), task_id)
+                    if next_task_id:
+                        _dispatch_queued_task(next_task_id, user_id)
+                except Exception:
+                    pass
+            return {'status': 'completed', 'task_id': task_id}
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 2: Generate table columns (Flash LLM)
+        # ═════════════════════════════════════════════════════════════════
+        update_task_status(
+            task_id, 'generating_columns', 15,
+            _t('china_analyzing_decisions', lang, current=0, total=total_events),
+        )
+
+        _pipeline_logger.info(
+            f"[task={task_id}] CHINA_EXAM PHASE2 generate_table_columns"
+        )
+        columns = await generate_table_columns(
+            query=query, event_count=total_events,
+            provider=flash_provider, lang=lang,
+        )
+        _pipeline_logger.info(
+            f"[task={task_id}] CHINA_EXAM PHASE2 columns_generated — "
+            f"columns={columns}"
+        )
+        _update_mysql_progress(task_id, 'generating_columns', 20)
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 2b: Per-event analysis (Pro LLM)
+        # ═════════════════════════════════════════════════════════════════
+        table_rows: list[dict] = []
+        for i, event in enumerate(events):
+            idx = i + 1
+            pct = 20 + int((i / total_events) * 40)
+            update_task_status(
+                task_id, 'analyzing', pct,
+                _t('china_analyzing_decisions', lang, current=idx, total=total_events),
+                table_rows=table_rows,
+            )
+
+            # Pause / Stop handling
+            _uid = params.get('user_id', '')
+            _completed = len(table_rows)
+            _result = _handle_task_stop(task_id, _uid, _completed, total_events)
+            if _result:
+                return _result
+            _result = _handle_task_pause(task_id, _uid, _completed, total_events, {
+                'completed': [r.get('决定号', '') for r in table_rows],
+                'pending': [e.decision_number for e in events[i:]],
+                'completed_rows': table_rows,
+                'columns': columns,
+            })
+            if _result:
+                return _result
+
+            _pipeline_logger.info(
+                f"[task={task_id}] CHINA_EXAM PHASE2 event[{idx}/{total_events}] — "
+                f"decision={event.decision_number}, type={event.decision}"
+            )
+
+            try:
+                row = await analyze_single_event(
+                    event=event, columns=columns, query=query,
+                    provider=pro_provider, lang=lang,
+                )
+            except Exception as e:
+                _pipeline_logger.warning(
+                    f"[task={task_id}] CHINA_EXAM PHASE2 event[{idx}] analyze_error — {e}"
+                )
+                row = {"决定号": event.decision_number, "_failed": True,
+                       "_failure_reason": str(e)}
+                for col in columns:
+                    if col not in row:
+                        row[col] = "分析失败" if lang == "zh" else "Analysis failed"
+
+            try:
+                summary = await generate_event_summary(
+                    event=event, row=row, query=query,
+                    provider=pro_provider, lang=lang,
+                )
+            except Exception as e:
+                _pipeline_logger.warning(
+                    f"[task={task_id}] CHINA_EXAM PHASE2 event[{idx}] summary_error — {e}"
+                )
+                summary = ""
+            row["_summary"] = summary
+            table_rows.append(row)
+
+        _pipeline_logger.info(
+            f"[task={task_id}] CHINA_EXAM PHASE2 complete — "
+            f"table_rows={len(table_rows)}, "
+            f"failed={sum(1 for r in table_rows if r.get('_failed'))}"
+        )
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 3: Generate report
+        # ═════════════════════════════════════════════════════════════════
+        update_task_status(task_id, 'generating_report', 65,
+                           _t('china_generating_timeline', lang))
+
+        # Build timeline
+        timeline_md = await build_examination_timeline(
+            events=events, law_state=law_state,
+            basic_info=basic_info, lang=lang,
+        )
+
+        # Executive summary via AI
+        update_task_status(task_id, 'generating_report', 70,
+                           _t('writing_summary', lang))
+
+        from sources.long_task.status_manager import ThrottledSummaryUpdater
+        summary_updater = ThrottledSummaryUpdater(
+            task_id, progress=70, step_msg=_t('writing_summary', lang),
+        )
+
+        # Assemble report: Timeline + Analysis Table + AI-generated sections
+        title = basic_info.get("title", "") or patent_id
+        report_title = _t('china_report_title', lang, patent_id=title)
+
+        # Build the analysis table
+        table_md = _build_markdown_table(table_rows, columns, lang)
+
+        # Build a text summary of all events for the AI to generate report
+        events_summary_text = _build_events_summary_text(events, lang)
+
+        if lang == "zh":
+            exec_prompt = (
+                "你是一个中国专利审查历史分析专家。基于以下审查决定的综合分析数据，"
+                "撰写一份\"核心审查洞察\"摘要（300-500字）。\n\n"
+                "要求：\n"
+                "- 总结该专利在中国经历的关键审查程序\n"
+                "- 提炼出最关键的审查决定及其影响\n"
+                "- 如果涉及多个程序（如先复审再无效），分析程序之间的关系\n"
+                "- 对专利最终的法律状态给出判断\n"
+                "- 用 bullet points 组织，每点 1-2 句话\n"
+            )
+        else:
+            exec_prompt = (
+                "You are a China patent examination history analysis expert. "
+                "Based on the comprehensive analysis of the following examination "
+                "decisions, write a \"Key Examination Insights\" summary (300-500 words).\n\n"
+                "Requirements:\n"
+                "- Summarize the key examination procedures this patent underwent in China\n"
+                "- Extract the most critical decisions and their impact\n"
+                "- If multiple procedures are involved (e.g. reexamination then invalidation), "
+                "analyze the relationships between them\n"
+                "- Provide a judgment on the patent's final legal status\n"
+                "- Use bullet points, 1-2 sentences each\n"
+                "Write ALL content in English."
+            )
+
+        exec_text = ""
+        try:
+            exec_result = await pro_provider.complete_json(
+                exec_prompt,
+                f"专利：{title}（申请号：{cn_app_number}）\n\n"
+                f"{timeline_md}\n\n{events_summary_text}",
+            )
+            if isinstance(exec_result, dict):
+                exec_text = exec_result.get("summary", "") or str(exec_result)
+            else:
+                exec_text = str(exec_result) if exec_result else ""
+        except Exception as e:
+            _pipeline_logger.warning(
+                f"[task={task_id}] CHINA_EXAM PHASE3 exec_summary failed — {e}"
+            )
+            if lang == "zh":
+                exec_text = f"本报告分析了中国专利申请 {cn_app_number} 的 {total_events} 个审查决定。详细分析见下方审查决定分析表。"
+            else:
+                exec_text = f"This report analyzes {total_events} examination decisions for CN application {cn_app_number}. See detailed analysis in the table below."
+
+        exec_heading = _t('default_exec_summary_heading', lang)
+
+        # Build claims section
+        claims_md = format_claims_for_report(claims, lang) if claims else ""
+
+        # Build legal status timeline
+        legal_md = build_legal_status_timeline(legal_timeline, lang) if legal_timeline else ""
+
+        report_text = (
+            f"# {report_title}\n\n"
+            f"## {exec_heading}\n\n{exec_text}\n\n"
+            f"{timeline_md}\n\n"
+            f"{table_md}\n\n"
+        )
+
+        # If there are events with substantial content, add per-decision analysis
+        for i, (event, row) in enumerate(zip(events, table_rows)):
+            summary = row.get("_summary", "")
+            if summary:
+                if lang == "zh":
+                    heading = f"决定 {event.decision_number} — {event.decision_label_zh}"
+                else:
+                    heading = f"Decision {event.decision_number} — {event.decision_label_en}"
+                report_text += f"### {heading}\n\n{summary}\n\n"
+
+        # Append claims and legal status at the end
+        if claims_md:
+            report_text += f"\n{claims_md}\n"
+        if legal_md:
+            report_text += f"\n{legal_md}\n"
+
+        _pipeline_logger.info(
+            f"[task={task_id}] CHINA_EXAM PHASE3 report — "
+            f"total_chars={len(report_text)}"
+        )
+        update_task_status(task_id, 'generating_report', 90,
+                           _t('report_writing_complete', lang),
+                           result_summary=report_text)
+        _update_mysql_progress(task_id, 'generating_report', 90, result_summary=report_text)
+
+        # ═════════════════════════════════════════════════════════════════
+        # Phase 4: Export DOCX + PDF
+        # ═════════════════════════════════════════════════════════════════
+        from sources.long_task.storage import get_storage_config
+
+        storage_cfg = get_storage_config()
+        _pipeline_logger.info(
+            f"[task={task_id}] CHINA_EXAM PHASE4 export — "
+            f"backend={storage_cfg.get('report_storage_backend', 'local')}"
+        )
+        try:
+            storage = create_storage(storage_cfg)
+        except Exception as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] CHINA_EXAM PHASE4 storage_init FAILED — {e}"
+            )
+            storage = create_storage({'report_storage_backend': 'local'})
+
+        report_files = []
+        local_storage = None
+
+        async def _get_local_storage():
+            nonlocal local_storage
+            if local_storage is None:
+                from sources.long_task.storage import create_storage as _create
+                local_storage = _create({'report_storage_backend': 'local'})
+            return local_storage
+
+        # DOCX
+        update_task_status(task_id, 'exporting', 90, _t('generating_word', lang))
+        docx_bytes = await export_docx_async(report_text, table_rows, columns, lang=lang)
+        try:
+            await storage.put(task_id, 'report.docx', docx_bytes)
+            _pipeline_logger.info(
+                f"[task={task_id}] CHINA_EXAM PHASE4 docx — size={len(docx_bytes)}"
+            )
+            report_files.append({'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes)})
+        except Exception as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] CHINA_EXAM PHASE4 docx upload FAILED — {e}"
+            )
+            try:
+                await (await _get_local_storage()).put(task_id, 'report.docx', docx_bytes)
+                report_files.append({'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes)})
+            except Exception as e2:
+                _pipeline_logger.error(
+                    f"[task={task_id}] CHINA_EXAM PHASE4 docx local fallback ALSO FAILED — {e2}"
+                )
+
+        # PDF
+        update_task_status(task_id, 'exporting', 95, _t('generating_pdf', lang))
+        pdf_bytes = await export_pdf_async(docx_bytes)
+        try:
+            await storage.put(task_id, 'report.pdf', pdf_bytes)
+            _pipeline_logger.info(
+                f"[task={task_id}] CHINA_EXAM PHASE4 pdf — size={len(pdf_bytes)}"
+            )
+            report_files.append({'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes)})
+        except Exception as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] CHINA_EXAM PHASE4 pdf upload FAILED — {e}"
+            )
+            try:
+                await (await _get_local_storage()).put(task_id, 'report.pdf', pdf_bytes)
+                report_files.append({'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes)})
+            except Exception as e2:
+                _pipeline_logger.error(
+                    f"[task={task_id}] CHINA_EXAM PHASE4 pdf local fallback ALSO FAILED — {e2}"
+                )
+
+        # ── Complete ──
+        _pipeline_logger.info(
+            f"[task={task_id}] CHINA_EXAM COMPLETED — "
+            f"patent_id={patent_id}, cn_app={cn_app_number}, "
+            f"decisions_analyzed={len(table_rows)}, "
+            f"report_chars={len(report_text)}, "
+            f"files={[f['format'] for f in report_files]}"
+        )
+        _update_mysql_progress(task_id, 'exporting', 100)
+        set_task_completed(task_id, report_files)
+
+        if user_id:
+            from sources.long_task.user_queue import complete_user_task
+            try:
+                next_task_id = complete_user_task(str(user_id), task_id)
+                if next_task_id:
+                    _dispatch_queued_task(next_task_id, user_id)
+            except Exception as e:
+                _pipeline_logger.warning(
+                    f"[task={task_id}] CHINA_EXAM QUEUE_DISPATCH_FAILED — {e}"
+                )
+
+        return {'status': 'completed', 'task_id': task_id}
+
+    loop = _asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(_run())
+    except Exception as e:
+        import traceback
+        _pipeline_logger.error(
+            f"[task={task_id}] CHINA_EXAM UNHANDLED_ERROR — "
+            f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
+        )
+        if user_id:
+            try:
+                from sources.long_task.user_queue import complete_user_task
+                complete_user_task(str(user_id), task_id)
+            except Exception:
+                pass
+        set_task_failed(task_id, f"{type(e).__name__}: {e}")
+        _update_mysql_progress(task_id, 'failed', 0)
+        return {'status': 'failed', 'task_id': task_id,
+                'error': f'{type(e).__name__}: {e}'}
+    finally:
+        loop.close()
+
+
+# ── EPO Examination History Analysis Task (single patent)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.task(bind=True, max_retries=2, default_retry_delay=60, time_limit=1800, soft_time_limit=1770)
+def execute_epo_examination_analysis(self, task_id: str, params: dict):
+    """Analyze European patent examination history via EPO OPS Register API.
+
+    Phase 0: Patent ID → EP application number via EPO family
+    Phase 1: Fetch Register data + Published Data (search report text)
+    Phase 2: AI analysis of search opinion + procedural timeline
+    Phase 3: Generate report (DOCX + PDF)
+
+    Unlike USPTO which downloads full documents, EPO analysis works with
+    a mix of full-text (search opinion) and structured metadata (procedural
+    steps, legal events).
+    """
+    import asyncio as _asyncio
+    import os as _os
+
+    retry_count = self.request.retries
+    patent_id = str(params.get('patent_id', '')).strip()
+    query = params.get('query', '')
+    lang = params.get('lang', 'zh')
+    session_id = params.get('session_id', '')
+    user_id = params.get('user_id', '')
+
+    _pipeline_logger.info(
+        f"[task={task_id}] EPO_EXAM START — "
+        f"patent_id={patent_id}, query={query[:120]}, lang={lang}, "
+        f"retry={retry_count}/{self.max_retries}"
+    )
+
+    if retry_count >= self.max_retries:
+        _pipeline_logger.error(
+            f"[task={task_id}] EPO_EXAM HARD_STOP — retry_count={retry_count} >= {self.max_retries}"
+        )
+        if user_id:
+            from sources.long_task.user_queue import complete_user_task
+            try:
+                complete_user_task(str(user_id), task_id)
+            except Exception:
+                pass
+        return {'status': 'failed', 'task_id': task_id,
+                'error': f'Max retries ({self.max_retries}) exceeded'}
+
+    if not patent_id:
+        _pipeline_logger.error(f"[task={task_id}] EPO_EXAM no patent_id provided")
+        _update_mysql_progress(task_id, 'failed', 0)
+        return {'status': 'failed', 'task_id': task_id, 'error': 'No patent_id'}
+
+    from sources.long_task.status_manager import (
+        update_task_status, set_task_completed, set_task_failed,
+    )
+    from sources.long_task.config import (
+        get_long_task_config, get_family_config,
+    )
+    from sources.long_task.storage import create_storage
+    from sources.llm_provider import Provider
+
+    # ── Provider setup ──
+    ltc = get_long_task_config()
+    model_family = ltc['provider_family']
+
+    if model_family == 'minimax':
+        flash_provider = Provider(
+            provider_name='minimax', model='MiniMax-M2.7-highspeed',
+            server_address='', is_local=False,
+        )
+        pro_provider = Provider(
+            provider_name='minimax', model='MiniMax-M3',
+            server_address='', is_local=False,
+        )
+    else:
+        flash_provider = Provider(
+            provider_name='deepseek', model='deepseek-v4-flash',
+            server_address='', is_local=False,
+        )
+        pro_provider = Provider(
+            provider_name='deepseek', model='deepseek-v4-pro',
+            server_address='', is_local=False,
+        )
+
+    async def _run():
+        # ── Phase 0: Resolve EP application number ──────────────────
+        update_task_status(task_id, 'preparing', 5,
+                           _t('preparing', lang, total=1),
+                           analysis_type='prosecution')
+
+        ep_family_cfg = get_family_config()
+        ep_ck = ep_family_cfg.get('epo_consumer_key', '')
+        ep_cs = ep_family_cfg.get('epo_consumer_secret', '')
+        # Env var overrides
+        ep_ck = _os.getenv('EPO_CONSUMER_KEY', ep_ck)
+        ep_cs = _os.getenv('EPO_CONSUMER_SECRET', ep_cs)
+        if not ep_ck or not ep_cs:
+            msg = "EPO API credentials not configured (set EPO_CONSUMER_KEY/EPO_CONSUMER_SECRET)."
+            set_task_failed(task_id, msg)
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
+        from sources.epo_ops_client import EPOClient
+        epo_client = EPOClient(consumer_key=ep_ck, consumer_secret=ep_cs)
+
+        from sources.long_task.epo_examination import (
+            resolve_ep_application_number,
+            fetch_examination_data,
+            build_examination_timeline,
+            generate_table_columns,
+            analyze_single_timeline_event,
+            generate_event_summary,
+        )
+
+        try:
+            ep_app_number, family_ctx = await resolve_ep_application_number(
+                patent_id, epo_client,
+            )
+        except ValueError as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] EPO_EXAM PHASE0 resolve_failed — {e}"
+            )
+            set_task_failed(task_id, str(e))
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': str(e)}
+
+        _pipeline_logger.info(
+            f"[task={task_id}] EPO_EXAM PHASE0 resolved — "
+            f"input={patent_id}, ep_app={ep_app_number}"
+        )
+
+        # ── Phase 1: Fetch examination data ──────────────────────────
+        update_task_status(task_id, 'preparing', 10,
+                           f"Fetching EPO Register data for EP{ep_app_number}...")
+        ep_data = await fetch_examination_data(ep_app_number, epo_client)
+
+        if not ep_data.get('has_events') and not ep_data.get('has_steps'):
+            _pipeline_logger.warning(
+                f"[task={task_id}] EPO_EXAM PHASE1 no_data — app={ep_app_number}"
+            )
+            set_task_failed(task_id, _t('epo_no_review_data', lang))
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id,
+                    'error': _t('epo_no_review_data', lang)}
+
+        _pipeline_logger.info(
+            f"[task={task_id}] EPO_EXAM PHASE1 data_fetched — "
+            f"events={len(ep_data.get('events', []))}, "
+            f"steps={len(ep_data.get('procedural_steps', []))}, "
+            f"timeline={len(ep_data.get('timeline_events', []))}, "
+            f"has_search_report={ep_data.get('has_search_report')}, "
+            f"status={ep_data.get('status')}"
+        )
+
+        # ── Phase 2: AI analysis ─────────────────────────────────────
+        timeline_events = ep_data.get('timeline_events', [])
+        search_report_text = ep_data.get('search_report_text', '')
+        claims_text = ep_data.get('claims_text', '')
+
+        # Generate table columns
+        update_task_status(task_id, 'generating_columns', 30,
+                           _t('china_generating_columns', lang))
+        columns = await generate_table_columns(
+            query=query, event_count=len(timeline_events),
+            provider=flash_provider, lang=lang,
+        )
+        _pipeline_logger.info(
+            f"[task={task_id}] EPO_EXAM PHASE2 columns — {columns}"
+        )
+
+        # Analyze each timeline event
+        total_events = len(timeline_events)
+        table_rows: list[dict] = []
+        for i, evt in enumerate(timeline_events):
+            update_task_status(
+                task_id, 'analyzing', 35 + int(40 * i / max(total_events, 1)),
+                _t('china_analyzing_decisions', lang, current=i + 1, total=total_events),
+            )
+            try:
+                row = await analyze_single_timeline_event(
+                    evt, search_report_text, claims_text,
+                    columns, query, pro_provider, lang,
+                )
+                summary = await generate_event_summary(
+                    evt, row, query, pro_provider, lang,
+                )
+                row['_summary'] = summary
+                row['_event_type'] = evt.event_type
+                row['_event_date'] = evt.date
+                table_rows.append(row)
+                _pipeline_logger.info(
+                    f"[task={task_id}] EPO_EXAM PHASE2 analyzed — "
+                    f"{i + 1}/{total_events} type={evt.event_type} "
+                    f"summary={summary[:80]}"
+                )
+            except Exception as e:
+                _pipeline_logger.warning(
+                    f"[task={task_id}] EPO_EXAM PHASE2 analysis_error — "
+                    f"event={i + 1}/{total_events}: {e}"
+                )
+                row = {col: "Analysis error" for col in columns}
+                row['_summary'] = f"Analysis failed: {e}"
+                row['_event_type'] = evt.event_type
+                row['_event_date'] = evt.date
+                table_rows.append(row)
+
+        # ── Phase 3: Build report ─────────────────────────────────────
+        update_task_status(task_id, 'generating_report', 80,
+                           _t('writing_summary', lang))
+
+        # Build markdown report
+        biblio = ep_data.get('biblio')
+        report_title = _t('epo_report_title', lang, patent_id=patent_id)
+
+        lines = [f"# {report_title}\n"]
+
+        # Executive summary via AI
+        exec_heading = "核心审查洞察" if lang == "zh" else "Key Examination Insights"
+        lines.append(f"## {exec_heading}\n")
+
+        # Build a data summary for the executive summary AI call
+        timeline_md = build_examination_timeline(timeline_events, biblio, lang)
+        rows_text = "\n".join(
+            f"- {r.get('_event_date', '?')} [{r.get('_event_type', '?')}]: "
+            f"{r.get('_summary', '')[:200]}"
+            for r in table_rows
+        )
+
+        if lang == "zh":
+            exec_prompt = (
+                "你是一个欧洲专利审查历史分析专家。基于以下审查数据，"
+                "撰写一段 3-5 句话的核心审查洞察总结。\n"
+                "包括：检索意见的核心发现、审查过程中主要的争议点、"
+                "权利要求的变化方向、以及最终的审查结论。"
+            )
+        else:
+            exec_prompt = (
+                "You are an EPO patent examination analysis expert. "
+                "Write a 3-5 sentence executive summary based on the "
+                "examination data below. Cover: key findings from the "
+                "search opinion, main issues during examination, direction "
+                "of claim amendments, and final outcome."
+            )
+
+        try:
+            exec_json = await pro_provider.complete_json(
+                exec_prompt,
+                f"Timeline:\n{timeline_md}\n\n"
+                f"Analysis rows:\n{rows_text}\n\n"
+                f"Search Report excerpt:\n{search_report_text[:3000]}\n\n"
+                f'Return JSON: {{"summary": "..."}}'
+            )
+            exec_summary = exec_json.get("summary", "")
+        except Exception:
+            exec_summary = ""
+        if exec_summary:
+            lines.append(f"{exec_summary}\n")
+
+        # Timeline
+        lines.append(timeline_md)
+
+        # Analysis table
+        ana_heading = "审查事件分析表" if lang == "zh" else "Examination Event Analysis Table"
+        lines.append(f"## {ana_heading}\n")
+
+        if lang == "zh":
+            header = "| " + " | ".join(columns) + " | 摘要 |"
+            sep = "|" + "|".join("------" for _ in range(len(columns) + 1)) + "|"
+        else:
+            header = "| " + " | ".join(columns) + " | Summary |"
+            sep = "|" + "|".join("------" for _ in range(len(columns) + 1)) + "|"
+        lines.append(header)
+        lines.append(sep)
+
+        for row in table_rows:
+            vals = [str(row.get(c, ""))[:200] for c in columns]
+            vals.append(str(row.get("_summary", ""))[:300])
+            lines.append("| " + " | ".join(vals) + " |")
+        lines.append("")
+
+        # Search opinion analysis (if available)
+        if search_report_text:
+            so_heading = "检索意见/书面意见" if lang == "zh" else "Search Opinion / Written Opinion"
+            lines.append(f"## {so_heading}\n")
+            lines.append(search_report_text[:5000])
+            lines.append("")
+
+        report_text = "\n".join(lines)
+
+        _pipeline_logger.info(
+            f"[task={task_id}] EPO_EXAM PHASE3 report — chars={len(report_text)}"
+        )
+
+        # ── Phase 4: Export ────────────────────────────────────────────
+        from sources.result_export import export_docx_md_async as _export_docx
+        from sources.result_export import export_pdf_async
+
+        update_task_status(task_id, 'exporting', 90, _t('generating_word', lang))
+        docx_bytes = await _export_docx(report_text, task_id=task_id)
+        storage = create_storage()
+        report_files: list[dict] = []
+
+        try:
+            await storage.put(task_id, 'report.docx', docx_bytes)
+            _pipeline_logger.info(
+                f"[task={task_id}] EPO_EXAM PHASE4 docx — size={len(docx_bytes)}"
+            )
+            report_files.append(
+                {'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes)}
+            )
+        except Exception as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] EPO_EXAM PHASE4 docx upload FAILED — {e}"
+            )
+
+        update_task_status(task_id, 'exporting', 95, _t('generating_pdf', lang))
+        pdf_bytes = await export_pdf_async(docx_bytes)
+        try:
+            await storage.put(task_id, 'report.pdf', pdf_bytes)
+            _pipeline_logger.info(
+                f"[task={task_id}] EPO_EXAM PHASE4 pdf — size={len(pdf_bytes)}"
+            )
+            report_files.append(
+                {'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes)}
+            )
+        except Exception as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] EPO_EXAM PHASE4 pdf upload FAILED — {e}"
+            )
+
+        # ── Complete ──
+        _pipeline_logger.info(
+            f"[task={task_id}] EPO_EXAM COMPLETED — "
+            f"patent_id={patent_id}, ep_app={ep_app_number}, "
+            f"events_analyzed={len(table_rows)}, "
+            f"report_chars={len(report_text)}, "
+            f"files={[f['format'] for f in report_files]}"
+        )
+        _update_mysql_progress(task_id, 'exporting', 100)
+        set_task_completed(task_id, report_files)
+
+        if user_id:
+            from sources.long_task.user_queue import complete_user_task
+            try:
+                next_task_id = complete_user_task(str(user_id), task_id)
+                if next_task_id:
+                    _dispatch_queued_task(next_task_id, user_id)
+            except Exception as e:
+                _pipeline_logger.warning(
+                    f"[task={task_id}] EPO_EXAM QUEUE_DISPATCH_FAILED — {e}"
+                )
+
+        return {'status': 'completed', 'task_id': task_id}
+
+    loop = _asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(_run())
+    except Exception as e:
+        import traceback
+        _pipeline_logger.error(
+            f"[task={task_id}] EPO_EXAM UNHANDLED_ERROR — "
+            f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
+        )
+        if user_id:
+            try:
+                from sources.long_task.user_queue import complete_user_task
+                complete_user_task(str(user_id), task_id)
+            except Exception:
+                pass
+        set_task_failed(task_id, f"{type(e).__name__}: {e}")
+        _update_mysql_progress(task_id, 'failed', 0)
+        return {'status': 'failed', 'task_id': task_id,
+                'error': f'{type(e).__name__}: {e}'}
+    finally:
+        loop.close()
+
+
+# ── Japan Examination History Analysis Task (single patent)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.task(bind=True, max_retries=2, default_retry_delay=60, time_limit=1800, soft_time_limit=1770)
+def execute_japan_examination_analysis(self, task_id: str, params: dict):
+    """Analyze Japanese patent examination history via JPO IP Data Platform.
+
+    Phase 0: Patent ID → JP application number via EPO family
+    Phase 1: Fetch progress data from JPO API
+    Phase 2: AI analysis of examination progress events
+    Phase 3: Generate report (DOCX + PDF)
+    """
+    import asyncio as _asyncio
+    import os as _os
+
+    retry_count = self.request.retries
+    patent_id = str(params.get('patent_id', '')).strip()
+    query = params.get('query', '')
+    lang = params.get('lang', 'zh')
+    session_id = params.get('session_id', '')
+    user_id = params.get('user_id', '')
+
+    _pipeline_logger.info(
+        f"[task={task_id}] JAPAN_EXAM START — "
+        f"patent_id={patent_id}, query={query[:120]}, lang={lang}, "
+        f"retry={retry_count}/{self.max_retries}"
+    )
+
+    if retry_count >= self.max_retries:
+        _pipeline_logger.error(
+            f"[task={task_id}] JAPAN_EXAM HARD_STOP — retry_count={retry_count} >= {self.max_retries}"
+        )
+        if user_id:
+            from sources.long_task.user_queue import complete_user_task
+            try:
+                complete_user_task(str(user_id), task_id)
+            except Exception:
+                pass
+        return {'status': 'failed', 'task_id': task_id,
+                'error': f'Max retries ({self.max_retries}) exceeded'}
+
+    if not patent_id:
+        _pipeline_logger.error(f"[task={task_id}] JAPAN_EXAM no patent_id provided")
+        _update_mysql_progress(task_id, 'failed', 0)
+        return {'status': 'failed', 'task_id': task_id, 'error': 'No patent_id'}
+
+    from sources.long_task.status_manager import (
+        update_task_status, set_task_completed, set_task_failed,
+    )
+    from sources.long_task.config import (
+        get_long_task_config, get_family_config, get_jpo_config,
+    )
+    from sources.long_task.storage import create_storage
+    from sources.llm_provider import Provider
+
+    # ── Provider setup ──
+    ltc = get_long_task_config()
+    model_family = ltc['provider_family']
+
+    if model_family == 'minimax':
+        flash_provider = Provider(
+            provider_name='minimax', model='MiniMax-M2.7-highspeed',
+            server_address='', is_local=False,
+        )
+        pro_provider = Provider(
+            provider_name='minimax', model='MiniMax-M3',
+            server_address='', is_local=False,
+        )
+    else:
+        flash_provider = Provider(
+            provider_name='deepseek', model='deepseek-v4-flash',
+            server_address='', is_local=False,
+        )
+        pro_provider = Provider(
+            provider_name='deepseek', model='deepseek-v4-pro',
+            server_address='', is_local=False,
+        )
+
+    async def _run():
+        # ── Phase 0: Resolve JP application number ──────────────────
+        update_task_status(task_id, 'preparing', 5,
+                           _t('preparing', lang, total=1),
+                           analysis_type='prosecution')
+
+        family_cfg = get_family_config()
+        ep_ck = family_cfg.get('epo_consumer_key', '')
+        ep_cs = family_cfg.get('epo_consumer_secret', '')
+        ep_ck = _os.getenv('EPO_CONSUMER_KEY', ep_ck)
+        ep_cs = _os.getenv('EPO_CONSUMER_SECRET', ep_cs)
+
+        from sources.long_task.patent_family import EPOFamilyClient
+
+        epo_client = None
+        if ep_ck and ep_cs:
+            epo_client = EPOFamilyClient(
+                consumer_key=ep_ck, consumer_secret=ep_cs,
+            )
+
+        from sources.long_task.japan_examination import (
+            resolve_jp_application_number,
+            fetch_examination_data,
+            build_examination_timeline,
+            build_registration_summary,
+            build_citations_summary,
+            generate_table_columns,
+            analyze_single_event,
+            generate_event_summary,
+        )
+
+        jp_app_number, family_ctx = await resolve_jp_application_number(
+            patent_id, epo_client,
+        )
+        if not jp_app_number:
+            msg = _t('japan_no_review_data', lang)
+            set_task_failed(task_id, msg)
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
+        _pipeline_logger.info(
+            f"[task={task_id}] JAPAN_EXAM PHASE0 resolved — "
+            f"input={patent_id}, jp_app={jp_app_number}"
+        )
+
+        # ── Phase 1: Fetch examination data ──────────────────────────
+        jpo_cfg = get_jpo_config()
+        jpo_user = jpo_cfg.get('username', '')
+        jpo_pass = jpo_cfg.get('password', '')
+        if not jpo_user or not jpo_pass:
+            msg = "JPO API credentials not configured (set JPO_USERNAME/JPO_PASSWORD env vars or [JPO] in config.ini)."
+            set_task_failed(task_id, msg)
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
+        from sources.jpo_client import JpoClient
+        jpo = JpoClient(username=jpo_user, password=jpo_pass)
+
+        update_task_status(task_id, 'preparing', 10,
+                           f"Fetching JPO examination data for {jp_app_number}...")
+        jp_data = await fetch_examination_data(jp_app_number, jpo)
+
+        progress = jp_data.get('progress', [])
+        if not progress:
+            _pipeline_logger.warning(
+                f"[task={task_id}] JAPAN_EXAM PHASE1 no_data — app={jp_app_number}"
+            )
+            set_task_failed(task_id, _t('japan_no_review_data', lang))
+            _update_mysql_progress(task_id, 'failed', 0)
+            return {'status': 'failed', 'task_id': task_id,
+                    'error': _t('japan_no_review_data', lang)}
+
+        _pipeline_logger.info(
+            f"[task={task_id}] JAPAN_EXAM PHASE1 data_fetched — "
+            f"events={jp_data.get('progress_count', 0)}, "
+            f"has_reg={jp_data.get('has_registration')}, "
+            f"has_cites={jp_data.get('has_citations')}"
+        )
+
+        # ── Phase 2: AI analysis ─────────────────────────────────────
+        update_task_status(task_id, 'generating_columns', 30,
+                           _t('china_generating_columns', lang))
+        columns = await generate_table_columns(
+            query=query, event_count=len(progress),
+            provider=flash_provider, lang=lang,
+        )
+        _pipeline_logger.info(
+            f"[task={task_id}] JAPAN_EXAM PHASE2 columns — {columns}"
+        )
+
+        total_events = len(progress)
+        table_rows: list[dict] = []
+        for i, evt in enumerate(progress):
+            update_task_status(
+                task_id, 'analyzing', 35 + int(40 * i / max(total_events, 1)),
+                _t('china_analyzing_decisions', lang, current=i + 1, total=total_events),
+            )
+            try:
+                row = await analyze_single_event(
+                    evt, columns, query, pro_provider, lang,
+                )
+                summary = await generate_event_summary(
+                    evt, row, query, pro_provider, lang,
+                )
+                row['_summary'] = summary
+                row['_event_name'] = evt.get('event', '')
+                row['_event_date'] = evt.get('event_date', '')
+                table_rows.append(row)
+                _pipeline_logger.info(
+                    f"[task={task_id}] JAPAN_EXAM PHASE2 analyzed — "
+                    f"{i + 1}/{total_events} event={evt.get('event', '?')[:40]}"
+                )
+            except Exception as e:
+                _pipeline_logger.warning(
+                    f"[task={task_id}] JAPAN_EXAM PHASE2 analysis_error — "
+                    f"event={i + 1}/{total_events}: {e}"
+                )
+                row = {col: "Analysis error" for col in columns}
+                row['_summary'] = f"Analysis failed: {e}"
+                row['_event_name'] = evt.get('event', '')
+                row['_event_date'] = evt.get('event_date', '')
+                table_rows.append(row)
+
+        # ── Phase 3: Build report ─────────────────────────────────────
+        update_task_status(task_id, 'generating_report', 80,
+                           _t('writing_summary', lang))
+
+        report_title = _t('japan_report_title', lang, patent_id=patent_id)
+        lines = [f"# {report_title}\n"]
+
+        exec_heading = "核心审查洞察" if lang == "zh" else "Key Examination Insights"
+        lines.append(f"## {exec_heading}\n")
+
+        # Build context for executive summary
+        timeline_md = build_examination_timeline(jp_data, lang)
+        rows_text = "\n".join(
+            f"- {r.get('_event_date', '?')} [{r.get('_event_name', '?')[:40]}]: "
+            f"{r.get('_summary', '')[:200]}"
+            for r in table_rows
+        )
+
+        if lang == "zh":
+            exec_prompt = (
+                "你是一个日本专利审查历史分析专家。基于以下审查数据，"
+                "撰写一段 3-5 句话的核心审查洞察总结。\n"
+                "包括：审查过程中的关键转折点、申请人的应对策略、"
+                "权利要求的变化方向、以及最终的审查结论。"
+            )
+        else:
+            exec_prompt = (
+                "You are a Japan patent examination analysis expert. "
+                "Write a 3-5 sentence executive summary based on the "
+                "examination data below. Cover: key turning points in "
+                "examination, applicant's strategy, direction of claim "
+                "amendments, and final outcome."
+            )
+
+        try:
+            exec_json = await pro_provider.complete_json(
+                exec_prompt,
+                f"Timeline:\n{timeline_md}\n\n"
+                f"Analysis rows:\n{rows_text}\n\n"
+                f'Return JSON: {{"summary": "..."}}'
+            )
+            exec_summary = exec_json.get("summary", "")
+        except Exception:
+            exec_summary = ""
+        if exec_summary:
+            lines.append(f"{exec_summary}\n")
+
+        # Timeline
+        lines.append(timeline_md)
+
+        # Registration
+        reg_md = build_registration_summary(jp_data, lang)
+        if reg_md:
+            lines.append(reg_md)
+
+        # Citations
+        cites_md = build_citations_summary(jp_data, lang)
+        if cites_md:
+            lines.append(cites_md)
+
+        # Analysis table
+        ana_heading = "审查事件分析表" if lang == "zh" else "Examination Event Analysis Table"
+        lines.append(f"## {ana_heading}\n")
+
+        if lang == "zh":
+            header = "| " + " | ".join(columns) + " | 摘要 |"
+            sep = "|" + "|".join("------" for _ in range(len(columns) + 1)) + "|"
+        else:
+            header = "| " + " | ".join(columns) + " | Summary |"
+            sep = "|" + "|".join("------" for _ in range(len(columns) + 1)) + "|"
+        lines.append(header)
+        lines.append(sep)
+
+        for row in table_rows:
+            vals = [str(row.get(c, ""))[:200] for c in columns]
+            vals.append(str(row.get("_summary", ""))[:300])
+            lines.append("| " + " | ".join(vals) + " |")
+        lines.append("")
+
+        report_text = "\n".join(lines)
+
+        _pipeline_logger.info(
+            f"[task={task_id}] JAPAN_EXAM PHASE3 report — chars={len(report_text)}"
+        )
+
+        # ── Phase 4: Export ────────────────────────────────────────────
+        from sources.result_export import export_docx_md_async as _export_docx
+        from sources.result_export import export_pdf_async
+
+        update_task_status(task_id, 'exporting', 90, _t('generating_word', lang))
+        docx_bytes = await _export_docx(report_text, task_id=task_id)
+        storage = create_storage()
+        report_files: list[dict] = []
+
+        try:
+            await storage.put(task_id, 'report.docx', docx_bytes)
+            _pipeline_logger.info(
+                f"[task={task_id}] JAPAN_EXAM PHASE4 docx — size={len(docx_bytes)}"
+            )
+            report_files.append(
+                {'format': 'docx', 'filename': 'report.docx', 'size': len(docx_bytes)}
+            )
+        except Exception as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] JAPAN_EXAM PHASE4 docx upload FAILED — {e}"
+            )
+
+        update_task_status(task_id, 'exporting', 95, _t('generating_pdf', lang))
+        pdf_bytes = await export_pdf_async(docx_bytes)
+        try:
+            await storage.put(task_id, 'report.pdf', pdf_bytes)
+            _pipeline_logger.info(
+                f"[task={task_id}] JAPAN_EXAM PHASE4 pdf — size={len(pdf_bytes)}"
+            )
+            report_files.append(
+                {'format': 'pdf', 'filename': 'report.pdf', 'size': len(pdf_bytes)}
+            )
+        except Exception as e:
+            _pipeline_logger.error(
+                f"[task={task_id}] JAPAN_EXAM PHASE4 pdf upload FAILED — {e}"
+            )
+
+        # ── Complete ──
+        _pipeline_logger.info(
+            f"[task={task_id}] JAPAN_EXAM COMPLETED — "
+            f"patent_id={patent_id}, jp_app={jp_app_number}, "
+            f"events_analyzed={len(table_rows)}, "
+            f"report_chars={len(report_text)}, "
+            f"files={[f['format'] for f in report_files]}"
+        )
+        _update_mysql_progress(task_id, 'exporting', 100)
+        set_task_completed(task_id, report_files)
+
+        if user_id:
+            from sources.long_task.user_queue import complete_user_task
+            try:
+                next_task_id = complete_user_task(str(user_id), task_id)
+                if next_task_id:
+                    _dispatch_queued_task(next_task_id, user_id)
+            except Exception as e:
+                _pipeline_logger.warning(
+                    f"[task={task_id}] JAPAN_EXAM QUEUE_DISPATCH_FAILED — {e}"
+                )
+
+        return {'status': 'completed', 'task_id': task_id}
+
+    loop = _asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(_run())
+    except Exception as e:
+        import traceback
+        _pipeline_logger.error(
+            f"[task={task_id}] JAPAN_EXAM UNHANDLED_ERROR — "
+            f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
+        )
+        if user_id:
+            try:
+                from sources.long_task.user_queue import complete_user_task
+                complete_user_task(str(user_id), task_id)
+            except Exception:
+                pass
+        set_task_failed(task_id, f"{type(e).__name__}: {e}")
+        _update_mysql_progress(task_id, 'failed', 0)
+        return {'status': 'failed', 'task_id': task_id,
+                'error': f'{type(e).__name__}: {e}'}
+    finally:
+        loop.close()
+
+
+# ── Prosecution History Analysis Task (single patent)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -1518,7 +4442,8 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         # fetch USPTO document list + classify by priority.
         # ═════════════════════════════════════════════════════════════════
         update_task_status(task_id, 'preparing', 1,
-                           _t('fetching_uspto', lang))
+                           _t('fetching_uspto', lang),
+                           analysis_type='prosecution')
 
         raw_patent_id = patent_id.strip()
         digits_only = ''.join(c for c in raw_patent_id if c.isdigit())
@@ -1741,7 +4666,8 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
         )
         update_task_status(task_id, 'generating_columns', 5,
                            f'分析维度：{" | ".join(columns[1:4])}...',
-                           table_columns=columns)
+                           table_columns=columns,
+                           analysis_type='prosecution')
         _update_mysql_progress(task_id, 'generating_columns', 5)
 
         # ═════════════════════════════════════════════════════════════════
@@ -1857,12 +4783,15 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
 
                 # Always use max(downloaded, analyzed) so the bar never dips
                 _p = max(_downloaded, _analyzed)
+                _visible_rows = [r for r in _table_rows if r is not None]
                 update_task_status(
                     task_id, 'analyzing',
                     progress_pct(_p, total_dl),
                     _t('prosecution_analyzing', lang,
                        current=_analyzed, total=total_dl,
                        desc=_doc.description[:40]),
+                    table_rows=_visible_rows,
+                    table_columns=columns,
                 )
 
                 _pipeline_logger.info(
@@ -2671,7 +5600,13 @@ def _dispatch_queued_task(next_task_id: str, user_id: str) -> None:
             next_params['patent_texts'] = stored['patent_texts']
 
         task_type = row.get('task_type', 'patent_analysis')
-        if task_type == 'prosecution_analysis':
+        if task_type == 'family_analysis':
+            next_params['patent_id'] = stored.get('patent_id', '')
+            next_params['lang'] = stored.get('lang', 'zh')
+            execute_family_analysis.delay(
+                task_id=next_task_id, params=next_params,
+            )
+        elif task_type == 'prosecution_analysis':
             next_params['patent_id'] = stored.get('patent_id', '')
             next_params['lang'] = stored.get('lang', 'zh')
             execute_prosecution_analysis.delay(
@@ -2871,27 +5806,6 @@ async def export_docx_async(report_text: str, table_rows: list, columns: list, l
         rFonts.set(qn('w:cs'), LATIN_FONT)
 
         _md_to_docx(doc, report_text)
-
-        # Add analysis table at the end
-        if table_rows and columns:
-            h = doc.add_heading(_t('default_analysis_table', lang), level=2)
-            _set_heading_font(h)
-            tbl = doc.add_table(rows=1, cols=len(columns))
-            tbl.style = 'Table Grid'
-            # Header row
-            for ci, col in enumerate(columns):
-                cell = tbl.rows[0].cells[ci]
-                cell.text = ''
-                run = cell.paragraphs[0].add_run(str(col))
-                _set_run_font(run, bold=True)
-            # Data rows
-            for row_data in table_rows:
-                row = tbl.add_row()
-                for ci, col in enumerate(columns):
-                    cell = row.cells[ci]
-                    cell.text = ''
-                    run = cell.paragraphs[0].add_run(str(row_data.get(col, '')))
-                    _set_run_font(run)
 
         buf = io.BytesIO()
         doc.save(buf)

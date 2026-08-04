@@ -4,10 +4,24 @@ import { useMemo, useState } from 'react'
 import { useI18n } from '@/lib/app-i18n'
 import { renderMarkdownToHtml } from '@/lib/markdownRender'
 
+interface JurisdictionStatus {
+  code: string
+  label: string
+  status: string  // 'done' | 'analyzing' | 'fetching' | 'pending' | 'no_data' | 'failed'
+  progress: number
+  detail: string
+  file_count: number
+  files_done: number
+}
+
 interface Props {
   content: string
   resultSummary?: string
   streaming: boolean
+  analysisType?: string
+  tableColumns?: string[]
+  familyOverview?: Record<string, any>
+  jurisdictions?: JurisdictionStatus[]
 }
 
 interface TaskState {
@@ -54,10 +68,10 @@ function parseTaskContent(content: string): TaskState | null {
   const labelMatch = content.match(/\]\s*(.+?)(?:\.{2,})?$/)
   let stepLabel = labelMatch ? labelMatch[1].trim() : ''
   // Clean garbled Unicode from LLM output
-  stepLabel = stepLabel.replace(/\uFFFD/g, '')
+  stepLabel = stepLabel.replace(/�/g, '')
     .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '')
     .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '')
-    .replace(/[\u0080-\u009F]/g, '')
+    .replace(/[-]/g, '')
 
   // Paused state
   if (content.includes('⏸') || content.includes('已暂停')) {
@@ -124,7 +138,10 @@ function parseTaskContent(content: string): TaskState | null {
   return null
 }
 
+// ── Phase icons ──────────────────────────────────────────────────────────────
+
 const PHASE_ICONS: Record<string, JSX.Element> = {
+  // Standard phases
   extracting_text: (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>
@@ -165,6 +182,27 @@ const PHASE_ICONS: Record<string, JSX.Element> = {
       <line x1="12" y1="15" x2="12" y2="3"/>
     </svg>
   ),
+  // Family / multi-country phases
+  family_lookup: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10"/>
+      <line x1="2" y1="12" x2="22" y2="12"/>
+      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+    </svg>
+  ),
+  data_fetch: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+      <line x1="8" y1="21" x2="16" y2="21"/>
+      <line x1="12" y1="17" x2="12" y2="21"/>
+    </svg>
+  ),
+  document_analysis: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21.21 15.89A10 10 0 1 1 8 2.83"/>
+      <path d="M22 12A10 10 0 0 0 12 2v10z"/>
+    </svg>
+  ),
 }
 
 const PHASE_LABEL_KEYS: Record<string, string> = {
@@ -174,9 +212,15 @@ const PHASE_LABEL_KEYS: Record<string, string> = {
   analyzing: 'longTask.phaseAnalyzing',
   generating_report: 'longTask.phaseGeneratingReport',
   exporting: 'longTask.phaseExporting',
+  // Family-specific phase labels
+  family_lookup: 'longTask.phaseFamilyLookup',
+  data_fetch: 'longTask.phaseDataFetch',
+  document_analysis: 'longTask.phaseDocumentAnalysis',
 }
 
-const PHASES = [
+// ── Standard phases (batch / single patent) ──────────────────────────────────
+
+const STANDARD_PHASES = [
   { key: 'extracting_text', fileUploadOnly: true },
   { key: 'searching_patents' },
   { key: 'generating_columns' },
@@ -185,6 +229,18 @@ const PHASES = [
   { key: 'exporting' },
 ]
 
+// ── Family phases (cross-jurisdiction multi-country analysis) ─────────────────
+
+const FAMILY_PHASES = [
+  { key: 'family_lookup' },
+  { key: 'data_fetch' },
+  { key: 'document_analysis' },
+  { key: 'generating_report' },
+  { key: 'exporting' },
+]
+
+// ── Keyword matching for phase detection ─────────────────────────────────────
+
 const PHASE_MATCH_KEYWORDS: Record<string, string[]> = {
   extracting_text: ['文件解析', '解析上传', 'Parsing', 'Extracting', 'OCR'],
   searching_patents: ['检索', 'Searching', 'Fetching USPTO'],
@@ -192,11 +248,60 @@ const PHASE_MATCH_KEYWORDS: Record<string, string[]> = {
   analyzing: ['正在分析', '下载专利', '专利分析', '已完成', 'Analyzing', 'Downloading', 'Analysis progress', 'Completed'],
   generating_report: ['报告', '撰写', 'Report', 'Writing', 'summary', 'outline'],
   exporting: ['Word', 'PDF', '导出', 'Generating Word', 'Converting DOCX', 'Exporting'],
+  family_lookup: ['同族', 'family', 'EPO', '司法辖区', 'jurisdiction', 'family member', '同族专利'],
+  data_fetch: ['获取', 'fetch', 'SIPOP', 'JPO', 'USPTO', '下载审查文件'],
+  document_analysis: ['分析中', 'analyzing', '审查文件', '已分析'],
+}
+
+// ── Family mode detection ────────────────────────────────────────────────────
+
+function isFamilyMode(content: string, stepLabel: string): boolean {
+  const combined = (content + ' ' + stepLabel).toLowerCase()
+  return (
+    combined.includes('同族') ||
+    combined.includes('family member') ||
+    combined.includes('jurisdiction') ||
+    combined.includes('司法辖区') ||
+    combined.includes('epo') ||
+    (combined.includes('us') && combined.includes('cn') && combined.includes('专利'))
+  )
 }
 
 function isFileUploadMode(content: string): boolean {
   return content.includes('上传文件') || content.includes('extracting_text') || content.includes('uploaded file') || content.includes('Parsing')
 }
+
+// ── Jurisdiction extraction from content ─────────────────────────────────────
+
+function extractJurisdictions(content: string, stepLabel: string): string[] {
+  const combined = content + ' ' + stepLabel
+  const jurisdictions: string[] = []
+  // Try to find a list like "US, CN, EP, JP" or "美、中、欧、日"
+  const jurisMatch = combined.match(/(?:涉及|across)\s*(\d+)\s*(?:个)?\s*(?:司法辖区|jurisdictions?)[:：]?\s*([A-Z,,\s、]+)/i)
+  if (jurisMatch && jurisMatch[2]) {
+    const codes = jurisMatch[2].split(/[,,\s、]+/).filter(Boolean)
+    jurisdictions.push(...codes)
+  }
+  // Fallback: detect individual country mentions
+  if (!jurisdictions.length) {
+    if (/US|美国|uspto/i.test(combined)) jurisdictions.push('US')
+    if (/CN|中国|sipop/i.test(combined)) jurisdictions.push('CN')
+    if (/EP|欧洲|epo/i.test(combined)) jurisdictions.push('EP')
+    if (/JP|日本/i.test(combined)) jurisdictions.push('JP')
+    if (/WO|PCT|世界/i.test(combined)) jurisdictions.push('WO')
+  }
+  return jurisdictions
+}
+
+const JURISDICTION_COLORS: Record<string, string> = {
+  US: '#3B82F6',
+  CN: '#EF4444',
+  EP: '#8B5CF6',
+  JP: '#F59E0B',
+  WO: '#10B981',
+}
+
+// ── API helpers ──────────────────────────────────────────────────────────────
 
 async function callLongTaskApi(taskId: string, action: 'pause' | 'resume' | 'stop'): Promise<boolean> {
   try {
@@ -215,7 +320,11 @@ async function callLongTaskApi(taskId: string, action: 'pause' | 'resume' | 'sto
   }
 }
 
-export default function LongTaskProgress({ content, resultSummary, streaming }: Props) {
+// ═══════════════════════════════════════════════════════════════════════════════
+// LongTaskProgress — main component
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export default function LongTaskProgress({ content, resultSummary, streaming, analysisType, tableColumns, familyOverview, jurisdictions }: Props) {
   const { t } = useI18n()
   const state = parseTaskContent(content)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
@@ -223,6 +332,17 @@ export default function LongTaskProgress({ content, resultSummary, streaming }: 
     () => (resultSummary ? renderMarkdownToHtml(resultSummary) : ''),
     [resultSummary],
   )
+
+  // Detect family mode: use explicit analysisType from backend, fall back to keyword matching
+  const stepLabel = state?.stepLabel || ''
+  // Explicit analysisType always wins over keyword guessing.
+  // Keyword-based family detection is only a fallback when the backend
+  // hasn't set analysis_type yet (pre-backend-fix or first poll).
+  const isFamily = analysisType
+    ? analysisType === 'family'
+    : isFamilyMode(content, stepLabel)
+  const jurisdictionCodes: string[] = (familyOverview?.jurisdictions as string[]) || (isFamily ? extractJurisdictions(content, stepLabel) : [])
+
   const summaryStreaming = Boolean(
     resultSummary
     && (state?.phase === 'running' || state?.phase === 'paused')
@@ -238,6 +358,41 @@ export default function LongTaskProgress({ content, resultSummary, streaming }: 
     await callLongTaskApi(state.taskId, action)
     setActionLoading(null)
   }
+
+  // ── Phase progress mapping ──────────────────────────────────────────────
+  function getPhaseStatus(phaseKey: string, progress: number, label: string): 'done' | 'active' | 'pending' {
+    // Keyword match — if the step label mentions this phase, it's at minimum active
+    const keywords = PHASE_MATCH_KEYWORDS[phaseKey] || []
+    if (keywords.some(kw => label.includes(kw))) {
+      return 'active'
+    }
+
+    if (isFamily) {
+      // Family mode thresholds
+      switch (phaseKey) {
+        case 'family_lookup':       return progress >= 8 ? 'done' : progress >= 1 ? 'active' : 'pending'
+        case 'data_fetch':          return progress >= 15 ? 'done' : progress >= 8 ? 'active' : 'pending'
+        case 'document_analysis':   return progress >= 76 ? 'done' : progress >= 15 ? 'active' : 'pending'
+        case 'generating_report':   return progress >= 90 ? 'done' : progress >= 76 ? 'active' : 'pending'
+        case 'exporting':           return progress >= 100 ? 'done' : progress >= 90 ? 'active' : 'pending'
+        default: return 'pending'
+      }
+    } else {
+      // Standard mode thresholds
+      switch (phaseKey) {
+        case 'extracting_text':    return progress >= 20 ? 'done' : progress >= 0 ? 'active' : 'pending'
+        case 'searching_patents':  return progress >= 2 ? 'done' : 'pending'
+        case 'generating_columns': return progress >= 5 ? 'done' : 'pending'
+        case 'analyzing':          return progress >= 75 ? 'done' : progress >= 10 ? 'active' : 'pending'
+        case 'generating_report':  return progress >= 90 ? 'done' : progress >= 80 ? 'active' : 'pending'
+        case 'exporting':          return progress >= 92 ? 'active' : 'pending'
+        default: return 'pending'
+      }
+    }
+  }
+
+  const phases = isFamily ? FAMILY_PHASES : STANDARD_PHASES
+  const visiblePhases = phases.filter(p => !('fileUploadOnly' in p) || !p.fileUploadOnly || isFileUploadMode(content))
 
   return (
     <div className="lt-progress-card">
@@ -259,10 +414,31 @@ export default function LongTaskProgress({ content, resultSummary, streaming }: 
             ? t('longTask.titleSubmitted')
             : t('longTask.titleRunning')}
         </span>
+        {isFamily && (
+          <span className="lt-analysis-badge family">{t('longTask.badgeFamily')}</span>
+        )}
+        {analysisType === 'prosecution' && !isFamily && (
+          <span className="lt-analysis-badge prosecution">{t('longTask.badgeProsecution')}</span>
+        )}
         {state.taskId && (
           <span className="lt-progress-id">{state.taskId}</span>
         )}
       </div>
+
+      {/* Jurisdiction badges (family mode) */}
+      {isFamily && jurisdictionCodes.length > 0 && (
+        <div className="lt-jurisdictions">
+          {jurisdictionCodes.map((code) => (
+            <span
+              key={code}
+              className="lt-jurisdiction-badge"
+              style={{ borderColor: JURISDICTION_COLORS[code] || '#6B7280', color: JURISDICTION_COLORS[code] || '#6B7280' }}
+            >
+              {code}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Progress bar (only in running phase) */}
       {(state.phase === 'running' || state.phase === 'submitted') && (
@@ -293,19 +469,9 @@ export default function LongTaskProgress({ content, resultSummary, streaming }: 
       {/* Phase indicators + inline action buttons */}
       {(state.phase === 'running' || state.phase === 'submitted' || state.phase === 'paused') && (
         <div className="lt-phases">
-          {PHASES.filter(p => !p.fileUploadOnly || isFileUploadMode(content)).map((p) => {
-            let status: 'done' | 'active' | 'pending' = 'pending'
-            if (p.key === 'extracting_text' && state.progress >= 20) status = 'done'
-            else if (p.key === 'extracting_text' && state.progress >= 0) status = 'active'
-            else if (p.key === 'searching_patents' && state.progress >= 2) status = 'done'
-            else if (p.key === 'generating_columns' && state.progress >= 5) status = 'done'
-            else if (p.key === 'analyzing' && state.progress >= 10) status = state.progress < 75 ? 'active' : 'done'
-            else if (p.key === 'generating_report' && state.progress >= 80) status = state.progress < 90 ? 'active' : 'done'
-            else if (p.key === 'exporting' && state.progress >= 92) status = 'active'
-
+          {visiblePhases.map((p) => {
+            const status = getPhaseStatus(p.key, state.progress, stepLabel)
             const phaseLabel = t(PHASE_LABEL_KEYS[p.key])
-            const keywords = PHASE_MATCH_KEYWORDS[p.key] || [phaseLabel]
-            if (keywords.some(kw => state.stepLabel.includes(kw)) && status !== 'done') status = 'active'
 
             return (
               <div
@@ -400,6 +566,53 @@ export default function LongTaskProgress({ content, resultSummary, streaming }: 
       {/* Current step */}
       {state.stepLabel && (state.phase === 'running' || state.phase === 'paused') && (
         <p className="lt-current-step">{state.stepLabel}</p>
+      )}
+
+      {/* Jurisdiction-level progress table (family analysis) */}
+      {jurisdictions && jurisdictions.length > 0 && (state.phase === 'running' || state.phase === 'paused') && (
+        <div className="lt-jur-table">
+          {jurisdictions.map((jur) => {
+            const isActive = jur.status === 'analyzing' || jur.status === 'fetching'
+            const isDone = jur.status === 'done'
+            const isNoData = jur.status === 'no_data' || jur.status === 'failed'
+            const statusText = t(`longTask.jurStatus_${jur.status}` as any) || jur.status
+            return (
+              <div
+                key={jur.code}
+                className={`lt-jur-row ${isActive ? 'active' : ''} ${isDone ? 'done' : ''} ${isNoData ? 'no-data' : ''}`}
+              >
+                <span className="lt-jur-flag">{jur.code}</span>
+                <span className="lt-jur-label">{jur.label}</span>
+                <span className={`lt-jur-status ${jur.status}`}>
+                  {isActive && <span className="lt-jur-pulse" />}
+                  {isDone && (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#10B981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M20 6 9 17l-5-5"/>
+                    </svg>
+                  )}
+                  {isNoData && (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6B7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                  )}
+                  {statusText}
+                </span>
+                <span className="lt-jur-detail">{jur.detail}</span>
+                <span className="lt-jur-bar-wrap">
+                  <span className="lt-jur-bar-track">
+                    <span
+                      className={`lt-jur-bar-fill ${jur.status}`}
+                      style={{ width: `${Math.max(jur.progress, isActive ? 8 : 0)}%` }}
+                    />
+                  </span>
+                  {jur.file_count > 0 && (
+                    <span className="lt-jur-bar-count">{jur.files_done}/{jur.file_count}</span>
+                  )}
+                </span>
+              </div>
+            )
+          })}
+        </div>
       )}
 
       {/* Report summary preview (streamed during Phase 3, shown before downloads) */}

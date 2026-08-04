@@ -173,6 +173,10 @@ export default {
     phaseAnalyzing: 'Patent Analysis',
     phaseGeneratingReport: 'Writing Report',
     phaseExporting: 'Exporting Files',
+    // Family / multi-country phases
+    phaseFamilyLookup: 'Family Lookup',
+    phaseDataFetch: 'Data Fetch',
+    phaseDocumentAnalysis: 'Analysis',
 
     // Card titles
     titleCompleted: 'Analysis Complete',
@@ -181,6 +185,20 @@ export default {
     titlePaused: 'Analysis Paused',
     titleSubmitted: 'Analysis Submitted',
     titleRunning: 'Analysis In Progress',
+
+    // Analysis type badges
+    badgeFamily: 'Cross-Jurisdiction',
+    badgeProsecution: 'US Prosecution',
+
+    // Analysis columns
+    columnsLabel: 'Analysis Dimensions',
+    jurTableTitle: 'Jurisdictions',
+    jurStatus_done: 'Done',
+    jurStatus_analyzing: 'Analyzing',
+    jurStatus_fetching: 'Fetching',
+    jurStatus_pending: 'Pending',
+    jurStatus_no_data: 'No Data',
+    jurStatus_failed: 'Failed',
 
     // Action button tooltips
     actionPause: 'Pause',
