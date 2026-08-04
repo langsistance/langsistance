@@ -1696,304 +1696,97 @@ input[type="checkbox"] {
 }
 
 /* =============================================================================
-   Patent Onboarding Wizard (floating card)
+   Patent Onboarding Tour (spotlight + tooltip)
    ============================================================================= */
 
-.patent-onboard-backdrop {
+.patent-tour-overlay {
   position: fixed;
   inset: 0;
   z-index: 500;
-  background: rgba(0,0,0,0.3);
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
 }
 
-.patent-onboard-card-float {
+.patent-tour-tooltip {
   position: fixed;
-  top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
   z-index: 501;
-  width: 580px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.18);
+  padding: 20px 22px;
+  width: 340px;
   max-width: 92vw;
-  max-height: 85vh;
-  background: var(--bg-white, #fff);
-  border-radius: 14px;
-  box-shadow: 0 8px 40px rgba(0,0,0,0.18);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  animation: patentTourFadeIn 0.25s ease;
 }
 
-.patent-onboard-card-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--border-color, #E5E5E5);
-  flex-shrink: 0;
+@keyframes patentTourFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
-.patent-onboard-card-steps {
+.patent-tour-step-dots {
   display: flex;
-  align-items: center;
   gap: 6px;
+  margin-bottom: 10px;
 }
 
-.patent-onboard-card-step-label {
-  font-size: 12px;
-  color: var(--text-secondary, #666);
-  margin-right: 6px;
-}
-
-.patent-onboard-step-dot {
-  width: 26px; height: 26px;
+.patent-tour-dot {
+  width: 8px; height: 8px;
   border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  font-weight: 600;
-  background: var(--border-color, #E5E5E5);
-  color: var(--text-secondary, #666);
-  flex-shrink: 0;
+  background: #ddd;
 }
 
-.patent-onboard-step-dot.active {
-  background: var(--color-primary, #10A37F);
-  color: #fff;
-}
+.patent-tour-dot.active { background: var(--color-primary, #10A37F); width: 20px; border-radius: 4px; }
+.patent-tour-dot.done { background: #a3e4d0; }
 
-.patent-onboard-step-dot.done {
-  background: #d4edda;
-  color: #155724;
-}
-
-.patent-onboard-step-line {
-  width: 24px; height: 2px;
-  background: var(--border-color, #E5E5E5);
-  border-radius: 1px;
-}
-
-.patent-onboard-step-line.done {
-  background: var(--color-primary, #10A37F);
-}
-
-.patent-onboard-skip-btn {
-  background: none;
-  border: none;
-  color: var(--text-secondary, #666);
-  font-size: 12px;
-  cursor: pointer;
-  padding: 4px 10px;
-  border-radius: 6px;
-}
-
-.patent-onboard-skip-btn:hover {
-  color: var(--text-primary, #111);
-  background: var(--bg-hover, #F8F8F7);
-}
-
-/* Card body */
-
-.patent-onboard-card-body {
-  padding: 20px;
-  overflow-y: auto;
-  flex: 1;
-  min-height: 0;
-}
-
-.patent-onboard-card-title {
-  font-size: 17px;
+.patent-tour-tt-title {
+  font-size: 15px;
   font-weight: 700;
   color: var(--text-primary, #111);
   margin: 0 0 6px;
 }
 
-.patent-onboard-card-subtitle {
+.patent-tour-tt-body {
   font-size: 13px;
   color: var(--text-secondary, #666);
-  margin: 0 0 18px;
-  line-height: 1.5;
+  line-height: 1.6;
+  margin: 0 0 16px;
 }
 
-.patent-onboard-card-examples-wrapper {
-  display: flex;
-  flex-direction: column;
-  max-height: 320px;
-  overflow-y: auto;
-}
-
-.patent-onboard-card-examples-wrapper::-webkit-scrollbar {
-  width: 4px;
-}
-
-.patent-onboard-card-examples-wrapper::-webkit-scrollbar-thumb {
-  background: var(--border-color, #E5E5E5);
-  border-radius: 2px;
-}
-
-/* Step 1: capability cards */
-
-.patent-onboard-cards {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.patent-onboard-card {
-  background: var(--bg-white, #fff);
-  border: 2px solid var(--border-color, #E5E5E5);
-  border-radius: 10px;
-  padding: 16px;
-  cursor: pointer;
-  text-align: left;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  transition: all 0.15s;
-}
-
-.patent-onboard-card:hover {
-  border-color: var(--color-primary, #10A37F);
-  box-shadow: 0 0 0 3px rgba(16,163,127,0.1);
-}
-
-.patent-onboard-card.selected {
-  border-color: var(--color-primary, #10A37F);
-  box-shadow: 0 0 0 3px rgba(16,163,127,0.15);
-  background: rgba(16,163,127,0.03);
-}
-
-.patent-onboard-card-icon { font-size: 24px; }
-.patent-onboard-card-name { font-size: 15px; font-weight: 600; color: var(--text-primary, #111); }
-.patent-onboard-card-desc { font-size: 13px; color: var(--text-secondary, #666); line-height: 1.5; }
-
-/* Step 2: examples */
-
-.patent-onboard-group-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary, #666);
-  padding-bottom: 4px;
-  border-bottom: 1px solid var(--border-color, #E5E5E5);
-  margin: 0 0 4px;
-}
-
-.patent-onboard-example-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 7px 10px;
-  border-radius: 8px;
-  cursor: pointer;
-  border: none;
-  background: none;
-  width: 100%;
-  text-align: left;
-}
-
-.patent-onboard-example-item:hover {
-  background: rgba(16,163,127,0.06);
-}
-
-.patent-onboard-example-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--color-primary, #10A37F);
-  background: rgba(16,163,127,0.1);
-  padding: 2px 7px;
-  border-radius: 5px;
-  white-space: nowrap;
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-
-.patent-onboard-example-text {
-  font-size: 13px;
-  color: var(--text-primary, #111);
-  line-height: 1.5;
-  word-break: break-word;
-}
-
-/* Step 3: input */
-
-.patent-onboard-input-wrapper {
-  display: flex;
-  gap: 8px;
-  background: var(--bg-white, #fff);
-  border: 2px solid var(--color-primary, #10A37F);
-  border-radius: 10px;
-  padding: 6px;
-}
-
-.patent-onboard-input-wrapper:focus-within {
-  box-shadow: 0 0 0 3px rgba(16,163,127,0.15);
-}
-
-.patent-onboard-textarea {
-  flex: 1;
-  border: none;
-  outline: none;
-  resize: none;
-  padding: 6px 10px;
-  font-size: 14px;
-  font-family: inherit;
-  line-height: 1.5;
-  min-height: 80px;
-  background: transparent;
-  color: var(--text-primary, #111);
-}
-
-.patent-onboard-textarea::placeholder { color: #bbb; }
-
-.patent-onboard-send-btn {
-  align-self: flex-end;
-  width: 38px; height: 38px;
-  border: none;
-  border-radius: 8px;
-  background: var(--color-primary, #10A37F);
-  color: #fff;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.patent-onboard-send-btn:hover { background: #0d8f6f; }
-.patent-onboard-send-btn:disabled { background: var(--border-color, #E5E5E5); cursor: not-allowed; }
-
-/* Card footer */
-
-.patent-onboard-card-footer {
+.patent-tour-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border-color, #E5E5E5);
 }
 
-.patent-onboard-btn-prev {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 7px 14px;
+.patent-tour-btn-skip {
+  background: none;
+  border: none;
+  color: var(--text-secondary, #999);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 0;
+}
+
+.patent-tour-btn-skip:hover { color: var(--text-primary, #111); }
+
+.patent-tour-btn-prev {
+  padding: 6px 14px;
   border: 1px solid var(--border-color, #E5E5E5);
-  border-radius: 8px;
-  background: var(--bg-white, #fff);
+  border-radius: 7px;
+  background: #fff;
   color: var(--text-primary, #111);
   font-size: 13px;
   cursor: pointer;
 }
 
-.patent-onboard-btn-prev:hover { background: var(--bg-hover, #F8F8F7); }
+.patent-tour-btn-prev:hover { background: var(--bg-hover, #F8F8F7); }
 
-.patent-onboard-btn-next {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 7px 22px;
+.patent-tour-btn-next {
+  padding: 6px 18px;
   border: none;
-  border-radius: 8px;
+  border-radius: 7px;
   background: var(--color-primary, #10A37F);
   color: #fff;
   font-size: 13px;
@@ -2001,5 +1794,25 @@ input[type="checkbox"] {
   cursor: pointer;
 }
 
-.patent-onboard-btn-next:hover { background: #0d8f6f; }
-.patent-onboard-btn-next:disabled { background: var(--border-color, #E5E5E5); cursor: not-allowed; }
+.patent-tour-btn-next:hover { background: #0d8f6f; }
+
+/* Arrow */
+.patent-tour-arrow {
+  position: absolute;
+  width: 0; height: 0;
+  border: 8px solid transparent;
+}
+
+.patent-tour-arrow-bottom {
+  top: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-bottom-color: #fff;
+}
+
+.patent-tour-arrow-top {
+  bottom: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-top-color: #fff;
+}

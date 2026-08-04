@@ -1,22 +1,63 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useI18n } from '@/lib/app-i18n'
 import { useAuth } from '@/contexts/AuthContext'
 
-type Capability = 'smartQA' | 'deepResearch' | null
-
 const STORAGE_KEY_PREFIX = 'copiioai_patent_onboarding_done'
 
-function PatentOnboardingWizard() {
+interface TourStep {
+  /** CSS selector for the element to highlight */
+  target: string
+  /** Tooltip position relative to target */
+  placement: 'bottom' | 'top' | 'right' | 'left'
+  /** Title */
+  titleKey: string
+  /** Body (i18n key or hardcoded) */
+  bodyKey: string
+}
+
+// ── Define what elements to point at on the chat page ──
+
+function getTourSteps(t: (key: string, params?: Record<string, string | number>) => string, lang: string): TourStep[] {
+  return [
+    {
+      target: '.scene-hint-persistent',
+      placement: 'bottom',
+      titleKey: lang === 'zh' ? '💬 智能问答 & 🔬 深度研究' : '💬 Smart Q&A & 🔬 Deep Research',
+      bodyKey: lang === 'zh'
+        ? '这里展示了你已启用的专利分析能力。智能问答支持按申请号、专利号、关键词等方式检索；深度研究支持全球专利家族审查和批量分析。'
+        : 'This shows your enabled patent analysis capabilities. Smart Q&A supports search by application number, patent number, keyword, etc. Deep Research covers global family prosecution and batch analysis.',
+    },
+    {
+      target: '.knowledge-group-item',
+      placement: 'top',
+      titleKey: lang === 'zh' ? '📝 示例提问' : '📝 Example Questions',
+      bodyKey: lang === 'zh'
+        ? '这些是你可以直接参考的提问示例，点击即可快速开始。也可以在下方的输入框中自由输入你的专利问题。'
+        : 'These are example questions you can reference. Click to quickly start, or type your own patent query in the input box below.',
+    },
+    {
+      target: '.chat-input-wrapper',
+      placement: 'top',
+      titleKey: lang === 'zh' ? '⌨️ 在这里输入问题' : '⌨️ Type Your Question Here',
+      bodyKey: lang === 'zh'
+        ? '在输入框中描述你的专利分析需求，按 Enter 发送。支持上传 PDF/DOCX/XML 专利说明书文件。现在就试试吧！'
+        : 'Describe your patent analysis needs in the input box, press Enter to send. You can also upload PDF/DOCX/XML patent specification files. Try it now!',
+    },
+  ]
+}
+
+export default function PatentOnboardingWizard() {
   const { t, lang } = useI18n()
   const { user } = useAuth()
   const [visible, setVisible] = useState(false)
-  const [step, setStep] = useState(1)
-  const [selectedCap, setSelectedCap] = useState<Capability>(null)
-  const [prefillText, setPrefillText] = useState('')
+  const [step, setStep] = useState(0)
+  const [spotlight, setSpotlight] = useState({ x: 0, y: 0, w: 0, h: 0 })
+  const [tooltipStyle, setTooltipStyle] = useState<Record<string, string>>({})
 
   const storageKey = `${STORAGE_KEY_PREFIX}_${user?.uid || 'unknown'}`
+  const tourSteps = getTourSteps(t, lang)
 
   useEffect(() => {
     try {
@@ -25,226 +66,165 @@ function PatentOnboardingWizard() {
     setVisible(true)
   }, [storageKey])
 
-  if (!visible) return null
+  // Calculate spotlight + tooltip position for current step
+  const updatePositions = useCallback(() => {
+    if (!visible || step >= tourSteps.length) return
+
+    const target = document.querySelector(tourSteps[step].target)
+    if (!target) return
+
+    const rect = target.getBoundingClientRect()
+    const padding = 8
+    setSpotlight({
+      x: rect.left - padding,
+      y: rect.top - padding,
+      w: rect.width + padding * 2,
+      h: rect.height + padding * 2,
+    })
+
+    // Tooltip position
+    const placement = tourSteps[step].placement
+    const gap = 16
+    const ttMaxW = 360
+
+    let ttLeft: number
+    let ttTop: number
+
+    if (placement === 'bottom') {
+      ttTop = rect.bottom + gap
+      ttLeft = Math.max(16, Math.min(rect.left + rect.width / 2 - ttMaxW / 2, window.innerWidth - ttMaxW - 16))
+    } else if (placement === 'top') {
+      ttTop = rect.top - gap
+      ttLeft = Math.max(16, Math.min(rect.left + rect.width / 2 - ttMaxW / 2, window.innerWidth - ttMaxW - 16))
+    } else if (placement === 'right') {
+      ttTop = Math.max(16, rect.top)
+      ttLeft = rect.right + gap
+    } else {
+      ttTop = Math.max(16, rect.top)
+      ttLeft = rect.left - ttMaxW - gap
+    }
+
+    setTooltipStyle({
+      position: 'fixed',
+      left: `${ttLeft}px`,
+      top: `${placement === 'top' ? 'auto' : ''}`,
+      bottom: `${placement === 'top' ? `${window.innerHeight - ttTop}px` : 'auto'}`,
+      maxWidth: `${ttMaxW}px`,
+      transform: 'none',
+    })
+  }, [visible, step, tourSteps])
+
+  useEffect(() => {
+    updatePositions()
+    window.addEventListener('resize', updatePositions)
+    window.addEventListener('scroll', updatePositions)
+    return () => {
+      window.removeEventListener('resize', updatePositions)
+      window.removeEventListener('scroll', updatePositions)
+    }
+  }, [updatePositions])
+
+  // Scroll target into view
+  useEffect(() => {
+    if (!visible || step >= tourSteps.length) return
+    const target = document.querySelector(tourSteps[step].target)
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      // Re-calc after scroll settles
+      setTimeout(updatePositions, 400)
+    }
+  }, [visible, step, tourSteps, updatePositions])
+
+  if (!visible || step >= tourSteps.length) return null
 
   function markDone() {
     setVisible(false)
     try { localStorage.setItem(storageKey, '1') } catch {}
   }
 
-  function handleExampleClick(example: string) {
-    setPrefillText(example)
-    setStep(3)
-  }
-
-  function handleSend() {
-    const text = prefillText.trim()
-    if (!text) return
-    markDone()
-    const textarea = document.querySelector('.chat-input') as HTMLTextAreaElement
-    if (textarea) {
-      const setter = Object.getOwnPropertyDescriptor(
-        window.HTMLTextAreaElement.prototype, 'value'
-      )?.set
-      if (setter) {
-        setter.call(textarea, text)
-      } else {
-        textarea.value = text
-      }
-      textarea.dispatchEvent(new Event('input', { bubbles: true }))
-      setTimeout(() => {
-        const btn = document.querySelector('.send-btn') as HTMLButtonElement
-        if (btn && !btn.disabled) btn.click()
-      }, 100)
+  function nextStep() {
+    if (step >= tourSteps.length - 1) {
+      markDone()
+    } else {
+      setStep(s => s + 1)
     }
   }
 
-  const appNoLabel = lang === 'zh' ? '申请号' : 'Application No.'
-  const patentNoLabel = lang === 'zh' ? '专利号' : 'Patent No.'
-  const pubNoLabel = lang === 'zh' ? '公开号' : 'Publication No.'
-  const keywordLabel = lang === 'zh' ? '关键词' : 'Keyword'
-  const assignorLabel = lang === 'zh' ? '权利人' : 'Assignor'
-  const googleLabel = lang === 'zh' ? 'Google搜索' : 'Google Search'
-  const docLabel = lang === 'zh' ? '文档检索' : 'Doc Retrieval'
-  const crossLabel = lang === 'zh' ? '跨国分析' : 'Cross-country'
-  const oaLabel = lang === 'zh' ? 'OA答复分析' : 'OA Response'
-  const claimLabel = lang === 'zh' ? '权利要求演变' : 'Claim Evolution'
-  const grantLabel = lang === 'zh' ? '授权策略' : 'Grant Strategy'
-  const riskLabel = lang === 'zh' ? '无效风险' : 'Invalidity & Risk'
-  const searchLabel = lang === 'zh' ? '搜索分析' : 'Search Analysis'
-  const specLabel = lang === 'zh' ? '指定专利分析' : 'Specified Patent'
-  const fileLabel = lang === 'zh' ? '文件上传分析' : 'File Upload'
-  const followLabel = lang === 'zh' ? '追问分析' : 'Follow-up'
+  function prevStep() {
+    setStep(s => Math.max(0, s - 1))
+  }
 
-  const smartQAItems = [
-    { label: appNoLabel, example: 'Retrieve all patent documents for application number 18893954.' },
-    { label: patentNoLabel, example: 'Search using patent number 12,615,916.' },
-    { label: pubNoLabel, example: 'Search using publication number US20240121982A1.' },
-    { label: keywordLabel, example: 'Search the USPTO for patents using the keyword "Agentic AI".' },
-    { label: assignorLabel, example: 'Search for patents where the assignee is Apple Inc.' },
-    { label: googleLabel, example: 'Search Google for patents related to AI agents.' },
-    { label: docLabel, example: 'Retrieve all patent documents with publication number US20250103146A1.' },
-  ]
-
-  const deepResearchFamily = [
-    { label: crossLabel, example: 'Analyze prosecution differences between US12506212 and its global family members' },
-    { label: oaLabel, example: 'Analyze rejection reasons and applicant response strategies for US12506212' },
-    { label: claimLabel, example: 'Analyze claim amendments and scope changes of US12506212 and its family members' },
-    { label: grantLabel, example: 'Analyze why US12506212 was granted and key amendment strategies' },
-    { label: riskLabel, example: 'Find limiting statements and legal risks in the prosecution history of US12506212' },
-  ]
-
-  const deepResearchBatch = [
-    { label: searchLabel, example: 'What recent patents does Tesla have in autonomous driving' },
-    { label: specLabel, example: 'Analyze patents 17429113, 18012525, 18331482' },
-    { label: fileLabel, example: 'Upload specification files (PDF/XML/DOCX) for text analysis. Filter these documents for AI-related patents' },
-    { label: followLabel, example: 'Query and filter previously retrieved patent results. Which of these are AI-related patents' },
-  ]
-
-  const steps = [1, 2, 3]
+  const cur = tourSteps[step]
 
   return (
     <>
-      {/* Backdrop */}
-      <div className="patent-onboard-backdrop" onClick={markDone} />
+      {/* Spotlight cutout overlay */}
+      <svg className="patent-tour-overlay" viewBox={`0 0 ${window.innerWidth} ${window.innerHeight}`}>
+        <defs>
+          <mask id="spotlight-mask">
+            <rect width="100%" height="100%" fill="white" />
+            <rect
+              x={spotlight.x}
+              y={spotlight.y}
+              width={spotlight.w}
+              height={spotlight.h}
+              rx="12"
+              fill="black"
+            />
+          </mask>
+        </defs>
+        <rect
+          width="100%"
+          height="100%"
+          fill="rgba(0,0,0,0.5)"
+          mask="url(#spotlight-mask)"
+        />
+        {/* Highlight border */}
+        <rect
+          x={spotlight.x}
+          y={spotlight.y}
+          width={spotlight.w}
+          height={spotlight.h}
+          rx="12"
+          fill="none"
+          stroke="rgba(16,163,127,0.6)"
+          strokeWidth="2"
+        />
+      </svg>
 
-      {/* Floating card */}
-      <div className="patent-onboard-card-float">
-        {/* Header with step dots */}
-        <div className="patent-onboard-card-top">
-          <div className="patent-onboard-card-steps">
-            <span className="patent-onboard-card-step-label">
-              {t('patentOnboarding.step', { current: step })} {t('patentOnboarding.of', { total: 3 })}
-            </span>
-            {steps.map((s, i) => (
-              <span key={s} style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
-                {i > 0 && <span className={`patent-onboard-step-line${s <= step ? ' done' : ''}`} />}
-                <span className={`patent-onboard-step-dot${s < step ? ' done' : ''}${s === step ? ' active' : ''}`}>
-                  {s < step ? '✓' : s}
-                </span>
-              </span>
-            ))}
-          </div>
-          <button className="patent-onboard-skip-btn" onClick={markDone}>
-            {t('patentOnboarding.skip')}
-          </button>
+      {/* Tooltip */}
+      <div className="patent-tour-tooltip" style={tooltipStyle}>
+        {/* Arrow */}
+        <div className={`patent-tour-arrow patent-tour-arrow-${cur.placement}`} />
+
+        {/* Step dots */}
+        <div className="patent-tour-step-dots">
+          {tourSteps.map((_, i) => (
+            <span key={i} className={`patent-tour-dot${i === step ? ' active' : ''}${i < step ? ' done' : ''}`} />
+          ))}
         </div>
 
-        {/* Step 1 */}
-        {step === 1 && (
-          <div className="patent-onboard-card-body">
-            <p className="patent-onboard-card-title">{t('patentOnboarding.step1.title')}</p>
-            <p className="patent-onboard-card-subtitle">{t('patentOnboarding.step1.subtitle')}</p>
-            <div className="patent-onboard-cards">
-              <button
-                className={`patent-onboard-card${selectedCap === 'smartQA' ? ' selected' : ''}`}
-                onClick={() => setSelectedCap('smartQA')}
-              >
-                <span className="patent-onboard-card-icon">💬</span>
-                <span className="patent-onboard-card-name">{t('patentOnboarding.step1.smartQA.name')}</span>
-                <span className="patent-onboard-card-desc">{t('patentOnboarding.step1.smartQA.desc')}</span>
-              </button>
-              <button
-                className={`patent-onboard-card${selectedCap === 'deepResearch' ? ' selected' : ''}`}
-                onClick={() => setSelectedCap('deepResearch')}
-              >
-                <span className="patent-onboard-card-icon">🔬</span>
-                <span className="patent-onboard-card-name">{t('patentOnboarding.step1.deepResearch.name')}</span>
-                <span className="patent-onboard-card-desc">{t('patentOnboarding.step1.deepResearch.desc')}</span>
-              </button>
-            </div>
-            <div className="patent-onboard-card-footer">
-              <div />
-              <button className="patent-onboard-btn-next" disabled={!selectedCap} onClick={() => setStep(2)}>
-                {t('patentOnboarding.next')}
-              </button>
-            </div>
-          </div>
-        )}
+        {/* Content */}
+        <h3 className="patent-tour-tt-title">{cur.titleKey}</h3>
+        <p className="patent-tour-tt-body">{cur.bodyKey}</p>
 
-        {/* Step 2 */}
-        {step === 2 && (
-          <div className="patent-onboard-card-body">
-            <p className="patent-onboard-card-title">{t('patentOnboarding.step2.title')}</p>
-            <p className="patent-onboard-card-subtitle">{t('patentOnboarding.step2.tip')}</p>
-            <div className="patent-onboard-card-examples-wrapper">
-              {selectedCap === 'smartQA' && smartQAItems.map((item, i) => (
-                <button key={i} className="patent-onboard-example-item" onClick={() => handleExampleClick(item.example)}>
-                  <span className="patent-onboard-example-label">{item.label}</span>
-                  <span className="patent-onboard-example-text">{item.example}</span>
-                </button>
-              ))}
-              {selectedCap === 'deepResearch' && (
-                <>
-                  <p className="patent-onboard-group-title">{t('patentOnboarding.step2.familyAnalysis')}</p>
-                  {deepResearchFamily.map((item, i) => (
-                    <button key={i} className="patent-onboard-example-item" onClick={() => handleExampleClick(item.example)}>
-                      <span className="patent-onboard-example-label">{item.label}</span>
-                      <span className="patent-onboard-example-text">{item.example}</span>
-                    </button>
-                  ))}
-                  <p className="patent-onboard-group-title" style={{ marginTop: 12 }}>
-                    {t('patentOnboarding.step2.batchAnalysis')}
-                  </p>
-                  {deepResearchBatch.map((item, i) => (
-                    <button key={i} className="patent-onboard-example-item" onClick={() => handleExampleClick(item.example)}>
-                      <span className="patent-onboard-example-label">{item.label}</span>
-                      <span className="patent-onboard-example-text">{item.example}</span>
-                    </button>
-                  ))}
-                </>
-              )}
-            </div>
-            <div className="patent-onboard-card-footer">
-              <button className="patent-onboard-btn-prev" onClick={() => setStep(1)}>
-                ← {t('patentOnboarding.prev')}
+        {/* Actions */}
+        <div className="patent-tour-actions">
+          <button className="patent-tour-btn-skip" onClick={markDone}>
+            {t('patentOnboarding.skip')}
+          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {step > 0 && (
+              <button className="patent-tour-btn-prev" onClick={prevStep}>
+                {t('patentOnboarding.prev')}
               </button>
-              <button className="patent-onboard-btn-next" onClick={() => setStep(3)}>
-                {t('patentOnboarding.next')}
-              </button>
-            </div>
+            )}
+            <button className="patent-tour-btn-next" onClick={nextStep}>
+              {step === tourSteps.length - 1 ? t('patentOnboarding.startChat') : t('patentOnboarding.next')}
+            </button>
           </div>
-        )}
-
-        {/* Step 3 */}
-        {step === 3 && (
-          <div className="patent-onboard-card-body">
-            <p className="patent-onboard-card-title">{t('patentOnboarding.step3.title')}</p>
-            <p className="patent-onboard-card-subtitle">{t('patentOnboarding.step3.subtitle')}</p>
-            <div className="patent-onboard-input-wrapper">
-              <textarea
-                className="patent-onboard-textarea"
-                placeholder={t('patentOnboarding.step3.placeholder')}
-                value={prefillText}
-                onChange={e => setPrefillText(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault()
-                    handleSend()
-                  }
-                }}
-                rows={3}
-              />
-              <button className="patent-onboard-send-btn" onClick={handleSend} disabled={!prefillText.trim()} title="Send">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="22" y1="2" x2="11" y2="13" />
-                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
-                </svg>
-              </button>
-            </div>
-            <div className="patent-onboard-card-footer">
-              <button className="patent-onboard-btn-prev" onClick={() => setStep(2)}>
-                ← {t('patentOnboarding.prev')}
-              </button>
-              <button className="patent-onboard-btn-next" onClick={markDone}>
-                {t('patentOnboarding.startChat')}
-              </button>
-            </div>
-          </div>
-        )}
+        </div>
       </div>
     </>
   )
 }
-
-export default PatentOnboardingWizard
