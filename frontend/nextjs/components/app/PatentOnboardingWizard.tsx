@@ -52,6 +52,7 @@ export default function PatentOnboardingWizard() {
   const { t, lang } = useI18n()
   const { user } = useAuth()
   const [visible, setVisible] = useState(false)
+  const [ready, setReady] = useState(false)
   const [step, setStep] = useState(0)
   const [spotlight, setSpotlight] = useState({ x: 0, y: 0, w: 0, h: 0 })
   const [tooltipStyle, setTooltipStyle] = useState<Record<string, string>>({})
@@ -59,6 +60,7 @@ export default function PatentOnboardingWizard() {
   const storageKey = `${STORAGE_KEY_PREFIX}_${user?.uid || 'unknown'}`
   const tourSteps = getTourSteps(t, lang)
 
+  // Check localStorage on mount
   useEffect(() => {
     try {
       if (localStorage.getItem(storageKey) === '1') return
@@ -68,10 +70,11 @@ export default function PatentOnboardingWizard() {
 
   // Calculate spotlight + tooltip position for current step
   const updatePositions = useCallback(() => {
-    if (!visible || step >= tourSteps.length) return
-
     const target = document.querySelector(tourSteps[step].target)
-    if (!target) return
+    if (!target) {
+      setReady(false)
+      return
+    }
 
     const rect = target.getBoundingClientRect()
     const padding = 8
@@ -87,11 +90,9 @@ export default function PatentOnboardingWizard() {
     const gap = 16
     const ttW = 340
 
-    // Center tooltip horizontally on target, clamp to viewport
     let ttLeft = rect.left + rect.width / 2 - ttW / 2
     ttLeft = Math.max(12, Math.min(ttLeft, window.innerWidth - ttW - 12))
 
-    // Arrow horizontal offset from tooltip left edge
     const arrowOffset = rect.left + rect.width / 2 - ttLeft
 
     let style: Record<string, string> = {
@@ -114,10 +115,10 @@ export default function PatentOnboardingWizard() {
     }
 
     setTooltipStyle(style)
-  }, [visible, step, tourSteps])
+    setReady(true)
+  }, [step, tourSteps])
 
   useEffect(() => {
-    updatePositions()
     window.addEventListener('resize', updatePositions)
     window.addEventListener('scroll', updatePositions)
     return () => {
@@ -126,19 +127,20 @@ export default function PatentOnboardingWizard() {
     }
   }, [updatePositions])
 
-  // Wait for target element to appear (async data), then scroll into view
+  // When visible or step changes: poll for target element, then show
   useEffect(() => {
     if (!visible || step >= tourSteps.length) return
 
+    setReady(false)
     const selector = tourSteps[step].target
     let attempts = 0
-    const maxAttempts = 20 // ~2 seconds
+    const maxAttempts = 30 // 3 seconds
 
     function tryShow() {
       const target = document.querySelector(selector)
       if (target) {
         target.scrollIntoView({ behavior: 'smooth', block: 'center' })
-        setTimeout(updatePositions, 400)
+        updatePositions()
         return
       }
       attempts++
@@ -147,10 +149,11 @@ export default function PatentOnboardingWizard() {
       }
     }
 
-    tryShow()
+    // Small initial delay in case React is still rendering
+    setTimeout(tryShow, 50)
   }, [visible, step, tourSteps, updatePositions])
 
-  if (!visible || step >= tourSteps.length) return null
+  if (!visible || !ready) return null
 
   function markDone() {
     setVisible(false)
