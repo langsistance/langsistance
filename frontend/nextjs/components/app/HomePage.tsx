@@ -29,10 +29,8 @@ function HomePageContent() {
   return (
     <AppLayout>
       <SceneOnboardingModal />
-      <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-        <Chat />
-        <PatentOnboardingWizard />
-      </div>
+      <PatentOnboardingWizard />
+      <Chat />
     </AppLayout>
   )
 }
