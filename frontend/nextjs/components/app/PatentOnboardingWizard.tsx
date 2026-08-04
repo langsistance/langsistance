@@ -2,30 +2,34 @@
 
 import { useState, useEffect } from 'react'
 import { useI18n } from '@/lib/app-i18n'
+import { useAuth } from '@/contexts/AuthContext'
 
 type Capability = 'smartQA' | 'deepResearch' | null
 
-const STORAGE_KEY = 'copiioai_patent_onboarding_done'
+const STORAGE_KEY_PREFIX = 'copiioai_patent_onboarding_done'
 
 function PatentOnboardingWizard() {
   const { t, lang } = useI18n()
+  const { user } = useAuth()
   const [visible, setVisible] = useState(false)
   const [step, setStep] = useState(1)
   const [selectedCap, setSelectedCap] = useState<Capability>(null)
   const [prefillText, setPrefillText] = useState('')
 
+  const storageKey = `${STORAGE_KEY_PREFIX}_${user?.uid || 'unknown'}`
+
   useEffect(() => {
     try {
-      if (localStorage.getItem(STORAGE_KEY) === '1') return
+      if (localStorage.getItem(storageKey) === '1') return
     } catch {}
     setVisible(true)
-  }, [])
+  }, [storageKey])
 
   if (!visible) return null
 
   function markDone() {
     setVisible(false)
-    try { localStorage.setItem(STORAGE_KEY, '1') } catch {}
+    try { localStorage.setItem(storageKey, '1') } catch {}
   }
 
   function handleExampleClick(example: string) {
