@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useI18n } from '@/lib/app-i18n'
 import { useAuth } from '@/contexts/AuthContext'
 
@@ -58,7 +58,7 @@ export default function PatentOnboardingWizard() {
   const [tooltipStyle, setTooltipStyle] = useState<Record<string, string>>({})
 
   const storageKey = `${STORAGE_KEY_PREFIX}_${user?.uid || 'unknown'}`
-  const tourSteps = getTourSteps(t, lang)
+  const tourSteps = useMemo(() => getTourSteps(t, lang), [t, lang])
 
   // Check localStorage on mount
   useEffect(() => {
