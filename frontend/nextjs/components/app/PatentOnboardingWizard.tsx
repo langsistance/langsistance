@@ -22,20 +22,20 @@ interface TourStep {
 function getTourSteps(t: (key: string, params?: Record<string, string | number>) => string, lang: string): TourStep[] {
   return [
     {
-      target: '.scene-hint-persistent',
+      target: '.scene-hint-group-smart .knowledge-group-item',
       placement: 'bottom',
-      titleKey: lang === 'zh' ? '💬 智能问答 & 🔬 深度研究' : '💬 Smart Q&A & 🔬 Deep Research',
+      titleKey: lang === 'zh' ? '💬 智能问答 — 示例提问' : '💬 Smart Q&A — Example',
       bodyKey: lang === 'zh'
-        ? '这里展示了你已启用的专利分析能力。智能问答支持按申请号、专利号、关键词等方式检索；深度研究支持全球专利家族审查和批量分析。'
-        : 'This shows your enabled patent analysis capabilities. Smart Q&A supports search by application number, patent number, keyword, etc. Deep Research covers global family prosecution and batch analysis.',
+        ? '这是智能问答的一个示例。你可以按申请号、专利号、公开号、关键词或权利人检索专利文档，点击即可快速开始。'
+        : 'This is a Smart Q&A example. You can search patents by application number, patent number, publication number, keyword, or assignee. Click to try it.',
     },
     {
-      target: '.knowledge-group-item',
+      target: '.scene-hint-group-deep .knowledge-group-item',
       placement: 'top',
-      titleKey: lang === 'zh' ? '📝 示例提问' : '📝 Example Questions',
+      titleKey: lang === 'zh' ? '🔬 深度研究 — 示例提问' : '🔬 Deep Research — Example',
       bodyKey: lang === 'zh'
-        ? '这些是你可以直接参考的提问示例，点击即可快速开始。也可以在下方的输入框中自由输入你的专利问题。'
-        : 'These are example questions you can reference. Click to quickly start, or type your own patent query in the input box below.',
+        ? '这是深度研究的一个示例。支持全球专利家族审查分析（跨国分析、OA答复、权利要求演变等）以及专利LLM驱动的批量分析。'
+        : 'This is a Deep Research example. It covers global patent family prosecution analysis (cross-country, OA response, claim evolution, etc.) and patent LLM-powered batch analysis.',
     },
     {
       target: '.chat-input-wrapper',
