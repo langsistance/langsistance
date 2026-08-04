@@ -124,15 +124,28 @@ export default function PatentOnboardingWizard() {
     }
   }, [updatePositions])
 
-  // Scroll target into view
+  // Wait for target element to appear (async data), then scroll into view
   useEffect(() => {
     if (!visible || step >= tourSteps.length) return
-    const target = document.querySelector(tourSteps[step].target)
-    if (target) {
-      target.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      // Re-calc after scroll settles
-      setTimeout(updatePositions, 400)
+
+    const selector = tourSteps[step].target
+    let attempts = 0
+    const maxAttempts = 20 // ~2 seconds
+
+    function tryShow() {
+      const target = document.querySelector(selector)
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        setTimeout(updatePositions, 400)
+        return
+      }
+      attempts++
+      if (attempts < maxAttempts) {
+        setTimeout(tryShow, 100)
+      }
     }
+
+    tryShow()
   }, [visible, step, tourSteps, updatePositions])
 
   if (!visible || step >= tourSteps.length) return null
