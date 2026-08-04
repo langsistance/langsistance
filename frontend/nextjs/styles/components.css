@@ -1796,23 +1796,22 @@ input[type="checkbox"] {
 
 .patent-tour-btn-next:hover { background: #0d8f6f; }
 
-/* Arrow */
+/* Arrow — positioned with CSS var --arrow-offset from tooltip left edge */
 .patent-tour-arrow {
   position: absolute;
   width: 0; height: 0;
   border: 8px solid transparent;
+  left: var(--arrow-offset, 50%);
 }
 
 .patent-tour-arrow-bottom {
   top: -16px;
-  left: 50%;
   transform: translateX(-50%);
   border-bottom-color: #fff;
 }
 
 .patent-tour-arrow-top {
   bottom: -16px;
-  left: 50%;
   transform: translateX(-50%);
   border-top-color: #fff;
 }

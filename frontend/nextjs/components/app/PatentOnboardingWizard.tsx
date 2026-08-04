@@ -85,33 +85,35 @@ export default function PatentOnboardingWizard() {
     // Tooltip position
     const placement = tourSteps[step].placement
     const gap = 16
-    const ttMaxW = 360
+    const ttW = 340
 
-    let ttLeft: number
-    let ttTop: number
+    // Center tooltip horizontally on target, clamp to viewport
+    let ttLeft = rect.left + rect.width / 2 - ttW / 2
+    ttLeft = Math.max(12, Math.min(ttLeft, window.innerWidth - ttW - 12))
 
-    if (placement === 'bottom') {
-      ttTop = rect.bottom + gap
-      ttLeft = Math.max(16, Math.min(rect.left + rect.width / 2 - ttMaxW / 2, window.innerWidth - ttMaxW - 16))
-    } else if (placement === 'top') {
-      ttTop = rect.top - gap
-      ttLeft = Math.max(16, Math.min(rect.left + rect.width / 2 - ttMaxW / 2, window.innerWidth - ttMaxW - 16))
-    } else if (placement === 'right') {
-      ttTop = Math.max(16, rect.top)
-      ttLeft = rect.right + gap
-    } else {
-      ttTop = Math.max(16, rect.top)
-      ttLeft = rect.left - ttMaxW - gap
-    }
+    // Arrow horizontal offset from tooltip left edge
+    const arrowOffset = rect.left + rect.width / 2 - ttLeft
 
-    setTooltipStyle({
+    let style: Record<string, string> = {
       position: 'fixed',
       left: `${ttLeft}px`,
-      top: `${placement === 'top' ? 'auto' : ''}`,
-      bottom: `${placement === 'top' ? `${window.innerHeight - ttTop}px` : 'auto'}`,
-      maxWidth: `${ttMaxW}px`,
-      transform: 'none',
-    })
+      maxWidth: `${ttW}px`,
+      '--arrow-offset': `${arrowOffset}px`,
+    }
+
+    if (placement === 'bottom') {
+      style.top = `${rect.bottom + gap}px`
+    } else if (placement === 'top') {
+      style.bottom = `${window.innerHeight - rect.top + gap}px`
+    } else if (placement === 'right') {
+      style.top = `${Math.max(12, rect.top + rect.height / 2 - 60)}px`
+      style.left = `${rect.right + gap}px`
+    } else {
+      style.top = `${Math.max(12, rect.top + rect.height / 2 - 60)}px`
+      style.left = `${rect.left - ttW - gap}px`
+    }
+
+    setTooltipStyle(style)
   }, [visible, step, tourSteps])
 
   useEffect(() => {
