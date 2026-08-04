@@ -6,6 +6,7 @@ import { ChatProvider } from '@/contexts/ChatContext'
 import { I18nProvider } from '@/lib/app-i18n'
 import AppLayout from '@/components/app/AppLayout'
 import SceneOnboardingModal from '@/components/app/SceneOnboardingModal'
+import PatentOnboardingWizard from '@/components/app/PatentOnboardingWizard'
 import LoginForm from '@/components/app/LoginForm'
 import Chat from '@/app/app/(auth)/chat/page'
 
@@ -28,7 +29,10 @@ function HomePageContent() {
   return (
     <AppLayout>
       <SceneOnboardingModal />
-      <Chat />
+      <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+        <Chat />
+        <PatentOnboardingWizard />
+      </div>
     </AppLayout>
   )
 }
