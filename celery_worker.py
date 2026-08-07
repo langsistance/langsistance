@@ -2032,6 +2032,9 @@ def execute_family_analysis(self, task_id: str, params: dict):
                 r'^CN\s*', '', cn_app_number or '', flags=__import__('re').IGNORECASE,
             ).replace('.', '').replace('-', '').replace(' ', '')
             cn_pub_number = cn_member.pub_number or ''
+            # Google Patents requires "CN" prefix; EPO family data omits it
+            if cn_pub_number and not cn_pub_number.upper().startswith('CN'):
+                cn_pub_number = f'CN{cn_pub_number}'
             _pipeline_logger.info(
                 f"[task={task_id}] FAMILY PHASE0.3 cn_member — "
                 f"cn_app={cn_app_number}, pub={cn_pub_number}"
