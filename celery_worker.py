@@ -1528,6 +1528,56 @@ async def _run_pipeline(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+def _build_google_cn_timeline(
+    basic_info: dict, law_state: dict, legal_timeline: list,
+    claims: list, cn_app_number: str, lang: str,
+) -> str:
+    """Build a CN patent examination overview markdown from Google Patents data."""
+    lines: list[str] = []
+    title = basic_info.get('title', '') if basic_info else ''
+    app_date = basic_info.get('applicationDate', '') if basic_info else ''
+    pub_date = basic_info.get('publicationDate', '') if basic_info else ''
+    status = law_state.get('lawStatus', '') if law_state else ''
+
+    if lang == 'zh':
+        lines.append(f'**中国申请号:** {cn_app_number}')
+        if title:
+            lines.append(f'**发明名称:** {title}')
+        if app_date:
+            lines.append(f'**申请日:** {app_date}')
+        if pub_date:
+            lines.append(f'**公开日:** {pub_date}')
+        if status:
+            lines.append(f'**当前法律状态:** {status}')
+        if claims:
+            lines.append(f'**权利要求数:** {len(claims)}')
+    else:
+        lines.append(f'**CN Application:** {cn_app_number}')
+        if title:
+            lines.append(f'**Title:** {title}')
+        if app_date:
+            lines.append(f'**Filing Date:** {app_date}')
+        if pub_date:
+            lines.append(f'**Publication Date:** {pub_date}')
+        if status:
+            lines.append(f'**Legal Status:** {status}')
+        if claims:
+            lines.append(f'**Claims:** {len(claims)}')
+
+    if legal_timeline:
+        lines.append('')
+        lines.append('**Legal Events:**' if lang != 'zh' else '**法律事件:**')
+        lines.append('')
+        for evt in legal_timeline[:20]:  # cap at 20 most recent
+            d = evt.get('date', '')
+            s = evt.get('lawStatus', '')
+            c = evt.get('lawStatusCode', '')
+            code_str = f' ({c})' if c else ''
+            lines.append(f'- {d}: {s}{code_str}')
+
+    return '\n'.join(lines)
+
+
 @app.task(bind=True, max_retries=2, default_retry_delay=60, time_limit=3600, soft_time_limit=3540)
 def execute_family_analysis(self, task_id: str, params: dict):
     """Cross-jurisdiction patent family prosecution analysis.
@@ -1593,7 +1643,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
     )
     from sources.long_task.config import (
         get_long_task_config, get_family_config, get_prosecution_config,
-        get_sipop_config, get_jpo_config,
+        get_jpo_config,
         DEFAULT_VISION_PROVIDER, DEFAULT_VISION_MODEL,
     )
     from sources.long_task.patent_family import EPOFamilyClient, EPOError
@@ -1972,7 +2022,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
                                analysis_type='family')
 
         # ═════════════════════════════════════════════════════════════════
-        # Phase 0.3: China examination data (if CN member exists)
+        # Phase 0.3: China examination data via Google Patents
         # ═════════════════════════════════════════════════════════════════
         cn_exam_data: dict = {}  # stored for report merging later
         cn_member = family.get_representative('CN')
@@ -1981,60 +2031,64 @@ def execute_family_analysis(self, task_id: str, params: dict):
             cn_app_number = __import__('re').sub(
                 r'^CN\s*', '', cn_app_number or '', flags=__import__('re').IGNORECASE,
             ).replace('.', '').replace('-', '').replace(' ', '')
+            cn_pub_number = cn_member.pub_number or ''
             _pipeline_logger.info(
                 f"[task={task_id}] FAMILY PHASE0.3 cn_member — "
-                f"cn_app={cn_app_number}, pub={cn_member.pub_number}"
+                f"cn_app={cn_app_number}, pub={cn_pub_number}"
             )
 
-            sipop_cfg = get_sipop_config()
-            sipop_key = sipop_cfg.get('app_key', '')
-            sipop_secret = sipop_cfg.get('app_secret', '')
-            if sipop_key and sipop_secret and cn_app_number:
+            if cn_app_number and cn_pub_number:
                 try:
-                    # Progress update for frontend — show CN examination phase
                     update_task_status(task_id, 'preparing', _advance_progress(8),
                                        _t('china_fetching_for_family', lang,
                                           cn_app=cn_app_number))
-                    from sources.sipop_client import SipopClient
-                    sipop = SipopClient(app_key=sipop_key, app_secret=sipop_secret)
+                    from sources.google_patents_client import GooglePatentsClient
+                    from sources.china_patent_client import ChinaPatentClient
                     from sources.long_task.china_examination import (
-                        fetch_examination_data,
-                        build_examination_timeline,
                         format_claims_for_report,
                         build_legal_status_timeline,
                     )
-                    cn_events, cn_law, cn_info, cn_claims, cn_legal = await fetch_examination_data(
-                        cn_app_number, sipop,
+
+                    cn_google = GooglePatentsClient(delay=2.0)
+                    cn_client = ChinaPatentClient(google_client=cn_google)
+                    cn_client.set_pub_number(cn_pub_number)
+
+                    cn_info = await cn_client.query_basic_info(cn_app_number)
+                    cn_claims_data = await cn_client.query_full_text(cn_app_number)
+                    cn_claims = cn_claims_data.get('claim', [])
+                    cn_legal = await cn_client.query_legal_state_timeline(cn_app_number)
+                    cn_law = await cn_client.query_law_state(cn_app_number)
+
+                    # Build CN examination overview from Google Patents data
+                    cn_timeline_md = _build_google_cn_timeline(
+                        cn_info, cn_law, cn_legal, cn_claims, cn_app_number, lang,
                     )
+                    cn_claims_md = format_claims_for_report(cn_claims, lang) if cn_claims else ''
+                    cn_legal_md = build_legal_status_timeline(cn_legal, lang) if cn_legal else ''
+
+                    await cn_google.close()
+
                     cn_exam_data = {
                         'cn_app_number': cn_app_number,
-                        'events': cn_events,
+                        'events': [],  # Google Patents has no review decisions
                         'law_state': cn_law,
                         'basic_info': cn_info,
                         'claims': cn_claims,
                         'legal_timeline': cn_legal,
-                        'timeline_md': await build_examination_timeline(
-                            cn_events, cn_law, cn_info, lang,
-                        ) if cn_events else '',
-                        'claims_md': format_claims_for_report(cn_claims, lang) if cn_claims else '',
-                        'legal_md': build_legal_status_timeline(cn_legal, lang) if cn_legal else '',
+                        'timeline_md': cn_timeline_md,
+                        'claims_md': cn_claims_md,
+                        'legal_md': cn_legal_md,
                     }
                     _pipeline_logger.info(
                         f"[task={task_id}] FAMILY PHASE0.3 cn_data — "
-                        f"events={len(cn_events)}, claims={len(cn_claims)}, "
+                        f"pub={cn_pub_number}, claims={len(cn_claims)}, "
                         f"legal_events={len(cn_legal)}"
                     )
-                    # Update CN jurisdiction status
                     for _j in _jurisdictions:
                         if _j['code'] == 'CN':
                             _j['status'] = 'done'
                             _j['progress'] = 100
-                            if cn_events:
-                                _j['detail'] = _t('family_cn_done', lang,
-                                                  events=len(cn_events),
-                                                  claims=len(cn_claims))
-                            else:
-                                _j['detail'] = _t('family_cn_basic', lang)
+                            _j['detail'] = _t('family_cn_basic', lang)
                     _advance_progress(12)
                 except Exception as e:
                     _pipeline_logger.warning(

@@ -1096,8 +1096,10 @@ async def generate_family_prosecution_report(
       6. Final Assessment (grant status, complexity, key insights)
       7. Appendix: analysis tables + claim chart
     """
-    _has_cn = bool(cn_exam_data and (cn_exam_data.get('events') or cn_exam_data.get('timeline_md')))
-    _has_ep = bool(ep_exam_data and (ep_exam_data.get('events') or ep_exam_data.get('timeline_md')))
+    _has_cn = bool(cn_exam_data and (
+        cn_exam_data.get('events') or cn_exam_data.get('timeline_md')
+        or cn_exam_data.get('legal_md') or cn_exam_data.get('claims_md')
+    ))
     _has_jp = bool(jp_exam_data and (jp_exam_data.get('progress') or jp_exam_data.get('timeline_md')))
     _has_ep = bool(ep_exam_data and (ep_exam_data.get('events') or ep_exam_data.get('timeline_md')))
 
