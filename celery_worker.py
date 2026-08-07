@@ -2687,9 +2687,9 @@ def execute_family_analysis(self, task_id: str, params: dict):
             flash_provider=flash_provider,
             pro_provider=pro_provider,
             lang=lang,
-            cn_exam_data=cn_exam_data if cn_exam_data else None,
-            jp_exam_data=jp_exam_data if jp_exam_data else None,
-            ep_exam_data=ep_exam_data if ep_exam_data else None,
+            cn_exam_data=cn_exam_data,
+            jp_exam_data=jp_exam_data,
+            ep_exam_data=ep_exam_data,
             family_overview=family_overview,
             summary_updater=summary_updater,
         )

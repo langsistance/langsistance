@@ -1137,18 +1137,19 @@ async def generate_family_prosecution_report(
 
     # CN data context
     cn_parts = []
-    if cn_exam_data.get("cn_app_number"):
+    _cn = cn_exam_data or {}
+    if _cn.get("cn_app_number"):
         cn_parts.append(
-            f"CN Application: {cn_exam_data['cn_app_number']}" if lang != "zh"
-            else f"中国申请号: {cn_exam_data['cn_app_number']}"
+            f"CN Application: {_cn['cn_app_number']}" if lang != "zh"
+            else f"中国申请号: {_cn['cn_app_number']}"
         )
-    if cn_exam_data.get("timeline_md"):
-        cn_parts.append(f"### CN Examination Timeline\n{cn_exam_data['timeline_md']}")
-    if cn_exam_data.get("claims_md"):
-        cn_parts.append(f"### CN Claims\n{cn_exam_data['claims_md']}")
-    if cn_exam_data.get("legal_md"):
-        cn_parts.append(f"### CN Legal Status\n{cn_exam_data['legal_md']}")
-    cn_events_list = cn_exam_data.get("events", [])
+    if _cn.get("timeline_md"):
+        cn_parts.append(f"### CN Examination Timeline\n{_cn['timeline_md']}")
+    if _cn.get("claims_md"):
+        cn_parts.append(f"### CN Claims\n{_cn['claims_md']}")
+    if _cn.get("legal_md"):
+        cn_parts.append(f"### CN Legal Status\n{_cn['legal_md']}")
+    cn_events_list = _cn.get("events", [])
     if cn_events_list:
         event_lines = []
         for evt in cn_events_list:
