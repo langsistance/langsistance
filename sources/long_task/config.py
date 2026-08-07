@@ -1,6 +1,17 @@
 import configparser
 import os
 
+
+def _read_config(path: str) -> configparser.ConfigParser:
+    """Read a config file with UTF-8 encoding, falling back to system default."""
+    cfg = configparser.ConfigParser()
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            cfg.read_file(f)
+    except Exception:
+        cfg.read(path)
+    return cfg
+
 DEFAULT_PROVIDER_FAMILY = 'deepseek'
 DEFAULT_MAX_PATENTS = 20
 DEFAULT_MAX_PATENTS_CNIPA = 10
@@ -20,8 +31,7 @@ def get_long_task_config(config_path: str = 'config.ini') -> dict:
             vision_provider (str)  — provider name for vision LLM
             vision_model (str)     — model name for vision LLM
     """
-    cfg = configparser.ConfigParser()
-    cfg.read(config_path)
+    cfg = _read_config(config_path)
 
     provider_family = DEFAULT_PROVIDER_FAMILY
     max_patents = DEFAULT_MAX_PATENTS
@@ -80,8 +90,7 @@ def get_family_config(config_path: str = 'config.ini') -> dict:
             epo_consumer_secret (str)
             max_jurisdictions (int)
     """
-    cfg = configparser.ConfigParser()
-    cfg.read(config_path)
+    cfg = _read_config(config_path)
 
     epo_consumer_key = DEFAULT_EPO_CONSUMER_KEY
     epo_consumer_secret = DEFAULT_EPO_CONSUMER_SECRET
@@ -115,8 +124,7 @@ def get_sipop_config(config_path: str = 'config.ini') -> dict:
         dict with keys: app_key (str), app_secret (str)
     """
     import os as _os
-    cfg = configparser.ConfigParser()
-    cfg.read(config_path)
+    cfg = _read_config(config_path)
 
     app_key = _os.getenv('SIPOP_APP_KEY', '')
     app_secret = _os.getenv('SIPOP_APP_SECRET', '')
@@ -132,6 +140,58 @@ def get_sipop_config(config_path: str = 'config.ini') -> dict:
     }
 
 
+# ── Baiten (佰腾) config ────────────────────────────────────────────────────
+
+DEFAULT_BAITEN_APP_KEY = ''
+DEFAULT_BAITEN_APP_SECRET = ''
+DEFAULT_BAITEN_GATEWAY_URL = 'https://open.patexplorer.com/api/gateway'
+
+
+def get_baiten_config(config_path: str = 'config.ini') -> dict:
+    """Read [BAITEN] section from config file, with env var overrides.
+
+    Returns:
+        dict with keys: app_key (str), app_secret (str), gateway_url (str)
+    """
+    import os as _os
+    cfg = _read_config(config_path)
+
+    app_key = _os.getenv('BAITEN_APP_KEY', '')
+    app_secret = _os.getenv('BAITEN_APP_SECRET', '')
+    gateway_url = _os.getenv('BAITEN_GATEWAY_URL', DEFAULT_BAITEN_GATEWAY_URL)
+
+    if not app_key and cfg.has_section('BAITEN'):
+        app_key = cfg.get('BAITEN', 'app_key', fallback=DEFAULT_BAITEN_APP_KEY)
+    if not app_secret and cfg.has_section('BAITEN'):
+        app_secret = cfg.get('BAITEN', 'app_secret', fallback=DEFAULT_BAITEN_APP_SECRET)
+    if cfg.has_section('BAITEN'):
+        gateway_url = cfg.get('BAITEN', 'gateway_url', fallback=gateway_url)
+
+    return {
+        'app_key': app_key.strip(),
+        'app_secret': app_secret.strip(),
+        'gateway_url': gateway_url.strip(),
+    }
+
+
+# ── China patent backend switch ──────────────────────────────────────────────
+
+def get_china_patent_backend() -> str:
+    """Read CHINA_PATENT_BACKEND env var.
+
+    Returns:
+        ``"multi"`` (default) — Google Patents + Baiten + EPO multi-source pipeline.
+        ``"sipop"`` — original SIPOP-only pipeline.
+    """
+    import os as _os
+    backend = _os.getenv('CHINA_PATENT_BACKEND', 'multi')
+    if backend not in ('multi', 'sipop'):
+        backend = 'multi'
+    return backend
+
+
+# ── JPO config ───────────────────────────────────────────────────────────────
+
 DEFAULT_JPO_USERNAME = ''
 DEFAULT_JPO_PASSWORD = ''
 
@@ -143,8 +203,7 @@ def get_jpo_config(config_path: str = 'config.ini') -> dict:
         dict with keys: username (str), password (str)
     """
     import os as _os
-    cfg = configparser.ConfigParser()
-    cfg.read(config_path)
+    cfg = _read_config(config_path)
 
     username = _os.getenv('JPO_USERNAME', '')
     password = _os.getenv('JPO_PASSWORD', '')
@@ -170,8 +229,7 @@ def get_prosecution_config(config_path: str = 'config.ini') -> dict:
             streaming_provider (str|None) — override LLM provider for streaming report output
             streaming_model (str|None)    — override LLM model for streaming report output
     """
-    cfg = configparser.ConfigParser()
-    cfg.read(config_path)
+    cfg = _read_config(config_path)
 
     max_pages_per_doc = DEFAULT_PROSECUTION_MAX_PAGES_PER_DOC
     include_priority_2 = DEFAULT_PROSECUTION_INCLUDE_PRIORITY_2

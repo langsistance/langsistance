@@ -2972,15 +2972,13 @@ def _build_basic_info_timeline(
 
 @app.task(bind=True, max_retries=2, default_retry_delay=60, time_limit=1800, soft_time_limit=1770)
 def execute_china_examination_analysis(self, task_id: str, params: dict):
-    """Analyze Chinese patent examination history via sipop.cn open data platform.
+    """Analyze Chinese patent examination history via Google Patents.
 
-    Phase 0: US/EP patent → CN application number via EPO family
-    Phase 1: Fetch examination data via SIPOP API (queryPatentReview + lawState + basicInfo)
-    Phase 2: AI analysis of examination events (Flash columns → Pro per-event analysis)
+    Phase 0: Resolve CN application number via EPO family
+    Phase 1: Fetch patent data via Google Patents (claims, description,
+             basic info, legal-status timeline)
+    Phase 2: AI analysis (Flash columns → Pro per-event analysis)
     Phase 3: Generate report (DOCX + PDF)
-
-    Unlike USPTO prosecution analysis which downloads documents, this task works
-    with *structured* review decision data returned by the SIPOP API.
     """
     import asyncio as _asyncio
     import os as _os
@@ -3020,7 +3018,7 @@ def execute_china_examination_analysis(self, task_id: str, params: dict):
         update_task_status, set_task_completed, set_task_failed,
     )
     from sources.long_task.config import (
-        get_long_task_config, get_sipop_config, get_family_config,
+        get_long_task_config, get_family_config,
     )
     from sources.long_task.patent_family import EPOFamilyClient, EPOError
     from sources.long_task.china_examination import (
@@ -3033,7 +3031,8 @@ def execute_china_examination_analysis(self, task_id: str, params: dict):
         format_claims_for_report,
         build_legal_status_timeline,
     )
-    from sources.sipop_client import SipopClient, SipopError
+    from sources.google_patents_client import GooglePatentsClient, GooglePatentsError
+    from sources.china_patent_client import ChinaPatentClient, ChinaPatentError
     from sources.long_task.storage import create_storage
     from sources.llm_provider import Provider
 
@@ -3060,21 +3059,9 @@ def execute_china_examination_analysis(self, task_id: str, params: dict):
             server_address='', is_local=False,
         )
 
-    # ── SIPOP config ─────────────────────────────────────────────────────────
-    sipop_cfg = get_sipop_config()
-    sipop_app_key = sipop_cfg.get('app_key', '')
-    sipop_app_secret = sipop_cfg.get('app_secret', '')
-
-    if not sipop_app_key or not sipop_app_secret:
-        _pipeline_logger.error(
-            f"[task={task_id}] CHINA_EXAM missing SIPOP credentials"
-        )
-        set_task_failed(task_id, "SIPOP API credentials not configured")
-        _update_mysql_progress(task_id, 'failed', 0)
-        return {'status': 'failed', 'task_id': task_id,
-                'error': 'SIPOP credentials not configured'}
-
-    sipop_client = SipopClient(app_key=sipop_app_key, app_secret=sipop_app_secret)
+    # ── China patent data client (Google Patents) ──────────────────────────
+    google_client = GooglePatentsClient(delay=2.0)
+    china_client = ChinaPatentClient(google_client=google_client)
 
     # ── Family config (for EPO family lookup) ────────────────────────────────
     fc = get_family_config()
@@ -3113,6 +3100,19 @@ def execute_china_examination_analysis(self, task_id: str, params: dict):
             f"jurisdictions={family_context.get('jurisdictions', [])}"
         )
 
+        # Set CN pub number for Google Patents queries
+        cn_pub_number = family_context.get('cn_pub_number', '')
+        if cn_pub_number:
+            china_client.set_pub_number(cn_pub_number)
+            _pipeline_logger.info(
+                f"[task={task_id}] CHINA_EXAM pub_number={cn_pub_number}"
+            )
+        else:
+            _pipeline_logger.warning(
+                f"[task={task_id}] CHINA_EXAM no CN pub_number in family context "
+                f"— Google Patents queries will fall back to empty results"
+            )
+
         # If we used EPO family, build an overview for the frontend
         if not family_context.get('direct_cn'):
             jurisdictions = family_context.get('jurisdictions', [])
@@ -3131,20 +3131,20 @@ def execute_china_examination_analysis(self, task_id: str, params: dict):
             )
 
         # ═════════════════════════════════════════════════════════════════
-        # Phase 1: Fetch examination data from SIPOP API
+        # Phase 1: Fetch examination data
         # ═════════════════════════════════════════════════════════════════
         update_task_status(task_id, 'preparing', 10,
                            _t('china_fetching_review', lang))
 
         try:
             events, law_state, basic_info, claims, legal_timeline = await fetch_examination_data(
-                cn_app_number, sipop_client,
+                cn_app_number, china_client,
             )
-        except SipopError as e:
+        except (GooglePatentsError, ChinaPatentError) as e:
             _pipeline_logger.error(
                 f"[task={task_id}] CHINA_EXAM PHASE1 fetch_failed — {e}"
             )
-            set_task_failed(task_id, f"SIPOP API error: {e}")
+            set_task_failed(task_id, f"Patent data API error: {e}")
             _update_mysql_progress(task_id, 'failed', 0)
             return {'status': 'failed', 'task_id': task_id, 'error': str(e)}
 
@@ -3563,6 +3563,11 @@ def execute_china_examination_analysis(self, task_id: str, params: dict):
         return {'status': 'failed', 'task_id': task_id,
                 'error': f'{type(e).__name__}: {e}'}
     finally:
+        # Cleanup: close the Google Patents shared HTTP client
+        try:
+            loop.run_until_complete(google_client.close())
+        except Exception:
+            pass
         loop.close()
 
 
