@@ -1977,6 +1977,7 @@ Begin your response now:
                     query_id=getattr(self, "_last_query_id", None),
                     original_count=original_total,
                     filter_applied=False,
+                    lang=getattr(self, "_lang", "zh"),
                 )
                 if artifacts:
                     await on_artifacts(artifacts)
@@ -2066,6 +2067,7 @@ Begin your response now:
                     query_id=getattr(self, "_last_query_id", None),
                     original_count=original_total,
                     filter_applied=True,
+                    lang=getattr(self, "_lang", "zh"),
                 )
                 if artifacts:
                     await on_artifacts(artifacts)
@@ -2158,6 +2160,7 @@ Begin your response now:
                 query_id=getattr(self, "_last_query_id", None),
                 original_count=original_total,
                 filter_applied=filter_result.applied,
+                lang=getattr(self, "_lang", "zh"),
             )
             if artifacts:
                 await on_artifacts(artifacts)
