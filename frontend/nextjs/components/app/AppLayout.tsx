@@ -130,10 +130,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
-  // Fetch sessions on mount and when route changes (detect long task completion)
+  // Fetch sessions on mount, when route changes, or when user logs in
   useEffect(() => {
     refreshSessions()
-  }, [refreshSessions, pathname])
+  }, [refreshSessions, pathname, user])
 
   // Re-fetch sessions periodically (for long task updates)
   useEffect(() => {
@@ -158,7 +158,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   function handleLoginClick() {
-    requireAuth(() => {}, '登录 CopiioAI 后开始使用')
+    requireAuth(() => {}, lang === 'en' ? 'Sign in to start using CopiioAI' : '登录 CopiioAI 后开始使用')
   }
 
   function toggleDevMode() {

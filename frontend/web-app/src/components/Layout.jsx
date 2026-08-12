@@ -21,7 +21,7 @@ export default function Layout() {
   }
 
   function handleLoginClick() {
-    requireAuth(() => {}, '登录 CopiioAI 后开始使用')
+    requireAuth(() => {}, lang === 'en' ? 'Sign in to start using CopiioAI' : '登录 CopiioAI 后开始使用')
   }
 
   return (
