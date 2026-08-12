@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import { useI18n } from '../i18n'
 
 const NAV = [
   { to: '/chat',      label: '对话' },
@@ -11,6 +12,7 @@ const NAV = [
 
 export default function Layout() {
   const { user, logout, requireAuth } = useAuth()
+  const { lang } = useI18n()
   const navigate = useNavigate()
 
   async function handleLogout() {
@@ -55,7 +57,7 @@ export default function Layout() {
               className="btn btn-primary"
               style={{ width: '100%', fontSize: 13 }}
             >
-              登录 / 注册
+              {lang === 'en' ? 'Sign In / Sign Up' : '登录 / 注册'}
             </button>
           )}
         </div>

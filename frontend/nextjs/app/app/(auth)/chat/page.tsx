@@ -397,7 +397,7 @@ export default function Chat() {
     if (!text || streaming) return
 
     if (!user) {
-      requireAuth(() => sendRef.current(), '登录后立即获得答案')
+      requireAuth(() => sendRef.current(), lang === 'en' ? 'Sign in to get your answer' : '登录后立即获得答案')
       return
     }
 

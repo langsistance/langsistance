@@ -36,7 +36,7 @@ export function AuthProvider({ children }) {
     }
     // Store action and open login modal
     pendingActionRef.current = action
-    setActionLabel(label || '')
+    setActionLabel(label || 'Sign in to continue')
     setLoginModalOpen(true)
   }
 

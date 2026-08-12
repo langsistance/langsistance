@@ -6,7 +6,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { createChatId, createChatMessage, updateAssistantMessage } from '../utils/chatSession'
 
 export default function Chat() {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const { user, requireAuth } = useAuth()
   const {
     messages,
@@ -36,7 +36,7 @@ export default function Chat() {
     if (!text || streaming) return
 
     if (!user) {
-      requireAuth(() => sendRef.current(), '登录后立即获得答案')
+      requireAuth(() => sendRef.current(), lang === 'en' ? 'Sign in to get your answer' : '登录后立即获得答案')
       return
     }
 

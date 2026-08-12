@@ -42,7 +42,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return
     }
     pendingActionRef.current = action
-    setActionLabel(label || '登录以继续使用')
+    setActionLabel(label || 'Sign in to continue')
     setLoginModalOpen(true)
   }
 

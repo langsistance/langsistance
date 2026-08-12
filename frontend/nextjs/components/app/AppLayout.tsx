@@ -206,7 +206,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               </>
             ) : (
               <button className="btn btn-primary" style={{ padding: '6px 16px', fontSize: 13, borderRadius: 8 }} onClick={handleLoginClick}>
-                登录 / 注册
+                {lang === 'en' ? 'Sign In / Sign Up' : '登录 / 注册'}
               </button>
             )}
           </div>
