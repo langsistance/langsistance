@@ -2,10 +2,12 @@ import { useRef, useEffect, useState } from 'react'
 import { queryStream } from '../services/api'
 import { useI18n } from '../i18n'
 import { useChatSession } from '../contexts/ChatContext'
+import { useAuth } from '../contexts/AuthContext'
 import { createChatId, createChatMessage, updateAssistantMessage } from '../utils/chatSession'
 
 export default function Chat() {
   const { t } = useI18n()
+  const { user, requireAuth } = useAuth()
   const {
     messages,
     setMessages,
@@ -28,6 +30,12 @@ export default function Chat() {
   async function send() {
     const text = input.trim()
     if (!text || streaming) return
+
+    if (!user) {
+      requireAuth(() => send(), '登录后立即获得答案')
+      return
+    }
+
     setInput('')
     setTransientStatus('')
     if (textareaRef.current) textareaRef.current.style.height = 'auto'

@@ -10,12 +10,16 @@ const NAV = [
 ]
 
 export default function Layout() {
-  const { user, logout } = useAuth()
+  const { user, logout, requireAuth } = useAuth()
   const navigate = useNavigate()
 
   async function handleLogout() {
     await logout()
     navigate('/login')
+  }
+
+  function handleLoginClick() {
+    requireAuth(() => {}, '登录 CopiioAI 后开始使用')
   }
 
   return (
@@ -37,13 +41,23 @@ export default function Layout() {
           ))}
         </div>
         <div style={{ padding: '8px 12px', borderTop: '1px solid var(--color-border)' }}>
-          <button
-            onClick={handleLogout}
-            className="btn btn-secondary"
-            style={{ width: '100%', fontSize: 13 }}
-          >
-            {user?.email?.split('@')[0] || '退出'} · 退出
-          </button>
+          {user ? (
+            <button
+              onClick={handleLogout}
+              className="btn btn-secondary"
+              style={{ width: '100%', fontSize: 13 }}
+            >
+              {user.email?.split('@')[0] || user.displayName || '用户'} · 退出
+            </button>
+          ) : (
+            <button
+              onClick={handleLoginClick}
+              className="btn btn-primary"
+              style={{ width: '100%', fontSize: 13 }}
+            >
+              登录 / 注册
+            </button>
+          )}
         </div>
       </nav>
 
