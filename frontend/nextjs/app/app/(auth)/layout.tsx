@@ -36,12 +36,12 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
-    <AuthProvider>
-      <I18nProvider>
+    <I18nProvider>
+      <AuthProvider>
         <ChatProvider>
           <AuthGuard>{children}</AuthGuard>
         </ChatProvider>
-      </I18nProvider>
-    </AuthProvider>
+      </AuthProvider>
+    </I18nProvider>
   )
 }

@@ -33,12 +33,12 @@ function HomePageContent() {
 
 export default function HomePage() {
   return (
-    <AuthProvider>
-      <I18nProvider>
+    <I18nProvider>
+      <AuthProvider>
         <ChatProvider>
           <HomePageContent />
         </ChatProvider>
-      </I18nProvider>
-    </AuthProvider>
+      </AuthProvider>
+    </I18nProvider>
   )
 }
