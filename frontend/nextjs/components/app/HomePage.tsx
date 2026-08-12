@@ -6,6 +6,7 @@ import { ChatProvider } from '@/contexts/ChatContext'
 import { I18nProvider } from '@/lib/app-i18n'
 import AppLayout from '@/components/app/AppLayout'
 import SceneOnboardingModal from '@/components/app/SceneOnboardingModal'
+import PatentOnboardingWizard from '@/components/app/PatentOnboardingWizard'
 import Chat from '@/app/app/(auth)/chat/page'
 
 function HomePageContent() {
@@ -26,6 +27,7 @@ function HomePageContent() {
   return (
     <AppLayout>
       {user && <SceneOnboardingModal />}
+      <PatentOnboardingWizard />
       <Chat />
     </AppLayout>
   )
