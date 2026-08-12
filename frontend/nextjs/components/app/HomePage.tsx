@@ -22,9 +22,10 @@ function HomePageContent() {
 
   // Always show Chat — even when not logged in.
   // Auth gate happens when the user clicks "send" in the chat input.
+  // Skip scene onboarding for anonymous users (API would fail, no scenes to select).
   return (
     <AppLayout>
-      <SceneOnboardingModal />
+      {user && <SceneOnboardingModal />}
       <Chat />
     </AppLayout>
   )
