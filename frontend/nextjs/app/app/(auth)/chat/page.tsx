@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import { queryStream, queryStreamWithFiles, getUserSceneStatus, getSceneKnowledge, pollLongTaskBatchStatus, getLongTaskReportUrl, getSession, saveSessionMessages } from '@/services/api'
 import { pollRecoverLongTask } from '@/lib/longTaskRecovery'
 import { useI18n } from '@/lib/app-i18n'
+import { useAuth } from '@/contexts/AuthContext'
 import MarkdownMessage from '@/components/app/MarkdownMessage'
 import { useChatSession } from '@/contexts/ChatContext'
 import type { ChatMessage } from '@/contexts/ChatContext'
@@ -54,6 +55,7 @@ function UserCopyButton({ content }: { content: string }) {
 
 export default function Chat() {
   const { t, lang } = useI18n()
+  const { user, requireAuth } = useAuth()
   const {
     messages,
     setMessages,
@@ -359,6 +361,12 @@ export default function Chat() {
   async function send() {
     const text = input.trim()
     if (!text || streaming) return
+
+    if (!user) {
+      requireAuth(() => send(), '登录后立即获得答案')
+      return
+    }
+
     setInput('')
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
 
