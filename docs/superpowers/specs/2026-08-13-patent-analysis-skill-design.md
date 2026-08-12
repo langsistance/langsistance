@@ -170,7 +170,7 @@ CREATE TABLE api_keys (
     key_hash VARCHAR(64) UNIQUE NOT NULL,
     user_email VARCHAR(255),
     tier VARCHAR(20) DEFAULT 'free',        -- free / paid
-    credits_remaining INT DEFAULT 3,          -- 免费 3 次
+    credits_remaining INT DEFAULT 1,          -- 免费 1 次
     created_at TIMESTAMP DEFAULT NOW()
 );
 ```
@@ -185,7 +185,7 @@ CREATE TABLE api_keys (
 
 | 档位 | 价格 | 内容 |
 |---|---|---|
-| 免费试用 | $0 | 3 次深度分析 |
+| 免费试用 | $0 | 1 次深度分析 |
 | 按次 | $29/次 | 单次深度分析 |
 | 优惠包 | $99/6 次 | 6 次深度分析 |
 | 月付 | $149/月 | 20 次深度分析 |
@@ -193,19 +193,31 @@ CREATE TABLE api_keys (
 ### 5.2 手动收款流程（第一阶段）
 
 ```
-用户额度用完 → MCP 返回提示 + 购买链接
-  → 用户邮件/PayPal/Wise 联系付款
-  → 手动 SQL INSERT credits
-  → 通知用户到账
+[1] 用户免费额度用完，继续提交分析
+    → MCP 返回: "credits 已用完。购买: https://copiioai.com/keys
+      或邮件 contact@copiioai.com"
+[2] 用户发邮件: "想买 6 次分析包"
+[3] 你回复付款链接（PayPal.me / Wise / Stripe Payment Link）
+[4] 用户付款（1 分钟）
+[5] 你收到付款通知，打开自己的管理后台页面
+    → 填 user_email + credits 数量 → 生成
+[6] 后端 SQL UPDATE 给该 email 的 key 增加 credits
+    （或第一次购买时 INSERT 新 key）
+[7] 你回复邮件: "已到账，你的 key 还是原来那个，直接继续用"
 ```
 
-**不接 Stripe 的原因**：先验证 10 个付费用户。手动收款强迫与用户对话，获取反馈；Stripe 需要美国主体/Atlas（成本 $500+ 且合规复杂）。跑通后再自动化。
+**关键体验**：老用户的 key 不变——充值是给现有 key 加 credits，不是发新 key。用户付完钱回来，Claude Code 里什么都不用改，直接继续分析。
+
+**管理后台**：v1 做一个极简内部页面（或复用现有 admin 能力）：输入 email + credits → 按钮 → SQL 更新。不需要给用户看的 portal。
+
+**不接 Stripe 的原因**：先验证 10 个付费用户。手动收款强迫与用户对话，获取反馈；Stripe 需要美国主体/Atlas（成本 $500+ 且合规复杂）。跑通后再自动化。Stripe 的过渡产品是 Stripe Payment Link——不建 billing 系统，只是一个收款链接，保持"手动"性质。
 
 ### 5.3 免费额度耗尽提示
 
 ```
 patent_usage → credits_remaining: 0
-submit → 402: "免费次数已用完，获取 API key: https://copiioai.com/keys"
+submit → 402: "免费次数已用完，购买分析次数: https://copiioai.com/keys
+或邮件 contact@copiioai.com"
 ```
 
 ---
