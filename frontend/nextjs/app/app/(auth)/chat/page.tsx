@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { queryStream, queryStreamWithFiles, getUserSceneStatus, getSceneKnowledge, pollLongTaskBatchStatus, getLongTaskReportUrl, getSession, saveSessionMessages } from '@/services/api'
+import { queryStream, queryStreamWithFiles, getUserSceneStatus, getSceneKnowledge, getPublicAvailableScenes, getPublicSceneKnowledge, pollLongTaskBatchStatus, getLongTaskReportUrl, getSession, saveSessionMessages } from '@/services/api'
 import { pollRecoverLongTask } from '@/lib/longTaskRecovery'
 import { useI18n } from '@/lib/app-i18n'
 import { useAuth } from '@/contexts/AuthContext'
@@ -122,7 +122,35 @@ export default function Chat() {
         setSceneSmartQA(smartQA)
         setSceneDeepResearch(deepResearch)
       })
-      .catch(() => {})
+      .catch(async () => {
+        // Anonymous user — fall back to public scene endpoints (no auth)
+        try {
+          const pubRes = await getPublicAvailableScenes(lang)
+          const allScenes = pubRes.scenes || []
+          setEnabledScenes(allScenes)
+          const smartQA: {name: string, desc: string}[] = []
+          const deepResearch: {name: string, desc: string}[] = []
+          for (const scene of allScenes) {
+            try {
+              const kr = await getPublicSceneKnowledge(scene.id, lang)
+              const items = kr.knowledge || []
+              items.forEach((item: any) => {
+                const example = {
+                  name: scene.name,
+                  desc: pickLang(item.description || item.question, lang),
+                }
+                if (item.type === 3) {
+                  deepResearch.push(example)
+                } else {
+                  smartQA.push(example)
+                }
+              })
+            } catch {}
+          }
+          setSceneSmartQA(smartQA)
+          setSceneDeepResearch(deepResearch)
+        } catch {}
+      })
   }, [lang])
 
   // Group scene knowledge items by scene name for structured display
