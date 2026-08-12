@@ -23,6 +23,10 @@ export default function Chat() {
   const textareaRef = useRef(null)
   const [transientStatus, setTransientStatus] = useState('')
 
+  // Keep a ref to the latest send() to avoid stale closure after login
+  const sendRef = useRef(send)
+  sendRef.current = send
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
@@ -32,7 +36,7 @@ export default function Chat() {
     if (!text || streaming) return
 
     if (!user) {
-      requireAuth(() => send(), '登录后立即获得答案')
+      requireAuth(() => sendRef.current(), '登录后立即获得答案')
       return
     }
 

@@ -95,6 +95,12 @@ export default function Chat() {
   const [sceneSmartQA, setSceneSmartQA] = useState<{name: string, desc: string}[]>([])
   const [sceneDeepResearch, setSceneDeepResearch] = useState<{name: string, desc: string}[]>([])
 
+  // Keep a ref to the latest send() so the pending auth callback always
+  // invokes the current render's closure (with up-to-date `user`), not a
+  // stale one from the anonymous render where `user` was null.
+  const sendRef = useRef(send)
+  sendRef.current = send
+
   useEffect(() => {
     getUserSceneStatus(lang)
       .then(async (res) => {
@@ -391,7 +397,7 @@ export default function Chat() {
     if (!text || streaming) return
 
     if (!user) {
-      requireAuth(() => send(), '登录后立即获得答案')
+      requireAuth(() => sendRef.current(), '登录后立即获得答案')
       return
     }
 
