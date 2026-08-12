@@ -192,25 +192,36 @@ CREATE TABLE api_keys (
 
 ### 5.2 手动收款流程（第一阶段）
 
+**收款工具：PayPal.me 链接为主，Wise 备选。**
+
+- PayPal 个人账户可收美元，提现到中国银行卡自动结汇（总损耗约 7-8%，含跨境手续费 + 货币转换费）
+- Wise 汇率更优（比 PayPal 省 2-3%），需确认收款方地区支持
+- Stripe 不可用（中国大陆无主体），未来自动化阶段再说
+- 国内代理所客户可直接微信/支付宝收款，零手续费
+
 ```
 [1] 用户免费额度用完，继续提交分析
     → MCP 返回: "credits 已用完。购买: https://copiioai.com/keys
       或邮件 contact@copiioai.com"
-[2] 用户发邮件: "想买 6 次分析包"
-[3] 你回复付款链接（PayPal.me / Wise / Stripe Payment Link）
-[4] 用户付款（1 分钟）
-[5] 你收到付款通知，打开自己的管理后台页面
-    → 填 user_email + credits 数量 → 生成
+[2] 用户打开 /keys 页面（静态页：价格表 + PayPal.me 链接）
+[3] 用户点 PayPal.me 链接付款（1 分钟）
+    → 付款记录带付款人 PayPal 邮箱
+[4] 你收到 PayPal 通知，比对付款邮箱：
+    · 匹配某注册用户邮箱 → 直接给该用户加 credits
+    · 不匹配 → 回邮件问："你的 CopiioAI 账号邮箱是？"
+[5] 你在管理后台输入 user_email + credits 数量 → 更新
 [6] 后端 SQL UPDATE 给该 email 的 key 增加 credits
     （或第一次购买时 INSERT 新 key）
-[7] 你回复邮件: "已到账，你的 key 还是原来那个，直接继续用"
+[7] 你回复邮件："已到账，你的 key 还是原来那个，直接继续用"
 ```
 
-**关键体验**：老用户的 key 不变——充值是给现有 key 加 credits，不是发新 key。用户付完钱回来，Claude Code 里什么都不用改，直接继续分析。
+**关键体验**：
+- 老用户的 key 不变——充值是给现有 key 加 credits，不是发新 key。用户付完钱回来，Claude Code 里什么都不用改，直接继续分析
+- 用户侧动作 = 付款一次；身份识别靠付款记录里的 PayPal 邮箱，邮件沟通是兜底不是必经
 
 **管理后台**：v1 做一个极简内部页面（或复用现有 admin 能力）：输入 email + credits → 按钮 → SQL 更新。不需要给用户看的 portal。
 
-**不接 Stripe 的原因**：先验证 10 个付费用户。手动收款强迫与用户对话，获取反馈；Stripe 需要美国主体/Atlas（成本 $500+ 且合规复杂）。跑通后再自动化。Stripe 的过渡产品是 Stripe Payment Link——不建 billing 系统，只是一个收款链接，保持"手动"性质。
+**手动而非自动的原因**：先验证 10 个付费用户。手动收款强迫与用户对话，获取反馈；Stripe 需要美国主体/Atlas（成本 $500+ 且合规复杂）。跑通后再自动化。
 
 ### 5.3 免费额度耗尽提示
 
@@ -265,12 +276,13 @@ submit → 402: "免费次数已用完，购买分析次数: https://copiioai.co
 | 1 | npm 包 `@copiioai/patent-mcp` | `patent-mcp/`（TypeScript，~200 行） | 2-3 天 |
 | 2 | SKILL.md | 同 GitHub repo | 0.5 天 |
 | 3 | 后端路由 `api_routes/patent_v1.py` | langsistance | 2 天 |
-| 4 | 认证中间件 + api_keys 表 | langsistance | 1 天 |
+| 4 | 认证中间件 + api_keys 表 + 内部管理页 | langsistance | 1 天 |
 | 5 | Celery 任务 + Redis 进度适配器 | langsistance | 2 天 |
-| 6 | 测试（后端 pytest + MCP 冒烟） | langsistance | 1-2 天 |
-| 7 | 部署（docker-compose / api.py 注册） | langsistance | 0.5 天 |
+| 6 | 静态页 `copiioai.com/keys`（价格表 + PayPal.me 链接） | langsistance 或静态托管 | 0.5 天 |
+| 7 | 测试（后端 pytest + MCP 冒烟） | langsistance | 1-2 天 |
+| 8 | 部署（docker-compose / api.py 注册） | langsistance | 0.5 天 |
 
-总计约 9-11 天开发。
+总计约 10-12 天开发。
 
 ---
 
