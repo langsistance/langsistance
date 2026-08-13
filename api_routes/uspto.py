@@ -40,10 +40,21 @@ async def download_uspto_file(
         return JSONResponse(status_code=502, content={"error": "USPTO download request failed"})
 
     disposition = "inline" if inline else "attachment"
+    media_type = download_file.media_type
+    if (
+        inline
+        and download_file.filename.lower().endswith(".pdf")
+        and media_type.lower() in ("application/octet-stream", "")
+    ):
+        # USPTO serves some PDFs with an octet-stream content type; with
+        # nosniff in play, browsers refuse to render those inline and
+        # download instead.  Coerce to application/pdf for the embedded
+        # viewer.  The attachment path keeps the upstream type unchanged.
+        media_type = "application/pdf"
     logger.info(f"USPTO lazy download proxied: {download_file.filename}")
     return Response(
         content=download_file.content,
-        media_type=download_file.media_type,
+        media_type=media_type,
         headers={
             "Content-Disposition": f'{disposition}; filename="{download_file.filename}"'
         },

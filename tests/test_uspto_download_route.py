@@ -199,12 +199,13 @@ class TestUsptoDownloadRoute(unittest.TestCase):
 class TestUsptoDownloadInlineMode(unittest.IsolatedAsyncioTestCase):
     """Route handler tests — fetch_uspto_download_file is patched out."""
 
-    def _fake_download_file(self):
+    def _fake_download_file(self, media_type="application/pdf", filename="document.pdf"):
         class FakeDownloadFile:
             content = b"%PDF-1.4 fake"
-            media_type = "application/pdf"
-            filename = "document.pdf"
-        return FakeDownloadFile()
+        fake = FakeDownloadFile()
+        fake.media_type = media_type
+        fake.filename = filename
+        return fake
 
     async def test_inline_param_sets_inline_content_disposition(self):
         from unittest.mock import patch
@@ -240,6 +241,54 @@ class TestUsptoDownloadInlineMode(unittest.IsolatedAsyncioTestCase):
             'attachment; filename="document.pdf"',
             response.headers["Content-Disposition"],
         )
+
+    async def test_inline_coerces_octet_stream_pdf_to_application_pdf(self):
+        from unittest.mock import patch
+        from api_routes.uspto import download_uspto_file
+
+        with patch(
+            "api_routes.uspto.fetch_uspto_download_file",
+            return_value=self._fake_download_file(
+                media_type="application/octet-stream", filename="MNY6TMQX4X76X49.pdf",
+            ),
+        ):
+            response = await download_uspto_file(
+                url="https://api.uspto.gov/api/v1/download/applications/18893954/MNY6TMQX4X76X49.pdf",
+                inline=True,
+            )
+        self.assertEqual(response.media_type, "application/pdf")
+
+    async def test_inline_keeps_octet_stream_for_non_pdf_filenames(self):
+        from unittest.mock import patch
+        from api_routes.uspto import download_uspto_file
+
+        with patch(
+            "api_routes.uspto.fetch_uspto_download_file",
+            return_value=self._fake_download_file(
+                media_type="application/octet-stream", filename="archive.xmlarchive",
+            ),
+        ):
+            response = await download_uspto_file(
+                url="https://api.uspto.gov/api/v1/download/applications/18893954/archive/xmlarchive",
+                inline=True,
+            )
+        self.assertEqual(response.media_type, "application/octet-stream")
+
+    async def test_attachment_keeps_octet_stream_media_type(self):
+        from unittest.mock import patch
+        from api_routes.uspto import download_uspto_file
+
+        with patch(
+            "api_routes.uspto.fetch_uspto_download_file",
+            return_value=self._fake_download_file(
+                media_type="application/octet-stream", filename="MNY6TMQX4X76X49.pdf",
+            ),
+        ):
+            response = await download_uspto_file(
+                url="https://api.uspto.gov/api/v1/download/applications/18893954/MNY6TMQX4X76X49.pdf",
+                inline=False,
+            )
+        self.assertEqual(response.media_type, "application/octet-stream")
 
 
 if __name__ == "__main__":
