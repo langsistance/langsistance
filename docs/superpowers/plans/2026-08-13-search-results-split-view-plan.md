@@ -143,7 +143,7 @@ class TestBuildResultArtifactsJson(unittest.TestCase):
         ]
 
     def test_includes_json_artifact_with_roles_and_source(self):
-        artifacts = build_result_artifacts(self._items(), source="uspto")
+        artifacts = build_result_artifacts(self._items() * 6, source="uspto")
 
         formats = {a["format"] for a in artifacts}
         self.assertIn("json", formats)
@@ -153,7 +153,7 @@ class TestBuildResultArtifactsJson(unittest.TestCase):
         json_artifact = next(a for a in artifacts if a["format"] == "json")
         payload = json.loads(json_artifact["content"].decode("utf-8"))
         self.assertEqual(payload["source"], "uspto")
-        self.assertEqual(json_artifact["row_count"], 1)
+        self.assertEqual(json_artifact["row_count"], 6)
         roles = {c["key"]: c["role"] for c in payload["columns"]}
         self.assertEqual(roles["patentTitle"], "title")
         self.assertEqual(roles["applicationNumberText"], "application_number")
@@ -1779,8 +1779,8 @@ export default function ResultsPage() {
   const { t } = useI18n()
   const router = useRouter()
   const searchParams = useSearchParams()
-  const { messages, setMessages, sessionId, setSessionId, resultsSetId, setResultsSetId } = useChatSession()
-  const { send, input, setInput, streaming, selectedFiles, setSelectedFiles, addFiles, removeFile, isDragOver, setIsDragOver } = useChatStream()
+  const { messages, setMessages, sessionId, setSessionId, resultsSetId, setResultsSetId, input, setInput, streaming } = useChatSession()
+  const { send, selectedFiles, setSelectedFiles, addFiles, removeFile, isDragOver, setIsDragOver } = useChatStream()
 
   const setId = searchParams.get('set') || resultsSetId
   const loadedRef = useRef(false)
