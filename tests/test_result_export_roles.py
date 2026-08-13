@@ -164,3 +164,65 @@ class TestBuildResultArtifactsJson(unittest.TestCase):
             payload["rows"][0]["downloadUrl"],
             "https://api.copiioai.com/uspto/download?url=second",
         )
+
+    def _doc_item_with_options(self, options):
+        item = self._document_item(None)
+        item["downloadOptionBag"] = options
+        return item
+
+    def _json_payload_of(self, items):
+        artifacts = build_result_artifacts(items, source="uspto_documents")
+        return json.loads(
+            next(a for a in artifacts if a["format"] == "json")["content"]
+            .decode("utf-8")
+        )
+
+    def test_prefers_pdf_option_over_earlier_docx(self):
+        items = [
+            self._doc_item_with_options([
+                {"mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                 "downloadUrl": "https://api.copiioai.com/uspto/download?url=docx"},
+                {"mimeType": "application/pdf",
+                 "downloadUrl": "https://api.copiioai.com/uspto/download?url=pdf"},
+            ])
+        ] * 6
+        payload = self._json_payload_of(items)
+        self.assertEqual(
+            payload["rows"][0]["downloadUrl"],
+            "https://api.copiioai.com/uspto/download?url=pdf",
+        )
+
+    def test_pdf_detected_by_mime_type_identifier(self):
+        items = [
+            self._doc_item_with_options([
+                {"mimeTypeIdentifier": "application/pdf",
+                 "downloadUrl": "https://api.copiioai.com/uspto/download?url=by-mime"},
+            ])
+        ] * 6
+        payload = self._json_payload_of(items)
+        self.assertEqual(
+            payload["rows"][0]["downloadUrl"],
+            "https://api.copiioai.com/uspto/download?url=by-mime",
+        )
+
+    def test_pdf_detected_by_url_extension_without_mime(self):
+        items = [
+            self._doc_item_with_options([
+                {"downloadUrl": "https://api.copiioai.com/uspto/download?url=a"},
+                {"downloadUrl": "https://example.com/file.PDF"},
+            ])
+        ] * 6
+        payload = self._json_payload_of(items)
+        self.assertEqual(payload["rows"][0]["downloadUrl"], "https://example.com/file.PDF")
+
+    def test_falls_back_to_first_url_when_no_pdf_option(self):
+        items = [
+            self._doc_item_with_options([
+                {"mimeType": "application/msword",
+                 "downloadUrl": "https://example.com/file.doc"},
+                {"mimeType": "application/xml",
+                 "downloadUrl": "https://example.com/file.xml"},
+            ])
+        ] * 6
+        payload = self._json_payload_of(items)
+        self.assertEqual(payload["rows"][0]["downloadUrl"], "https://example.com/file.doc")

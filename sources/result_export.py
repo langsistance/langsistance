@@ -91,22 +91,32 @@ def infer_column_role(key: str) -> str:
 
 
 def _lift_download_url(item: dict[str, Any]) -> dict[str, Any]:
-    """Lift the first ``downloadOptionBag[].downloadUrl`` to a top-level key.
+    """Lift the best ``downloadOptionBag[].downloadUrl`` to a top-level key.
 
-    USPTO document rows nest their download URL inside a list; flattened
-    verbatim, that list becomes an opaque ``text`` cell and the frontend
-    never sees a ``url``-role column, so no download button renders.
-    ``downloadUrl`` maps to the ``url`` role via :data:`_ROLE_SUFFIXES`.
+    PDF options are preferred — the frontend renders PDFs inline in an
+    embedded reader (DOCX/XML cannot render in an iframe).  Falls back to
+    the first non-empty URL when no PDF option exists.  ``downloadUrl``
+    maps to the ``url`` role via :data:`_ROLE_SUFFIXES`.
     """
     options = item.get("downloadOptionBag")
     if not isinstance(options, list):
         return item
+    fallback: str | None = None
     for option in options:
         if not isinstance(option, dict):
             continue
         download_url = option.get("downloadUrl")
-        if isinstance(download_url, str) and download_url:
+        if not isinstance(download_url, str) or not download_url:
+            continue
+        if fallback is None:
+            fallback = download_url
+        mime = str(
+            option.get("mimeTypeIdentifier", "") or option.get("mimeType", "")
+        ).lower()
+        if "pdf" in mime or download_url.lower().split("?", 1)[0].endswith(".pdf"):
             return {**item, "downloadUrl": download_url}
+    if fallback is not None:
+        return {**item, "downloadUrl": fallback}
     return item
 
 
