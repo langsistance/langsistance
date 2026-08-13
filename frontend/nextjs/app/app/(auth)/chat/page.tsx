@@ -7,6 +7,8 @@ import { replaceAssistantMessage } from '@/lib/chatSession'
 import { useI18n } from '@/lib/app-i18n'
 import { useAuth } from '@/contexts/AuthContext'
 import MarkdownMessage from '@/components/app/MarkdownMessage'
+import ResultCard from '@/components/app/ResultCard'
+import { pruneResultsForPersistence } from '@/lib/results'
 import { useChatSession } from '@/contexts/ChatContext'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { pickLang } from '@/lib/bilingual'
@@ -213,6 +215,7 @@ export default function Chat() {
               artifacts: [],
               resultSummary: (m as any).resultSummary || undefined,
               patent_ids: (m as any).patent_ids || undefined,
+              results: (m as any).results || undefined,
             }))
             // Strip orphan long-task messages (🔬/✅/❌ without taskId).
             // These were saved before taskId was attached during SSE.
@@ -348,6 +351,9 @@ export default function Chat() {
           ...(m.taskId ? { taskId: m.taskId } : {}),
           ...(m.resultSummary ? { resultSummary: m.resultSummary } : {}),
           ...(m.patent_ids ? { patent_ids: m.patent_ids } : {}),
+          ...((m as any).results
+            ? { results: pruneResultsForPersistence((m as any).results) }
+            : {}),
         }))
         await saveSessionMessages(sessionId, toSave)
       } catch {
@@ -507,17 +513,22 @@ export default function Chat() {
           {messages.map((msg) => (
             <div key={msg.id} className={`chat-message-wrapper ${msg.role}`}>
               {msg.role === 'assistant' ? (
-                <MarkdownMessage
-                  content={msg.content}
-                  artifacts={msg.artifacts || []}
-                  resultSummary={msg.resultSummary}
-                  streaming={streaming && streamingId === msg.id}
-                  transientStatus={streaming && streamingId === msg.id ? transientStatus : ''}
-                  analysisType={(msg as any).analysisType}
-                  tableColumns={(msg as any).tableColumns}
-                  familyOverview={(msg as any).familyOverview}
-                  jurisdictions={(msg as any).jurisdictions}
-                />
+                <>
+                  {(msg as any).results && (
+                    <ResultCard results={(msg as any).results} sessionId={sessionId} />
+                  )}
+                  <MarkdownMessage
+                    content={msg.content}
+                    artifacts={msg.artifacts || []}
+                    resultSummary={msg.resultSummary}
+                    streaming={streaming && streamingId === msg.id}
+                    transientStatus={streaming && streamingId === msg.id ? transientStatus : ''}
+                    analysisType={(msg as any).analysisType}
+                    tableColumns={(msg as any).tableColumns}
+                    familyOverview={(msg as any).familyOverview}
+                    jurisdictions={(msg as any).jurisdictions}
+                  />
+                </>
               ) : (
                 <div className="chat-message user">
                   {msg.content}
