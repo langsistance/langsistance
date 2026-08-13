@@ -621,4 +621,13 @@ export default {
     loading: '加载中...',
     bellTitle: '消息通知',
   },
+
+  // 检索结果页
+  results: {
+    emptyTitle: '还没有可浏览的检索结果',
+    emptyHint: '回到对话页发起一次检索，然后在结果卡片中点击"在结果页查看"。',
+    backToChat: '回对话页',
+    sidebarPlaceholder: '继续追问…',
+    selectedCount: '{count} 条结果',
+  },
 };

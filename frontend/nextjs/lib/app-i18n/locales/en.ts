@@ -621,4 +621,13 @@ export default {
     loading: 'Loading...',
     bellTitle: 'Notifications',
   },
+
+  // Search results page
+  results: {
+    emptyTitle: 'No search results to browse yet',
+    emptyHint: 'Go back to the chat page, run a search, then click "View on results page" on the result card.',
+    backToChat: 'Back to Chat',
+    sidebarPlaceholder: 'Continue asking…',
+    selectedCount: '{count} results',
+  },
 };
