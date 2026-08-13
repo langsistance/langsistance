@@ -7,6 +7,7 @@ import { useChatSession, type ChatMessage } from '@/contexts/ChatContext'
 import { useChatStream } from '@/lib/useChatStream'
 import { getSession } from '@/services/api'
 import MarkdownMessage from '@/components/app/MarkdownMessage'
+import SceneHint from '@/components/app/SceneHint'
 import ResultList from '@/components/app/results/ResultList'
 import DetailPanel from '@/components/app/results/DetailPanel'
 import { buildRowModel } from '@/lib/results'
@@ -122,7 +123,15 @@ export default function ResultsPage() {
     <div className="page active results-page">
       <div className="results-layout">
         <aside className="results-chat-sidebar">
-          <div className="chat-messages results-chat-messages">
+          <div className="chat-messages">
+            {messages.length === 0 && (
+              <div className="empty-state">
+                <h3>{t('chat.welcome.greeting')}</h3>
+                <p>{t('chat.welcome.prompt')}</p>
+              </div>
+            )}
+            <SceneHint />
+
             {messages.map((msg) => (
               <div key={msg.id} className={`chat-message-wrapper ${msg.role}`}>
                 {msg.role === 'assistant' ? (
