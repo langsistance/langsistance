@@ -4,3 +4,6 @@ node_modules/
 *.local
 .env*.local
 .wrangler/
+
+# build caches
+*.tsbuildinfo
