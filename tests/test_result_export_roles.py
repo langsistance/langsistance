@@ -104,3 +104,63 @@ class TestBuildResultArtifactsJson(unittest.TestCase):
             .decode("utf-8")
         )
         self.assertEqual(payload["source"], "uspto")
+
+    def _document_item(self, download_url=None):
+        item = {
+            "documentCode": "CTNF",
+            "documentCodeDescriptionText": "Non-Final Rejection",
+            "mailRoomDate": "2023-04-04",
+            "documentIdentifier": "MMU2X3JJX89X113",
+            "pageTotalQuantity": 12,
+        }
+        if download_url is not None:
+            item["downloadOptionBag"] = [
+                {"mimeType": "application/pdf", "downloadUrl": download_url}
+            ]
+        return item
+
+    def test_document_items_lift_download_url_into_url_column(self):
+        # Document rows carry their download URL inside the nested
+        # downloadOptionBag list — it must surface as a top-level
+        # downloadUrl column so the frontend can render the download button.
+        download_url = "https://api.copiioai.com/uspto/download?url=example"
+        items = [self._document_item(download_url)] * 6
+        artifacts = build_result_artifacts(items, source="uspto_documents")
+
+        payload = json.loads(
+            next(a for a in artifacts if a["format"] == "json")["content"]
+            .decode("utf-8")
+        )
+        roles = {c["key"]: c["role"] for c in payload["columns"]}
+        self.assertEqual(roles["downloadUrl"], "url")
+        self.assertEqual(roles["downloadOptionBag"], "text")  # raw kept
+        self.assertEqual(payload["rows"][0]["downloadUrl"], download_url)
+
+    def test_document_items_without_download_option_bag_have_no_url_column(self):
+        items = [self._document_item(None)] * 6
+        artifacts = build_result_artifacts(items, source="uspto_documents")
+
+        payload = json.loads(
+            next(a for a in artifacts if a["format"] == "json")["content"]
+            .decode("utf-8")
+        )
+        roles = {c["key"]: c["role"] for c in payload["columns"]}
+        self.assertNotIn("downloadUrl", roles)
+
+    def test_document_items_skip_empty_download_url_options(self):
+        item = self._document_item(None)
+        item["downloadOptionBag"] = [
+            {"mimeType": "application/pdf", "downloadUrl": ""},
+            {"mimeType": "application/pdf",
+             "downloadUrl": "https://api.copiioai.com/uspto/download?url=second"},
+        ]
+        artifacts = build_result_artifacts([item] * 6, source="uspto_documents")
+
+        payload = json.loads(
+            next(a for a in artifacts if a["format"] == "json")["content"]
+            .decode("utf-8")
+        )
+        self.assertEqual(
+            payload["rows"][0]["downloadUrl"],
+            "https://api.copiioai.com/uspto/download?url=second",
+        )

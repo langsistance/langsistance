@@ -90,6 +90,26 @@ def infer_column_role(key: str) -> str:
     return "text"
 
 
+def _lift_download_url(item: dict[str, Any]) -> dict[str, Any]:
+    """Lift the first ``downloadOptionBag[].downloadUrl`` to a top-level key.
+
+    USPTO document rows nest their download URL inside a list; flattened
+    verbatim, that list becomes an opaque ``text`` cell and the frontend
+    never sees a ``url``-role column, so no download button renders.
+    ``downloadUrl`` maps to the ``url`` role via :data:`_ROLE_SUFFIXES`.
+    """
+    options = item.get("downloadOptionBag")
+    if not isinstance(options, list):
+        return item
+    for option in options:
+        if not isinstance(option, dict):
+            continue
+        download_url = option.get("downloadUrl")
+        if isinstance(download_url, str) and download_url:
+            return {**item, "downloadUrl": download_url}
+    return item
+
+
 def _stringify_cell(value: Any) -> str:
     if value is None:
         return ""
@@ -126,7 +146,7 @@ def normalize_result_rows(items: list[Any]) -> tuple[list[str], list[dict[str, s
     for item in items:
         row: dict[str, str] = {}
         if isinstance(item, dict):
-            _flatten_value("", item, row)
+            _flatten_value("", _lift_download_url(item), row)
         else:
             row["value"] = _stringify_cell(item)
 
