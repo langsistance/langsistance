@@ -641,6 +641,8 @@ export default {
     tabDoc: 'Document',
     fieldTableEmpty: 'No more fields',
     closeDetail: 'Close',
+    collapseList: 'Collapse list',
+    expandList: 'Expand results',
     specLoading: 'Loading specification…',
     specError: 'Failed to load specification',
     specPdfLink: 'Original PDF',

@@ -25,13 +25,14 @@ interface RowModel {
 }
 
 export default function ResultList({
-  results, activeRowId, onSelect, onOpenTab, onProsecution,
+  results, activeRowId, onSelect, onOpenTab, onProsecution, onCollapse,
 }: {
   results: ResultsPayload
   activeRowId: string | null
   onSelect: (model: RowModel) => void
   onOpenTab: (model: RowModel, tab: string) => void
   onProsecution: (model: RowModel) => void
+  onCollapse?: () => void
 }) {
   const { t } = useI18n()
   const [sort, setSort] = useState<'relevance' | 'date' | 'assignee'>('relevance')
@@ -78,6 +79,16 @@ export default function ResultList({
   return (
     <div className="results-list">
       <div className="results-list-toolbar">
+        {onCollapse && (
+          <button
+            className="results-collapse-btn"
+            onClick={onCollapse}
+            aria-label={t('results.collapseList')}
+            title={t('results.collapseList')}
+          >
+            ⟨
+          </button>
+        )}
         <span className="results-list-count">{t('results.selectedCount').replace('{count}', String(models.length))}</span>
         <select value={sort} onChange={(e) => setSort(e.target.value as any)} aria-label="sort">
           <option value="relevance">{t('results.sortRelevance')}</option>

@@ -30,6 +30,7 @@ export default function ResultsPage() {
   const { t } = useI18n()
   const [activeRowId, setActiveRowId] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<string>('details')
+  const [listCollapsed, setListCollapsed] = useState(false)
   const router = useRouter()
   const searchParams = useSearchParams()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -72,6 +73,11 @@ export default function ResultsPage() {
   useEffect(() => {
     if (setId) setResultsSetId(setId)
   }, [setId, setResultsSetId])
+
+  // New result set → the list always starts visible
+  useEffect(() => {
+    setListCollapsed(false)
+  }, [setId])
 
   const activeMessage: ChatMessage | undefined = useMemo(() => {
     if (!setId) return undefined
@@ -122,7 +128,7 @@ export default function ResultsPage() {
 
   return (
     <div className="page active results-page">
-      <div className="results-layout">
+      <div className={`results-layout${listCollapsed ? ' collapsed' : ''}`}>
         <aside className="results-chat-sidebar">
           <div className="chat-messages">
             {messages.length === 0 && (
@@ -247,6 +253,16 @@ export default function ResultsPage() {
             </div>
           </div>
         </aside>
+        {listCollapsed && (
+          <button
+            className="results-expand-btn"
+            onClick={() => setListCollapsed(false)}
+            title={t('results.expandList')}
+          >
+            ⟩ {t('results.expandList')}
+          </button>
+        )}
+        {!listCollapsed && (
         <main className="results-main">
           <ResultList
             results={(activeMessage as any).results}
@@ -254,6 +270,7 @@ export default function ResultsPage() {
             onSelect={(model) => { setActiveRowId(model.id); setActiveTab(model.isDocument ? 'doc' : 'details') }}
             onOpenTab={(model, tab) => { setActiveRowId(model.id); setActiveTab(tab) }}
             onProsecution={handleProsecution}
+            onCollapse={() => setListCollapsed(true)}
           />
           {activeRow && (
             <div className="results-overlay">
@@ -266,6 +283,7 @@ export default function ResultsPage() {
             </div>
           )}
         </main>
+        )}
       </div>
     </div>
   )

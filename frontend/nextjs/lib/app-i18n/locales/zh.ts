@@ -641,6 +641,8 @@ export default {
     tabDoc: '文档信息',
     fieldTableEmpty: '暂无更多字段',
     closeDetail: '关闭',
+    collapseList: '收起列表',
+    expandList: '展开结果列表',
     specLoading: '正在加载说明书…',
     specError: '说明书加载失败',
     specPdfLink: 'PDF 原文',
