@@ -39,22 +39,30 @@ export default function ResultList({
   const models = useMemo<RowModel[]>(() => {
     const dateCol = findRoleColumn(results.columns, 'publication_date')
     const assigneeCol = findRoleColumn(results.columns, 'assignee')
-    const list = results.rows.map((row) => buildRowModel(row, results.columns, results.source) as RowModel)
+    const entries = results.rows.map((row, index) => {
+      const model = buildRowModel(row, results.columns, results.source) as RowModel
+      // Fallback id collision — rows with no usable title/patent id all get
+      // 'row'; disambiguate with the original index.
+      if (model.id === 'row') model.id = `row-${index}`
+      return { row, model }
+    })
     if (sort === 'date' && dateCol) {
-      const key = dateCol.label || dateCol.key
-      list.sort((a, b) =>
-        String(b.fields.find(([k]) => k === key)?.[1] || '').localeCompare(
-          String(a.fields.find(([k]) => k === key)?.[1] || ''),
+      // Compare the raw column value off the row, not the rendered label, so
+      // rows whose date is absent sort deterministically.
+      entries.sort((a, b) =>
+        String(b.row[dateCol.key] || '').localeCompare(
+          String(a.row[dateCol.key] || ''),
         ),
       )
     } else if (sort === 'assignee' && assigneeCol) {
       const key = assigneeCol.label || assigneeCol.key
-      list.sort((a, b) =>
-        (a.meta.find((m) => m.label === key)?.value ?? '').localeCompare(
-          b.meta.find((m) => m.label === key)?.value ?? '',
+      entries.sort((a, b) =>
+        (a.model.meta.find((m) => m.label === key)?.value ?? '').localeCompare(
+          b.model.meta.find((m) => m.label === key)?.value ?? '',
         ),
       )
     }
+    const list = entries.map((e) => e.model)
     if (sourceFilter !== 'all') {
       return list.filter((m) => m.source === sourceFilter)
     }
