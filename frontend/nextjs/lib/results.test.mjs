@@ -5,6 +5,7 @@ import {
   buildRowModel,
   findRoleColumn,
   pruneResultsForPersistence,
+  resolveActiveResultsMessage,
 } from './results.js'
 
 const COLUMNS = [
@@ -80,4 +81,38 @@ test('pruneResultsForPersistence truncates abstracts and caps rows', () => {
   assert.ok(pruned.rows[0].abstractText.length <= 500)
   assert.equal(pruned.rows[0].patentNumber, 'US0')
   assert.equal('customThing' in pruned.rows[0], false)
+})
+
+const RESULT_MESSAGE = (setId) => ({ id: `m-${setId}`, role: 'assistant', results: { setId, source: 'uspto', columns: [], rows: [] } })
+
+test('resolveActiveResultsMessage returns the exact setId match', () => {
+  const messages = [
+    { id: 'u1', role: 'user', content: 'hi' },
+    RESULT_MESSAGE('set-a'),
+    RESULT_MESSAGE('set-b'),
+  ]
+  assert.equal(resolveActiveResultsMessage(messages, 'set-a').id, 'm-set-a')
+})
+
+test('resolveActiveResultsMessage falls back to newest results when setId misses', () => {
+  const messages = [RESULT_MESSAGE('set-a'), RESULT_MESSAGE('set-b')]
+  // Stale/absent setId (timing race after auto-navigation) — newest wins
+  assert.equal(resolveActiveResultsMessage(messages, 'set-missing').id, 'm-set-b')
+})
+
+test('resolveActiveResultsMessage returns newest results when setId is null', () => {
+  const messages = [
+    { id: 'u1', role: 'user', content: 'hi' },
+    RESULT_MESSAGE('set-a'),
+    RESULT_MESSAGE('set-b'),
+  ]
+  assert.equal(resolveActiveResultsMessage(messages, null).id, 'm-set-b')
+  assert.equal(resolveActiveResultsMessage(messages, '').id, 'm-set-b')
+})
+
+test('resolveActiveResultsMessage returns undefined with no results anywhere', () => {
+  const messages = [{ id: 'u1', role: 'user', content: 'hi' }]
+  assert.equal(resolveActiveResultsMessage(messages, 'set-a'), undefined)
+  assert.equal(resolveActiveResultsMessage([], 'set-a'), undefined)
+  assert.equal(resolveActiveResultsMessage(null, 'set-a'), undefined)
 })

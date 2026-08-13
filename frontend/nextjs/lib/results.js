@@ -91,3 +91,20 @@ export function pruneResultsForPersistence(
     rows,
   }
 }
+
+/**
+ * Resolve the message whose results the results page should display.
+ * Prefers the URL's setId; when nothing matches — the auto-navigation
+ * state race right after streaming, or a stale set in the URL — falls
+ * back to the newest message carrying results so the list still renders.
+ */
+export function resolveActiveResultsMessage(messages, urlSetId) {
+  const list = Array.isArray(messages) ? messages : []
+  let newest = null
+  for (const message of list) {
+    if (!message || !message.results) continue
+    if (urlSetId && message.results.setId === urlSetId) return message
+    newest = message
+  }
+  return newest || undefined
+}

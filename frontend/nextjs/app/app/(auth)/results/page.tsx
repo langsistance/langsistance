@@ -11,7 +11,7 @@ import UserCopyButton from '@/components/app/UserCopyButton'
 import SceneHint from '@/components/app/SceneHint'
 import ResultList from '@/components/app/results/ResultList'
 import DetailPanel from '@/components/app/results/DetailPanel'
-import { buildRowModel } from '@/lib/results'
+import { buildRowModel, resolveActiveResultsMessage } from '@/lib/results'
 
 function getFileTypeBadge(file: File): string {
   const ext = '.' + file.name.split('.').pop()?.toLowerCase()
@@ -80,8 +80,11 @@ export default function ResultsPage() {
   }, [setId])
 
   const activeMessage: ChatMessage | undefined = useMemo(() => {
-    if (!setId) return undefined
-    return messages.find((m) => (m as any).results?.setId === setId)
+    // Fall back to the newest results message when the URL's set has no
+    // exact match — the auto-navigation state race right after streaming
+    // can briefly render the results page before the newest message's
+    // results commit (intermittent empty page).
+    return resolveActiveResultsMessage(messages, setId) || undefined
   }, [messages, setId])
 
   const activeRow = useMemo(() => {
