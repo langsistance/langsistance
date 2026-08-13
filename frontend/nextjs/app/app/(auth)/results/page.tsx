@@ -12,6 +12,7 @@ import SceneHint from '@/components/app/SceneHint'
 import ResultList from '@/components/app/results/ResultList'
 import DetailPanel from '@/components/app/results/DetailPanel'
 import { buildRowModel, resolveActiveResultsMessage } from '@/lib/results'
+import { loadResultsStore, restoreResultsInMessages } from '@/lib/resultsStore'
 
 function getFileTypeBadge(file: File): string {
   const ext = '.' + file.name.split('.').pop()?.toLowerCase()
@@ -51,7 +52,7 @@ export default function ResultsPage() {
         // Only mark hydrated after the fetch succeeds so a transient failure
         // can retry on the next navigation/re-mount.
         loadedRef.current = true
-        setMessages(data.messages
+        const loaded = data.messages
           .filter((m: any) => m.role && m.content)
           .map((m: any, i: number) => ({
             id: `hist_${i}_${Date.now()}`,
@@ -62,7 +63,8 @@ export default function ResultsPage() {
             patent_ids: m.patent_ids || undefined,
             results: m.results || undefined,
             artifacts: [],
-          })))
+          }))
+        setMessages(restoreResultsInMessages(loaded, loadResultsStore(window.localStorage)))
         setSessionId(sid)
       } catch {
         // Session unavailable — stay in empty state
@@ -79,13 +81,21 @@ export default function ResultsPage() {
     setListCollapsed(false)
   }, [setId])
 
+  // Two-phase store read: render-path resolution must not touch
+  // localStorage during SSR/hydration (static export).
+  const [resultsStore, setResultsStore] = useState<ReturnType<typeof loadResultsStore> | null>(null)
+
+  useEffect(() => {
+    setResultsStore(loadResultsStore(window.localStorage))
+  }, [])
+
   const activeMessage: ChatMessage | undefined = useMemo(() => {
     // Fall back to the newest results message when the URL's set has no
     // exact match — the auto-navigation state race right after streaming
     // can briefly render the results page before the newest message's
     // results commit (intermittent empty page).
-    return resolveActiveResultsMessage(messages, setId) || undefined
-  }, [messages, setId])
+    return resolveActiveResultsMessage(messages, setId, resultsStore) || undefined
+  }, [messages, setId, resultsStore])
 
   const activeRow = useMemo(() => {
     if (!activeMessage || !activeRowId) return null

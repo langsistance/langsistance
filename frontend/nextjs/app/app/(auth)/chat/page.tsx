@@ -10,6 +10,7 @@ import MarkdownMessage from '@/components/app/MarkdownMessage'
 import UserCopyButton from '@/components/app/UserCopyButton'
 import SceneHint from '@/components/app/SceneHint'
 import { pruneResultsForPersistence } from '@/lib/results'
+import { loadResultsStore, restoreResultsInMessages } from '@/lib/resultsStore'
 import { useChatSession } from '@/contexts/ChatContext'
 import { useChatStream } from '@/lib/useChatStream'
 
@@ -121,7 +122,7 @@ export default function Chat() {
               m.taskId || (!m.content.includes('🔬') && !m.content.includes('✅') && !m.content.includes('❌'))
             )
           if (loaded.length > 0) {
-            setMessages(loaded)
+            setMessages(restoreResultsInMessages(loaded, loadResultsStore(window.localStorage)))
             // Scroll to bottom after loading session messages
             requestAnimationFrame(() => {
               isNearBottomRef.current = true
