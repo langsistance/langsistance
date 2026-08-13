@@ -641,6 +641,7 @@ export default {
     tabDoc: 'Document',
     fieldTableEmpty: 'No more fields',
     closeDetail: 'Close',
+    rowDocDownload: 'Download',
     collapseList: 'Collapse list',
     expandList: 'Expand results',
     specLoading: 'Loading specification…',

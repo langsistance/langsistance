@@ -43,9 +43,14 @@ export default function ResultRow({
         {model.isDocument ? (
           <>
             {model.url && (
-              <a href={model.url} target="_blank" rel="noopener noreferrer">
-                {t('results.rowDocView')}
-              </a>
+              <>
+                <a href={model.url} target="_blank" rel="noopener noreferrer">
+                  {t('results.rowDocView')}
+                </a>
+                <a href={model.url} download rel="noopener noreferrer">
+                  {t('results.rowDocDownload')}
+                </a>
+              </>
             )}
           </>
         ) : (
