@@ -21,6 +21,12 @@ export interface ChatMessage {
   taskId?: string  // long task ID for progress tracking across save/load
   resultSummary?: string  // long task report markdown preview
   patent_ids?: string[]  // hidden — carried in conversation_history for follow-up queries
+  results?: {
+    setId: string
+    source: string
+    columns: Array<{ key: string; label: string; role: string }>
+    rows: Array<Record<string, unknown>>
+  }
 }
 
 interface ChatContextValue {
@@ -35,6 +41,8 @@ interface ChatContextValue {
   abortRef: MutableRefObject<AbortController | null>
   sessionId: string | null
   setSessionId: Dispatch<SetStateAction<string | null>>
+  resultsSetId: string | null
+  setResultsSetId: Dispatch<SetStateAction<string | null>>
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null)
@@ -45,6 +53,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [streaming, setStreaming] = useState(false)
   const [streamingId, setStreamingId] = useState<string | null>(null)
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [resultsSetId, setResultsSetId] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   return (
@@ -61,6 +70,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         abortRef,
         sessionId,
         setSessionId,
+        resultsSetId,
+        setResultsSetId,
       }}
     >
       {children}
