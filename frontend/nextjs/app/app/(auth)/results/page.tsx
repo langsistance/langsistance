@@ -7,6 +7,7 @@ import { useChatSession, type ChatMessage } from '@/contexts/ChatContext'
 import { useChatStream } from '@/lib/useChatStream'
 import { getSession } from '@/services/api'
 import MarkdownMessage from '@/components/app/MarkdownMessage'
+import UserCopyButton from '@/components/app/UserCopyButton'
 import SceneHint from '@/components/app/SceneHint'
 import ResultList from '@/components/app/results/ResultList'
 import DetailPanel from '@/components/app/results/DetailPanel'
@@ -143,7 +144,11 @@ export default function ResultsPage() {
                     transientStatus={streaming && streamingId === msg.id ? transientStatus : ''}
                   />
                 ) : (
-                  <div className="chat-message user">{msg.content}</div>
+                  <div className="chat-message user">
+                    {msg.content}
+                    <UserCopyButton content={msg.content} />
+                    <div className="user-copy-button-bridge" />
+                  </div>
                 )}
               </div>
             ))}

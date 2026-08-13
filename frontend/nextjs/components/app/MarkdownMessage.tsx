@@ -201,7 +201,9 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
     setTimeout(() => setDownloadedArtifactId(null), 2000)
   }
 
-  const orderedArtifacts = orderDownloadArtifacts(artifacts) as ChatArtifact[]
+  const orderedArtifacts = (orderDownloadArtifacts(artifacts) as ChatArtifact[]).filter(
+    (artifact) => artifact.format !== 'json',
+  )
   const showActions = !streaming && Boolean(content.trim() || orderedArtifacts.length)
 
   return (
