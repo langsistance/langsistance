@@ -97,7 +97,8 @@ def _normalize_submit_patent_id(raw: str, scenario: str) -> str:
     """Validate and normalize a patent ID for the submit endpoint.
 
     - prosecution: must be an 8-digit US application number (prefix stripped)
-    - family: any publication/application number with >= 6 alphanumerics
+    - family: any publication/application number with >= 6 alphanumerics;
+      requires at least one digit in addition to the >= 6 alphanumerics
     """
     if scenario not in ("prosecution", "family"):
         raise ValueError(f"Unknown scenario: {scenario}")
@@ -168,6 +169,17 @@ def register_long_task_routes(logger, config):
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
+        patent_source = body.get("patent_source", "uspto")
+        if not isinstance(patent_source, str) or not patent_source.strip():
+            raise HTTPException(
+                status_code=400, detail="patent_source must be a non-empty string",
+            )
+        patent_source = patent_source.strip()
+        if len(patent_source) > 20:
+            raise HTTPException(
+                status_code=400, detail="patent_source must be at most 20 characters",
+            )
+
         query = str(body.get("query") or "").strip() or (
             f"分析专利 {patent_id} 的审查历史" if scenario == "prosecution"
             else f"分析 {patent_id} 及其全球同族的审查差异"
@@ -224,7 +236,7 @@ def register_long_task_routes(logger, config):
                      _json.dumps({
                          "query": query,
                          "patent_id": patent_id,
-                         "patent_source": "uspto",
+                         "patent_source": patent_source,
                          "lang": lang,
                      }, ensure_ascii=False)),
                 )
@@ -238,7 +250,7 @@ def register_long_task_routes(logger, config):
             "user_id": str(user_id),
             "scenario": "prosecution" if scenario == "prosecution" else "families",
             "patent_id": patent_id,
-            "patent_source": "uspto",
+            "patent_source": patent_source,
             "patent_id_type": (
                 "application_number" if scenario == "prosecution" else "unknown"
             ),
