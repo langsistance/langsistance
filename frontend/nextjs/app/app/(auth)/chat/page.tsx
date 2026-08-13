@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
+import { useRef, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { getSession, saveSessionMessages, pollLongTaskBatchStatus, getLongTaskReportUrl } from '@/services/api'
 import { replaceAssistantMessage } from '@/lib/chatSession'
@@ -11,7 +11,6 @@ import UserCopyButton from '@/components/app/UserCopyButton'
 import SceneHint from '@/components/app/SceneHint'
 import { pruneResultsForPersistence } from '@/lib/results'
 import { useChatSession } from '@/contexts/ChatContext'
-import { copyTextToClipboard } from '@/lib/clipboard'
 import { useChatStream } from '@/lib/useChatStream'
 
 export default function Chat() {
