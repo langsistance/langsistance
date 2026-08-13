@@ -10,6 +10,11 @@
   --text-primary: #111111;
   --text-secondary: #666666;
   --shadow-medium: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.1);
+  --color-primary-faint: rgba(16, 163, 127, 0.05);
+  --color-primary-soft: rgba(16, 163, 127, 0.18);
+  --color-error: #B23A2E;
+  --color-error-bg: #FFF8F8;
+  --color-error-ring: rgba(211, 47, 47, 0.4);
   --spacing-sm: 8px;
   --spacing-md: 12px;
   --spacing-lg: 16px;
@@ -1257,7 +1262,7 @@ button { cursor: pointer; }
 }
 
 .results-list-toolbar select:focus-visible {
-  box-shadow: 0 0 0 3px rgba(16, 163, 127, 0.18);
+  box-shadow: 0 0 0 3px var(--color-primary-soft);
 }
 
 /* Scrollable row region — grid layout requires min-height: 0 + auto scroll */
@@ -1548,21 +1553,21 @@ button { cursor: pointer; }
 
 /* ── Error / retry state ── */
 .results-error {
-  border-color: rgba(211, 47, 47, 0.35);
-  background: #FFF8F8;
+  border-color: var(--color-error-ring);
+  background: var(--color-error-bg);
 }
 
 .results-error p {
-  color: #B23A2E;
+  color: var(--color-error);
   margin-bottom: var(--spacing-3);
 }
 
 .results-error button {
   padding: 6px 14px;
-  border: 1px solid rgba(211, 47, 47, 0.4);
+  border: 1px solid var(--color-error-ring);
   border-radius: var(--radius-md);
   background: #FFFFFF;
-  color: #B23A2E;
+  color: var(--color-error);
   font-size: 13px;
   font-family: inherit;
   font-weight: 500;
@@ -1571,13 +1576,13 @@ button { cursor: pointer; }
 }
 
 .results-error button:hover {
-  background: #B23A2E;
-  border-color: #B23A2E;
+  background: var(--color-error);
+  border-color: var(--color-error);
   color: #FFFFFF;
 }
 
 .results-error button:focus-visible {
-  outline: 2px solid #B23A2E;
+  outline: 2px solid var(--color-error);
   outline-offset: 2px;
 }
 
@@ -1653,8 +1658,8 @@ button { cursor: pointer; }
 /* Independent claims get a primary accent + tinted background */
 .results-claim.independent {
   border-left-color: var(--color-primary);
-  background: rgba(16, 163, 127, 0.05);
-  border-color: rgba(16, 163, 127, 0.28);
+  background: var(--color-primary-faint);
+  border-color: var(--color-primary-soft);
 }
 
 .results-claim-header {
