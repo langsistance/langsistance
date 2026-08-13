@@ -8,6 +8,7 @@ import { useI18n } from '@/lib/app-i18n'
 import { useAuth } from '@/contexts/AuthContext'
 import { useChatSession, type ChatMessage } from '@/contexts/ChatContext'
 import { decodeArtifactChunksToResults, decodeResultsArtifact } from '@/lib/chatSession'
+import { persistResultsSetToStorage } from '@/lib/resultsStore'
 import {
   addAssistantArtifactChunk,
   addAssistantArtifactEnd,
@@ -197,10 +198,21 @@ export function useChatStream() {
             if (event.type === 'artifact_end') {
               const endArtifactId = String(event.artifact_id ?? event.artifactId ?? '')
               if (pendingJsonId !== null && endArtifactId === pendingJsonId) {
-                decodedSetId = decodeArtifactChunksToResults(
+                const decodedResults = decodeArtifactChunksToResults(
                   pendingJsonChunks, pendingJsonId,
-                )?.setId ?? null
+                )
+                decodedSetId = decodedResults?.setId ?? null
                 pendingJsonId = null
+                // Persist a pruned copy to browser localStorage so the
+                // results survive refresh / tab reopen.  Unavailable
+                // storage degrades silently (no-op).
+                if (decodedResults) {
+                  persistResultsSetToStorage(
+                    window.localStorage,
+                    decodedResults,
+                    { sessionId, queryText: text, savedAt: Date.now() },
+                  )
+                }
               }
               setMessages((m) => addAssistantArtifactEnd(
                 m,
