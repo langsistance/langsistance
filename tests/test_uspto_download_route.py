@@ -224,7 +224,7 @@ class TestUsptoDownloadInlineMode(unittest.IsolatedAsyncioTestCase):
             response.headers["Content-Disposition"],
         )
 
-    async def test_default_disposition_is_attachment(self):
+    async def test_explicit_inline_false_yields_attachment_disposition(self):
         from unittest.mock import patch
         from api_routes.uspto import download_uspto_file
 

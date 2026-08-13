@@ -1649,32 +1649,6 @@ button { cursor: pointer; }
   word-break: break-word;
 }
 
-/* Document link */
-.results-doc-link {
-  display: inline-block;
-  margin-top: var(--spacing-3);
-  padding: 6px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-main);
-  color: var(--color-text-primary);
-  font-size: 13px;
-  font-weight: 500;
-  text-decoration: none;
-  transition: all 0.15s ease;
-}
-
-.results-doc-link:hover {
-  border-color: var(--color-primary);
-  color: var(--color-primary);
-  background: var(--color-bg-white);
-}
-
-.results-doc-link:focus-visible {
-  outline: 2px solid var(--color-primary);
-  outline-offset: 2px;
-}
-
 .results-doc-frame {
   width: 100%;
   height: 70vh;
