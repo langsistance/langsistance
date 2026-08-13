@@ -1041,10 +1041,16 @@ button { cursor: pointer; }
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 280px 1fr 1fr;
+  /* Default: chat + results list share the width equally.  The detail
+     pane only appears after a row is selected. */
+  grid-template-columns: 1fr 1fr;
   grid-template-rows: 100%;
   align-items: stretch;
   overflow: hidden;
+}
+
+.results-layout.with-detail {
+  grid-template-columns: 280px 1fr 1fr;
 }
 
 /* Left: chat sidebar */
@@ -1465,16 +1471,26 @@ button { cursor: pointer; }
 }
 
 /* Empty detail state */
-.results-detail-empty {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--spacing-6);
+/* Detail pane close button — returns the layout to the two-pane default */
+.results-detail-close {
+  margin-left: auto;
+  border: none;
+  background: transparent;
   color: var(--color-text-secondary);
   font-size: 13px;
-  text-align: center;
+  cursor: pointer;
+  padding: var(--spacing-1) var(--spacing-2);
+  border-radius: var(--radius-sm);
+}
+
+.results-detail-close:hover {
+  color: var(--color-text-primary);
+  background: var(--color-primary-faint);
+}
+
+.results-detail-close:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
 }
 
 /* ── Field table (details tab) — muted label column, border-separated rows ── */

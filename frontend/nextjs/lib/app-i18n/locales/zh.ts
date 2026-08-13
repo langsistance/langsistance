@@ -645,6 +645,7 @@ export default {
     tabProsecution: '审查历史',
     tabDoc: '文档信息',
     fieldTableEmpty: '暂无更多字段',
+    closeDetail: '关闭',
     specLoading: '正在加载说明书…',
     specError: '说明书加载失败',
     specPdfLink: 'PDF 原文',

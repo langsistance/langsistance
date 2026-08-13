@@ -7,7 +7,6 @@ import { replaceAssistantMessage } from '@/lib/chatSession'
 import { useI18n } from '@/lib/app-i18n'
 import { useAuth } from '@/contexts/AuthContext'
 import MarkdownMessage from '@/components/app/MarkdownMessage'
-import ResultCard from '@/components/app/ResultCard'
 import { pruneResultsForPersistence } from '@/lib/results'
 import { useChatSession } from '@/contexts/ChatContext'
 import { copyTextToClipboard } from '@/lib/clipboard'
@@ -514,9 +513,6 @@ export default function Chat() {
             <div key={msg.id} className={`chat-message-wrapper ${msg.role}`}>
               {msg.role === 'assistant' ? (
                 <>
-                  {(msg as any).results && (
-                    <ResultCard results={(msg as any).results} sessionId={sessionId} />
-                  )}
                   <MarkdownMessage
                     content={msg.content}
                     artifacts={msg.artifacts || []}

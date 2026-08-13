@@ -91,7 +91,7 @@ export default function ResultsPage() {
 
   return (
     <div className="page active results-page">
-      <div className="results-layout">
+      <div className={`results-layout${activeRow ? ' with-detail' : ''}`}>
         <aside className="results-chat-sidebar">
           <div className="results-chat-messages">
             {messages.map((msg) => (
@@ -121,7 +121,14 @@ export default function ResultsPage() {
           onSelect={(model) => { setActiveRowId(model.id); setActiveTab(model.isDocument ? 'doc' : 'details') }}
           onOpenTab={(model, tab) => { setActiveRowId(model.id); setActiveTab(tab) }}
         />
-        <DetailPanel row={activeRow} tab={activeTab} onTabChange={setActiveTab} />
+        {activeRow && (
+          <DetailPanel
+            row={activeRow}
+            tab={activeTab}
+            onTabChange={setActiveTab}
+            onClose={() => setActiveRowId(null)}
+          />
+        )}
       </div>
     </div>
   )

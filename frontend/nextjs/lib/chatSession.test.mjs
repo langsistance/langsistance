@@ -8,6 +8,7 @@ import {
   createChatId,
   createChatMessage,
   decodeResultsArtifact,
+  hasResultsForMessage,
   updateAssistantMessage,
 } from './chatSession.js'
 
@@ -153,4 +154,25 @@ test('decodes multi-chunk artifacts chunked at 32768 bytes (padding trap regress
   assert.ok(decoded[0].results, 'multi-chunk JSON artifact must decode')
   assert.equal(decoded[0].results.rows.length, 50)
   assert.equal(decoded[0].results.rows[49].patentTitle.startsWith('Patent 49'), true)
+})
+
+test('hasResultsForMessage detects attached results by message id', () => {
+  const assistant = createChatMessage('assistant', 'answer')
+  let messages = addAssistantArtifactStart([assistant], assistant.id, {
+    artifact_id: 'art-json-x', format: 'json', filename: 'r.json',
+  })
+  messages = addAssistantArtifactChunk(
+    messages, assistant.id, 'art-json-x',
+    Buffer.from(JSON.stringify({ source: 'uspto', columns: [], rows: [{}] }), 'utf-8').toString('base64'),
+  )
+  messages = addAssistantArtifactEnd(messages, assistant.id, 'art-json-x')
+  messages = decodeResultsArtifact(messages, assistant.id)
+
+  assert.equal(hasResultsForMessage(messages, assistant.id), true)
+  assert.equal(hasResultsForMessage(messages, 'other-id'), false)
+})
+
+test('hasResultsForMessage returns false without results', () => {
+  const assistant = createChatMessage('assistant', 'plain answer')
+  assert.equal(hasResultsForMessage([assistant], assistant.id), false)
 })

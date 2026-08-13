@@ -645,6 +645,7 @@ export default {
     tabProsecution: 'Prosecution',
     tabDoc: 'Document',
     fieldTableEmpty: 'No more fields',
+    closeDetail: 'Close',
     specLoading: 'Loading specification…',
     specError: 'Failed to load specification',
     specPdfLink: 'Original PDF',

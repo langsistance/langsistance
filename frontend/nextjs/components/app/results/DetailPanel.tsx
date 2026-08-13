@@ -9,15 +9,17 @@ import ProsecutionTab from './ProsecutionTab'
 const TAB_ORDER = ['details', 'doc', 'spec', 'claims', 'prosecution']
 
 export default function DetailPanel({
-  row, tab, onTabChange,
+  row, tab, onTabChange, onClose,
 }: {
   row: any
   tab: string
   onTabChange: (tab: string) => void
+  onClose?: () => void
 }) {
   const { t } = useI18n()
   if (!row) {
-    return <div className="results-detail-empty">← {t('results.emptyHint')}</div>
+    // Not rendered without a selected row — defensive only.
+    return null
   }
   const availableTabs = TAB_ORDER.filter((key) => {
     if (key === 'doc') return row.isDocument
@@ -39,6 +41,16 @@ export default function DetailPanel({
             {t(`results.tab${key.charAt(0).toUpperCase() + key.slice(1)}`)}
           </button>
         ))}
+        {onClose && (
+          <button
+            className="results-detail-close"
+            onClick={onClose}
+            aria-label={t('results.closeDetail')}
+            title={t('results.closeDetail')}
+          >
+            ✕
+          </button>
+        )}
       </div>
       <div className="results-detail-body">
         {activeTab === 'details' && (

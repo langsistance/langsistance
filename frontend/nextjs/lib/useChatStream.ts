@@ -1,12 +1,13 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { queryStream, queryStreamWithFiles, pollLongTaskBatchStatus, getLongTaskReportUrl, getSession, saveSessionMessages } from '@/services/api'
 import { pollRecoverLongTask } from '@/lib/longTaskRecovery'
 import { useI18n } from '@/lib/app-i18n'
 import { useAuth } from '@/contexts/AuthContext'
 import { useChatSession, type ChatMessage } from '@/contexts/ChatContext'
-import { decodeResultsArtifact } from '@/lib/chatSession'
+import { decodeResultsArtifact, hasResultsForMessage } from '@/lib/chatSession'
 import {
   addAssistantArtifactChunk,
   addAssistantArtifactEnd,
@@ -30,6 +31,7 @@ function cleanGarbledText(text: string): string {
 export function useChatStream() {
   const { t, lang } = useI18n()
   const { user, requireAuth } = useAuth()
+  const router = useRouter()
   const {
     messages, setMessages, input, setInput,
     streaming, setStreaming, streamingId, setStreamingId,
@@ -43,6 +45,9 @@ export function useChatStream() {
   const activeTasksRef = useRef<Map<string, string>>(new Map())       // taskId → assistantId
   const globalPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const longTaskReceivedRef = useRef(false)
+  // Latest messages for post-stream checks (auto-open the results page).
+  const messagesRef = useRef(messages)
+  messagesRef.current = messages
 
   const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
   const MAX_FILE_COUNT = 100
@@ -310,6 +315,15 @@ export function useChatStream() {
       setStreaming(false)
       setStreamingId(null)
       abortRef.current = null
+
+      // Auto-open the results page once a search has streamed a decoded
+      // results set — no intermediate card click required.
+      const latest = messagesRef.current.find((msg) => msg.id === assistantId) as any
+      if (latest && latest.results) {
+        const params = new URLSearchParams({ set: String(latest.results.setId) })
+        if (sessionId) params.set('session_id', sessionId)
+        router.push(`/app/results?${params.toString()}`)
+      }
     }
   }
 

@@ -132,6 +132,15 @@ function base64ChunksToText(chunks) {
 }
 
 /**
+ * True when the message with *messageId* carries decoded results —
+ * used to decide auto-navigation to the results page after streaming.
+ */
+export function hasResultsForMessage(messages, messageId) {
+  const message = (Array.isArray(messages) ? messages : []).find((msg) => msg.id === messageId)
+  return Boolean(message && message.results)
+}
+
+/**
  * Decode a complete format=json artifact into message.results.
  * Idempotent — returns messages unchanged when there is nothing to decode
  * (or the payload is malformed), so it is safe to call on every update.
