@@ -7,7 +7,7 @@ import { pollRecoverLongTask } from '@/lib/longTaskRecovery'
 import { useI18n } from '@/lib/app-i18n'
 import { useAuth } from '@/contexts/AuthContext'
 import { useChatSession, type ChatMessage } from '@/contexts/ChatContext'
-import { decodeResultsArtifact, hasResultsForMessage } from '@/lib/chatSession'
+import { decodeArtifactChunksToResults, decodeResultsArtifact } from '@/lib/chatSession'
 import {
   addAssistantArtifactChunk,
   addAssistantArtifactEnd,
@@ -45,9 +45,6 @@ export function useChatStream() {
   const activeTasksRef = useRef<Map<string, string>>(new Map())       // taskId → assistantId
   const globalPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const longTaskReceivedRef = useRef(false)
-  // Latest messages for post-stream checks (auto-open the results page).
-  const messagesRef = useRef(messages)
-  messagesRef.current = messages
 
   const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
   const MAX_FILE_COUNT = 100
@@ -111,6 +108,12 @@ export function useChatStream() {
     const assistant = createChatMessage('assistant', '')
     const assistantId = assistant.id
 
+    // Local (synchronous) tracking of the JSON artifact so the post-stream
+    // navigation decision never depends on React state commit timing.
+    let pendingJsonId: string | null = null
+    let pendingJsonChunks: string[] = []
+    let decodedSetId: string | null = null
+
     // Preserve all long task cards (running / completed / failed) so the
     // user can see multiple concurrent or queued tasks in one conversation.
     setMessages((m) => [...m, userMsg, assistant])
@@ -168,23 +171,41 @@ export function useChatStream() {
               continue
             }
             if (event.type === 'artifact_start') {
+              // Track the JSON artifact's chunks locally so navigation can be
+              // decided synchronously after streaming — independent of React
+              // state commit timing.
+              if (event.format === 'json') {
+                pendingJsonId = String(event.artifact_id ?? event.artifactId ?? '')
+                pendingJsonChunks = []
+              }
               setMessages((m) => addAssistantArtifactStart(m, assistantId, event))
               continue
             }
             if (event.type === 'artifact_chunk') {
+              const chunkArtifactId = String(event.artifact_id ?? event.artifactId ?? '')
+              if (pendingJsonId !== null && chunkArtifactId === pendingJsonId) {
+                pendingJsonChunks.push(String(event.data ?? ''))
+              }
               setMessages((m) => addAssistantArtifactChunk(
                 m,
                 assistantId,
-                String(event.artifact_id ?? event.artifactId ?? ''),
+                chunkArtifactId,
                 String(event.data ?? '')
               ))
               continue
             }
             if (event.type === 'artifact_end') {
+              const endArtifactId = String(event.artifact_id ?? event.artifactId ?? '')
+              if (pendingJsonId !== null && endArtifactId === pendingJsonId) {
+                decodedSetId = decodeArtifactChunksToResults(
+                  pendingJsonChunks, pendingJsonId,
+                )?.setId ?? null
+                pendingJsonId = null
+              }
               setMessages((m) => addAssistantArtifactEnd(
                 m,
                 assistantId,
-                String(event.artifact_id ?? event.artifactId ?? '')
+                endArtifactId
               ))
               // Decode the completed JSON results artifact into message.results
               // for the results page. Idempotent — safe to call unconditionally.
@@ -317,10 +338,11 @@ export function useChatStream() {
       abortRef.current = null
 
       // Auto-open the results page once a search has streamed a decoded
-      // results set — no intermediate card click required.
-      const latest = messagesRef.current.find((msg) => msg.id === assistantId) as any
-      if (latest && latest.results) {
-        const params = new URLSearchParams({ set: String(latest.results.setId) })
+      // results set — no intermediate card click required.  decodedSetId is
+      // assigned synchronously in the SSE loop (independent of React commit
+      // timing), so this check is deterministic.
+      if (decodedSetId) {
+        const params = new URLSearchParams({ set: decodedSetId })
         if (sessionId) params.set('session_id', sessionId)
         router.push(`/app/results?${params.toString()}`)
       }

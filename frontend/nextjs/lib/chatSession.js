@@ -141,6 +141,31 @@ export function hasResultsForMessage(messages, messageId) {
 }
 
 /**
+ * Decode raw base64 artifact chunks into a results payload — the pure
+ * decode step shared by decodeResultsArtifact (state path) and the chat
+ * stream hook (synchronous navigation path).  Returns null on any failure.
+ */
+export function decodeArtifactChunksToResults(chunks, artifactId) {
+  if (!Array.isArray(chunks) || chunks.length === 0) return null
+  const text = base64ChunksToText(chunks)
+  if (!text) return null
+  try {
+    const payload = JSON.parse(text)
+    if (!payload || typeof payload !== 'object' || !Array.isArray(payload.rows)) {
+      return null
+    }
+    return {
+      setId: artifactId,
+      source: payload.source || 'uspto',
+      columns: Array.isArray(payload.columns) ? payload.columns : [],
+      rows: payload.rows,
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
  * Decode a complete format=json artifact into message.results.
  * Idempotent — returns messages unchanged when there is nothing to decode
  * (or the payload is malformed), so it is safe to call on every update.
@@ -153,24 +178,11 @@ export function decodeResultsArtifact(messages, messageId) {
       (artifact) => artifact.format === 'json' && artifact.complete,
     )
     if (!jsonArtifact) return msg
-    const text = base64ChunksToText(jsonArtifact.chunks || [])
-    if (!text) return msg
-    try {
-      const payload = JSON.parse(text)
-      if (!payload || typeof payload !== 'object' || !Array.isArray(payload.rows)) {
-        return msg
-      }
-      return {
-        ...msg,
-        results: {
-          setId: jsonArtifact.artifactId,
-          source: payload.source || 'uspto',
-          columns: Array.isArray(payload.columns) ? payload.columns : [],
-          rows: payload.rows,
-        },
-      }
-    } catch {
-      return msg
-    }
+    const results = decodeArtifactChunksToResults(
+      jsonArtifact.chunks || [],
+      jsonArtifact.artifactId,
+    )
+    if (!results) return msg
+    return { ...msg, results }
   })
 }

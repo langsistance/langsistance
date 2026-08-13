@@ -7,6 +7,7 @@ import {
   addAssistantArtifactStart,
   createChatId,
   createChatMessage,
+  decodeArtifactChunksToResults,
   decodeResultsArtifact,
   hasResultsForMessage,
   updateAssistantMessage,
@@ -175,4 +176,19 @@ test('hasResultsForMessage detects attached results by message id', () => {
 test('hasResultsForMessage returns false without results', () => {
   const assistant = createChatMessage('assistant', 'plain answer')
   assert.equal(hasResultsForMessage([assistant], assistant.id), false)
+})
+
+test('decodeArtifactChunksToResults decodes chunks into a results payload', () => {
+  const payload = { source: 'uspto', columns: [], rows: [{ patentTitle: 'T' }] }
+  const b64 = Buffer.from(JSON.stringify(payload), 'utf-8').toString('base64')
+  const results = decodeArtifactChunksToResults([b64], 'art-1')
+  assert.equal(results.setId, 'art-1')
+  assert.equal(results.source, 'uspto')
+  assert.equal(results.rows.length, 1)
+})
+
+test('decodeArtifactChunksToResults returns null for malformed data', () => {
+  assert.equal(decodeArtifactChunksToResults(['%%%%'], 'art-1'), null)
+  assert.equal(decodeArtifactChunksToResults([], 'art-1'), null)
+  assert.equal(decodeArtifactChunksToResults(['e30='], 'art-1'), null) // {} — no rows
 })
