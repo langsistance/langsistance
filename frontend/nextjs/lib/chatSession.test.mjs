@@ -117,3 +117,40 @@ test('decodeResultsArtifact survives malformed JSON', () => {
   const decoded = decodeResultsArtifact(messages, assistant.id)
   assert.equal(decoded[0].results, undefined)
 })
+
+test('decodes multi-chunk artifacts chunked at 32768 bytes (padding trap regression)', () => {
+  const assistant = createChatMessage('assistant', 'answer')
+  const messages = [assistant]
+  const payload = JSON.stringify({
+    source: 'uspto',
+    columns: [{ key: 'patentTitle', label: '标题', role: 'title' }],
+    rows: Array.from({ length: 50 }, (_, i) => ({
+      patentTitle: `Patent ${i} — `.repeat(200),
+    })),
+  })
+  // Backend chunks at ARTIFACT_CHUNK_BYTES = 32768; 32768 % 3 = 2, so every
+  // full chunk's base64 ends with '=' padding — concatenating padded
+  // base64 and decoding once truncates at the first '='.
+  const bytes = Buffer.from(payload, 'utf-8')
+  const CHUNK = 32768
+  const chunks = []
+  for (let start = 0; start < bytes.length; start += CHUNK) {
+    chunks.push(bytes.subarray(start, start + CHUNK).toString('base64'))
+  }
+  assert.ok(chunks.length > 1, 'payload must span multiple backend chunks')
+  assert.ok(chunks[0].endsWith('='), 'first chunk must carry padding like production')
+
+  let withArtifact = addAssistantArtifactStart(messages, assistant.id, {
+    artifact_id: 'art-json-multi', format: 'json', filename: 'r.json',
+    mime_type: 'application/json', row_count: 50, column_count: 1,
+  })
+  for (const chunk of chunks) {
+    withArtifact = addAssistantArtifactChunk(withArtifact, assistant.id, 'art-json-multi', chunk)
+  }
+  withArtifact = addAssistantArtifactEnd(withArtifact, assistant.id, 'art-json-multi')
+
+  const decoded = decodeResultsArtifact(withArtifact, assistant.id)
+  assert.ok(decoded[0].results, 'multi-chunk JSON artifact must decode')
+  assert.equal(decoded[0].results.rows.length, 50)
+  assert.equal(decoded[0].results.rows[49].patentTitle.startsWith('Patent 49'), true)
+})

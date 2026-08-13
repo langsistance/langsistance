@@ -103,14 +103,29 @@ export function addAssistantPatentIds(messages, messageId, patentIds) {
 }
 
 function base64ChunksToText(chunks) {
+  // Decode each chunk SEPARATELY and merge bytes.  The backend slices at
+  // 32768 bytes (32768 % 3 = 2), so every full chunk's base64 ends with
+  // '=' padding — concatenating the base64 strings and decoding once
+  // truncates at the first '='.  Per-chunk decoding mirrors the proven
+  // base64ChunksToBlob download path.
   try {
-    if (typeof Buffer !== 'undefined') {
-      return Buffer.from(chunks.join(''), 'base64').toString('utf-8')
+    const byteArrays = chunks.map((chunk) => {
+      if (typeof Buffer !== 'undefined') {
+        return new Uint8Array(Buffer.from(chunk, 'base64'))
+      }
+      const binary = window.atob(chunk)
+      const bytes = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+      return bytes
+    })
+    const total = byteArrays.reduce((sum, bytes) => sum + bytes.length, 0)
+    const merged = new Uint8Array(total)
+    let offset = 0
+    for (const bytes of byteArrays) {
+      merged.set(bytes, offset)
+      offset += bytes.length
     }
-    const binary = window.atob(chunks.join(''))
-    const bytes = new Uint8Array(binary.length)
-    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
-    return new TextDecoder().decode(bytes)
+    return new TextDecoder().decode(merged)
   } catch {
     return null
   }
