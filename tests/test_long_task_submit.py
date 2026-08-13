@@ -39,6 +39,16 @@ class TestNormalizeSubmitPatentId(unittest.TestCase):
         with self.assertRaises(ValueError):
             _normalize_submit_patent_id("<>script", "family")
 
+    def test_family_accepts_common_punctuation(self):
+        self.assertEqual(
+            _normalize_submit_patent_id("US16/382,616", "family"),
+            "US16/382,616",
+        )
+        self.assertEqual(
+            _normalize_submit_patent_id("US 12,506,212", "family"),
+            "US 12,506,212",
+        )
+
     def test_rejects_unknown_scenario(self):
         with self.assertRaises(ValueError):
             _normalize_submit_patent_id("17638216", "batch")

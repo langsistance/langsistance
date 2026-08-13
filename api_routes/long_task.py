@@ -112,11 +112,10 @@ def _normalize_submit_patent_id(raw: str, scenario: str) -> str:
             )
         return digits
     clean = re.sub(r"[^A-Za-z0-9]", "", value)
-    if len(clean) != len(value):
-        # Embedded punctuation/symbols make the ID ambiguous — treat as garbage.
-        raise ValueError("patent_id contains invalid characters")
     if len(clean) < 6:
         raise ValueError("patent_id too short for family analysis")
+    if not any(ch.isdigit() for ch in clean):
+        raise ValueError("patent_id must contain digits")
     return value
 
 
