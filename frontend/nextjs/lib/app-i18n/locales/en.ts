@@ -645,5 +645,13 @@ export default {
     tabProsecution: 'Prosecution',
     tabDoc: 'Document',
     fieldTableEmpty: 'No more fields',
+    specLoading: 'Loading specification…',
+    specError: 'Failed to load specification',
+    specPdfLink: 'Original PDF',
+    claimIndependent: 'Independent claim',
+    claimsLoading: 'Loading claims…',
+    claimsError: 'Failed to load claims',
+    claimCopy: 'Copy',
+    retry: 'Retry',
   },
 };

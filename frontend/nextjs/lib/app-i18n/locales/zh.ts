@@ -645,5 +645,13 @@ export default {
     tabProsecution: '审查历史',
     tabDoc: '文档信息',
     fieldTableEmpty: '暂无更多字段',
+    specLoading: '正在加载说明书…',
+    specError: '说明书加载失败',
+    specPdfLink: 'PDF 原文',
+    claimIndependent: '独立权利要求',
+    claimsLoading: '正在加载权利要求…',
+    claimsError: '权利要求加载失败',
+    claimCopy: '复制',
+    retry: '重试',
   },
 };
