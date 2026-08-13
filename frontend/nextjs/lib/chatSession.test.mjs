@@ -7,6 +7,7 @@ import {
   addAssistantArtifactStart,
   createChatId,
   createChatMessage,
+  decodeResultsArtifact,
   updateAssistantMessage,
 } from './chatSession.js'
 
@@ -64,4 +65,55 @@ test('chat session stores streamed assistant artifacts by id', () => {
   assert.equal(complete[0].artifacts[0].format, 'csv')
   assert.deepEqual(complete[0].artifacts[0].chunks, ['YmFzZTY0'])
   assert.equal(complete[0].artifacts[0].complete, true)
+})
+
+test('decodes complete JSON artifact into message.results', () => {
+  const assistant = createChatMessage('assistant', 'answer')
+  const messages = [assistant]
+  const payload = JSON.stringify({
+    source: 'uspto',
+    columns: [{ key: 'patentTitle', label: '标题', role: 'title' }],
+    rows: [{ patentTitle: '一种图像处理方法' }],
+  })
+  const b64 = Buffer.from(payload, 'utf-8').toString('base64')
+
+  let withArtifact = addAssistantArtifactStart(messages, assistant.id, {
+    artifact_id: 'art-json',
+    format: 'json',
+    filename: 'r.json',
+    mime_type: 'application/json',
+    row_count: 1,
+    column_count: 1,
+  })
+  withArtifact = addAssistantArtifactChunk(withArtifact, assistant.id, 'art-json', b64)
+  withArtifact = addAssistantArtifactEnd(withArtifact, assistant.id, 'art-json')
+
+  const decoded = decodeResultsArtifact(withArtifact, assistant.id)
+  assert.ok(decoded[0].results)
+  assert.equal(decoded[0].results.setId, 'art-json')
+  assert.equal(decoded[0].results.source, 'uspto')
+  assert.equal(decoded[0].results.rows[0].patentTitle, '一种图像处理方法')
+})
+
+test('decodeResultsArtifact leaves message untouched when no JSON artifact', () => {
+  const assistant = createChatMessage('assistant', 'answer')
+  const messages = [assistant]
+
+  const withCsv = addAssistantArtifactStart(messages, assistant.id, {
+    artifact_id: 'art-csv', format: 'csv', filename: 'r.csv',
+  })
+  const decoded = decodeResultsArtifact(withCsv, assistant.id)
+  assert.equal(decoded[0].results, undefined)
+})
+
+test('decodeResultsArtifact survives malformed JSON', () => {
+  const assistant = createChatMessage('assistant', 'answer')
+  let messages = addAssistantArtifactStart([assistant], assistant.id, {
+    artifact_id: 'art-bad', format: 'json', filename: 'r.json',
+  })
+  messages = addAssistantArtifactChunk(messages, assistant.id, 'art-bad', '%%%%')
+  messages = addAssistantArtifactEnd(messages, assistant.id, 'art-bad')
+
+  const decoded = decodeResultsArtifact(messages, assistant.id)
+  assert.equal(decoded[0].results, undefined)
 })

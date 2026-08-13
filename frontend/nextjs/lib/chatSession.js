@@ -101,3 +101,52 @@ export function addAssistantPatentIds(messages, messageId, patentIds) {
       : msg
   )
 }
+
+function base64ChunksToText(chunks) {
+  try {
+    if (typeof Buffer !== 'undefined') {
+      return Buffer.from(chunks.join(''), 'base64').toString('utf-8')
+    }
+    const binary = window.atob(chunks.join(''))
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+    return new TextDecoder().decode(bytes)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Decode a complete format=json artifact into message.results.
+ * Idempotent — returns messages unchanged when there is nothing to decode
+ * (or the payload is malformed), so it is safe to call on every update.
+ */
+export function decodeResultsArtifact(messages, messageId) {
+  return messages.map((msg) => {
+    if (msg.id !== messageId || msg.results) return msg
+    const artifacts = Array.isArray(msg.artifacts) ? msg.artifacts : []
+    const jsonArtifact = artifacts.find(
+      (artifact) => artifact.format === 'json' && artifact.complete,
+    )
+    if (!jsonArtifact) return msg
+    const text = base64ChunksToText(jsonArtifact.chunks || [])
+    if (!text) return msg
+    try {
+      const payload = JSON.parse(text)
+      if (!payload || typeof payload !== 'object' || !Array.isArray(payload.rows)) {
+        return msg
+      }
+      return {
+        ...msg,
+        results: {
+          setId: jsonArtifact.artifactId,
+          source: payload.source || 'uspto',
+          columns: Array.isArray(payload.columns) ? payload.columns : [],
+          rows: payload.rows,
+        },
+      }
+    } catch {
+      return msg
+    }
+  })
+}
