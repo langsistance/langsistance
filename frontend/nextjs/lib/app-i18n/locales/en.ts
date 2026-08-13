@@ -639,5 +639,11 @@ export default {
     rowProsecution: 'Prosecution',
     rowDocView: 'View original',
     rowDocInfo: 'Details',
+    tabDetails: 'Details',
+    tabSpec: 'Specification',
+    tabClaims: 'Claims',
+    tabProsecution: 'Prosecution',
+    tabDoc: 'Document',
+    fieldTableEmpty: 'No more fields',
   },
 };

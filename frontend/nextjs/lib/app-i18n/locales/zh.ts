@@ -639,5 +639,11 @@ export default {
     rowProsecution: '审查历史',
     rowDocView: '查看原文',
     rowDocInfo: '详情',
+    tabDetails: '详情',
+    tabSpec: '说明书',
+    tabClaims: '权利要求',
+    tabProsecution: '审查历史',
+    tabDoc: '文档信息',
+    fieldTableEmpty: '暂无更多字段',
   },
 };
