@@ -2231,6 +2231,8 @@ def execute_family_analysis(self, task_id: str, params: dict):
                     jp_exam_data = {
                         'jp_app_number': jp_app_number,
                         'progress': jp_data.get('progress', []),
+                        'synthesized_events': jp_data.get('synthesized_events', []),
+                        'progress_synthesized': jp_data.get('progress_synthesized', False),
                         'registration': jp_data.get('registration'),
                         'citations': jp_data.get('citations'),
                         'refusal_reasons': jp_data.get('refusal_reasons'),
@@ -2242,6 +2244,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
                     _pipeline_logger.info(
                         f"[task={task_id}] FAMILY PHASE0.4 jp_data — "
                         f"events={jp_data.get('progress_count', 0)}, "
+                        f"synthesized={jp_data.get('progress_synthesized', False)}, "
                         f"has_reg={jp_data.get('has_registration')}, "
                         f"has_cites={jp_data.get('has_citations')}, "
                         f"has_refusal={jp_data.get('has_refusal_reasons')}, "
@@ -2251,8 +2254,12 @@ def execute_family_analysis(self, task_id: str, params: dict):
                         if _j['code'] == 'JP':
                             _pc = jp_data.get('progress_count', 0)
                             _j['status'] = 'done'; _j['progress'] = 100
-                            if _pc > 0 or jp_data.get('has_registration'):
+                            if _pc > 0:
                                 _j['detail'] = _t('family_jp_done', lang, events=_pc)
+                            elif jp_data.get('progress_synthesized', False):
+                                _j['detail'] = _t('family_jp_basic', lang)
+                            elif jp_data.get('has_registration'):
+                                _j['detail'] = _t('family_jp_done', lang, events=0)
                             else:
                                 _j['detail'] = _t('family_jp_basic', lang)
                     _advance_progress(13)
@@ -4145,7 +4152,10 @@ def execute_japan_examination_analysis(self, task_id: str, params: dict):
                            f"Fetching JPO examination data for {jp_app_number}...")
         jp_data = await fetch_examination_data(jp_app_number, jpo)
 
-        progress = jp_data.get('progress', [])
+        # Real document-list events first; fall back to the explicitly
+        # flagged biblio-synthesized timeline when the JPO API returned
+        # bibliographic data only.
+        progress = jp_data.get('progress', []) or jp_data.get('synthesized_events', [])
         if not progress:
             _pipeline_logger.warning(
                 f"[task={task_id}] JAPAN_EXAM PHASE1 no_data — app={jp_app_number}"
@@ -4158,6 +4168,7 @@ def execute_japan_examination_analysis(self, task_id: str, params: dict):
         _pipeline_logger.info(
             f"[task={task_id}] JAPAN_EXAM PHASE1 data_fetched — "
             f"events={jp_data.get('progress_count', 0)}, "
+            f"synthesized={jp_data.get('progress_synthesized', False)}, "
             f"has_reg={jp_data.get('has_registration')}, "
             f"has_cites={jp_data.get('has_citations')}"
         )
@@ -4231,6 +4242,13 @@ def execute_japan_examination_analysis(self, task_id: str, params: dict):
                 "包括：审查过程中的关键转折点、申请人的应对策略、"
                 "权利要求的变化方向、以及最终的审查结论。"
             )
+            if jp_data.get('progress_synthesized', False):
+                exec_prompt = (
+                    "⚠️ 注意：JPO 未返回审查经过明细（書類一覧），"
+                    "以下时间线仅根据著录项日期推断。"
+                    "不要声称'无审查意见'或'直接授权'，数据不足请如实说明。\n\n"
+                    + exec_prompt
+                )
         else:
             exec_prompt = (
                 "You are a Japan patent examination analysis expert. "
@@ -4239,6 +4257,14 @@ def execute_japan_examination_analysis(self, task_id: str, params: dict):
                 "examination, applicant's strategy, direction of claim "
                 "amendments, and final outcome."
             )
+            if jp_data.get('progress_synthesized', False):
+                exec_prompt = (
+                    "⚠️ NOTE: JPO returned no examination document list; "
+                    "the timeline below is inferred from bibliographic dates "
+                    "only. Do NOT claim 'no office actions' or 'direct grant' "
+                    "— state that the data is insufficient.\n\n"
+                    + exec_prompt
+                )
 
         try:
             exec_json = await pro_provider.complete_json(

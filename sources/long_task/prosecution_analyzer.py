@@ -1198,19 +1198,42 @@ async def generate_family_prosecution_report(
             a_str = str(amendments)[:5000] if not isinstance(amendments, str) else amendments[:5000]
             jp_parts.append(f"### JP Amendments\n{a_str}" if lang != "zh" else f"### 日本意見書・補正書\n{a_str}")
         jp_data_text = "\n\n".join(jp_parts)
-        # Mark data depth
-        _jp_has_deep = bool(jp_exam_data.get("refusal_reasons") or jp_exam_data.get("amendments") or (len(jp_exam_data.get("progress", [])) > 3))
-        if not _jp_has_deep and jp_data_text:
-            jp_data_text = (
-                "[BASIC DATA ONLY — no detailed examination events. "
-                "Do NOT create a separate Japan analysis section. "
-                "Mention key facts in the Family Overview only.]\n"
-                + jp_data_text
-            ) if lang != "zh" else (
-                "[仅有基础数据—无详细审查事件。不要创建独立的日本分析章节。"
-                "仅在专利家族概览中提及关键事实。]\n"
-                + jp_data_text
+        # Mark data depth.  Synthesized (biblio-inferred) timelines are NOT
+        # detailed examination events — treat them as basic data.
+        _jp_synthesized = bool(jp_exam_data.get("progress_synthesized", False))
+        _jp_has_deep = bool(
+            not _jp_synthesized
+            and (
+                jp_exam_data.get("refusal_reasons")
+                or jp_exam_data.get("amendments")
+                or (len(jp_exam_data.get("progress", [])) > 3)
             )
+        )
+        if not _jp_has_deep and jp_data_text:
+            if _jp_synthesized:
+                _hint_zh = (
+                    "[仅有著录项推断数据—JPO 未返回审查经过明细（書類一覧为空）。"
+                    "不要创建独立的日本分析章节；不要断言'无审查意见'或'直接授权'，"
+                    "数据不足即如实说明。仅在专利家族概览中提及关键事实。]\n"
+                )
+                _hint_en = (
+                    "[BIBLIO-INFERRED DATA ONLY — JPO returned no examination "
+                    "document list. Do NOT create a separate Japan analysis "
+                    "section; do NOT claim 'no office actions' or 'direct grant' "
+                    "— state that data is insufficient. Mention key facts in "
+                    "the Family Overview only.]\n"
+                )
+            else:
+                _hint_zh = (
+                    "[仅有基础数据—无详细审查事件。不要创建独立的日本分析章节。"
+                    "仅在专利家族概览中提及关键事实。]\n"
+                )
+                _hint_en = (
+                    "[BASIC DATA ONLY — no detailed examination events. "
+                    "Do NOT create a separate Japan analysis section. "
+                    "Mention key facts in the Family Overview only.]\n"
+                )
+            jp_data_text = (_hint_en if lang != "zh" else _hint_zh) + jp_data_text
     # No filler text — empty means LLM skips the section
     # ── EP data context ──
     ep_data_text = ""
