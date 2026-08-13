@@ -6,10 +6,23 @@ import { useI18n } from '@/lib/app-i18n'
 import { useChatSession, type ChatMessage } from '@/contexts/ChatContext'
 import { useChatStream } from '@/lib/useChatStream'
 import { getSession } from '@/services/api'
-import ResultCard from '@/components/app/ResultCard'
+import MarkdownMessage from '@/components/app/MarkdownMessage'
 import ResultList from '@/components/app/results/ResultList'
 import DetailPanel from '@/components/app/results/DetailPanel'
 import { buildRowModel } from '@/lib/results'
+
+function getFileTypeBadge(file: File): string {
+  const ext = '.' + file.name.split('.').pop()?.toLowerCase()
+  if (ext === '.docx') return 'DOCX'
+  if (ext === '.xml') return 'XML'
+  return 'PDF'
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+}
 
 export default function ResultsPage() {
   const { t } = useI18n()
@@ -17,8 +30,9 @@ export default function ResultsPage() {
   const [activeTab, setActiveTab] = useState<string>('details')
   const router = useRouter()
   const searchParams = useSearchParams()
-  const { messages, setMessages, sessionId, setSessionId, resultsSetId, setResultsSetId, input, setInput, streaming } = useChatSession()
-  const { send, selectedFiles, setSelectedFiles, addFiles, removeFile, isDragOver, setIsDragOver } = useChatStream()
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const { messages, setMessages, sessionId, setSessionId, resultsSetId, setResultsSetId, input, setInput, streaming, streamingId } = useChatSession()
+  const { send, abort, transientStatus, selectedFiles, setSelectedFiles, addFiles, removeFile, isDragOver, setIsDragOver } = useChatStream()
 
   const setId = searchParams.get('set') || resultsSetId
   const loadedRef = useRef(false)
@@ -108,26 +122,115 @@ export default function ResultsPage() {
     <div className="page active results-page">
       <div className="results-layout">
         <aside className="results-chat-sidebar">
-          <div className="results-chat-messages">
+          <div className="chat-messages results-chat-messages">
             {messages.map((msg) => (
-              <div key={msg.id} className={`results-chat-item ${msg.role}`}>
-                {msg.role === 'assistant' && (msg as any).results ? (
-                  <ResultCard results={(msg as any).results} sessionId={sessionId} />
+              <div key={msg.id} className={`chat-message-wrapper ${msg.role}`}>
+                {msg.role === 'assistant' ? (
+                  <MarkdownMessage
+                    content={msg.content}
+                    artifacts={msg.artifacts || []}
+                    resultSummary={msg.resultSummary}
+                    streaming={streaming && streamingId === msg.id}
+                    transientStatus={streaming && streamingId === msg.id ? transientStatus : ''}
+                  />
                 ) : (
-                  <span>{msg.content.length > 120 ? msg.content.slice(0, 120) + '…' : msg.content}</span>
+                  <div className="chat-message user">{msg.content}</div>
                 )}
               </div>
             ))}
           </div>
-          <div className="results-chat-input">
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={t('results.sidebarPlaceholder')}
-              rows={2}
-            />
-            <button onClick={() => send()} disabled={streaming || !input.trim()}>→</button>
+          {isDragOver && (
+            <div
+              className="file-drop-overlay"
+              onDragOver={(e) => { e.preventDefault(); setIsDragOver(true) }}
+              onDragLeave={(e) => { e.preventDefault(); setIsDragOver(false) }}
+              onDrop={(e) => { e.preventDefault(); setIsDragOver(false); if (e.dataTransfer.files.length > 0) addFiles(e.dataTransfer.files) }}
+            >
+              <div className="file-drop-zone">
+                <p>{t('chat.dropFilesHere') || 'Drop patent specification files here'}</p>
+                <span className="file-drop-hint">PDF, DOCX, XML · Max 10 MB each · Up to 100 files</span>
+              </div>
+            </div>
+          )}
+          <div className="chat-input-container">
+            {selectedFiles.length > 0 && (
+              <div className="file-chips-bar">
+                {selectedFiles.map((file, i) => (
+                  <div key={`${file.name}-${i}`} className="file-chip">
+                    <span className={`file-chip-badge ${getFileTypeBadge(file).toLowerCase()}`}>
+                      {getFileTypeBadge(file)}
+                    </span>
+                    <span className="file-chip-name">{file.name}</span>
+                    <span className="file-chip-size">{formatFileSize(file.size)}</span>
+                    <button
+                      className="file-chip-remove"
+                      onClick={() => removeFile(i)}
+                      aria-label="Remove file"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                      </svg>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div
+              className="chat-input-wrapper"
+              onDragOver={(e) => { e.preventDefault(); setIsDragOver(true) }}
+              onDragLeave={(e) => { e.preventDefault(); setIsDragOver(false) }}
+              onDrop={(e) => { e.preventDefault(); setIsDragOver(false); if (e.dataTransfer.files.length > 0) addFiles(e.dataTransfer.files) }}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="file-input-hidden"
+                accept=".pdf,.docx,.xml"
+                multiple
+                onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = '' }}
+              />
+              <button
+                className="file-upload-btn"
+                onClick={() => fileInputRef.current?.click()}
+                aria-label="Attach patent files"
+                title={t('chat.attachFiles') || 'Attach patent specification files (PDF, DOCX, XML)'}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                </svg>
+              </button>
+              <textarea
+                className="chat-input"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder={t('chat.placeholder')}
+                rows={1}
+              />
+              {streaming ? (
+                <button
+                  className="send-btn"
+                  onClick={abort}
+                  style={{ background: 'var(--color-text-secondary)' }}
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                    <rect x="6" y="6" width="12" height="12" />
+                  </svg>
+                </button>
+              ) : (
+                <button
+                  className="send-btn"
+                  onClick={() => send()}
+                  disabled={!input.trim() && selectedFiles.length === 0}
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <line x1="22" y1="2" x2="11" y2="13" />
+                    <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                  </svg>
+                </button>
+              )}
+            </div>
           </div>
         </aside>
         <main className="results-main">

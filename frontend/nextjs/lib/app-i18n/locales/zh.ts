@@ -156,8 +156,6 @@ export default {
     longTaskQueuedWithId: '🔬 深度分析排队中，将在当前任务完成后自动开始... 任务ID: {taskId}',
     longTaskStopping: '⏹ 正在停止... {pct} 任务ID: {taskId}',
     phasePreparing: '正在准备专利分析...',
-    resultsCardTitle: '🔍 检索到 {count} 条结果',
-    resultsViewButton: '在结果页查看',
   },
 
   // 侧边栏

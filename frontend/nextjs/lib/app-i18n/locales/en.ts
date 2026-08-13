@@ -156,8 +156,6 @@ export default {
     longTaskQueuedWithId: '🔬 Analysis queued, will start automatically after current task completes... Task ID: {taskId}',
     longTaskStopping: '⏹ Stopping... {pct} Task ID: {taskId}',
     phasePreparing: 'Preparing patent analysis...',
-    resultsCardTitle: '🔍 Found {count} results',
-    resultsViewButton: 'View in results page',
   },
 
   // Sidebar
