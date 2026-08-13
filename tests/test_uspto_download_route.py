@@ -196,5 +196,51 @@ class TestUsptoDownloadRoute(unittest.TestCase):
             )
 
 
+class TestUsptoDownloadInlineMode(unittest.IsolatedAsyncioTestCase):
+    """Route handler tests — fetch_uspto_download_file is patched out."""
+
+    def _fake_download_file(self):
+        class FakeDownloadFile:
+            content = b"%PDF-1.4 fake"
+            media_type = "application/pdf"
+            filename = "document.pdf"
+        return FakeDownloadFile()
+
+    async def test_inline_param_sets_inline_content_disposition(self):
+        from unittest.mock import patch
+        from api_routes.uspto import download_uspto_file
+
+        with patch(
+            "api_routes.uspto.fetch_uspto_download_file",
+            return_value=self._fake_download_file(),
+        ):
+            response = await download_uspto_file(
+                url="https://api.uspto.gov/api/v1/download/applications/18244278/documents/file.pdf",
+                inline=True,
+            )
+        self.assertEqual(response.media_type, "application/pdf")
+        self.assertIn(
+            'inline; filename="document.pdf"',
+            response.headers["Content-Disposition"],
+        )
+
+    async def test_default_disposition_is_attachment(self):
+        from unittest.mock import patch
+        from api_routes.uspto import download_uspto_file
+
+        with patch(
+            "api_routes.uspto.fetch_uspto_download_file",
+            return_value=self._fake_download_file(),
+        ):
+            response = await download_uspto_file(
+                url="https://api.uspto.gov/api/v1/download/applications/18244278/documents/file.pdf",
+                inline=False,
+            )
+        self.assertIn(
+            'attachment; filename="document.pdf"',
+            response.headers["Content-Disposition"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

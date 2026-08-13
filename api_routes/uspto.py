@@ -16,7 +16,10 @@ router = APIRouter()
 
 
 @router.get("/uspto/download")
-async def download_uspto_file(url: str = Query(..., min_length=1)):
+async def download_uspto_file(
+    url: str = Query(..., min_length=1),
+    inline: bool = Query(False),
+):
     logger.info(f"USPTO lazy download requested: {url}")
     try:
         download_file = fetch_uspto_download_file(
@@ -36,11 +39,12 @@ async def download_uspto_file(url: str = Query(..., min_length=1)):
         logger.error(f"USPTO lazy download request failed: {exc}")
         return JSONResponse(status_code=502, content={"error": "USPTO download request failed"})
 
+    disposition = "inline" if inline else "attachment"
     logger.info(f"USPTO lazy download proxied: {download_file.filename}")
     return Response(
         content=download_file.content,
         media_type=download_file.media_type,
         headers={
-            "Content-Disposition": f'attachment; filename="{download_file.filename}"'
+            "Content-Disposition": f'{disposition}; filename="{download_file.filename}"'
         },
     )
