@@ -1,9 +1,12 @@
 'use client'
 
 import { useI18n } from '@/lib/app-i18n'
+import { buildDocPreview } from '@/lib/docPreview'
 
 export default function DocTab({ row }: { row: any }) {
   const { t } = useI18n()
+  const preview = buildDocPreview(row.url)
+
   return (
     <div className="results-detail-card">
       <h3>{row.title}</h3>
@@ -13,10 +16,25 @@ export default function DocTab({ row }: { row: any }) {
           <span>{item.value}</span>
         </div>
       ))}
-      {row.url && (
-        <a className="results-doc-link" href={row.url} target="_blank" rel="noopener noreferrer">
-          {t('results.rowDocView')}
-        </a>
+      {preview.mode === 'iframe' && (
+        <iframe
+          className="results-doc-frame"
+          src={preview.src}
+          title={row.title || 'document preview'}
+        />
+      )}
+      {preview.mode === 'fallback' && (
+        <div className="results-error">
+          <p>{t('results.docNoPdf')}</p>
+          <a href={preview.url} download rel="noopener noreferrer">
+            {t('results.docPdfFallbackDownload')}
+          </a>
+        </div>
+      )}
+      {preview.mode === 'unavailable' && (
+        <div className="results-error">
+          <p>{t('results.docUnavailable')}</p>
+        </div>
       )}
     </div>
   )
