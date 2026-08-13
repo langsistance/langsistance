@@ -653,5 +653,11 @@ export default {
     claimsError: '权利要求加载失败',
     claimCopy: '复制',
     retry: '重试',
+    prosecutionUs: '美国审查历史分析',
+    prosecutionFamily: '跨国同族审查历史分析',
+    prosecutionUsUnavailable: '需要 8 位美国申请号',
+    prosecutionSubmitting: '正在提交分析任务…',
+    prosecutionSubmitError: '提交失败，请稍后重试',
+    prosecutionRunning: '分析进行中…',
   },
 };
