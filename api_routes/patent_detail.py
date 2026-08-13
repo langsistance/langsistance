@@ -18,14 +18,10 @@ import re
 
 from fastapi import APIRouter, HTTPException, Request
 
-from sources.logger import Logger
 from sources.user.passport import verify_firebase_token
 
 VALID_SOURCES = {"uspto", "google_patents"}
 
-_SECTION_HEADING_PATTERN = re.compile(
-    r"^[\[【]?[0-9]{4}[\]】]?\s*$"
-)
 _NATURAL_HEADING_PATTERN = re.compile(
     r"^(技术领域|背景技术|发明内容|附图说明|具体实施方式|"
     r"Technical Field|Background|Summary|Brief Description|"
@@ -128,13 +124,10 @@ async def _fetch_claims(source: str, patent_id: str) -> dict:
 def register_patent_detail_routes(logger, config):
     """Register patent detail routes with dependency injection."""
     router = APIRouter()
-    logger = Logger("patent_detail.log")
 
     @router.get("/patent/{source}/{patent_id}/spec")
-    async def patent_spec(source: str, patent_id: str, http_request: Request = None):
-        if http_request is not None:
-            auth_header = http_request.headers.get("Authorization")
-            verify_firebase_token(auth_header)
+    async def patent_spec(source: str, patent_id: str, http_request: Request):
+        verify_firebase_token(http_request.headers.get("Authorization"))
         if source not in VALID_SOURCES:
             raise HTTPException(status_code=400, detail="Unsupported source")
         if not patent_id or len(patent_id) > 40:
@@ -150,10 +143,8 @@ def register_patent_detail_routes(logger, config):
         return {"success": True, **payload}
 
     @router.get("/patent/{source}/{patent_id}/claims")
-    async def patent_claims(source: str, patent_id: str, http_request: Request = None):
-        if http_request is not None:
-            auth_header = http_request.headers.get("Authorization")
-            verify_firebase_token(auth_header)
+    async def patent_claims(source: str, patent_id: str, http_request: Request):
+        verify_firebase_token(http_request.headers.get("Authorization"))
         if source not in VALID_SOURCES:
             raise HTTPException(status_code=400, detail="Unsupported source")
         if not patent_id or len(patent_id) > 40:
