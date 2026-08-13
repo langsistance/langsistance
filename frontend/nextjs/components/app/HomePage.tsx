@@ -7,7 +7,6 @@ import { I18nProvider } from '@/lib/app-i18n'
 import AppLayout from '@/components/app/AppLayout'
 import SceneOnboardingModal from '@/components/app/SceneOnboardingModal'
 import PatentOnboardingWizard from '@/components/app/PatentOnboardingWizard'
-import LoginForm from '@/components/app/LoginForm'
 import Chat from '@/app/app/(auth)/chat/page'
 
 function HomePageContent() {
@@ -22,13 +21,12 @@ function HomePageContent() {
     )
   }
 
-  if (user === null) {
-    return <LoginForm />
-  }
-
+  // Always show Chat — even when not logged in.
+  // Auth gate happens when the user clicks "send" in the chat input.
+  // Skip scene onboarding for anonymous users (API would fail, no scenes to select).
   return (
     <AppLayout>
-      <SceneOnboardingModal />
+      {user && <SceneOnboardingModal />}
       <PatentOnboardingWizard />
       <Chat />
     </AppLayout>
@@ -37,12 +35,12 @@ function HomePageContent() {
 
 export default function HomePage() {
   return (
-    <AuthProvider>
-      <I18nProvider>
+    <I18nProvider>
+      <AuthProvider>
         <ChatProvider>
           <HomePageContent />
         </ChatProvider>
-      </I18nProvider>
-    </AuthProvider>
+      </AuthProvider>
+    </I18nProvider>
   )
 }

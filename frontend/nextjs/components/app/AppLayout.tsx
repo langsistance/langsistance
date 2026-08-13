@@ -86,7 +86,7 @@ function getInitialDevMode() {
 }
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
-  const { user, logout } = useAuth()
+  const { user, logout, requireAuth } = useAuth()
   const { t, lang } = useI18n()
   const router = useRouter()
   const pathname = usePathname()
@@ -130,10 +130,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
-  // Fetch sessions on mount and when route changes (detect long task completion)
+  // Fetch sessions on mount, when route changes, or when user logs in
   useEffect(() => {
     refreshSessions()
-  }, [refreshSessions, pathname])
+  }, [refreshSessions, pathname, user])
 
   // Re-fetch sessions periodically (for long task updates)
   useEffect(() => {
@@ -155,6 +155,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   async function handleLogout() {
     await logout()
     router.push('/app/login')
+  }
+
+  function handleLoginClick() {
+    requireAuth(() => {}, lang === 'en' ? 'Sign in to start using CopiioAI' : '登录 CopiioAI 后开始使用')
   }
 
   function toggleDevMode() {
@@ -180,22 +184,30 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <MessageBell />
           <LanguageToggleButton />
           <div className="user-menu" ref={menuRef}>
-            <button className="user-avatar" onClick={() => setMenuOpen(v => !v)}>
-              {user?.email?.[0]?.toUpperCase() ?? 'U'}
-            </button>
-            {menuOpen && (
-              <div className="user-menu-dropdown">
-                <div className="user-menu-email">{user?.email}</div>
-                <hr className="user-menu-divider" />
-                <button className="user-menu-logout" onClick={handleLogout}>
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-                    <polyline points="16 17 21 12 16 7" />
-                    <line x1="21" y1="12" x2="9" y2="12" />
-                  </svg>
-                  {t('common.signOut')}
+            {user ? (
+              <>
+                <button className="user-avatar" onClick={() => setMenuOpen(v => !v)}>
+                  {user.email?.[0]?.toUpperCase() ?? 'U'}
                 </button>
-              </div>
+                {menuOpen && (
+                  <div className="user-menu-dropdown">
+                    <div className="user-menu-email">{user.email}</div>
+                    <hr className="user-menu-divider" />
+                    <button className="user-menu-logout" onClick={handleLogout}>
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                        <polyline points="16 17 21 12 16 7" />
+                        <line x1="21" y1="12" x2="9" y2="12" />
+                      </svg>
+                      {t('common.signOut')}
+                    </button>
+                  </div>
+                )}
+              </>
+            ) : (
+              <button className="btn btn-primary" style={{ padding: '6px 16px', fontSize: 13, borderRadius: 8 }} onClick={handleLoginClick}>
+                {lang === 'en' ? 'Sign In / Sign Up' : '登录 / 注册'}
+              </button>
             )}
           </div>
         </div>

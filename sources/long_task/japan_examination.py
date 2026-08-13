@@ -1,18 +1,21 @@
 """Japan patent examination history analysis pipeline.
 
 Resolves a patent ID (US/CN/EP/JP) to a Japanese application number via the
-EPO family API, fetches examination progress data from the JPO IP Data
-Platform, and formats it for inclusion in cross-jurisdiction reports.
+EPO family API, fetches examination data from the JPO IP Data Platform,
+and formats it for inclusion in cross-jurisdiction reports.
 
-Unlike China (SIPOP), the JPO API provides a chronological *progress list*
-of all examination events rather than structured review decisions.  The
-analysis approach is therefore simplified: parse the progress timeline,
-translate event names, and present as a structured timeline.
+The JPO ``app_progress`` API does NOT provide an event list.  Examination
+events live in ``bibliographyInformation[].documentList[]`` (documentCode /
+documentDescription / legalDate / documentNumber).  When that document list
+is absent (bibliographic-only response), a fallback timeline is synthesized
+from bibliographic dates and explicitly flagged as degraded — it is kept
+SEPARATE from real progress so downstream code never mistakes it for a
+real examination history.
 
 Flow::
 
     patent_id → [EPO family → JP app_number] → JPO API
-    → parse progress events → build timeline → append to report
+    → parse document list → build timeline → append to report
 """
 
 from __future__ import annotations
@@ -149,10 +152,13 @@ async def fetch_examination_data(
 
     Returns:
         Dict with:
-          - progress: full progress list (list of dicts)
+          - progress: REAL examination events from the JPO document list
+          - synthesized_events: biblio-inferred fallback timeline (empty
+            when real events exist)
+          - progress_synthesized: True when the document list was absent
+          - progress_count: number of REAL progress events
           - registration: registration info dict (or None)
           - citations: cited documents list (or None)
-          - progress_count: number of progress events
           - has_registration: bool
           - has_citations: bool
     """
@@ -161,6 +167,8 @@ async def fetch_examination_data(
     result: dict[str, Any] = {
         "jp_app_number": jp_app_number,
         "progress": [],
+        "synthesized_events": [],
+        "progress_synthesized": False,
         "registration": None,
         "citations": None,
         "progress_count": 0,
@@ -171,10 +179,14 @@ async def fetch_examination_data(
     # ── Progress (examination timeline) ──
     try:
         progress_raw = await jpo_client.get_patent_progress(jp_app_number)
-        events = parse_jp_progress_events(progress_raw)
-        result["progress"] = events
-        result["progress_count"] = len(events)
-        if not events:
+        events, synthesized = parse_jp_progress_events(progress_raw)
+        if synthesized:
+            # Real document list absent — keep synthesized biblio timeline
+            # SEPARATE from real progress so callers can't mistake it for
+            # a real examination history.
+            result["synthesized_events"] = events
+            result["progress_synthesized"] = True
+            result["progress_count"] = 0
             # Log full data structure to diagnose key mismatches
             _dbg = {}
             if isinstance(progress_raw, dict):
@@ -186,10 +198,12 @@ async def fetch_examination_data(
                     else:
                         _dbg[k] = type(v).__name__
             _logger.warning(
-                f"japan_fetch_progress_empty — app={jp_app_number}, "
-                f"data_structure={_dbg}"
+                f"japan_fetch_progress_synthesized — app={jp_app_number}, "
+                f"synthesized={len(events)}, data_structure={_dbg}"
             )
         else:
+            result["progress"] = events
+            result["progress_count"] = len(events)
             _logger.info(
                 f"japan_fetch_progress — app={jp_app_number}, events={len(events)}"
             )
@@ -484,12 +498,18 @@ def build_examination_timeline(
     """
     from sources.jpo_client import translate_jp_event
 
-    events = jp_data.get("progress", [])
+    events = jp_data.get("progress", []) or []
+    synthesized = False
     if not events:
-        if lang == "zh":
-            return "未获取到日本审查经过数据。\n"
-        else:
-            return "No Japanese examination progress data available.\n"
+        # No real events — fall back to the separately stored synthesized
+        # biblio timeline, if present, and label it as degraded.
+        events = jp_data.get("synthesized_events", []) or []
+        if not events:
+            if lang == "zh":
+                return "未获取到日本审查经过数据。\n"
+            else:
+                return "No Japanese examination progress data available.\n"
+        synthesized = True
 
     lines: list[str] = []
 
@@ -498,6 +518,21 @@ def build_examination_timeline(
         lines.append("### 日本审查经过\n")
     else:
         lines.append("### Japan Examination Progress\n")
+
+    # Degraded-data label: synthesized timelines must never be presented
+    # as a real examination history (they are built from biblio dates only).
+    if synthesized:
+        if lang == "zh":
+            lines.append(
+                "**⚠️ 数据说明：JPO 未返回审查经过明细（書類一覧），"
+                "以下时间线仅根据著录项日期推断，可能不完整。**\n"
+            )
+        else:
+            lines.append(
+                "**⚠️ Note: JPO returned no examination document list; "
+                "this timeline is inferred from bibliographic dates only "
+                "and may be incomplete.**\n"
+            )
 
     # Summary line
     if lang == "zh":
@@ -517,8 +552,13 @@ def build_examination_timeline(
         date_str = _parse_event_date(evt.get("event_date", ""))
         event_name = evt.get("event", "")
         translated = translate_jp_event(event_name, lang)
-        detail = evt.get("event_detail", "") or evt.get("event_remarks", "") or "—"
-        detail = _truncate(detail, 180)
+        detail = (
+            evt.get("document_number")
+            or evt.get("event_detail")
+            or evt.get("event_remarks")
+            or "—"
+        )
+        detail = _truncate(str(detail), 180)
 
         lines.append(f"| {date_str} | {translated} | {detail} |")
 
@@ -532,7 +572,7 @@ def build_examination_timeline(
                            "審判", "意見書", "手続補正書", "登録査定",
                            "出願審査請求", "取下", "放棄", "無効"])
     ]
-    if _key_events:
+    if _key_events and not synthesized:
         if lang == "zh":
             lines.append("**关键审查里程碑：**\n")
         else:

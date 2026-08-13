@@ -29,6 +29,12 @@ button { cursor: pointer; }
   justify-content: center;
 }
 
+/* Override login-page when inside a modal — no full-height, no background */
+.modal-body .login-page {
+  min-height: auto;
+  background: transparent;
+}
+
 .login-card {
   background: var(--color-bg-white);
   border: 1px solid var(--color-border);

@@ -61,8 +61,9 @@ class JpoClient:
 
         client = JpoClient(username="...", password="...")
         progress = await client.get_patent_progress("202080061975")
-        for event in progress.get("progressList", []):
-            print(event["event"], event["eventDate"])
+        for bib in progress.get("bibliographyInformation", []):
+            for doc in bib.get("documentList", []):
+                print(doc["documentCode"], doc["documentDescription"])
     """
 
     def __init__(self, username: str, password: str) -> None:
@@ -89,8 +90,11 @@ class JpoClient:
             application_number: 10-digit JP application number.
 
         Returns:
-            Dict with ``progressList`` — list of examination events, each with
-            ``event``, ``eventDate``, ``eventCategory``, ``eventDetail`` etc.
+            Dict with bibliographic fields plus ``bibliographyInformation`` —
+            a list of ``{numberType, number, documentList[]}`` entries where
+            each document carries ``documentCode``, ``documentDescription``,
+            ``legalDate`` and ``documentNumber``.  There is NO event list;
+            the document list IS the examination history.
         """
         return await self._get(
             f"{JPO_API_PREFIX}/patent/v1/app_progress/{application_number}"
@@ -354,49 +358,64 @@ def normalize_jp_application_number(raw: str) -> str:
     return num
 
 
-def parse_jp_progress_events(progress_data: dict[str, Any]) -> list[dict[str, Any]]:
-    """Parse JPO patent progress response into a list of examination events.
+def parse_jp_progress_events(
+    progress_data: dict[str, Any],
+) -> tuple[list[dict[str, Any]], bool]:
+    """Parse the JPO ``app_progress`` response into examination events.
 
-    The JPO ``app_progress`` API may return two different structures:
+    The JPO API has NO ``progressList`` key.  Real examination events live
+    in ``bibliographyInformation[].documentList[]`` — one entry per
+    document (書類), each carrying:
 
-    1. With progress events (has ``progressList`` key)::
+      - ``documentCode``        — 中間書類コード (e.g. "A621..." = 拒絶理由通知書)
+      - ``documentDescription`` — 書類名 (human-readable, e.g. "拒絶理由通知書")
+      - ``legalDate``           — 受付日・発送日・作成日 (YYYYMMDD)
+      - ``documentNumber``      — 書類番号 (11 digits)
 
-        {"progressList": [
-            {"event": "出願", "eventDate": "2020-08-25", ...},
-            ...
-        ]}
-
-    2. Bibliographic-only (no ``progressList`` — common for PCT national-phase
-       entries).  In this case we synthesize timeline events from the date fields
-       (filing, publication, registration).
-
-    Returns a list of events sorted by date.
+    Returns:
+        ``(events, synthesized)`` — ``events`` are REAL events from the
+        document list (sorted by date).  When the document list is empty
+        (bibliographic-only response), a fallback timeline is synthesized
+        from the bibliographic dates and ``synthesized`` is ``True`` so
+        callers can treat the data as degraded instead of real.
     """
-    progress_list = progress_data.get("progressList", [])
-    if not isinstance(progress_list, list):
-        progress_list = []
+    events: list[dict[str, Any]] = []
 
-    events = []
-    for item in progress_list:
-        if not isinstance(item, dict):
-            continue
-        events.append({
-            "event": item.get("event", ""),
-            "event_date": item.get("eventDate", ""),
-            "event_category": item.get("eventCategory", ""),
-            "event_detail": item.get("eventDetail", ""),
-            "event_remarks": item.get("eventRemarks", ""),
-            "event_code": item.get("eventCode", ""),
-            "event_number": item.get("eventNumber", ""),
-        })
+    bib_entries = progress_data.get("bibliographyInformation", [])
+    if isinstance(bib_entries, list):
+        for bib_entry in bib_entries:
+            if not isinstance(bib_entry, dict):
+                continue
+            doc_list = bib_entry.get("documentList", [])
+            if not isinstance(doc_list, list):
+                continue
+            for doc in doc_list:
+                if not isinstance(doc, dict):
+                    continue
+                event_date = str(doc.get("legalDate", "") or "").strip()
+                event_code = str(doc.get("documentCode", "") or "").strip()
+                event_desc = str(doc.get("documentDescription", "") or "").strip()
+                if not event_date and not event_code and not event_desc:
+                    continue  # fully empty placeholder row
+                events.append({
+                    "event": event_desc or f"書類コード {event_code}",
+                    "event_date": event_date,
+                    "event_category": "",
+                    "event_detail": "",
+                    "event_remarks": "",
+                    "event_code": event_code,
+                    "event_number": str(doc.get("documentNumber", "") or "").strip(),
+                    "document_number": str(doc.get("documentNumber", "") or "").strip(),
+                })
 
     # ── Fallback: synthesize from bibliographic dates ──────────────────────
     if not events:
         events = _synthesize_progress_from_biblio(progress_data)
+        return events, True
 
-    # Sort by date
-    events.sort(key=lambda e: e.get("event_date", ""))
-    return events
+    # Sort by date (empty dates last, stable for same-date documents)
+    events.sort(key=lambda e: (e.get("event_date", "") == "", e.get("event_date", "")))
+    return events, False
 
 
 def _synthesize_progress_from_biblio(
@@ -405,7 +424,9 @@ def _synthesize_progress_from_biblio(
     """Build a minimal timeline from bibliographic date fields.
 
     Used when the JPO ``app_progress`` endpoint returns only bibliographic
-    data (no ``progressList``), which is common for PCT national-phase entries.
+    data (no document list).  Every synthesized event carries
+    ``synthesized=True`` so downstream consumers can label the data as
+    degraded instead of presenting it as a real examination history.
     """
     events: list[dict[str, Any]] = []
 
@@ -418,6 +439,7 @@ def _synthesize_progress_from_biblio(
             "event_category": "A01",
             "event_detail": data.get("inventionTitle", ""),
             "event_remarks": "",
+            "synthesized": True,
         })
 
     # Publication date
@@ -429,6 +451,7 @@ def _synthesize_progress_from_biblio(
             "event_category": "B01",
             "event_detail": data.get("publicationNumber", ""),
             "event_remarks": "",
+            "synthesized": True,
         })
 
     # Registration (grant) date
@@ -441,6 +464,7 @@ def _synthesize_progress_from_biblio(
             "event_category": "G01",
             "event_detail": reg_num or "",
             "event_remarks": "",
+            "synthesized": True,
         })
 
     return events

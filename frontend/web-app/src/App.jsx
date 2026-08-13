@@ -1,5 +1,4 @@
-import { Routes, Route, Navigate } from 'react-router-dom'
-import { useAuth } from './contexts/AuthContext'
+import { Routes, Route } from 'react-router-dom'
 import Login from './pages/Login'
 import Layout from './components/Layout'
 import Chat from './pages/Chat'
@@ -9,13 +8,6 @@ import Community from './pages/Community'
 import DevTools from './pages/DevTools'
 import { ChatProvider } from './contexts/ChatContext'
 
-function RequireAuth({ children }) {
-  const { user } = useAuth()
-  if (user === undefined) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: 'var(--color-text-secondary)' }}>加载中...</div>
-  if (!user) return <Navigate to="/login" replace />
-  return children
-}
-
 export default function App() {
   return (
     <Routes>
@@ -23,14 +15,12 @@ export default function App() {
       <Route
         path="/*"
         element={
-          <RequireAuth>
-            <ChatProvider>
-              <Layout />
-            </ChatProvider>
-          </RequireAuth>
+          <ChatProvider>
+            <Layout />
+          </ChatProvider>
         }
       >
-        <Route index element={<Navigate to="/chat" replace />} />
+        <Route index element={<Chat />} />
         <Route path="chat" element={<Chat />} />
         <Route path="knowledge" element={<Knowledge />} />
         <Route path="share" element={<Share />} />

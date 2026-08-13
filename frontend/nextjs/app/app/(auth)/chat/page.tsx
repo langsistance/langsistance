@@ -2,9 +2,10 @@
 
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { queryStream, queryStreamWithFiles, getUserSceneStatus, getSceneKnowledge, pollLongTaskBatchStatus, getLongTaskReportUrl, getSession, saveSessionMessages } from '@/services/api'
+import { queryStream, queryStreamWithFiles, getUserSceneStatus, getSceneKnowledge, getPublicAvailableScenes, getPublicSceneKnowledge, pollLongTaskBatchStatus, getLongTaskReportUrl, getSession, saveSessionMessages } from '@/services/api'
 import { pollRecoverLongTask } from '@/lib/longTaskRecovery'
 import { useI18n } from '@/lib/app-i18n'
+import { useAuth } from '@/contexts/AuthContext'
 import MarkdownMessage from '@/components/app/MarkdownMessage'
 import { useChatSession } from '@/contexts/ChatContext'
 import type { ChatMessage } from '@/contexts/ChatContext'
@@ -54,6 +55,7 @@ function UserCopyButton({ content }: { content: string }) {
 
 export default function Chat() {
   const { t, lang } = useI18n()
+  const { user, requireAuth } = useAuth()
   const {
     messages,
     setMessages,
@@ -93,6 +95,12 @@ export default function Chat() {
   const [sceneSmartQA, setSceneSmartQA] = useState<{name: string, desc: string}[]>([])
   const [sceneDeepResearch, setSceneDeepResearch] = useState<{name: string, desc: string}[]>([])
 
+  // Keep a ref to the latest send() so the pending auth callback always
+  // invokes the current render's closure (with up-to-date `user`), not a
+  // stale one from the anonymous render where `user` was null.
+  const sendRef = useRef(send)
+  sendRef.current = send
+
   useEffect(() => {
     getUserSceneStatus(lang)
       .then(async (res) => {
@@ -120,7 +128,35 @@ export default function Chat() {
         setSceneSmartQA(smartQA)
         setSceneDeepResearch(deepResearch)
       })
-      .catch(() => {})
+      .catch(async () => {
+        // Anonymous user — fall back to public scene endpoints (no auth)
+        try {
+          const pubRes = await getPublicAvailableScenes(lang)
+          const allScenes = pubRes.scenes || []
+          setEnabledScenes(allScenes)
+          const smartQA: {name: string, desc: string}[] = []
+          const deepResearch: {name: string, desc: string}[] = []
+          for (const scene of allScenes) {
+            try {
+              const kr = await getPublicSceneKnowledge(scene.id, lang)
+              const items = kr.knowledge || []
+              items.forEach((item: any) => {
+                const example = {
+                  name: scene.name,
+                  desc: pickLang(item.description || item.question, lang),
+                }
+                if (item.type === 3) {
+                  deepResearch.push(example)
+                } else {
+                  smartQA.push(example)
+                }
+              })
+            } catch {}
+          }
+          setSceneSmartQA(smartQA)
+          setSceneDeepResearch(deepResearch)
+        } catch {}
+      })
   }, [lang])
 
   // Group scene knowledge items by scene name for structured display
@@ -359,6 +395,12 @@ export default function Chat() {
   async function send() {
     const text = input.trim()
     if (!text || streaming) return
+
+    if (!user) {
+      requireAuth(() => sendRef.current(), lang === 'en' ? 'Sign in to get your answer' : '登录后立即获得答案')
+      return
+    }
+
     setInput('')
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
 

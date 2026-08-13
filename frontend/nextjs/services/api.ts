@@ -38,6 +38,19 @@ async function get<T>(path: string, params: Record<string, string | number> = {}
   return assertApiResponseSuccess(await res.json(), `${path} failed`) as T
 }
 
+// Public API calls — no auth required, used for anonymous browsing
+async function getPublic<T>(path: string, params: Record<string, string | number> = {}): Promise<T> {
+  const entries = Object.entries(params).map(([k, v]) => [k, String(v)] as [string, string])
+  const qs = new URLSearchParams(entries).toString()
+  const url = `${BASE_URL}${path}${qs ? '?' + qs : ''}`
+  const res = await fetch(url)
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => '')
+    throw new Error(`${path} failed: ${res.status}${errorBody ? ` — ${errorBody}` : ''}`)
+  }
+  return assertApiResponseSuccess(await res.json(), `${path} failed`) as T
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ApiResult = Promise<any>
 
@@ -76,6 +89,11 @@ export const getUserScenes = (lang: string = 'zh'): ApiResult => get('/user/scen
 export const getUserSceneStatus = (lang: string = 'zh'): ApiResult => get('/user/scenes/status', { lang })
 export const updateUserScenes = (sceneIds: number[]): ApiResult =>
   post('/user/scenes', { scene_ids: sceneIds })
+
+// Public scene API — no auth, for anonymous browsing
+export const getPublicAvailableScenes = (lang: string = 'zh'): ApiResult => getPublic('/scenes/available', { lang })
+export const getPublicSceneKnowledge = (sceneId: number, lang: string = 'zh'): ApiResult =>
+  getPublic(`/scenes/${sceneId}/knowledge`, { lang })
 export const markOnboarded = (): ApiResult => post('/user/onboarded', {})
 
 // ── Feedback & Messages ─────────────────────────────────────────────────
