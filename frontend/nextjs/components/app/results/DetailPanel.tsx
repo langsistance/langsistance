@@ -25,6 +25,7 @@ export default function DetailPanel({
     if (key === 'prosecution') return !row.isDocument
     return !row.isDocument
   })
+  const activeTab = availableTabs.includes(tab) ? tab : availableTabs[0]
 
   return (
     <div className="results-detail">
@@ -32,7 +33,7 @@ export default function DetailPanel({
         {availableTabs.map((key) => (
           <button
             key={key}
-            className={tab === key ? 'active' : ''}
+            className={activeTab === key ? 'active' : ''}
             onClick={() => onTabChange(key)}
           >
             {t(`results.tab${key.charAt(0).toUpperCase() + key.slice(1)}`)}
@@ -40,7 +41,7 @@ export default function DetailPanel({
         ))}
       </div>
       <div className="results-detail-body">
-        {tab === 'details' && (
+        {activeTab === 'details' && (
           <div className="results-detail-card">
             <h3>{row.title}</h3>
             {row.fields.length > 0 ? (
@@ -59,10 +60,10 @@ export default function DetailPanel({
             )}
           </div>
         )}
-        {tab === 'doc' && <DocTab row={row} />}
-        {tab === 'spec' && <SpecTab row={row} />}
-        {tab === 'claims' && <ClaimsTab row={row} />}
-        {tab === 'prosecution' && <ProsecutionTab row={row} />}
+        {activeTab === 'doc' && <DocTab row={row} />}
+        {activeTab === 'spec' && <SpecTab row={row} />}
+        {activeTab === 'claims' && <ClaimsTab row={row} />}
+        {activeTab === 'prosecution' && <ProsecutionTab row={row} />}
       </div>
     </div>
   )
