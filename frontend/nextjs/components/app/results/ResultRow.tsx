@@ -15,18 +15,27 @@ interface RowModel {
 }
 
 export default function ResultRow({
-  model, active, onSelect, onOpenTab,
+  model, active, onSelect, onOpenTab, onProsecution,
 }: {
   model: RowModel
   active: boolean
   onSelect: (model: RowModel) => void
   onOpenTab: (model: RowModel, tab: string) => void
+  onProsecution: (model: RowModel) => void
 }) {
   const { t } = useI18n()
 
   return (
     <div className={`result-row${active ? ' active' : ''}`} onClick={() => onSelect(model)}>
-      <div className="result-row-title">{model.title || '—'}</div>
+      <button
+        className="result-row-title"
+        onClick={(e) => {
+          e.stopPropagation()
+          onSelect(model)
+        }}
+      >
+        {model.title || '—'}
+      </button>
       <div className="result-row-meta">
         {model.meta.map((item) => (
           <span key={item.label} className="result-row-meta-item">
@@ -37,7 +46,6 @@ export default function ResultRow({
       <div className="result-row-actions" onClick={(e) => e.stopPropagation()}>
         {model.isDocument ? (
           <>
-            <button onClick={() => onOpenTab(model, 'doc')}>{t('results.rowDocInfo')}</button>
             {model.url && (
               <a href={model.url} target="_blank" rel="noopener noreferrer">
                 {t('results.rowDocView')}
@@ -46,10 +54,9 @@ export default function ResultRow({
           </>
         ) : (
           <>
-            <button onClick={() => onOpenTab(model, 'details')}>{t('results.rowDetails')}</button>
             <button onClick={() => onOpenTab(model, 'spec')}>{t('results.rowSpec')}</button>
             <button onClick={() => onOpenTab(model, 'claims')}>{t('results.rowClaims')}</button>
-            <button onClick={() => onOpenTab(model, 'prosecution')}>{t('results.rowProsecution')}</button>
+            <button onClick={() => onProsecution(model)}>{t('results.rowProsecution')}</button>
           </>
         )}
       </div>

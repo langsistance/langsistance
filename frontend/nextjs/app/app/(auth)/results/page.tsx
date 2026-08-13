@@ -77,6 +77,21 @@ export default function ResultsPage() {
     }
   }
 
+  function handleProsecution(model: any) {
+    // 审查历史 analysis runs in the conversation page — navigate back with
+    // a pending query so the normal chat pipeline (intent routing → long
+    // task card) picks it up exactly as if the user had typed it.
+    const identifier = model.patentId || model.applicationNumber
+    const isUsAppNumber = /^\d{8}$/.test(model.applicationNumber || '')
+    const queryText = isUsAppNumber
+      ? `分析专利 ${identifier} 的审查历史`
+      : `分析 ${identifier} 及其全球同族申请的审查差异`
+    const params = new URLSearchParams()
+    if (sessionId) params.set('session_id', sessionId)
+    params.set('pending_query', queryText)
+    router.push(`/app/chat?${params.toString()}`)
+  }
+
   if (!activeMessage) {
     return (
       <div className="page active results-page">
@@ -91,7 +106,7 @@ export default function ResultsPage() {
 
   return (
     <div className="page active results-page">
-      <div className={`results-layout${activeRow ? ' with-detail' : ''}`}>
+      <div className="results-layout">
         <aside className="results-chat-sidebar">
           <div className="results-chat-messages">
             {messages.map((msg) => (
@@ -115,20 +130,25 @@ export default function ResultsPage() {
             <button onClick={() => send()} disabled={streaming || !input.trim()}>→</button>
           </div>
         </aside>
-        <ResultList
-          results={(activeMessage as any).results}
-          activeRowId={activeRowId}
-          onSelect={(model) => { setActiveRowId(model.id); setActiveTab(model.isDocument ? 'doc' : 'details') }}
-          onOpenTab={(model, tab) => { setActiveRowId(model.id); setActiveTab(tab) }}
-        />
-        {activeRow && (
-          <DetailPanel
-            row={activeRow}
-            tab={activeTab}
-            onTabChange={setActiveTab}
-            onClose={() => setActiveRowId(null)}
+        <main className="results-main">
+          <ResultList
+            results={(activeMessage as any).results}
+            activeRowId={activeRowId}
+            onSelect={(model) => { setActiveRowId(model.id); setActiveTab(model.isDocument ? 'doc' : 'details') }}
+            onOpenTab={(model, tab) => { setActiveRowId(model.id); setActiveTab(tab) }}
+            onProsecution={handleProsecution}
           />
-        )}
+          {activeRow && (
+            <div className="results-overlay">
+              <DetailPanel
+                row={activeRow}
+                tab={activeTab}
+                onTabChange={setActiveTab}
+                onClose={() => setActiveRowId(null)}
+              />
+            </div>
+          )}
+        </main>
       </div>
     </div>
   )

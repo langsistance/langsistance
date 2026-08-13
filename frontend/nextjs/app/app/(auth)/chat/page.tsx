@@ -77,6 +77,7 @@ export default function Chat() {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const isNearBottomRef = useRef(true)
+  const pendingQuerySentRef = useRef<string | null>(null)
 
   // Reset the auto-growing textarea height after a send empties the input.
   // The height reset previously lived inside the chat send() pipeline, which
@@ -86,6 +87,20 @@ export default function Chat() {
       textareaRef.current.style.height = 'auto'
     }
   }, [input])
+
+  // Auto-send a query arriving via URL (?pending_query=...) — used by the
+  // results page's 审查历史 button to trigger prosecution analysis back in
+  // the conversation.  The parameter is cleared from the URL so a refresh
+  // never re-sends it.
+  useEffect(() => {
+    const pending = searchParams.get('pending_query')
+    if (!pending || pendingQuerySentRef.current === pending) return
+    pendingQuerySentRef.current = pending
+    const url = new URL(window.location.href)
+    url.searchParams.delete('pending_query')
+    window.history.replaceState({}, '', url.toString())
+    send([], pending)
+  }, [searchParams, send])
 
   const [enabledScenes, setEnabledScenes] = useState<any[]>([])
   const [sceneSmartQA, setSceneSmartQA] = useState<{name: string, desc: string}[]>([])

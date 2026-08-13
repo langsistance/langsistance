@@ -4,9 +4,8 @@ import { useI18n } from '@/lib/app-i18n'
 import DocTab from './DocTab'
 import SpecTab from './SpecTab'
 import ClaimsTab from './ClaimsTab'
-import ProsecutionTab from './ProsecutionTab'
 
-const TAB_ORDER = ['details', 'doc', 'spec', 'claims', 'prosecution']
+const TAB_ORDER = ['details', 'doc', 'spec', 'claims']
 
 export default function DetailPanel({
   row, tab, onTabChange, onClose,
@@ -23,8 +22,6 @@ export default function DetailPanel({
   }
   const availableTabs = TAB_ORDER.filter((key) => {
     if (key === 'doc') return row.isDocument
-    if (key === 'details') return !row.isDocument
-    if (key === 'prosecution') return !row.isDocument
     return !row.isDocument
   })
   const activeTab = availableTabs.includes(tab) ? tab : availableTabs[0]
@@ -75,7 +72,6 @@ export default function DetailPanel({
         {activeTab === 'doc' && <DocTab row={row} />}
         {activeTab === 'spec' && <SpecTab row={row} />}
         {activeTab === 'claims' && <ClaimsTab row={row} />}
-        {activeTab === 'prosecution' && <ProsecutionTab row={row} />}
       </div>
     </div>
   )

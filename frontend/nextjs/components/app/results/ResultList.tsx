@@ -25,12 +25,13 @@ interface RowModel {
 }
 
 export default function ResultList({
-  results, activeRowId, onSelect, onOpenTab,
+  results, activeRowId, onSelect, onOpenTab, onProsecution,
 }: {
   results: ResultsPayload
   activeRowId: string | null
   onSelect: (model: RowModel) => void
   onOpenTab: (model: RowModel, tab: string) => void
+  onProsecution: (model: RowModel) => void
 }) {
   const { t } = useI18n()
   const [sort, setSort] = useState<'relevance' | 'date' | 'assignee'>('relevance')
@@ -98,6 +99,7 @@ export default function ResultList({
             active={activeRowId === model.id}
             onSelect={onSelect}
             onOpenTab={onOpenTab}
+            onProsecution={onProsecution}
           />
         ))}
       </div>

@@ -1049,8 +1049,31 @@ button { cursor: pointer; }
   overflow: hidden;
 }
 
-.results-layout.with-detail {
-  grid-template-columns: 280px 1fr 1fr;
+/* Main column hosts the result list; the detail overlay floats above it */
+.results-main {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Detail overlay: right-aligned, full height, leaves ~280px of the list
+   visible on the left (matching the chat sidebar width). */
+.results-overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: calc(100% - 280px);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-white);
+  border-left: 1px solid var(--color-border);
+  box-shadow: var(--shadow-md);
+  z-index: 10;
+  overflow: hidden;
 }
 
 /* Left: chat sidebar */
@@ -1313,6 +1336,11 @@ button { cursor: pointer; }
 }
 
 .result-row-title {
+  border: none;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
   color: var(--color-text-primary);
   font-size: 14px;
   font-weight: 600;
@@ -1322,6 +1350,17 @@ button { cursor: pointer; }
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.result-row-title:hover {
+  color: var(--color-primary);
+  text-decoration: underline;
+}
+
+.result-row-title:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+  border-radius: 2px;
 }
 
 .result-row-meta {

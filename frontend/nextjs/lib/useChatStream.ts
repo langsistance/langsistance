@@ -85,15 +85,15 @@ export function useChatStream() {
   // Keep a ref to the latest send() so the pending auth callback always
   // invokes the current render's closure (with up-to-date `user`), not a
   // stale one from the anonymous render where `user` was null.
-  const sendRef = useRef<(files?: File[]) => Promise<void>>(async () => {})
+  const sendRef = useRef<(presetText?: string) => Promise<void>>(async () => {})
   sendRef.current = send
 
-  async function send() {
-    const text = input.trim()
+  async function send(presetText: string = '') {
+    const text = (presetText || input).trim()
     if (!text || streaming) return
 
     if (!user) {
-      requireAuth(() => sendRef.current(), lang === 'en' ? 'Sign in to get your answer' : '登录后立即获得答案')
+      requireAuth(() => sendRef.current(presetText), lang === 'en' ? 'Sign in to get your answer' : '登录后立即获得答案')
       return
     }
 
@@ -519,9 +519,9 @@ export function useChatStream() {
   }, [])
 
   return {
-    send: (files: File[] = []) => {
+    send: (files: File[] = [], presetText: string = '') => {
       if (files.length > 0) setSelectedFiles((prev) => [...prev, ...files])
-      return sendRef.current()
+      return sendRef.current(presetText)
     },
     abort: () => abortRef.current?.abort(),
     transientStatus,
