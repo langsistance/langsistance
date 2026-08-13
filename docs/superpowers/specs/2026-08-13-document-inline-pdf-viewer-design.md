@@ -27,7 +27,8 @@
 
 - 不做 PDF 文本提取 / OCR（扫描件提取不可靠、慢）
 - 不改列表行「查看 / 下载」按钮（用户仅要求删详情里的）
-- 不改专利行逻辑、spec/claims tab、CSV/XLSX artifact
+- 不改专利行逻辑、spec/claims tab
+- 不破坏 CSV/XLSX 下载行为。注：`_lift_download_url` 作用于所有格式，CSV/XLSX 会同步**新增**一列 `downloadUrl`（加性变更，不删除任何原有列）——2026-08-13 终审发现后经用户确认接受
 - 不新增 SSE 事件类型
 
 ## 四、设计
@@ -110,7 +111,7 @@
 | 文件 | 改动 |
 |---|---|
 | `api_routes/uspto.py` | +`inline` 参数（~6 行） |
-| `sources/result_export.py` | `_lift_download_url` PDF 偏好（~20 行） |
+| `sources/result_export.py` | `_lift_download_url` PDF 偏好（~20 行）；CSV/XLSX 同步新增 `downloadUrl` 列（加性，经确认） |
 | `frontend/nextjs/components/app/results/DocTab.tsx` | 重写（~70 行） |
 | `frontend/nextjs/lib/docPreview.js` | 新增纯函数（~15 行） |
 | `frontend/nextjs/lib/app-i18n/locales/{zh,en}.ts` | +3 条文案 |
