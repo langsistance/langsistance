@@ -64,6 +64,8 @@ _ROLE_SUFFIXES: list[tuple[str, str]] = [
     ("title", "patenttitle"),
     ("title", "inventiontitle"),
     ("title", "title"),
+    ("publication_number", "earliestpublicationnumber"),
+    ("publication_number", "pctpublicationnumber"),
     ("url", "pdfurl"),
     ("url", "downloadurl"),
     ("url", "download_url"),

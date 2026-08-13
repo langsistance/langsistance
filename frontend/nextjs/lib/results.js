@@ -15,7 +15,7 @@ export function columnValue(row, column) {
   return value === undefined || value === null ? '' : String(value)
 }
 
-const META_ROLES = ['patent_id', 'assignee', 'publication_date']
+const META_ROLES = ['patent_id', 'application_number', 'publication_number', 'assignee', 'publication_date']
 
 export function buildRowModel(row, columns, source) {
   const list = Array.isArray(columns) ? columns : []

@@ -11,6 +11,7 @@ const COLUMNS = [
   { key: 'patentTitle', label: '标题', role: 'title' },
   { key: 'patentNumber', label: '专利号', role: 'patent_id' },
   { key: 'applicationNumberText', label: '申请号', role: 'application_number' },
+  { key: 'applicationMetaData.earliestPublicationNumber', label: '公开号', role: 'publication_number' },
   { key: 'assigneeEntityName', label: '申请人', role: 'assignee' },
   { key: 'publicationDate', label: '公开日', role: 'publication_date' },
   { key: 'abstractText', label: '摘要', role: 'abstract' },
@@ -21,6 +22,7 @@ const ROW = {
   patentTitle: '一种图像处理方法',
   patentNumber: 'US12000123B2',
   applicationNumberText: '17638216',
+  'applicationMetaData.earliestPublicationNumber': 'US20220294065A1',
   assigneeEntityName: '华为',
   publicationDate: '2024-06-01',
   abstractText: '摘要文字。',
@@ -39,7 +41,7 @@ test('buildRowModel builds title/meta/patent identifiers for patent rows', () =>
   assert.equal(model.patentId, 'US12000123B2')
   assert.equal(model.applicationNumber, '17638216')
   assert.equal(model.isDocument, false)
-  assert.equal(model.meta.length, 3) // patent_id + assignee + publication_date
+  assert.equal(model.meta.length, 5) // patent_id + application_number + publication_number + assignee + publication_date
   assert.equal(model.meta[0].label, '专利号')
   assert.ok(model.fields.length >= 6) // all non-empty fields incl. text role
 })

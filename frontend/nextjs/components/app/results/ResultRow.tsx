@@ -37,11 +37,7 @@ export default function ResultRow({
         {model.title || '—'}
       </button>
       <div className="result-row-meta">
-        {model.meta.map((item) => (
-          <span key={item.label} className="result-row-meta-item">
-            {item.label}: {item.value}
-          </span>
-        ))}
+        {model.meta.map((item) => item.value).filter(Boolean).join(' · ')}
       </div>
       <div className="result-row-actions" onClick={(e) => e.stopPropagation()}>
         {model.isDocument ? (

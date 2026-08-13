@@ -8,9 +8,9 @@ from sources.result_export import (
 )
 
 VALID_ROLES = {
-    "title", "patent_id", "application_number", "assignee", "inventors",
-    "filing_date", "publication_date", "ipc", "abstract",
-    "document_title", "document_date", "url", "text",
+    "title", "patent_id", "application_number", "publication_number",
+    "assignee", "inventors", "filing_date", "publication_date", "ipc",
+    "abstract", "document_title", "document_date", "url", "text",
 }
 
 
@@ -30,6 +30,8 @@ class TestInferColumnRole(unittest.TestCase):
             "inventorName": "inventors",
             "filingDate": "filing_date",
             "publicationDate": "publication_date",
+            "applicationMetaData.earliestPublicationNumber": "publication_number",
+            "pctPublicationNumber": "publication_number",
             "grantDate": "publication_date",
             "ipcClass": "ipc",
             "cpcClass": "ipc",

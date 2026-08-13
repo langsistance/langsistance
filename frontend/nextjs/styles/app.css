@@ -1264,12 +1264,25 @@ button { cursor: pointer; }
 .result-row {
   display: block;
   padding: var(--spacing-3);
-  border: 1px solid var(--color-border);
+  border: none;
+  border-bottom: 1px solid var(--color-border);
   border-left: 2px solid transparent;
-  border-radius: var(--radius-md);
   background: var(--color-bg-white);
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: background 0.15s ease;
+}
+
+.result-row:hover {
+  background: var(--color-primary-faint);
+}
+
+.result-row.active {
+  border-left-color: var(--color-primary);
+  background: var(--color-primary-faint);
+}
+
+.result-row:last-child {
+  border-bottom: none;
 }
 
 .result-row:hover {
@@ -1318,18 +1331,16 @@ button { cursor: pointer; }
 }
 
 .result-row-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px var(--spacing-3);
   font-size: 12px;
   color: var(--color-text-secondary);
-  line-height: 1.35;
+  line-height: 1.4;
   margin-bottom: var(--spacing-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.result-row-meta-item {
-  white-space: nowrap;
-}
+
 
 /* Row action buttons + link — compact ghost-style controls */
 .result-row-actions {
@@ -1340,17 +1351,28 @@ button { cursor: pointer; }
 
 .result-row-actions button,
 .result-row-actions a {
-  padding: 5px 10px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-main);
-  color: var(--color-text-primary);
+  padding: 2px var(--spacing-1);
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
   font-size: 12px;
   font-family: inherit;
   font-weight: 500;
   text-decoration: none;
   cursor: pointer;
-  transition: all 0.15s ease;
+}
+
+.result-row-actions button:hover,
+.result-row-actions a:hover {
+  color: var(--color-primary);
+  text-decoration: underline;
+}
+
+.result-row-actions button:focus-visible,
+.result-row-actions a:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+  border-radius: 2px;
 }
 
 .result-row-actions button:hover,

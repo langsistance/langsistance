@@ -145,6 +145,7 @@ content 解码后的 JSON 载荷：
 | `title` | patentTitle, inventionTitle, title | 行卡片标题 |
 | `patent_id` | patentNumber, publicationNumber, pno | 元信息行 + 详情接口参数 |
 | `application_number` | applicationNumberText, applicationNumber, apc | 美国审查历史按钮可用性（8 位数字） |
+| `publication_number` | earliestPublicationNumber, pctPublicationNumber | 行卡片公开号 |
 | `assignee` | assigneeEntityName, applicant, assignee | 元信息行 |
 | `inventors` | inventors, inventorName | 详情 tab |
 | `filing_date` | filingDate, applicationDate, 申请日 | 元信息行/排序 |
