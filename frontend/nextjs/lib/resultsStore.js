@@ -69,10 +69,16 @@ export function saveResultsStore(storage, store) {
     try {
       storage.setItem(RESULTS_STORE_KEY, JSON.stringify(current))
       return
-    } catch {
+    } catch (error) {
+      // Only quota pressure justifies dropping sets; permanent errors
+      // (blocked site data, serialization failure) must not discard data.
+      const name = error && error.name ? error.name : ''
+      const code = error && error.code ? error.code : 0
+      const isQuota = name === 'QuotaExceededError' || code === 22 || code === 1014
+      if (!isQuota) return
       const next = dropOldestSet(current)
       if (Object.keys(next.sets).length === Object.keys(current.sets).length) {
-        return // 没有可丢的了（或错误不是配额导致）——静默放弃
+        return // 没有可丢的了——静默放弃
       }
       current = next
     }

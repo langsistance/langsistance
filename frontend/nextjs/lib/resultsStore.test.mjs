@@ -69,7 +69,7 @@ test('saveResultsStore drops oldest sets when quota is exceeded', () => {
   let attempts = 0
   storage.setItem = (key, value) => {
     attempts += 1
-    if (attempts < 2) throw new Error('QuotaExceededError')
+    if (attempts < 2) throw new DOMException('QuotaExceededError', 'QuotaExceededError')
     storage._map.set(key, value)
   }
   saveResultsStore(storage, store) // 第 1 次失败丢 a，第 2 次只剩 {b} 成功
@@ -79,11 +79,32 @@ test('saveResultsStore drops oldest sets when quota is exceeded', () => {
 })
 
 test('saveResultsStore gives up silently when storage is unusable', () => {
-  const storage = { getItem: () => null, setItem: () => { throw new Error('SecurityError') } }
+  let attempts = 0
+  const storage = {
+    getItem: () => null,
+    setItem: () => { attempts += 1; throw new DOMException('SecurityError', 'SecurityError') },
+  }
   const store = persistResultsSet(loadResultsStore(null), RESULTS('a'), {
     setId: 'a', sessionId: null, queryText: 'qa', savedAt: 1,
   })
   saveResultsStore(storage, store) // 不抛异常
+  assert.equal(attempts, 1) // 非配额错误：一次即放弃，不丢 set
+})
+
+test('saveResultsStore does not drop sets on non-quota errors', () => {
+  let attempts = 0
+  const storage = {
+    getItem: () => null,
+    setItem: () => { attempts += 1; throw new DOMException('SecurityError', 'SecurityError') },
+  }
+  let store = persistResultsSet(loadResultsStore(null), RESULTS('a'), {
+    setId: 'a', sessionId: null, queryText: 'qa', savedAt: 1,
+  })
+  store = persistResultsSet(store, RESULTS('b'), {
+    setId: 'b', sessionId: null, queryText: 'qb', savedAt: 2,
+  })
+  saveResultsStore(storage, store)
+  assert.equal(attempts, 1) // 有 2 个 set 也只尝试 1 次——没有丢最旧重试
 })
 
 test('persistResultsSetToStorage loads, persists, and saves', () => {
