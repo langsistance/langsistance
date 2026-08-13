@@ -39,7 +39,7 @@ test('buildRowModel builds title/meta/patent identifiers for patent rows', () =>
   assert.equal(model.patentId, 'US12000123B2')
   assert.equal(model.applicationNumber, '17638216')
   assert.equal(model.isDocument, false)
-  assert.equal(model.meta.length, 2) // patent_id + assignee
+  assert.equal(model.meta.length, 3) // patent_id + assignee + publication_date
   assert.equal(model.meta[0].label, '专利号')
   assert.ok(model.fields.length >= 6) // all non-empty fields incl. text role
 })

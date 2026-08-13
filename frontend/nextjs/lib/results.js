@@ -15,10 +15,7 @@ export function columnValue(row, column) {
   return value === undefined || value === null ? '' : String(value)
 }
 
-const META_ROLES = [
-  ['patent_id', 'patent_id'],
-  ['assignee', 'assignee'],
-]
+const META_ROLES = ['patent_id', 'assignee', 'publication_date']
 
 export function buildRowModel(row, columns, source) {
   const list = Array.isArray(columns) ? columns : []
@@ -29,7 +26,7 @@ export function buildRowModel(row, columns, source) {
   const title = columnValue(row, titleCol)
 
   const meta = []
-  for (const [role] of META_ROLES) {
+  for (const role of META_ROLES) {
     const col = findRoleColumn(list, role)
     if (!col) continue
     const value = columnValue(row, col)
