@@ -22,6 +22,7 @@ services:
       - MYSQL_DATABASE=${MYSQL_DATABASE}
       - WORK_DIR=/opt/workspace
       - BACKEND_PORT=${BACKEND_PORT}
+      - COPIIOAI_API_BASE_URL=${COPIIOAI_API_BASE_URL}
       - DOCKER_INTERNAL_URL=http://host.docker.internal
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
