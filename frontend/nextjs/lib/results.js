@@ -4,6 +4,8 @@
  * decoded from the format=json artifact.
  */
 
+import { buildStoredMessage } from './resultsStore.js'
+
 export function findRoleColumn(columns, role) {
   const list = Array.isArray(columns) ? columns : []
   return list.find((col) => col && col.role === role) || null
@@ -94,17 +96,25 @@ export function pruneResultsForPersistence(
 
 /**
  * Resolve the message whose results the results page should display.
- * Prefers the URL's setId; when nothing matches — the auto-navigation
- * state race right after streaming, or a stale set in the URL — falls
- * back to the newest message carrying results so the list still renders.
+ * Prefers the URL's setId; when nothing matches in memory — the
+ * auto-navigation state race right after streaming, or a stale set in
+ * the URL — falls back to the newest message carrying results so the
+ * list still renders.  When the in-memory match comes up empty, an
+ * optional `store` may supply a synthetic message restored from
+ * localStorage for the setId (Task 2), before the newest in-memory
+ * message is used as the last resort.
  */
-export function resolveActiveResultsMessage(messages, urlSetId) {
+export function resolveActiveResultsMessage(messages, urlSetId, store) {
   const list = Array.isArray(messages) ? messages : []
   let newest = null
   for (const message of list) {
     if (!message || !message.results) continue
     if (urlSetId && message.results.setId === urlSetId) return message
     newest = message
+  }
+  if (urlSetId && store) {
+    const storedMessage = buildStoredMessage(urlSetId, store)
+    if (storedMessage) return storedMessage
   }
   return newest || undefined
 }

@@ -116,3 +116,23 @@ test('resolveActiveResultsMessage returns undefined with no results anywhere', (
   assert.equal(resolveActiveResultsMessage([], 'set-a'), undefined)
   assert.equal(resolveActiveResultsMessage(null, 'set-a'), undefined)
 })
+
+test('resolveActiveResultsMessage falls back to stored set before newest fallback', () => {
+  const messages = [RESULT_MESSAGE('set-a')]
+  const store = { sets: { 'stored-x': { source: 'uspto', columns: [], rows: [] } }, index: [] }
+  const resolved = resolveActiveResultsMessage(messages, 'stored-x', store)
+  assert.equal(resolved.id, 'stored-stored-x')
+  assert.equal(resolved.results.setId, 'stored-x')
+})
+
+test('resolveActiveResultsMessage prefers exact memory match over store', () => {
+  const messages = [RESULT_MESSAGE('set-a')]
+  const store = { sets: { 'set-a': { source: 'uspto', columns: [], rows: [] } }, index: [] }
+  assert.equal(resolveActiveResultsMessage(messages, 'set-a', store).id, 'm-set-a')
+})
+
+test('resolveActiveResultsMessage keeps newest fallback when store misses', () => {
+  const messages = [RESULT_MESSAGE('set-a')]
+  const store = { sets: {}, index: [] }
+  assert.equal(resolveActiveResultsMessage(messages, 'missing', store).id, 'm-set-a')
+})
