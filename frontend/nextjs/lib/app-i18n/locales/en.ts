@@ -656,6 +656,7 @@ export default {
     prosecutionUs: 'US prosecution analysis',
     prosecutionFamily: 'Cross-border family prosecution analysis',
     prosecutionUsUnavailable: 'Requires an 8-digit US application number',
+    prosecutionNoId: 'No patent identifier on this result',
     prosecutionSubmitting: 'Submitting analysis task…',
     prosecutionSubmitError: 'Submission failed, please try again later',
     prosecutionRunning: 'Analysis in progress…',

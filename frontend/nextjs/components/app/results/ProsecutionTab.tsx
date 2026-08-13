@@ -26,6 +26,7 @@ export default function ProsecutionTab({ row }: { row: any }) {
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const hasUsAppNumber = /^\d{8}$/.test(row.applicationNumber || '')
+  const hasAnyId = Boolean(row.patentId || row.applicationNumber)
 
   async function handleSubmit(kind: 'prosecution' | 'family') {
     setSubmitting(true)
@@ -99,7 +100,8 @@ export default function ProsecutionTab({ row }: { row: any }) {
         </button>
         <button
           className="results-prosecution-entry"
-          disabled={submitting}
+          disabled={!hasAnyId || submitting}
+          title={hasAnyId ? '' : t('results.prosecutionNoId')}
           onClick={() => handleSubmit('family')}
         >
           🌐 {t('results.prosecutionFamily')}
