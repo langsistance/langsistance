@@ -355,6 +355,7 @@ export async function submitLongTask(payload: {
   query?: string
   lang?: string
   sessionId?: string
+  source?: string
 }): Promise<SubmitLongTaskResponse> {
   return post<SubmitLongTaskResponse>('/long_task/submit', {
     scenario: payload.scenario,
@@ -362,5 +363,6 @@ export async function submitLongTask(payload: {
     ...(payload.query ? { query: payload.query } : {}),
     ...(payload.lang ? { lang: payload.lang } : {}),
     ...(payload.sessionId ? { session_id: payload.sessionId } : {}),
+    ...(payload.source ? { patent_source: payload.source } : {}),
   })
 }

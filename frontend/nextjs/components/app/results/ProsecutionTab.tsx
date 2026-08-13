@@ -39,6 +39,7 @@ export default function ProsecutionTab({ row }: { row: any }) {
           ? `分析专利 ${row.patentId || row.applicationNumber} 的审查历史`
           : `分析 ${row.patentId || row.applicationNumber} 及其全球同族申请的审查差异`,
         lang: 'zh',
+        ...(row.source ? { source: row.source } : {}),
         ...(sessionId ? { sessionId } : {}),
       })
       setTasks((prev) => [...prev, {
@@ -53,6 +54,9 @@ export default function ProsecutionTab({ row }: { row: any }) {
     }
   }
 
+  // The dep string deliberately keys on taskId+status only. It excludes
+  // progress/currentStep so the 1.5s interval is not re-primed on every tick;
+  // status changes and new tasks restart it instead.
   useEffect(() => {
     const openTasks = tasks.filter((task) => !['completed', 'failed'].includes(task.status))
     if (openTasks.length === 0) return
