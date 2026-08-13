@@ -27,11 +27,13 @@ export default function ResultsPage() {
   useEffect(() => {
     const sid = searchParams.get('session_id')
     if (!sid || loadedRef.current || messages.length > 0) return
-    loadedRef.current = true
     ;(async () => {
       try {
         const data = await getSession(sid)
         if (!Array.isArray(data.messages)) return
+        // Only mark hydrated after the fetch succeeds so a transient failure
+        // can retry on the next navigation/re-mount.
+        loadedRef.current = true
         setMessages(data.messages
           .filter((m: any) => m.role && m.content)
           .map((m: any, i: number) => ({
