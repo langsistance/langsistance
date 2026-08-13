@@ -94,6 +94,7 @@
 
 | 场景 | 行为 |
 |---|---|
+| **iframe 被 `X-Frame-Options`/CSP 拦截** | **部署前提（E2E 实测发现，2026-08-13）**：Cloudflare 响应头改写规则给所有 zone 加了 `X-Frame-Options: SAMEORIGIN` + 不含 API 域的 `frame-src` CSP。必须：① 新增高优先级规则对 `/uspto/download*` 删除 XFO 并设置 `Content-Security-Policy: frame-ancestors 'self' https://test.copiioai.com https://*.copiioai.com`；② 现有 CSP 规则 `frame-src` 追加 `https://api.copiioai.com https://api-test.copiioai.com`。否则 iframe 显示 "This content is blocked" |
 | 后端下载失败（400/502） | iframe 内浏览器错误页（无法自定义）→ 可接受 |
 | 文档只有 DOCX/XML 选项 | `_lift` 回退第一个 URL → 前端启发式识别扩展名 → 降级视图 |
 | row.url 为空 | 降级视图「文档不可用」 |
