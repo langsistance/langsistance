@@ -41,7 +41,10 @@ def _export_min_rows() -> int:
 _ROLE_SUFFIXES: list[tuple[str, str]] = [
     # (role, lowercase suffix) — first match wins, checked in order
     ("document_title", "documenttitle"),
+    ("document_title", "documentdescription"),
+    ("document_title", "documentcodedescriptiontext"),
     ("document_date", "documentdate"),
+    ("document_date", "mailroomdate"),
     ("application_number", "applicationnumbertext"),
     ("application_number", "applicationnumber"),
     ("application_number", "application_number"),
