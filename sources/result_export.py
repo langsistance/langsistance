@@ -68,6 +68,7 @@ _ROLE_SUFFIXES: list[tuple[str, str]] = [
     ("url", "downloadurl"),
     ("url", "download_url"),
     ("url", "document_url"),
+    ("url", "url"),
 ]
 
 

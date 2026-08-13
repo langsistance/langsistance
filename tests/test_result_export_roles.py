@@ -39,6 +39,7 @@ class TestInferColumnRole(unittest.TestCase):
             "documentDate": "document_date",
             "pdfUrl": "url",
             "download_url": "url",
+            "url": "url",
         }
         for key, expected in cases.items():
             with self.subTest(key=key):
