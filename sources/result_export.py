@@ -36,6 +36,54 @@ def _export_min_rows() -> int:
         return DEFAULT_EXPORT_MIN_ROWS
 
 
+# ── Column roles for the structured JSON artifact ─────────────────────────
+# Closed set consumed by the frontend results view.  Unknown keys are "text".
+_ROLE_SUFFIXES: list[tuple[str, str]] = [
+    # (role, lowercase suffix) — first match wins, checked in order
+    ("document_title", "documenttitle"),
+    ("document_date", "documentdate"),
+    ("application_number", "applicationnumbertext"),
+    ("application_number", "applicationnumber"),
+    ("application_number", "application_number"),
+    ("patent_id", "patentnumber"),
+    ("patent_id", "publicationnumber"),
+    ("assignee", "assigneeentityname"),
+    ("assignee", "assignee"),
+    ("assignee", "applicant"),
+    ("inventors", "inventorname"),
+    ("inventors", "inventors"),
+    ("filing_date", "filingdate"),
+    ("filing_date", "applicationdate"),
+    ("publication_date", "publicationdate"),
+    ("publication_date", "grantdate"),
+    ("ipc", "ipcclass"),
+    ("ipc", "cpcclass"),
+    ("ipc", "ipc"),
+    ("abstract", "abstracttext"),
+    ("abstract", "abstract"),
+    ("title", "patenttitle"),
+    ("title", "inventiontitle"),
+    ("title", "title"),
+    ("url", "pdfurl"),
+    ("url", "downloadurl"),
+    ("url", "download_url"),
+    ("url", "document_url"),
+]
+
+
+def infer_column_role(key: str) -> str:
+    """Map a flattened result column key to a frontend rendering role.
+
+    Keys may carry prefixes (e.g. ``applicationMetaData.patentTitle``) —
+    only the last path segment is compared.  Unknown keys map to ``text``.
+    """
+    segment = str(key or "").lower().rsplit(".", 1)[-1].strip()
+    for role, suffix in _ROLE_SUFFIXES:
+        if segment == suffix:
+            return role
+    return "text"
+
+
 def _stringify_cell(value: Any) -> str:
     if value is None:
         return ""
@@ -457,16 +505,22 @@ def build_xlsx_bytes(
 def build_result_artifacts(
     items: list[Any],
     *,
+    source: str = "uspto",
     query_id: str | None = None,
     original_count: int | None = None,
     filter_applied: bool = False,
     generated_at: datetime | None = None,
     lang: str = "zh",
 ) -> list[dict[str, Any]]:
-    """Build CSV and XLSX artifacts from patent search result items.
+    """Build CSV, XLSX and structured JSON artifacts from result items.
+
+    ``source`` is one of ``uspto`` / ``google_patents`` / ``uspto_documents``
+    and rides along in the JSON payload so the frontend can drive per-row
+    detail actions.
 
     Args:
         items: List of patent result dicts (raw USPTO API format).
+        source: Data source identifier carried into the JSON payload.
         query_id: Optional query identifier.
         original_count: Total result count before filtering.
         filter_applied: Whether a filter was applied to the results.
@@ -475,7 +529,7 @@ def build_result_artifacts(
             Follows the user's query language.
 
     Returns:
-        List of artifact dicts (CSV + XLSX) ready for SSE delivery.
+        List of artifact dicts (CSV + XLSX + JSON) ready for SSE delivery.
         Returns an empty list when the result count is too small.
     """
     exported_count = len(items)
@@ -503,6 +557,22 @@ def build_result_artifacts(
     csv_content = build_csv_bytes(columns, rows)
     xlsx_content = build_xlsx_bytes(columns, rows, metadata, lang=lang)
 
+    json_payload = {
+        "source": source,
+        "columns": [
+            {
+                "key": col,
+                "label": uspto_field_label(col, lang),
+                "role": infer_column_role(col),
+            }
+            for col in columns
+        ],
+        "rows": rows,
+    }
+    json_content = json.dumps(
+        json_payload, ensure_ascii=False,
+    ).encode("utf-8")
+
     common = {
         "row_count": exported_count,
         "column_count": len(columns),
@@ -523,5 +593,13 @@ def build_result_artifacts(
             "filename": f"{base_name}.xlsx",
             "mime_type": XLSX_MIME_TYPE,
             "content": xlsx_content,
+        },
+        {
+            **common,
+            "artifact_id": f"{uuid.uuid4().hex}-json",
+            "format": "json",
+            "filename": f"{base_name}.json",
+            "mime_type": "application/json",
+            "content": json_content,
         },
     ]
