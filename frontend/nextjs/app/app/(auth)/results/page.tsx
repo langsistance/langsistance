@@ -9,9 +9,12 @@ import { getSession } from '@/services/api'
 import ResultCard from '@/components/app/ResultCard'
 import ResultList from '@/components/app/results/ResultList'
 import DetailPanel from '@/components/app/results/DetailPanel'
+import { buildRowModel } from '@/lib/results'
 
 export default function ResultsPage() {
   const { t } = useI18n()
+  const [activeRowId, setActiveRowId] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<string>('details')
   const router = useRouter()
   const searchParams = useSearchParams()
   const { messages, setMessages, sessionId, setSessionId, resultsSetId, setResultsSetId, input, setInput, streaming } = useChatSession()
@@ -56,6 +59,14 @@ export default function ResultsPage() {
     if (!setId) return undefined
     return messages.find((m) => (m as any).results?.setId === setId)
   }, [messages, setId])
+
+  const activeRow = useMemo(() => {
+    if (!activeMessage || !activeRowId) return null
+    const results = (activeMessage as any).results
+    if (!results) return null
+    const row = results.rows.find((r: any) => buildRowModel(r, results.columns, results.source).id === activeRowId)
+    return row ? buildRowModel(row, results.columns, results.source) : null
+  }, [activeMessage, activeRowId])
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -102,8 +113,13 @@ export default function ResultsPage() {
             <button onClick={() => send()} disabled={streaming || !input.trim()}>→</button>
           </div>
         </aside>
-        <ResultList results={(activeMessage as any).results} onOpenRow={() => {}} />
-        <DetailPanel row={null} />
+        <ResultList
+          results={(activeMessage as any).results}
+          activeRowId={activeRowId}
+          onSelect={(model) => { setActiveRowId(model.id); setActiveTab(model.isDocument ? 'doc' : 'details') }}
+          onOpenTab={(model, tab) => { setActiveRowId(model.id); setActiveTab(tab) }}
+        />
+        <DetailPanel row={activeRow} tab={activeTab} onTabChange={setActiveTab} />
       </div>
     </div>
   )
