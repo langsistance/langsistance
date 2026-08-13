@@ -4,11 +4,11 @@ import { buildDocPreview } from './docPreview.js'
 
 const PROXY = 'https://api.copiioai.com/uspto/download'
 
-test('proxy url with inner pdf builds iframe src with inline param', () => {
+test('proxy url with inner pdf builds iframe src with inline param and collapsed navpanes', () => {
   const url = `${PROXY}?url=${encodeURIComponent('https://api.uspto.gov/api/v1/download/applications/1/file.pdf')}`
   const preview = buildDocPreview(url)
   assert.equal(preview.mode, 'iframe')
-  assert.equal(preview.src, `${url}&inline=1`)
+  assert.equal(preview.src, `${url}&inline=1#navpanes=0`)
 })
 
 test('proxy url with inner docx falls back', () => {
@@ -21,7 +21,13 @@ test('proxy url with inner docx falls back', () => {
 test('plain pdf url embeds without inline param', () => {
   const preview = buildDocPreview('https://example.com/patent.pdf?token=1')
   assert.equal(preview.mode, 'iframe')
-  assert.equal(preview.src, 'https://example.com/patent.pdf?token=1')
+  assert.equal(preview.src, 'https://example.com/patent.pdf?token=1#navpanes=0')
+})
+
+test('plain pdf url with existing fragment keeps it untouched', () => {
+  const preview = buildDocPreview('https://example.com/patent.pdf#page=2')
+  assert.equal(preview.mode, 'iframe')
+  assert.equal(preview.src, 'https://example.com/patent.pdf#page=2')
 })
 
 test('plain docx url falls back', () => {

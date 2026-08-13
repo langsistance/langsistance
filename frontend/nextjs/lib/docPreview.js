@@ -32,6 +32,13 @@ function isPdfPath(url) {
   }
 }
 
+// Adobe PDF open parameters honored by the browser PDF viewers — the
+// thumbnail navigation pane starts collapsed (still expandable via the
+// viewer's sidebar button).  Fragments never reach the server.
+function withViewerParams(src) {
+  return src.includes('#') ? src : `${src}#navpanes=0`
+}
+
 export function buildDocPreview(url) {
   if (!url || typeof url !== 'string') return { mode: 'unavailable' }
 
@@ -39,11 +46,11 @@ export function buildDocPreview(url) {
     const inner = extractInnerUrl(url)
     if (!inner) return { mode: 'fallback', url }
     return isPdfPath(inner)
-      ? { mode: 'iframe', src: `${url}&inline=1` }
+      ? { mode: 'iframe', src: withViewerParams(`${url}&inline=1`) }
       : { mode: 'fallback', url }
   }
 
   return isPdfPath(url)
-    ? { mode: 'iframe', src: url }
+    ? { mode: 'iframe', src: withViewerParams(url) }
     : { mode: 'fallback', url }
 }
