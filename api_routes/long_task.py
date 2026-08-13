@@ -6,6 +6,8 @@ Endpoints:
   GET /long_task/{task_id}/report?format=pdf|docx
 """
 
+import re
+
 from fastapi import APIRouter, Query, HTTPException, Request
 from fastapi.responses import Response
 from sources.long_task.status_manager import get_task_status, lookup_query_task
@@ -91,6 +93,33 @@ def _lookup_task_by_query_id_mysql(user_id: int, query_id: str) -> dict | None:
     return None
 
 
+def _normalize_submit_patent_id(raw: str, scenario: str) -> str:
+    """Validate and normalize a patent ID for the submit endpoint.
+
+    - prosecution: must be an 8-digit US application number (prefix stripped)
+    - family: any publication/application number with >= 6 alphanumerics
+    """
+    if scenario not in ("prosecution", "family"):
+        raise ValueError(f"Unknown scenario: {scenario}")
+    value = (raw or "").strip()
+    if not value:
+        raise ValueError("patent_id is required")
+    if scenario == "prosecution":
+        digits = "".join(ch for ch in value if ch.isdigit())
+        if len(digits) != 8:
+            raise ValueError(
+                "Prosecution analysis requires an 8-digit US application number"
+            )
+        return digits
+    clean = re.sub(r"[^A-Za-z0-9]", "", value)
+    if len(clean) != len(value):
+        # Embedded punctuation/symbols make the ID ambiguous — treat as garbage.
+        raise ValueError("patent_id contains invalid characters")
+    if len(clean) < 6:
+        raise ValueError("patent_id too short for family analysis")
+    return value
+
+
 def register_long_task_routes(logger, config):
     """Register long task polling and download routes with dependency injection."""
     router = APIRouter()
@@ -110,6 +139,134 @@ def register_long_task_routes(logger, config):
         if hit:
             return {"success": True, "found": True, **hit}
         return {"success": True, "found": False}
+
+    @router.post("/long_task/submit")
+    async def submit_long_task(http_request: Request):
+        """Directly submit a prosecution/family long task (results-page button).
+
+        Body: {scenario: "prosecution"|"family", patent_id, query?, lang?,
+               session_id?}
+        Reuses the existing queue + Celery dispatch; polling/download go
+        through the existing status/report endpoints.
+        """
+        import json as _json
+        import uuid as _uuid
+
+        auth_header = http_request.headers.get("Authorization")
+        user = verify_firebase_token(auth_header)
+        user_id = int(user["uid"])
+
+        try:
+            body = await http_request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+        scenario = body.get("scenario", "")
+        try:
+            patent_id = _normalize_submit_patent_id(
+                body.get("patent_id", ""), scenario,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        query = str(body.get("query") or "").strip() or (
+            f"分析专利 {patent_id} 的审查历史" if scenario == "prosecution"
+            else f"分析 {patent_id} 及其全球同族的审查差异"
+        )
+        lang = body.get("lang") if body.get("lang") in ("zh", "en") else "zh"
+
+        from sources.knowledge.knowledge import get_db_connection
+        from sources.long_task.user_queue import try_start_user_task
+
+        task_id = f"lt_{_uuid.uuid4().hex[:12]}"
+        session_id = str(body.get("session_id") or "").strip()
+
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                if not session_id:
+                    session_id = f"sess_{_uuid.uuid4().hex[:12]}"
+                    cur.execute(
+                        """INSERT INTO conversations
+                           (session_id, user_id, title, messages, long_task_ids)
+                           VALUES (%s, %s, %s, %s, %s)""",
+                        (session_id, user_id, query[:60],
+                         _json.dumps([], ensure_ascii=False),
+                         _json.dumps([task_id])),
+                    )
+                else:
+                    cur.execute(
+                        """SELECT long_task_ids FROM conversations
+                           WHERE session_id = %s AND user_id = %s AND status != 2""",
+                        (session_id, user_id),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        raise HTTPException(status_code=400, detail="Unknown session_id")
+                    existing = _json.loads(row["long_task_ids"]) if isinstance(
+                        row["long_task_ids"], str
+                    ) else (row["long_task_ids"] or [])
+                    existing.append(task_id)
+                    cur.execute(
+                        """UPDATE conversations SET long_task_ids = %s,
+                           update_time = NOW() WHERE session_id = %s""",
+                        (_json.dumps(existing), session_id),
+                    )
+
+                task_type = (
+                    "prosecution_analysis" if scenario == "prosecution"
+                    else "family_analysis"
+                )
+                cur.execute(
+                    """INSERT INTO long_tasks
+                       (task_id, session_id, user_id, task_type, input_params, status)
+                       VALUES (%s, %s, %s, %s, %s, 'pending')""",
+                    (task_id, session_id, user_id, task_type,
+                     _json.dumps({
+                         "query": query,
+                         "patent_id": patent_id,
+                         "patent_source": "uspto",
+                         "lang": lang,
+                     }, ensure_ascii=False)),
+                )
+                conn.commit()
+        finally:
+            conn.close()
+
+        celery_params = {
+            "query": query,
+            "session_id": session_id,
+            "user_id": str(user_id),
+            "scenario": "prosecution" if scenario == "prosecution" else "families",
+            "patent_id": patent_id,
+            "patent_source": "uspto",
+            "patent_id_type": (
+                "application_number" if scenario == "prosecution" else "unknown"
+            ),
+            "lang": lang,
+        }
+
+        queue_result = try_start_user_task(str(user_id), task_id)
+        status = "running"
+        if queue_result == "running":
+            if scenario == "prosecution":
+                from celery_worker import execute_prosecution_analysis
+                execute_prosecution_analysis.delay(task_id=task_id, params=celery_params)
+            else:
+                from celery_worker import execute_family_analysis
+                execute_family_analysis.delay(task_id=task_id, params=celery_params)
+        else:
+            status = "queued"
+        logger.info(
+            f"submit_long_task — task_id={task_id}, scenario={scenario}, "
+            f"patent_id={patent_id}, queue={queue_result}"
+        )
+        return {
+            "success": True,
+            "task_id": task_id,
+            "session_id": session_id,
+            "status": status,
+        }
 
     @router.get("/long_task/user_queue")
     async def user_queue_status(http_request: Request):
