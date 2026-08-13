@@ -77,4 +77,5 @@ test('pruneResultsForPersistence truncates abstracts and caps rows', () => {
   assert.equal(pruned.rows.length, 50)
   assert.ok(pruned.rows[0].abstractText.length <= 500)
   assert.equal(pruned.rows[0].patentNumber, 'US0')
+  assert.equal('customThing' in pruned.rows[0], false)
 })
