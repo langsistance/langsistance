@@ -1205,12 +1205,15 @@ button { cursor: pointer; }
 /* Toolbar: count + sort/filter selects */
 .results-list-toolbar {
   flex: 0 0 auto;
+  position: sticky;
+  top: 0;
+  z-index: 5;
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
-  padding: var(--spacing-3);
+  padding: var(--spacing-3) var(--spacing-4);
   border-bottom: 1px solid var(--color-border);
-  background: var(--color-bg-main);
+  background: var(--color-bg-white);
 }
 
 .results-list-count {
@@ -1220,24 +1223,29 @@ button { cursor: pointer; }
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
 }
 
 /* Small selects consistent with the app's light select styling */
 .results-list-toolbar select {
   flex: 0 0 auto;
-  max-width: 132px;
-  padding: 6px 8px;
+  max-width: 150px;
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 5px 26px 5px 10px;
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-white);
+  border-radius: 999px;
+  background-color: var(--color-bg-white);
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23666' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
   color: var(--color-text-primary);
   font-size: 12px;
+  font-weight: 500;
   font-family: inherit;
   cursor: pointer;
-  outline: none;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color 0.15s ease;
 }
 
 .results-list-toolbar select:hover,
@@ -1263,13 +1271,26 @@ button { cursor: pointer; }
 /* ── Row cards ── */
 .result-row {
   display: block;
-  padding: var(--spacing-3);
+  padding: var(--spacing-4);
   border: none;
   border-bottom: 1px solid var(--color-border);
-  border-left: 2px solid transparent;
+  border-left: 3px solid transparent;
   background: var(--color-bg-white);
   cursor: pointer;
   transition: background 0.15s ease;
+}
+
+.result-row:hover {
+  background: var(--color-primary-faint);
+}
+
+.result-row.active {
+  border-left-color: var(--color-primary);
+  background: var(--color-primary-faint);
+}
+
+.result-row:last-child {
+  border-bottom: none;
 }
 
 .result-row:hover {
@@ -1309,14 +1330,24 @@ button { cursor: pointer; }
   text-align: left;
   cursor: pointer;
   color: var(--color-text-primary);
-  font-size: 14px;
+  font-size: 14.5px;
   font-weight: 600;
-  line-height: 1.35;
+  line-height: 1.45;
   margin-bottom: var(--spacing-1);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.result-row-title:hover {
+  color: var(--color-primary);
+}
+
+.result-row-title:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+  border-radius: 2px;
 }
 
 .result-row-title:hover {
@@ -1333,7 +1364,7 @@ button { cursor: pointer; }
 .result-row-meta {
   font-size: 12px;
   color: var(--color-text-secondary);
-  line-height: 1.4;
+  line-height: 1.5;
   margin-bottom: var(--spacing-2);
   white-space: nowrap;
   overflow: hidden;
@@ -1346,20 +1377,39 @@ button { cursor: pointer; }
 .result-row-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--spacing-1);
+  gap: var(--spacing-3);
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
+}
+
+.result-row:hover .result-row-actions,
+.result-row.active .result-row-actions {
+  opacity: 1;
 }
 
 .result-row-actions button,
 .result-row-actions a {
-  padding: 2px var(--spacing-1);
+  padding: 0;
   border: none;
   background: transparent;
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: 12.5px;
   font-family: inherit;
   font-weight: 500;
   text-decoration: none;
   cursor: pointer;
+}
+
+.result-row-actions button:hover,
+.result-row-actions a:hover {
+  color: var(--color-primary);
+}
+
+.result-row-actions button:focus-visible,
+.result-row-actions a:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 .result-row-actions button:hover,
