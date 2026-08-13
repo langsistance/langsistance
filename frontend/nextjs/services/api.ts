@@ -303,3 +303,64 @@ export async function getLongTaskUserQueue(): Promise<{
   if (!res.ok) return { success: false }
   return res.json()
 }
+
+export interface PatentSpecSection {
+  heading: string
+  paragraphs: string[]
+}
+
+export interface PatentSpecResponse {
+  sections: PatentSpecSection[]
+  source_url: string
+}
+
+export interface PatentClaim {
+  number: number
+  text: string
+  independent: boolean
+}
+
+export interface PatentClaimsResponse {
+  claims: PatentClaim[]
+}
+
+export interface SubmitLongTaskResponse {
+  success: boolean
+  task_id: string
+  session_id: string
+  status: string
+}
+
+export async function fetchPatentSpec(
+  source: string,
+  patentId: string,
+): Promise<PatentSpecResponse> {
+  return get<PatentSpecResponse & { success: boolean }>(
+    `/patent/${encodeURIComponent(source)}/${encodeURIComponent(patentId)}/spec`,
+  )
+}
+
+export async function fetchPatentClaims(
+  source: string,
+  patentId: string,
+): Promise<PatentClaimsResponse> {
+  return get<PatentClaimsResponse & { success: boolean }>(
+    `/patent/${encodeURIComponent(source)}/${encodeURIComponent(patentId)}/claims`,
+  )
+}
+
+export async function submitLongTask(payload: {
+  scenario: 'prosecution' | 'family'
+  patentId: string
+  query?: string
+  lang?: string
+  sessionId?: string
+}): Promise<SubmitLongTaskResponse> {
+  return post<SubmitLongTaskResponse>('/long_task/submit', {
+    scenario: payload.scenario,
+    patent_id: payload.patentId,
+    ...(payload.query ? { query: payload.query } : {}),
+    ...(payload.lang ? { lang: payload.lang } : {}),
+    ...(payload.sessionId ? { session_id: payload.sessionId } : {}),
+  })
+}
