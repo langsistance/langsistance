@@ -114,10 +114,10 @@ test('saveResultsStore drops oldest sets when quota is exceeded', () => {
   let attempts = 0
   storage.setItem = (key, value) => {
     attempts += 1
-    if (attempts < 3) throw new Error('QuotaExceededError')
+    if (attempts < 2) throw new Error('QuotaExceededError')
     storage._map.set(key, value)
   }
-  saveResultsStore(storage, store) // 第 1、2 次失败丢 a，第 3 次成功
+  saveResultsStore(storage, store) // 第 1 次失败丢 a，第 2 次只剩 {b} 成功
   const saved = JSON.parse(storage._map.get('copiioai_results'))
   assert.equal('a' in saved.sets, false)
   assert.equal('b' in saved.sets, true)
