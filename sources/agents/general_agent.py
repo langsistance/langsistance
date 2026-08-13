@@ -158,6 +158,17 @@ def _extract_patent_ids_from_items(items: list) -> list:
             result.append(pid)
     return result
 
+
+def _infer_result_source(tool_info) -> str:
+    """Infer the search result source from the backend tool URL."""
+    url = (getattr(tool_info, "url", "") or "").lower()
+    if "patents.google.com" in url:
+        return "google_patents"
+    if "documents" in url:
+        return "uspto_documents"
+    return "uspto"
+
+
 def _is_long_task_knowledge(knowledge_item) -> bool:
     """Check if knowledge item represents a long task (type=3)."""
     if knowledge_item is None:
@@ -1974,6 +1985,7 @@ Begin your response now:
                 _replace_uspto_download_urls_for_batch(items_for_export)
                 artifacts = build_result_artifacts(
                     items_for_export,
+                    source=_infer_result_source(self.knowledgeTool[1]),
                     query_id=getattr(self, "_last_query_id", None),
                     original_count=original_total,
                     filter_applied=False,
@@ -2064,6 +2076,7 @@ Begin your response now:
                 _replace_uspto_download_urls_for_batch(items_for_export)
                 artifacts = build_result_artifacts(
                     items_for_export,
+                    source=_infer_result_source(self.knowledgeTool[1]),
                     query_id=getattr(self, "_last_query_id", None),
                     original_count=original_total,
                     filter_applied=True,
@@ -2157,6 +2170,7 @@ Begin your response now:
             _replace_uspto_download_urls_for_batch(items_for_export)
             artifacts = build_result_artifacts(
                 items_for_export,
+                source=_infer_result_source(self.knowledgeTool[1]),
                 query_id=getattr(self, "_last_query_id", None),
                 original_count=original_total,
                 filter_applied=filter_result.applied,
