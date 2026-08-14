@@ -102,7 +102,12 @@ export default function ResultsPage() {
     if (!activeMessage || !activeRowId) return null
     const results = (activeMessage as any).results
     if (!results) return null
-    const row = results.rows.find((r: any) => buildRowModel(r, results.columns, results.source).id === activeRowId)
+    // Selection is index-based — row ids are not unique (document lists
+    // share titles/descriptions), so an id round-trip can resolve to the
+    // wrong row or to nothing at all.
+    const index = Number(activeRowId)
+    if (!Number.isInteger(index) || index < 0 || index >= results.rows.length) return null
+    const row = results.rows[index]
     return row ? buildRowModel(row, results.columns, results.source) : null
   }, [activeMessage, activeRowId])
 
@@ -111,35 +116,6 @@ export default function ResultsPage() {
     () => findQueryForResultsMessage(messages, activeMessage, setId, resultsStore),
     [messages, activeMessage, setId, resultsStore],
   )
-
-  // [DIAG2] What the page resolved from URL + messages (skips streaming noise)
-  useEffect(() => {
-    if (streaming) return
-    const ar = (activeMessage as any)?.results
-    let rowModels: unknown = null
-    try {
-      rowModels = (ar?.rows ?? []).slice(0, 3).map((r: any) => {
-        const m = buildRowModel(r, ar.columns, ar.source)
-        return { id: String(m.id).slice(0, 30), title: String(m.title).slice(0, 30), isDoc: m.isDocument }
-      })
-    } catch (e) {
-      rowModels = 'buildRowModel threw: ' + String(e)
-    }
-    console.log(
-      '[copiioai-diag2] results-render setId=', setId,
-      'activeSetId=', ar?.setId ?? null,
-      'activeSource=', ar?.source ?? null,
-      'activeRows=', ar?.rows?.length ?? null,
-      'rowModels=', JSON.stringify(rowModels),
-      'activeRowId=', activeRowId,
-      'activeRowResolved=', activeRow ? String(activeRow.id).slice(0, 30) : null,
-      'queryText=', queryText?.slice(0, 60),
-      'activeMsgContent=', (activeMessage?.content || '').slice(0, 40),
-      'msgResults=', messages.map((m: any) => m.results?.setId ?? '-').join(','),
-      'href=', window.location.href,
-    )
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- diag probe
-  }, [setId, activeMessage, messages, activeRowId, activeRow])
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -320,8 +296,8 @@ export default function ResultsPage() {
             results={(activeMessage as any).results}
             activeRowId={activeRowId}
             queryText={queryText}
-            onSelect={(model) => { console.log('[copiioai-diag2] row-click id=', String(model.id).slice(0, 40), 'title=', String(model.title).slice(0, 30), 'isDoc=', model.isDocument); setActiveRowId(model.id); setActiveTab(model.isDocument ? 'doc' : 'details') }}
-            onOpenTab={(model, tab) => { setActiveRowId(model.id); setActiveTab(tab) }}
+            onSelect={(model, index) => { setActiveRowId(String(index)); setActiveTab(model.isDocument ? 'doc' : 'details') }}
+            onOpenTab={(model, index, tab) => { setActiveRowId(String(index)); setActiveTab(tab) }}
             onProsecution={handleProsecution}
             onCollapse={() => setListCollapsed(true)}
           />

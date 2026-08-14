@@ -15,23 +15,24 @@ interface RowModel {
 }
 
 export default function ResultRow({
-  model, active, onSelect, onOpenTab, onProsecution,
+  model, index, active, onSelect, onOpenTab, onProsecution,
 }: {
   model: RowModel
+  index: number
   active: boolean
-  onSelect: (model: RowModel) => void
-  onOpenTab: (model: RowModel, tab: string) => void
+  onSelect: (model: RowModel, index: number) => void
+  onOpenTab: (model: RowModel, index: number, tab: string) => void
   onProsecution: (model: RowModel) => void
 }) {
   const { t } = useI18n()
 
   return (
-    <div className={`result-row${active ? ' active' : ''}`} onClick={() => onSelect(model)}>
+    <div className={`result-row${active ? ' active' : ''}`} onClick={() => onSelect(model, index)}>
       <button
         className="result-row-title"
         onClick={(e) => {
           e.stopPropagation()
-          onSelect(model)
+          onSelect(model, index)
         }}
       >
         {model.title || '—'}
@@ -55,8 +56,8 @@ export default function ResultRow({
           </>
         ) : (
           <>
-            <button onClick={() => onOpenTab(model, 'spec')}>{t('results.rowSpec')}</button>
-            <button onClick={() => onOpenTab(model, 'claims')}>{t('results.rowClaims')}</button>
+            <button onClick={() => onOpenTab(model, index, 'spec')}>{t('results.rowSpec')}</button>
+            <button onClick={() => onOpenTab(model, index, 'claims')}>{t('results.rowClaims')}</button>
             <button onClick={() => onProsecution(model)}>{t('results.rowProsecution')}</button>
           </>
         )}

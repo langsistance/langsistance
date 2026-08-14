@@ -30,8 +30,8 @@ export default function ResultList({
   results: ResultsPayload
   activeRowId: string | null
   queryText?: string
-  onSelect: (model: RowModel) => void
-  onOpenTab: (model: RowModel, tab: string) => void
+  onSelect: (model: RowModel, index: number) => void
+  onOpenTab: (model: RowModel, index: number, tab: string) => void
   onProsecution: (model: RowModel) => void
   onCollapse?: () => void
 }) {
@@ -39,15 +39,12 @@ export default function ResultList({
   const [sort, setSort] = useState<'relevance' | 'date' | 'assignee'>('relevance')
   const [sourceFilter, setSourceFilter] = useState<string>('all')
 
-  const models = useMemo<RowModel[]>(() => {
+  const models = useMemo<Array<{ model: RowModel; index: number }>>(() => {
     const dateCol = findRoleColumn(results.columns, 'publication_date')
     const assigneeCol = findRoleColumn(results.columns, 'assignee')
     const entries = results.rows.map((row, index) => {
       const model = buildRowModel(row, results.columns, results.source) as RowModel
-      // Fallback id collision — rows with no usable title/patent id all get
-      // 'row'; disambiguate with the original index.
-      if (model.id === 'row') model.id = `row-${index}`
-      return { row, model }
+      return { row, model, index }
     })
     if (sort === 'date' && dateCol) {
       // Compare the raw column value off the row, not the rendered label, so
@@ -65,15 +62,15 @@ export default function ResultList({
         ),
       )
     }
-    const list = entries.map((e) => e.model)
+    const list = entries.map((e) => ({ model: e.model, index: e.index }))
     if (sourceFilter !== 'all') {
-      return list.filter((m) => m.source === sourceFilter)
+      return list.filter(({ model }) => model.source === sourceFilter)
     }
     return list
   }, [results, sort, sourceFilter])
 
   const sources = useMemo(() => {
-    const set = new Set(models.map((m) => m.source))
+    const set = new Set(models.map(({ model }) => model.source))
     return Array.from(set)
   }, [models])
 
@@ -107,11 +104,15 @@ export default function ResultList({
         </select>
       </div>
       <div className="results-list-scroll">
-        {models.map((model) => (
+        {models.map(({ model, index }) => (
           <ResultRow
-            key={model.id + model.title}
+            // The index keeps keys unique — duplicate id/title pairs across
+            // rows (document lists share descriptions) once leaked stale DOM
+            // nodes into the list and broke selection on set switch.
+            key={`${index}-${model.id}`}
             model={model}
-            active={activeRowId === model.id}
+            index={index}
+            active={activeRowId === String(index)}
             onSelect={onSelect}
             onOpenTab={onOpenTab}
             onProsecution={onProsecution}

@@ -125,8 +125,6 @@ export function useChatStream() {
     let pendingJsonId: string | null = null
     let pendingJsonChunks: string[] = []
     let decodedSetId: string | null = null
-    // [DIAG2] compact stream-event trace for the navigation decision
-    const diagEvents: string[] = []
 
     // Preserve all long task cards (running / completed / failed) so the
     // user can see multiple concurrent or queued tasks in one conversation.
@@ -169,7 +167,7 @@ export function useChatStream() {
         for (const line of lines) {
           if (!line.startsWith('data:')) continue
           const raw = line.slice(5).trim()
-          if (raw === '[DONE]') { diagEvents.push('done'); continue }
+          if (raw === '[DONE]') continue
           let evt: unknown
           try {
             evt = JSON.parse(raw)
@@ -185,7 +183,6 @@ export function useChatStream() {
               continue
             }
             if (event.type === 'artifact_start') {
-              diagEvents.push('start:' + String(event.format ?? '?'))
               // Track the JSON artifact's chunks locally so navigation can be
               // decided synchronously after streaming — independent of React
               // state commit timing.
@@ -210,7 +207,6 @@ export function useChatStream() {
               continue
             }
             if (event.type === 'artifact_end') {
-              diagEvents.push('end:' + String(event.format ?? event.artifact_id ?? '?'))
               const endArtifactId = String(event.artifact_id ?? event.artifactId ?? '')
               if (pendingJsonId !== null && endArtifactId === pendingJsonId) {
                 const decodedResults = decodeArtifactChunksToResults(
@@ -284,7 +280,6 @@ export function useChatStream() {
             }
           }
           if (evt && typeof evt === 'object' && 'error' in evt && evt.error) {
-            diagEvents.push('err:' + String(evt.error).slice(0, 80))
             throw new Error(String(evt.error))
           }
 
@@ -360,8 +355,6 @@ export function useChatStream() {
         }
       }
     } finally {
-      // [DIAG2]
-      console.log('[copiioai-diag2] send-finally events=', diagEvents.join(','), 'decodedSetId=', decodedSetId, 'willPush=', Boolean(decodedSetId), 'sessionId=', sessionId)
       setTransientStatus('')
       setStreaming(false)
       setStreamingId(null)
