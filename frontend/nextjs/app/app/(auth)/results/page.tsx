@@ -115,9 +115,14 @@ export default function ResultsPage() {
   // [DIAG2] What the page resolved from URL + messages (skips streaming noise)
   useEffect(() => {
     if (streaming) return
+    const ar = (activeMessage as any)?.results
     console.log(
       '[copiioai-diag2] results-render setId=', setId,
-      'activeSetId=', (activeMessage as any)?.results?.setId ?? null,
+      'activeSetId=', ar?.setId ?? null,
+      'activeSource=', ar?.source ?? null,
+      'activeRows=', ar?.rows?.length ?? null,
+      'firstRow=', JSON.stringify(ar?.rows?.[0] ?? null).slice(0, 200),
+      'queryText=', queryText?.slice(0, 60),
       'activeMsgContent=', (activeMessage?.content || '').slice(0, 40),
       'msgResults=', messages.map((m: any) => m.results?.setId ?? '-').join(','),
       'href=', window.location.href,
