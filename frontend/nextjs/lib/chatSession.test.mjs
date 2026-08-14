@@ -10,6 +10,7 @@ import {
   decodeArtifactChunksToResults,
   decodeResultsArtifact,
   hasResultsForMessage,
+  shouldResetConversationOnNavigation,
   updateAssistantMessage,
 } from './chatSession.js'
 
@@ -191,4 +192,14 @@ test('decodeArtifactChunksToResults returns null for malformed data', () => {
   assert.equal(decodeArtifactChunksToResults(['%%%%'], 'art-1'), null)
   assert.equal(decodeArtifactChunksToResults([], 'art-1'), null)
   assert.equal(decodeArtifactChunksToResults(['e30='], 'art-1'), null) // {} — no rows
+})
+
+test('shouldResetConversationOnNavigation only resets on the chat route', () => {
+  assert.equal(shouldResetConversationOnNavigation('/app/chat'), true)
+  // The results page auto-opens after a search with no session_id — the
+  // transition must not wipe the shared conversation (regression: the chat
+  // page's session-load effect re-renders with the new URL before unmount).
+  assert.equal(shouldResetConversationOnNavigation('/app/results'), false)
+  assert.equal(shouldResetConversationOnNavigation('/app/knowledge'), false)
+  assert.equal(shouldResetConversationOnNavigation('/app'), false)
 })

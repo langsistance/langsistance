@@ -186,3 +186,15 @@ export function decodeResultsArtifact(messages, messageId) {
     return { ...msg, results }
   })
 }
+
+/**
+ * A session_id-less URL only means "new conversation" when the chat page
+ * itself is the active route.  During a client-side transition away from
+ * the chat page (e.g. the auto-open of the results page after a search)
+ * the router context updates before the page unmounts, and treating that
+ * moment as "new conversation" would wipe the shared message list out
+ * from under the incoming page.
+ */
+export function shouldResetConversationOnNavigation(pathname) {
+  return pathname === '/app/chat'
+}

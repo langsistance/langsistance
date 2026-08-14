@@ -1,9 +1,9 @@
 'use client'
 
 import { useRef, useEffect } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
 import { getSession, saveSessionMessages, pollLongTaskBatchStatus, getLongTaskReportUrl } from '@/services/api'
-import { replaceAssistantMessage } from '@/lib/chatSession'
+import { replaceAssistantMessage, shouldResetConversationOnNavigation } from '@/lib/chatSession'
 import { useI18n } from '@/lib/app-i18n'
 import { useAuth } from '@/contexts/AuthContext'
 import MarkdownMessage from '@/components/app/MarkdownMessage'
@@ -76,13 +76,20 @@ export default function Chat() {
 
   // Load session from URL param (and resume long task polling if needed)
   const lastLoadedSidRef = useRef<string | null>(null)
+  const pathname = usePathname()
   useEffect(() => {
     const sid = searchParams.get('session_id')
     if (!sid) {
-      // Always clear when navigating to a URL without session_id (e.g. 新对话).
-      // This handles both the case where the component persisted across
-      // a client-side navigation and the case where it freshly mounted
-      // with stale ChatProvider state from the parent layout.
+      // A URL without session_id means "new conversation" — but only when
+      // the chat page is the active route.  Handles both the case where
+      // the component persisted across a client-side navigation (e.g.
+      // 新对话) and the case where it freshly mounted with stale
+      // ChatProvider state from the parent layout.  During a client-side
+      // transition away (e.g. the auto-open of the results page after a
+      // search) the router context updates before this component
+      // unmounts — clearing then would wipe the shared conversation out
+      // from under the incoming page.
+      if (!shouldResetConversationOnNavigation(pathname)) return
       stopLongTaskPolling()
       setMessages([])
       setSessionId(null)
@@ -228,7 +235,7 @@ export default function Chat() {
     })()
 
     return () => { cancelled = true }
-  }, [searchParams, sessionId, setMessages, setSessionId])
+  }, [searchParams, pathname, sessionId, setMessages, setSessionId])
 
   const messagesHash = JSON.stringify(messages.map(m => ({ role: m.role, content: m.content, taskId: (m as any).taskId, resultSummary: (m as any).resultSummary, patent_ids: (m as any).patent_ids })))
   // Save session after streaming completes — but ONLY if a session already exists
