@@ -116,10 +116,15 @@ export default function ResultsPage() {
   useEffect(() => {
     if (streaming) return
     const ar = (activeMessage as any)?.results
-    const rowModels = (ar?.rows ?? []).slice(0, 3).map((r: any) => {
-      const m = buildRowModel(r, ar.columns, ar.source)
-      return { id: String(m.id).slice(0, 30), title: String(m.title).slice(0, 30), isDoc: m.isDocument }
-    })
+    let rowModels: unknown = null
+    try {
+      rowModels = (ar?.rows ?? []).slice(0, 3).map((r: any) => {
+        const m = buildRowModel(r, ar.columns, ar.source)
+        return { id: String(m.id).slice(0, 30), title: String(m.title).slice(0, 30), isDoc: m.isDocument }
+      })
+    } catch (e) {
+      rowModels = 'buildRowModel threw: ' + String(e)
+    }
     console.log(
       '[copiioai-diag2] results-render setId=', setId,
       'activeSetId=', ar?.setId ?? null,
@@ -134,7 +139,7 @@ export default function ResultsPage() {
       'href=', window.location.href,
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps -- diag probe
-  }, [setId, activeMessage, messages])
+  }, [setId, activeMessage, messages, activeRowId, activeRow])
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
