@@ -130,45 +130,66 @@ def _is_tar_archive(content: bytes) -> bool:
 
 
 def extract_text_from_xmlarchive_tar(tar_bytes: bytes) -> str | None:
-    """Extract patent specification text from a USPTO xmlarchive tar file.
+    """Extract patent text from a USPTO xmlarchive tar file.
 
     The tar archive typically contains a directory structure like::
 
         <appNumber>/<docId>/<filename>.SPEC.XML       ← specification text
+        <appNumber>/<docId>/<filename>.CLM.xml        ← claims text
         <appNumber>/<docId>/<filename>.SPEC_svg.zip   ← drawings (ignored)
 
-    We locate the ``.SPEC.XML`` member and return its decoded text content.
+    Members are tried in preference order: ``.SPEC.XML`` first, then
+    claims members (``.CLM.xml`` / ``.CLMS.xml``), then any other
+    ``.xml`` member (zip/svg artifacts skipped).  The first member with
+    extractable text wins.
 
     Args:
         tar_bytes: Raw tar archive bytes downloaded from USPTO.
 
     Returns:
-        Decoded XML specification text, or None if extraction fails.
+        Decoded XML text, or None if extraction fails.
     """
     import io as _io
     import tarfile as _tarfile
 
+    _preferred_suffixes = (".SPEC.XML", ".CLM.xml", ".CLMS.xml", ".CLM.XML")
+
     try:
         with _tarfile.open(fileobj=_io.BytesIO(tar_bytes), mode="r") as tf:
-            # Find the .SPEC.XML file (skip .zip / SVG members)
-            for member in tf.getmembers():
-                if not member.isfile():
+            members = [m for m in tf.getmembers() if m.isfile()]
+
+            ordered: list = []
+            seen: set = set()
+            for suffix in _preferred_suffixes:
+                for member in members:
+                    if member.name.endswith(suffix) and member.name not in seen:
+                        seen.add(member.name)
+                        ordered.append(member)
+            for member in members:
+                if member.name in seen:
                     continue
-                if not member.name.endswith(".SPEC.XML"):
-                    continue
+                lowered = member.name.lower()
+                if lowered.endswith(".xml") and ".zip" not in lowered and "svg" not in lowered:
+                    seen.add(member.name)
+                    ordered.append(member)
+
+            for member in ordered:
                 f = tf.extractfile(member)
                 if f is None:
                     continue
                 content = f.read()
                 text = content.decode("utf-8", errors="replace")
-                if len(text.strip()) > 100:
+                # The preference order already filters noise; only skip
+                # members with no meaningful content (a claims document
+                # with a single short claim stays extractable).
+                if len(text.strip()) > 20:
                     _logger.info(
                         f"xmlarchive_tar_extracted — "
                         f"member={member.name}, chars={len(text)}"
                     )
                     return text
             _logger.warning(
-                f"xmlarchive_tar_no_spec_xml — "
+                f"xmlarchive_tar_no_xml_member — "
                 f"members={[m.name for m in tf.getmembers()]}"
             )
             return None

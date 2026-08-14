@@ -140,6 +140,46 @@ def _find_claims_document(document_bag: list) -> dict | None:
     return None
 
 
+def _parse_claims_xml(text: str) -> list[dict] | None:
+    """Parse a USPTO CLM.xml payload into structured claims.
+
+    USPTO claims documents download as xmlarchive tars whose member is a
+    ``CLM.xml`` file: each ``<claim num="…">`` element carries its
+    ``<claim-text>`` children.  Returns ``[{"number": int, "text": str}]``
+    in document order, or None when the payload is not claims XML (or no
+    claims could be found) so callers can fall back to text parsing.
+    """
+    if not text or "<claim" not in text:
+        return None
+    try:
+        import xml.etree.ElementTree as _ET
+        root = _ET.fromstring(text)
+    except Exception:
+        return None
+
+    claims: list[dict] = []
+    for element in root.iter():
+        if element.tag.rsplit("}", 1)[-1].lower() != "claim":
+            continue
+        parts = []
+        for child in element:
+            if child.tag.rsplit("}", 1)[-1].lower() != "claim-text":
+                continue
+            part = "".join(child.itertext()).strip()
+            if part:
+                parts.append(part)
+        claim_text = " ".join(parts).strip()
+        if not claim_text:
+            continue
+        number = len(claims) + 1
+        num = str(element.get("num") or "").lstrip("0")
+        if num.isdigit():
+            number = int(num)
+        claims.append({"number": number, "text": claim_text})
+
+    return claims or None
+
+
 async def _fetch_spec_pdf(source: str, patent_id: str) -> dict:
     """Resolve the USPTO specification PDF and return its proxy URL.
 
@@ -202,6 +242,11 @@ async def _fetch_claims(source: str, patent_id: str) -> dict:
         raise PatentDetailError(
             f"Claims text extraction failed for {app_number}"
         )
+    # Prefer the structured CLM.xml parse (numbers live in the num
+    # attribute); fall back to text splitting for plain-text documents.
+    structured = _parse_claims_xml(text)
+    if structured:
+        return build_claims_payload([claim["text"] for claim in structured])
     return build_claims_payload(split_claims_text(_strip_xml_tags(text)))
 
 

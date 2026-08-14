@@ -17,6 +17,7 @@ from api_routes.patent_detail import (
     split_claims_text,
     _find_claims_document,
     _find_spec_document,
+    _parse_claims_xml,
     _strip_xml_tags,
 )
 
@@ -70,6 +71,59 @@ class TestSplitClaimsText(unittest.TestCase):
         claims = split_claims_text(text)
         self.assertEqual(len(claims), 2)
         self.assertIn("canceled", claims[0])
+
+
+class TestParseClaimsXml(unittest.TestCase):
+    CLAIMS_XML = """<?xml version="1.0"?>
+        <us-patent-grant>
+          <claims id="claims">
+            <claim id="CLM-00001" num="00001">
+              <claim-text>First claim text.</claim-text>
+            </claim>
+            <claim id="CLM-00002" num="00002">
+              <claim-text>Second claim <b>with markup</b> here.</claim-text>
+            </claim>
+          </claims>
+        </us-patent-grant>
+    """
+
+    def test_parses_claims_with_num_attributes(self):
+        claims = _parse_claims_xml(self.CLAIMS_XML)
+        self.assertEqual(len(claims), 2)
+        self.assertEqual(claims[0]["number"], 1)
+        self.assertEqual(claims[0]["text"], "First claim text.")
+        self.assertEqual(claims[1]["number"], 2)
+        self.assertEqual(claims[1]["text"], "Second claim with markup here.")
+
+    def test_returns_none_for_plain_text(self):
+        self.assertIsNone(_parse_claims_xml("1. A plain text claim."))
+        self.assertIsNone(_parse_claims_xml(""))
+
+    def test_returns_none_when_no_claim_elements(self):
+        self.assertIsNone(
+            _parse_claims_xml("<specification><p>no claims here</p></specification>")
+        )
+
+    def test_number_falls_back_to_sequence(self):
+        xml = (
+            "<claims>"
+            "<claim><claim-text>one</claim-text></claim>"
+            "<claim num='00003'><claim-text>three</claim-text></claim>"
+            "</claims>"
+        )
+        claims = _parse_claims_xml(xml)
+        self.assertEqual([c["number"] for c in claims], [1, 3])
+
+    def test_skips_claims_without_text(self):
+        xml = (
+            "<claims>"
+            "<claim num='00001'><claim-text>real</claim-text></claim>"
+            "<claim num='00002'><claim-text>   </claim-text></claim>"
+            "</claims>"
+        )
+        claims = _parse_claims_xml(xml)
+        self.assertEqual(len(claims), 1)
+        self.assertEqual(claims[0]["text"], "real")
 
 
 class TestStripXmlTags(unittest.TestCase):
