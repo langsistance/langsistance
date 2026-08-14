@@ -125,18 +125,16 @@ export default function ResultsPage() {
   }
 
   function handleProsecution(model: any) {
-    // 审查历史 analysis runs in the conversation page — navigate back with
-    // a pending query so the normal chat pipeline (intent routing → long
-    // task card) picks it up exactly as if the user had typed it.
+    // Send the analysis query through the results sidebar's own chat
+    // pipeline — the long task card and its progress render right here
+    // and the split view (list + conversation) stays put.  Navigating to
+    // the chat page would unmount this view entirely.
     const identifier = model.patentId || model.applicationNumber
     const isUsAppNumber = /^\d{8}$/.test(model.applicationNumber || '')
     const queryText = isUsAppNumber
       ? `分析专利 ${identifier} 的审查历史`
       : `分析 ${identifier} 及其全球同族申请的审查差异`
-    const params = new URLSearchParams()
-    if (sessionId) params.set('session_id', sessionId)
-    params.set('pending_query', queryText)
-    router.push(chatPath(params.toString()))
+    send([], queryText)
   }
 
   if (!activeMessage) {
