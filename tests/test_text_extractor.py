@@ -18,6 +18,32 @@ def _tar_with(members: dict[str, str]) -> bytes:
     return buf.getvalue()
 
 
+class TestGetDownloadUrlStrictMode(unittest.TestCase):
+    DOC = {
+        "downloadOptionBag": [
+            {"mimeTypeIdentifier": "XML", "downloadUrl": "https://x/x.xmlarchive"},
+            {"mimeTypeIdentifier": "PDF", "downloadUrl": "https://x/x.pdf"},
+        ]
+    }
+
+    def test_strict_mode_returns_empty_when_order_unmatched(self):
+        from sources.long_task.text_extractor import get_download_url_from_doc
+        self.assertEqual(
+            get_download_url_from_doc(
+                self.DOC,
+                mime_order=("MS_WORD",),
+                fallback_to_any=False,
+            ),
+            "",
+        )
+
+    def test_default_falls_back_to_any(self):
+        from sources.long_task.text_extractor import get_download_url_from_doc
+        self.assertTrue(
+            get_download_url_from_doc(self.DOC, mime_order=("MS_WORD",))
+        )
+
+
 class TestXmlarchiveTarExtraction(unittest.TestCase):
     def test_extracts_clm_xml_member(self):
         content = "<claims><claim num='00001'><claim-text>claim one</claim-text></claim></claims>"

@@ -47,6 +47,7 @@ USPTO_PDF_PREFERRED_MIME_ORDER = (
 def get_download_url_from_doc(
     doc: dict,
     mime_order: tuple[str, ...] | None = None,
+    fallback_to_any: bool = True,
 ) -> str:
     """Extract the best download URL from a USPTO documentBag entry.
 
@@ -56,6 +57,10 @@ def get_download_url_from_doc(
         doc: USPTO documentBag entry dict.
         mime_order: Optional custom MIME preference order.  Defaults to
             USPTO_PREFERRED_MIME_ORDER (DOCX > XML > PDF).
+        fallback_to_any: When True (default), return any available URL
+            when no option matches the order — callers probing for a
+            specific format (e.g. "is there a DOCX?") pass False to get
+            an empty string instead of an unrelated format.
 
     Returns:
         Best download URL string, or empty string if none found.
@@ -94,8 +99,9 @@ def get_download_url_from_doc(
                 mime_key = preferred.upper()
                 if mime_key in url_by_mime:
                     return url_by_mime[mime_key]
-            # Fallback: return any available URL
-            return next(iter(url_by_mime.values()))
+            if fallback_to_any:
+                return next(iter(url_by_mime.values()))
+            return ""
 
     # Top-level fallback
     for key in ("downloadUrl", "documentUrl", "url"):

@@ -336,6 +336,36 @@ class TestParseClaimsXml(unittest.TestCase):
         self.assertEqual(len(claims), 1)
         self.assertEqual(claims[0]["text"], "real")
 
+    def test_parses_design_patent_claim_without_claim_elements(self):
+        # Design patents (D-numbers) carry the single claim as a plain
+        # paragraph — no <Claim> elements exist in the CLM.XML.
+        xml = (
+            '<?xml version="1.0" encoding="utf-8"?>'
+            '<uspat:ClaimsDocument xmlns:uscom="urn:us:gov:doc:uspto:common" '
+            'xmlns:uspat="urn:us:gov:doc:uspto:patent" '
+            'xmlns:com="http://www.wipo.int/standards/XMLSchema/ST96/Common">'
+            '<uspat:DocumentMetadata><uscom:DocumentCode>CLM</uscom:DocumentCode></uspat:DocumentMetadata>'
+            '<uscom:Heading>I <com:Del>CL</com:Del>laim:</uscom:Heading>'
+            '<uscom:P com:pNumber="0">The ornamental design for the False Eyelashes, '
+            'as shown and described.Page 3 of 6</uscom:P>'
+            '<uspat:Claims com:id="CLM-00000">'
+            '<uscom:P com:pNumber="1">Application No.: 29/967,887 '
+            'Response to Office Action dated December 4, 2024. '
+            'The dashed broken lines in the figures depict portions that '
+            'form no part of the claimed design.</uscom:P>'
+            '</uspat:Claims>'
+            '</uspat:ClaimsDocument>'
+        )
+        claims = _parse_claims_xml(xml)
+        self.assertEqual(len(claims), 1)
+        self.assertEqual(claims[0]["number"], 1)
+        self.assertEqual(
+            claims[0]["text"],
+            "The ornamental design for the False Eyelashes, as shown and described.",
+        )
+        # The amendment-status paragraph is NOT a claim
+        self.assertNotIn("Application No.", claims[0]["text"])
+
 
 class TestStripXmlTags(unittest.TestCase):
     def test_strips_tags_and_unescapes(self):
@@ -514,7 +544,7 @@ class TestSpecHandlerLogic(unittest.IsolatedAsyncioTestCase):
             ]),
         ), patch(
             "sources.long_task.text_extractor.get_download_url_from_doc",
-            side_effect=lambda _doc, mime_order=None: (
+            side_effect=lambda _doc, mime_order=None, fallback_to_any=True: (
                 pdf_url if mime_order and "PDF" in mime_order else ""
             ),
         ), patch(

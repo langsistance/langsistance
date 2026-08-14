@@ -280,14 +280,57 @@ def _claim_number_from(element) -> int | None:
     return None
 
 
+def _text_without_deletions(element) -> str:
+    """Element text with <Del> (editorial deletion) content removed."""
+    parts = []
+    if element.text:
+        parts.append(element.text)
+    for child in element:
+        if child.tag.rsplit("}", 1)[-1].lower() == "del":
+            continue
+        parts.append(_text_without_deletions(child))
+        if child.tail:
+            parts.append(child.tail)
+    return "".join(parts)
+
+
+_DESIGN_CLAIM_PATTERN = re.compile(
+    r"ornamental design|as shown and described", re.IGNORECASE
+)
+_PAGE_SUFFIX_PATTERN = re.compile(r"\s*Page\s+\d+\s+of\s+\d+\s*$", re.IGNORECASE)
+
+
+def _extract_design_claim(root) -> str | None:
+    """Extract the single design-patent claim from a CLM.XML document.
+
+    Design patents (D-numbers) carry no ``<Claim>`` elements — the claim
+    is a plain paragraph mentioning the ornamental design, e.g.
+    "The ornamental design for the False Eyelashes, as shown and
+    described."  Trailing page markers are stripped and editorial
+    deletions are ignored.
+    """
+    for element in root.iter():
+        if element.tag.rsplit("}", 1)[-1].lower() != "p":
+            continue
+        text = _text_without_deletions(element).strip()
+        if not _DESIGN_CLAIM_PATTERN.search(text):
+            continue
+        text = _PAGE_SUFFIX_PATTERN.sub("", text).strip()
+        if text:
+            return text
+    return None
+
+
 def _parse_claims_xml(text: str) -> list[dict] | None:
     """Parse a USPTO CLM.xml payload into structured claims.
 
-    Handles both claim schemas in the wild:
+    Handles the claim schemas in the wild:
     - classic ``<claim num="…">`` with ``<claim-text>`` children;
     - ST.96 VASTEC ``<uspat:Claim>`` with a ``<pat:ClaimNumber>`` child
       and ``<uspat:ClaimText>`` segments (namespaces are matched by local
-      name, and OCR footer segments are dropped).
+      name, and OCR footer segments are dropped);
+    - design patents (D-numbers) that carry no claim elements at all —
+      the single ornamental-design paragraph is extracted instead.
 
     Returns ``[{"number": int, "text": str}]`` in document order, or None
     when the payload is not claims XML (or no claims could be found) so
@@ -322,6 +365,11 @@ def _parse_claims_xml(text: str) -> list[dict] | None:
             "number": _claim_number_from(element) or len(claims) + 1,
             "text": claim_text,
         })
+
+    if not claims:
+        design_claim = _extract_design_claim(root)
+        if design_claim:
+            return [{"number": 1, "text": design_claim}]
 
     return claims or None
 
@@ -405,7 +453,9 @@ async def _fetch_claims(source: str, patent_id: str) -> dict:
         )
 
     # 1. XML — structured CLM.xml parse (numbers live in ClaimNumber).
-    if get_download_url_from_doc(claims_doc, mime_order=_XML_MIME_ORDER):
+    if get_download_url_from_doc(
+        claims_doc, mime_order=_XML_MIME_ORDER, fallback_to_any=False
+    ):
         text = await uspto_download.download_document_text(
             claims_doc, mime_order=_XML_MIME_ORDER
         )
@@ -419,7 +469,9 @@ async def _fetch_claims(source: str, patent_id: str) -> dict:
             )
 
     # 2. DOCX — text-layer parse with numbered / paragraph fallbacks.
-    if get_download_url_from_doc(claims_doc, mime_order=_DOCX_MIME_ORDER):
+    if get_download_url_from_doc(
+        claims_doc, mime_order=_DOCX_MIME_ORDER, fallback_to_any=False
+    ):
         text = await uspto_download.download_document_text(
             claims_doc, mime_order=_DOCX_MIME_ORDER
         )
@@ -438,9 +490,12 @@ async def _fetch_claims(source: str, patent_id: str) -> dict:
                 f"id={patent_id}, chars={len(cleaned)}, head={cleaned[:300]!r}"
             )
 
-    # 3. PDF — inline viewer, no extraction.
+    # 3. PDF — inline viewer, no extraction.  Strict: never substitute a
+    # non-PDF format into the viewer.
     pdf_url = get_download_url_from_doc(
-        claims_doc, mime_order=USPTO_PDF_PREFERRED_MIME_ORDER
+        claims_doc,
+        mime_order=USPTO_PDF_PREFERRED_MIME_ORDER,
+        fallback_to_any=False,
     )
     if not pdf_url:
         raise PatentDetailError(
