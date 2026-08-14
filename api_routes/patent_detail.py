@@ -298,6 +298,11 @@ _DESIGN_CLAIM_PATTERN = re.compile(
     r"ornamental design|as shown and described", re.IGNORECASE
 )
 _PAGE_SUFFIX_PATTERN = re.compile(r"\s*Page\s+\d+\s+of\s+\d+\s*$", re.IGNORECASE)
+# Design claims end with this standard phrase — everything after it is
+# page-number/footer noise (OCR sometimes glues "Page 2" to the text).
+_DESIGN_CLAIM_END_PATTERN = re.compile(
+    r"as shown and described\s*[.;:]?", re.IGNORECASE
+)
 
 
 def _extract_design_claim(root) -> str | None:
@@ -306,7 +311,8 @@ def _extract_design_claim(root) -> str | None:
     Design patents (D-numbers) carry no ``<Claim>`` elements — the claim
     is a plain paragraph mentioning the ornamental design, e.g.
     "The ornamental design for the False Eyelashes, as shown and
-    described."  Trailing page markers are stripped and editorial
+    described."  The text is cut at that standard closing phrase, so
+    page markers and OCR remnants after it are dropped; editorial
     deletions are ignored.
     """
     for element in root.iter():
@@ -315,6 +321,11 @@ def _extract_design_claim(root) -> str | None:
         text = _text_without_deletions(element).strip()
         if not _DESIGN_CLAIM_PATTERN.search(text):
             continue
+        end_match = _DESIGN_CLAIM_END_PATTERN.search(text)
+        if end_match:
+            text = text[: end_match.end()].rstrip()
+            if text:
+                return text
         text = _PAGE_SUFFIX_PATTERN.sub("", text).strip()
         if text:
             return text

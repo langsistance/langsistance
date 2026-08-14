@@ -28,9 +28,10 @@ export function pruneMessagesForPersistence(messages) {
         id: msg.id,
         role: msg.role,
         content: msg.content,
-        // Artifact chunks are base64-heavy; downloads are not restored
-        // across provider remounts (same trade-off as session loads).
-        artifacts: [],
+        // Artifact chunks are preserved so the Excel/CSV download buttons
+        // keep working after a provider remount.  saveChatStore strips
+        // them only when the storage quota forces it.
+        artifacts: Array.isArray(msg.artifacts) ? msg.artifacts : [],
       }
       if (msg.taskId) pruned.taskId = msg.taskId
       if (msg.resultSummary) pruned.resultSummary = String(msg.resultSummary).slice(0, MAX_PERSIST_SUMMARY_CHARS)
@@ -39,6 +40,13 @@ export function pruneMessagesForPersistence(messages) {
       return pruned
     })
     .filter(Boolean)
+}
+
+export function stripArtifactChunks(messages) {
+  if (!Array.isArray(messages)) return []
+  return messages.map((msg) =>
+    Array.isArray(msg && msg.artifacts) ? { ...msg, artifacts: [] } : msg
+  )
 }
 
 export function loadChatStore(storage) {
@@ -55,8 +63,19 @@ export function saveChatStore(storage, messages) {
   if (!storage) return
   try {
     storage.setItem(CHAT_STORE_KEY, JSON.stringify(messages))
+    return
+  } catch (error) {
+    const name = error && error.name ? error.name : ''
+    const code = error && error.code ? error.code : 0
+    const isQuota = name === 'QuotaExceededError' || code === 22 || code === 1014
+    if (!isQuota) return
+  }
+  // Quota pressure — retry once with artifact chunks stripped; the
+  // conversation survives, only the download payloads degrade.
+  try {
+    storage.setItem(CHAT_STORE_KEY, JSON.stringify(stripArtifactChunks(messages)))
   } catch {
-    // Quota / blocked site data — the conversation stays in memory only.
+    // Storage unavailable — the conversation stays in memory only.
   }
 }
 

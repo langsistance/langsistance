@@ -73,7 +73,7 @@ function landingConversation() {
   ]
 }
 
-test('pruneMessagesForPersistence strips artifact chunks and prunes results', () => {
+test('pruneMessagesForPersistence keeps artifact chunks and prunes results', () => {
   const pruned = pruneMessagesForPersistence(landingConversation())
   assert.equal(pruned.length, 2)
   assert.equal(pruned[0].id, 'u1')
@@ -81,7 +81,10 @@ test('pruneMessagesForPersistence strips artifact chunks and prunes results', ()
   assert.equal(pruned[0].content, '搜索图像处理专利')
   const assistant = pruned[1]
   assert.equal(assistant.content, '为你找到以下专利。')
-  assert.deepEqual(assistant.artifacts, [])
+  // Download buttons depend on the artifact chunks surviving the remount
+  assert.equal(assistant.artifacts.length, 2)
+  assert.equal(assistant.artifacts[1].format, 'xlsx')
+  assert.equal(assistant.artifacts[1].chunks[0], '<large base64 xlsx chunk>')
   assert.deepEqual(assistant.patent_ids, ['US12000123B2'])
   assert.equal(assistant.taskId, 'task-1')
   assert.equal(assistant.resultSummary, '# 分析报告\n\n生成完毕。')
@@ -120,8 +123,28 @@ test('persistChatToStorage round-trips a pruned conversation', () => {
   assert.equal(restored.length, 2)
   assert.equal(restored[0].content, '搜索图像处理专利')
   assert.equal(restored[1].content, '为你找到以下专利。')
-  assert.deepEqual(restored[1].artifacts, [])
+  assert.equal(restored[1].artifacts.length, 2)
+  assert.equal(restored[1].artifacts[1].chunks[0], '<large base64 xlsx chunk>')
   assert.ok(restored[1].results)
+})
+
+test('saveChatStore strips artifact chunks when quota is exceeded', () => {
+  const stored = []
+  const quotaStorage = {
+    getItem: () => null,
+    setItem: (key, value) => {
+      if (JSON.parse(value)[1].artifacts.length > 0) {
+        const error = new Error('quota')
+        error.name = 'QuotaExceededError'
+        throw error
+      }
+      stored.push(JSON.parse(value))
+    },
+  }
+  persistChatToStorage(quotaStorage, landingConversation())
+  assert.equal(stored.length, 1)
+  assert.equal(stored[0][1].content, '为你找到以下专利。') // conversation survives
+  assert.deepEqual(stored[0][1].artifacts, []) // only chunks degrade
 })
 
 test('saveChatStore degrades silently when storage throws', () => {

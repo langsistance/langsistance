@@ -366,6 +366,25 @@ class TestParseClaimsXml(unittest.TestCase):
         # The amendment-status paragraph is NOT a claim
         self.assertNotIn("Application No.", claims[0]["text"])
 
+    def test_design_claim_strips_page_number_remnants(self):
+        # OCR sometimes glues the page number to the claim text:
+        # "as shown and described.2" / "described.Page 2 of 6"
+        xml = (
+            '<?xml version="1.0" encoding="utf-8"?>'
+            '<uspat:ClaimsDocument xmlns:uscom="urn:us:gov:doc:uspto:common" '
+            'xmlns:uspat="urn:us:gov:doc:uspto:patent" '
+            'xmlns:com="http://www.wipo.int/standards/XMLSchema/ST96/Common">'
+            '<uscom:P com:pNumber="0">The ornamental design for a False Eyelash, '
+            'as shown and described.2</uscom:P>'
+            '</uspat:ClaimsDocument>'
+        )
+        claims = _parse_claims_xml(xml)
+        self.assertEqual(len(claims), 1)
+        self.assertEqual(
+            claims[0]["text"],
+            "The ornamental design for a False Eyelash, as shown and described.",
+        )
+
 
 class TestStripXmlTags(unittest.TestCase):
     def test_strips_tags_and_unescapes(self):
