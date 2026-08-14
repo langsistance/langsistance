@@ -66,6 +66,38 @@ class SSECallbackHandler(AsyncCallbackHandler):
                 "artifact_id": artifact_id,
             })
 
+    async def on_step(self, round: int, thought: str, action: str,
+                      params_brief: str = "", reasoning_text: str = "") -> None:
+        """One ReAct action round started — emitted before the tool executes.
+
+        Frontend renders *thought* as a live one-line status; *reasoning_text*
+        (model reasoning, may be empty) is kept for the expandable timeline.
+        """
+        await self.queue.put({
+            'type': 'step',
+            'round': round,
+            'thought': thought,
+            'action': action,
+            'params_brief': params_brief,
+            'reasoning_text': reasoning_text,
+        })
+
+    async def on_observation(self, round: int, result_brief: str) -> None:
+        """One ReAct action round finished — brief result summary."""
+        await self.queue.put({
+            'type': 'observation',
+            'round': round,
+            'result_brief': result_brief,
+        })
+
+    async def on_agent_elapsed(self, elapsed_seconds: float, steps: int) -> None:
+        """ReAct loop finished — frontend collapses the steps into a summary."""
+        await self.queue.put({
+            'type': 'agent_elapsed',
+            'elapsed_seconds': elapsed_seconds,
+            'steps': steps,
+        })
+
     async def on_tool_start(
             self,
             serialized: dict,
