@@ -42,6 +42,22 @@ export default function ClaimsTab({ row }: { row: any }) {
     )
   }
 
+  // No structured claims (image-only scanned document) — the backend
+  // returns the /uspto/download proxy URL; show the original PDF in the
+  // inline viewer, same presentation as the spec tab.
+  if (data.pdf_url) {
+    const src = `${data.pdf_url}${data.pdf_url.includes('?') ? '&' : '?'}inline=1#navpanes=0`
+    return (
+      <div className="results-detail-card">
+        <iframe
+          className="results-doc-frame"
+          src={src}
+          title={t('results.claimsTab')}
+        />
+      </div>
+    )
+  }
+
   async function handleCopy(number: number, text: string) {
     if (await copyTextToClipboard(text)) {
       setCopiedNumber(number)
@@ -51,7 +67,7 @@ export default function ClaimsTab({ row }: { row: any }) {
 
   return (
     <div className="results-detail-card">
-      {data.claims.map((claim) => (
+      {(data.claims || []).map((claim) => (
         <div
           key={claim.number}
           className={`results-claim${claim.independent ? ' independent' : ''}${claim.status === 'canceled' ? ' canceled' : ''}`}

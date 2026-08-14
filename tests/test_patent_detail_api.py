@@ -484,6 +484,9 @@ class TestSpecHandlerLogic(unittest.IsolatedAsyncioTestCase):
                 {"documentCode": "CLM", "documentCodeDescriptionText": "Claims"},
             ]),
         ), patch(
+            "sources.long_task.text_extractor.get_download_url_from_doc",
+            return_value="https://api.uspto.gov/api/v1/download/clm.xmlarchive",
+        ), patch(
             "sources.uspto_download.download_document_text",
             new=AsyncMock(return_value=claims_text),
         ):
@@ -494,6 +497,37 @@ class TestSpecHandlerLogic(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["claims"][0]["independent"])
         self.assertFalse(result["claims"][1]["independent"])
         self.assertFalse(result["claims"][2]["independent"])
+
+    async def test_claims_falls_back_to_pdf_viewer_url(self):
+        # No XML / DOCX options (or both failed to parse) — the endpoint
+        # must return the PDF proxy URL instead of extracting anything.
+        from api_routes.patent_detail import _fetch_claims
+
+        pdf_url = "https://api.uspto.gov/api/v1/download/clm.pdf"
+        with patch(
+            "sources.uspto_download.resolve_application_number",
+            new=AsyncMock(return_value="18893954"),
+        ), patch(
+            "sources.uspto_download.fetch_document_bag",
+            new=AsyncMock(return_value=[
+                {"documentCode": "CLM", "documentCodeDescriptionText": "Claims"},
+            ]),
+        ), patch(
+            "sources.long_task.text_extractor.get_download_url_from_doc",
+            side_effect=lambda _doc, mime_order=None: (
+                pdf_url if mime_order and "PDF" in mime_order else ""
+            ),
+        ), patch(
+            "sources.dynamic_tool_params._build_uspto_download_proxy_url",
+            return_value="https://api-test.copiioai.com/uspto/download?url=clm",
+        ):
+            result = await _fetch_claims("uspto", "US12000123B2")
+
+        self.assertEqual(
+            result["pdf_url"],
+            "https://api-test.copiioai.com/uspto/download?url=clm",
+        )
+        self.assertNotIn("claims", result)
 
 
 class TestPatentDetailRoutes(unittest.TestCase):

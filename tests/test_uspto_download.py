@@ -172,6 +172,39 @@ class TestDownloadDocumentText(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertEqual(await download_document_text(self.DOC), "")
 
+    async def test_scanned_pdf_degrades_to_empty(self):
+        # Image-only scanned PDFs have no text layer — extraction returns
+        # empty (the claims endpoint serves such documents as a viewer URL).
+        with patch(
+            "sources.uspto_download._download",
+            new=AsyncMock(
+                return_value=UsptoHttpResponse(
+                    status_code=200,
+                    content=b"%PDF-1.4 scanned pages",
+                    content_type="application/octet-stream",
+                )
+            ),
+        ), patch(
+            "sources.long_task.text_extractor.extract_text_from_binary",
+            return_value=None,
+        ):
+            self.assertEqual(await download_document_text(self.DOC), "")
+
+    async def test_custom_mime_order_selects_xml_url(self):
+        doc = {
+            "downloadOptionBag": [
+                {"mimeTypeIdentifier": "PDF", "downloadUrl": "https://api.uspto.gov/api/v1/download/x.pdf"},
+                {"mimeTypeIdentifier": "XML", "downloadUrl": "https://api.uspto.gov/api/v1/download/x.xmlarchive"},
+            ]
+        }
+        download_mock = AsyncMock(
+            return_value=UsptoHttpResponse(status_code=200, content=b"", content_type="text/xml")
+        )
+        with patch("sources.uspto_download._download", new=download_mock):
+            await download_document_text(doc, mime_order=("XML", "application/xml", "text/xml"))
+        download_mock.assert_awaited_once()
+        self.assertIn(".xmlarchive", download_mock.await_args.args[0])
+
     async def test_returns_empty_when_doc_has_no_url(self):
         self.assertEqual(await download_document_text({}), "")
 

@@ -316,7 +316,8 @@ export interface PatentClaim {
 }
 
 export interface PatentClaimsResponse {
-  claims: PatentClaim[]
+  claims?: PatentClaim[]  // structured claims when a text-layer document exists
+  pdf_url?: string  // otherwise the proxy URL — render in the inline viewer
 }
 
 export interface SubmitLongTaskResponse {

@@ -655,6 +655,7 @@ export default {
     claimCanceled: '已取消',
     claimsLoading: '正在加载权利要求…',
     claimsError: '权利要求加载失败',
+    claimsTab: '专利权利要求',
     claimCopy: '复制',
     retry: '重试',
   },

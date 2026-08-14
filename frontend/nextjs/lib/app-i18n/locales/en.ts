@@ -655,6 +655,7 @@ export default {
     claimCanceled: 'Canceled',
     claimsLoading: 'Loading claims…',
     claimsError: 'Failed to load claims',
+    claimsTab: 'Patent claims',
     claimCopy: 'Copy',
     retry: 'Retry',
   },

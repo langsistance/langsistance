@@ -365,9 +365,29 @@ async def _fetch_spec_pdf(source: str, patent_id: str) -> dict:
     return {"pdf_url": _build_uspto_download_proxy_url(pdf_url)}
 
 
+_XML_MIME_ORDER = ("XML", "application/xml", "text/xml")
+_DOCX_MIME_ORDER = (
+    "MS_WORD",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+)
+
+
 async def _fetch_claims(source: str, patent_id: str) -> dict:
-    """Fetch the USPTO claims document for *patent_id* and parse claims."""
+    """Fetch the USPTO claims document for *patent_id*.
+
+    Preference order:
+    1. XML (xmlarchive CLM.XML) — structured parse into the claims list.
+    2. DOCX — text-layer parse (numbered / paragraph fallback).
+    3. PDF — no extraction at all: return the proxy URL and let the
+       frontend show the original PDF in the inline viewer (scanned
+       documents never get OCR'd).
+    """
     from sources import uspto_download
+    from sources.dynamic_tool_params import _build_uspto_download_proxy_url
+    from sources.long_task.text_extractor import (
+        USPTO_PDF_PREFERRED_MIME_ORDER,
+        get_download_url_from_doc,
+    )
 
     try:
         app_number = await uspto_download.resolve_application_number(patent_id)
@@ -383,38 +403,50 @@ async def _fetch_claims(source: str, patent_id: str) -> dict:
         raise PatentDetailError(
             f"No claims document in USPTO file wrapper for {app_number}"
         )
-    text = await uspto_download.download_document_text(claims_doc)
-    if not text:
+
+    # 1. XML — structured CLM.xml parse (numbers live in ClaimNumber).
+    if get_download_url_from_doc(claims_doc, mime_order=_XML_MIME_ORDER):
+        text = await uspto_download.download_document_text(
+            claims_doc, mime_order=_XML_MIME_ORDER
+        )
+        if text:
+            structured = _parse_claims_xml(text)
+            if structured:
+                return build_claims_payload([claim["text"] for claim in structured])
+            logger.warning(
+                f"claims xml parse found no claims — source={source}, "
+                f"id={patent_id}, raw_head={text[:500]!r}"
+            )
+
+    # 2. DOCX — text-layer parse with numbered / paragraph fallbacks.
+    if get_download_url_from_doc(claims_doc, mime_order=_DOCX_MIME_ORDER):
+        text = await uspto_download.download_document_text(
+            claims_doc, mime_order=_DOCX_MIME_ORDER
+        )
+        if text:
+            cleaned = _strip_document_noise(_strip_xml_tags(text))
+            claims = split_claims_text(cleaned)
+            if not claims:
+                # Word auto-numbered lists lose their numbers in
+                # extraction — split by paragraph with claim-starter
+                # heuristics instead.
+                claims = split_unnumbered_claims(cleaned)
+            if claims:
+                return build_claims_payload(claims)
+            logger.warning(
+                f"claims parse found no claims — source={source}, "
+                f"id={patent_id}, chars={len(cleaned)}, head={cleaned[:300]!r}"
+            )
+
+    # 3. PDF — inline viewer, no extraction.
+    pdf_url = get_download_url_from_doc(
+        claims_doc, mime_order=USPTO_PDF_PREFERRED_MIME_ORDER
+    )
+    if not pdf_url:
         raise PatentDetailError(
-            f"Claims text extraction failed for {app_number}"
+            f"No downloadable claims document for application {app_number}"
         )
-    # Prefer the structured CLM.xml parse (numbers live in the num
-    # attribute); fall back to text splitting for plain-text documents.
-    structured = _parse_claims_xml(text)
-    if structured:
-        return build_claims_payload([claim["text"] for claim in structured])
-    if "<claim" in (text or ""):
-        # Diagnostic: the payload looked like claims XML but structured
-        # parsing found nothing — log the raw head to see the shape.
-        logger.warning(
-            f"claims xml parse found no claims — source={source}, "
-            f"id={patent_id}, raw_head={text[:500]!r}"
-        )
-    cleaned = _strip_document_noise(_strip_xml_tags(text))
-    claims = split_claims_text(cleaned)
-    if not claims:
-        # Word auto-numbered lists lose their numbers in extraction —
-        # split by paragraph with claim-starter heuristics instead.
-        claims = split_unnumbered_claims(cleaned)
-    if not claims:
-        # Diagnostic: the document downloaded and extracted but no
-        # "N. " claim starts were found — e.g. DOCX auto-numbered lists
-        # whose numbers live in numbering.xml and never reach the text.
-        logger.warning(
-            f"claims parse found no numbered claims — source={source}, "
-            f"id={patent_id}, chars={len(cleaned)}, head={cleaned[:300]!r}"
-        )
-    return build_claims_payload(claims)
+    return {"pdf_url": _build_uspto_download_proxy_url(pdf_url)}
 
 
 def register_patent_detail_routes(logger, config):

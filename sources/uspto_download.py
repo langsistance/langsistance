@@ -201,15 +201,15 @@ async def resolve_application_number(patent_id: str) -> str:
     raise ValueError(f"Could not resolve USPTO application for id {patent_id!r}")
 
 
-async def download_document_text(doc: dict) -> str:
+async def download_document_text(doc: dict, mime_order: tuple[str, ...] | None = None) -> str:
     """Download a USPTO documentBag entry and extract its text.
 
     Follows the prosecution pattern: pick the best downloadOptionBag URL
-    (DOCX > XML > PDF for text), follow at most one in-body redirect, and
-    extract text via the shared binary extractor (PDF text extraction is
-    enabled — SPEC/CLM documents are usually text-based; scanned
-    documents degrade to an empty string).  Failure modes are logged so
-    an empty result is diagnosable from backend.log alone.
+    (``mime_order``, defaulting to DOCX > XML > PDF for text), follow at
+    most one in-body redirect, and extract text via the shared binary
+    extractor (PDF text extraction is enabled; image-only scanned PDFs
+    return empty).  Failure modes are logged so an empty result is
+    diagnosable from backend.log alone.
     """
     import asyncio
 
@@ -223,7 +223,7 @@ async def download_document_text(doc: dict) -> str:
         desc = str((doc or {}).get("documentCodeDescriptionText") or "").strip()[:60]
         return f"code={code}, desc={desc}"
 
-    download_url = get_download_url_from_doc(doc or {})
+    download_url = get_download_url_from_doc(doc or {}, mime_order=mime_order)
     if not download_url:
         logger.warning(f"uspto_download no_url — {_doc_summary()}")
         return ""
