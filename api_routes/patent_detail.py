@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """Patent detail endpoints for the split-view results page.
 
-GET /patent/{source}/{patent_id}/spec    — 说明书分段全文
+GET /patent/{source}/{patent_id}/spec    — 说明书 PDF（内嵌阅读器代理地址）
 GET /patent/{source}/{patent_id}/claims  — 权利要求列表
 
 Documents come from USPTO's file-wrapper download (the same mechanism the
 prosecution-history long task uses): resolve the application number, fetch
-the PEDS document list, locate the SPEC / CLM documents, download them and
-extract text.  ``source`` is validated against the known set but does not
-change the download path — USPTO is the single data source.
+the PEDS document list and locate the SPEC / CLM documents.  The spec
+endpoint returns the USPTO PDF behind the existing lazy-download proxy
+(``/uspto/download``) so the frontend embeds the original PDF in a viewer
+— the same way patent documents are displayed.  Claims are downloaded and
+parsed into a structured list.  ``source`` is validated against the known
+set but does not change the download path — USPTO is the single data
+source.
 
 Auth: Firebase bearer token (same pattern as other web routes).
 """
@@ -21,13 +25,6 @@ from fastapi import APIRouter, HTTPException, Request
 from sources.user.passport import verify_firebase_token
 
 VALID_SOURCES = {"uspto", "google_patents"}
-
-_NATURAL_HEADING_PATTERN = re.compile(
-    r"^(技术领域|背景技术|发明内容|附图说明|具体实施方式|"
-    r"Technical Field|Background|Summary|Brief Description|"
-    r"Detailed Description|Embodiments)\s*$"
-)
-_SECTION_CHUNK_SIZE = 15
 
 _CLAIM_START_PATTERN = re.compile(r"(?m)^\s*(\d{1,3})\.\s*")
 
@@ -52,46 +49,6 @@ _XML_TAG_PATTERN = re.compile(r"<[^>]+>")
 
 class PatentDetailError(Exception):
     """Base error for patent detail fetch failures."""
-
-
-def split_description_sections(paragraphs: list[str]) -> list[dict]:
-    """Split description paragraphs into sections.
-
-    Paragraphs that look like natural headings (技术领域/背景技术/…) start a
-    new section; otherwise paragraphs are chunked into numbered sections of
-    ``_SECTION_CHUNK_SIZE``.
-    """
-    sections: list[dict] = []
-    current: dict | None = None
-    for para in paragraphs:
-        para = (para or "").strip()
-        if not para:
-            continue
-        if _NATURAL_HEADING_PATTERN.match(para):
-            if current:
-                sections.append(current)
-            current = {"heading": para, "paragraphs": []}
-            continue
-        if current is None:
-            current = {"heading": "", "paragraphs": []}
-        current["paragraphs"].append(para)
-    if current:
-        sections.append(current)
-
-    if not sections:
-        return []
-    # Fallback chunking when no natural headings were found
-    if len(sections) == 1 and not sections[0]["heading"]:
-        chunks = []
-        paras = sections[0]["paragraphs"]
-        for i in range(0, len(paras), _SECTION_CHUNK_SIZE):
-            end = min(i + _SECTION_CHUNK_SIZE, len(paras))
-            chunks.append({
-                "heading": f"段落 {i + 1}-{end}",
-                "paragraphs": paras[i:end],
-            })
-        return chunks
-    return sections
 
 
 def build_claims_payload(claims: list[str]) -> dict:
@@ -141,17 +98,6 @@ def split_claims_text(text: str) -> list[str]:
     return claims
 
 
-def _split_paragraphs(text: str) -> list[str]:
-    """Split extracted document text into paragraphs (blank-line separated)."""
-    normalized = (
-        (text or "")
-        .replace("\r\n", "\n")
-        .replace("\r", "\n")
-        .replace("\x0c", "\n")
-    )
-    return [p.strip() for p in re.split(r"\n\s*\n", normalized) if p.strip()]
-
-
 def _strip_xml_tags(text: str) -> str:
     """Strip XML tags (SPEC.XML / CLM.XML payloads) and unescape entities."""
     if not text or "<" not in text:
@@ -194,9 +140,20 @@ def _find_claims_document(document_bag: list) -> dict | None:
     return None
 
 
-async def _fetch_spec_text(source: str, patent_id: str) -> dict:
-    """Fetch the USPTO specification for *patent_id* and split into sections."""
+async def _fetch_spec_pdf(source: str, patent_id: str) -> dict:
+    """Resolve the USPTO specification PDF and return its proxy URL.
+
+    The URL points at the existing lazy-download proxy (``/uspto/download``)
+    so the frontend can embed the original PDF in an inline viewer without
+    exposing the USPTO API key — the same mechanism patent document rows
+    already use.
+    """
     from sources import uspto_download
+    from sources.dynamic_tool_params import _build_uspto_download_proxy_url
+    from sources.long_task.text_extractor import (
+        USPTO_PDF_PREFERRED_MIME_ORDER,
+        get_download_url_from_doc,
+    )
 
     try:
         app_number = await uspto_download.resolve_application_number(patent_id)
@@ -212,17 +169,14 @@ async def _fetch_spec_text(source: str, patent_id: str) -> dict:
         raise PatentDetailError(
             f"No specification document in USPTO file wrapper for {app_number}"
         )
-    text = await uspto_download.download_document_text(spec_doc)
-    if not text:
+    pdf_url = get_download_url_from_doc(
+        spec_doc, mime_order=USPTO_PDF_PREFERRED_MIME_ORDER
+    )
+    if not pdf_url:
         raise PatentDetailError(
-            f"Specification text extraction failed for {app_number}"
+            f"No downloadable specification PDF for application {app_number}"
         )
-    return {
-        "sections": split_description_sections(_split_paragraphs(_strip_xml_tags(text))),
-        # Viewer link only — data comes from USPTO; Google Patents remains
-        # the most reliable public viewer for granted patents.
-        "source_url": f"https://patents.google.com/patent/{patent_id}",
-    }
+    return {"pdf_url": _build_uspto_download_proxy_url(pdf_url)}
 
 
 async def _fetch_claims(source: str, patent_id: str) -> dict:
@@ -263,7 +217,7 @@ def register_patent_detail_routes(logger, config):
         if not patent_id or len(patent_id) > 40:
             raise HTTPException(status_code=400, detail="Invalid patent_id")
         try:
-            payload = await _fetch_spec_text(source, patent_id)
+            payload = await _fetch_spec_pdf(source, patent_id)
         except PatentDetailError as exc:
             logger.error(f"spec fetch failed — source={source}, id={patent_id}: {exc}")
             # Expected upstream misses are data conditions, not server

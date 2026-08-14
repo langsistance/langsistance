@@ -304,14 +304,8 @@ export async function getLongTaskUserQueue(): Promise<{
   return res.json()
 }
 
-export interface PatentSpecSection {
-  heading: string
-  paragraphs: string[]
-}
-
 export interface PatentSpecResponse {
-  sections: PatentSpecSection[]
-  source_url: string
+  pdf_url: string  // lazy-download proxy URL — embed in an inline viewer
 }
 
 export interface PatentClaim {

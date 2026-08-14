@@ -15,36 +15,10 @@ from api_routes.patent_detail import (
     build_claims_payload,
     register_patent_detail_routes,
     split_claims_text,
-    split_description_sections,
     _find_claims_document,
     _find_spec_document,
-    _split_paragraphs,
     _strip_xml_tags,
 )
-
-
-class TestSplitDescriptionSections(unittest.TestCase):
-    def test_chunks_paragraphs_without_headings(self):
-        paras = [f"paragraph {i}" for i in range(40)]
-        sections = split_description_sections(paras)
-        self.assertEqual(len(sections), 3)  # 15 + 15 + 10
-        self.assertEqual(sections[0]["heading"], "段落 1-15")
-        self.assertEqual(len(sections[0]["paragraphs"]), 15)
-
-    def test_uses_natural_headings_when_present(self):
-        paras = [
-            "技术领域", "本申请涉及电池。",
-            "背景技术", "现有技术存在不足。",
-            "发明内容", "提供一种新的结构。",
-        ]
-        sections = split_description_sections(paras)
-        headings = [s["heading"] for s in sections]
-        self.assertIn("技术领域", headings)
-        self.assertIn("背景技术", headings)
-        self.assertIn("发明内容", headings)
-
-    def test_empty_paragraphs(self):
-        self.assertEqual(split_description_sections([]), [])
 
 
 class TestBuildClaimsPayload(unittest.TestCase):
@@ -98,18 +72,6 @@ class TestSplitClaimsText(unittest.TestCase):
         self.assertIn("canceled", claims[0])
 
 
-class TestSplitParagraphs(unittest.TestCase):
-    def test_splits_on_blank_lines(self):
-        text = "para one line\nmore\n\npara two\n\n\npara three"
-        self.assertEqual(
-            _split_paragraphs(text),
-            ["para one line\nmore", "para two", "para three"],
-        )
-
-    def test_normalizes_carriage_returns_and_form_feeds(self):
-        self.assertEqual(_split_paragraphs("a\r\nb\r\n\x0cc"), ["a\nb", "c"])
-
-
 class TestStripXmlTags(unittest.TestCase):
     def test_strips_tags_and_unescapes(self):
         self.assertEqual(
@@ -152,8 +114,8 @@ class TestDocumentSelection(unittest.TestCase):
 
 
 class TestSpecHandlerLogic(unittest.IsolatedAsyncioTestCase):
-    async def test_spec_uses_uspto_download_and_splits(self):
-        from api_routes.patent_detail import _fetch_spec_text
+    async def test_spec_returns_proxy_pdf_url(self):
+        from api_routes.patent_detail import _fetch_spec_pdf
 
         with patch(
             "sources.uspto_download.resolve_application_number",
@@ -164,16 +126,21 @@ class TestSpecHandlerLogic(unittest.IsolatedAsyncioTestCase):
                 {"documentCode": "SPEC", "documentCodeDescriptionText": "Specification"},
             ]),
         ), patch(
-            "sources.uspto_download.download_document_text",
-            new=AsyncMock(return_value="技术领域\n\n本申请涉及电池。"),
+            "sources.long_task.text_extractor.get_download_url_from_doc",
+            return_value="https://api.uspto.gov/api/v1/download/spec.pdf",
+        ), patch(
+            "sources.dynamic_tool_params._build_uspto_download_proxy_url",
+            return_value="https://api-test.copiioai.com/uspto/download?url=encoded",
         ):
-            result = await _fetch_spec_text("uspto", "US12000123B2")
+            result = await _fetch_spec_pdf("uspto", "US12000123B2")
 
-        self.assertEqual(len(result["sections"]), 1)
-        self.assertIn("patents.google.com", result["source_url"])
+        self.assertEqual(
+            result["pdf_url"],
+            "https://api-test.copiioai.com/uspto/download?url=encoded",
+        )
 
     async def test_spec_raises_when_document_list_unavailable(self):
-        from api_routes.patent_detail import _fetch_spec_text
+        from api_routes.patent_detail import _fetch_spec_pdf
 
         with patch(
             "sources.uspto_download.resolve_application_number",
@@ -183,10 +150,10 @@ class TestSpecHandlerLogic(unittest.IsolatedAsyncioTestCase):
             new=AsyncMock(return_value=None),
         ):
             with self.assertRaises(PatentDetailError):
-                await _fetch_spec_text("uspto", "US12000123B2")
+                await _fetch_spec_pdf("uspto", "US12000123B2")
 
     async def test_spec_raises_when_spec_document_missing(self):
-        from api_routes.patent_detail import _fetch_spec_text
+        from api_routes.patent_detail import _fetch_spec_pdf
 
         with patch(
             "sources.uspto_download.resolve_application_number",
@@ -198,7 +165,25 @@ class TestSpecHandlerLogic(unittest.IsolatedAsyncioTestCase):
             ]),
         ):
             with self.assertRaises(PatentDetailError):
-                await _fetch_spec_text("uspto", "US12000123B2")
+                await _fetch_spec_pdf("uspto", "US12000123B2")
+
+    async def test_spec_raises_when_no_pdf_url(self):
+        from api_routes.patent_detail import _fetch_spec_pdf
+
+        with patch(
+            "sources.uspto_download.resolve_application_number",
+            new=AsyncMock(return_value="18893954"),
+        ), patch(
+            "sources.uspto_download.fetch_document_bag",
+            new=AsyncMock(return_value=[
+                {"documentCode": "SPEC", "documentCodeDescriptionText": "Specification"},
+            ]),
+        ), patch(
+            "sources.long_task.text_extractor.get_download_url_from_doc",
+            return_value="",
+        ):
+            with self.assertRaises(PatentDetailError):
+                await _fetch_spec_pdf("uspto", "US12000123B2")
 
     async def test_claims_uses_uspto_claims_document(self):
         from api_routes.patent_detail import _fetch_claims
@@ -249,7 +234,7 @@ class TestPatentDetailRoutes(unittest.TestCase):
 
     def test_spec_returns_200_success_false_on_upstream_miss(self):
         with patch(
-            "api_routes.patent_detail._fetch_spec_text",
+            "api_routes.patent_detail._fetch_spec_pdf",
             new=AsyncMock(side_effect=PatentDetailError("Patent not found (404)")),
         ):
             response = self.client.get(
@@ -273,13 +258,12 @@ class TestPatentDetailRoutes(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.json()["success"])
 
-    def test_spec_returns_200_success_true_with_sections(self):
+    def test_spec_returns_200_success_true_with_pdf_url(self):
         with patch(
-            "api_routes.patent_detail._fetch_spec_text",
+            "api_routes.patent_detail._fetch_spec_pdf",
             new=AsyncMock(
                 return_value={
-                    "sections": [{"heading": "技术领域", "paragraphs": ["内容"]}],
-                    "source_url": "https://patents.google.com/patent/US12000123B2",
+                    "pdf_url": "https://api-test.copiioai.com/uspto/download?url=encoded",
                 }
             ),
         ):
@@ -290,7 +274,7 @@ class TestPatentDetailRoutes(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertTrue(body["success"])
-        self.assertEqual(len(body["sections"]), 1)
+        self.assertIn("/uspto/download", body["pdf_url"])
 
     def test_unsupported_source_still_400(self):
         response = self.client.get(

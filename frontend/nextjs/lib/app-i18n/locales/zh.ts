@@ -649,6 +649,7 @@ export default {
     expandList: '展开结果列表',
     specLoading: '正在加载说明书…',
     specError: '说明书加载失败',
+    specTab: '专利说明书',
     specPdfLink: 'PDF 原文',
     claimIndependent: '独立权利要求',
     claimsLoading: '正在加载权利要求…',

@@ -649,6 +649,7 @@ export default {
     expandList: 'Expand results',
     specLoading: 'Loading specification…',
     specError: 'Failed to load specification',
+    specTab: 'Patent specification',
     specPdfLink: 'Original PDF',
     claimIndependent: 'Independent claim',
     claimsLoading: 'Loading claims…',

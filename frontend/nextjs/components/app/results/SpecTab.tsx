@@ -31,7 +31,7 @@ export default function SpecTab({ row }: { row: any }) {
   }, [row.source, row.patentId, row.applicationNumber, retryKey])
 
   if (state === 'loading') return <div className="results-detail-card">{t('results.specLoading')}</div>
-  if (state === 'error' || !data) {
+  if (state === 'error' || !data?.pdf_url) {
     return (
       <div className="results-detail-card results-error">
         <p>{t('results.specError')}</p>
@@ -40,21 +40,19 @@ export default function SpecTab({ row }: { row: any }) {
     )
   }
 
+  // The backend returns the /uspto/download proxy URL (PDF).  inline=1
+  // makes the proxy serve the file inline (and coerce octet-stream to
+  // application/pdf for the embedded viewer); the navpanes fragment keeps
+  // the thumbnail pane collapsed — same presentation as document rows.
+  const src = `${data.pdf_url}${data.pdf_url.includes('?') ? '&' : '?'}inline=1#navpanes=0`
+
   return (
     <div className="results-detail-card">
-      {data.source_url && (
-        <a className="results-spec-pdf" href={data.source_url} target="_blank" rel="noopener noreferrer">
-          {t('results.specPdfLink')}
-        </a>
-      )}
-      {data.sections.map((section) => (
-        <section key={section.heading} className="results-spec-section">
-          <h4>{section.heading}</h4>
-          {section.paragraphs.map((para, index) => (
-            <p key={index}>{para}</p>
-          ))}
-        </section>
-      ))}
+      <iframe
+        className="results-doc-frame"
+        src={src}
+        title={t('results.specTab')}
+      />
     </div>
   )
 }
