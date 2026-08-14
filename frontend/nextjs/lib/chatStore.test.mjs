@@ -81,8 +81,11 @@ test('pruneMessagesForPersistence keeps artifact chunks and prunes results', () 
   assert.equal(pruned[0].content, '搜索图像处理专利')
   const assistant = pruned[1]
   assert.equal(assistant.content, '为你找到以下专利。')
-  // Download buttons depend on the artifact chunks surviving the remount
+  // Download buttons depend on the csv/xlsx chunks surviving the remount;
+  // the json artifact's chunks are dropped (its data lives in msg.results).
   assert.equal(assistant.artifacts.length, 2)
+  assert.equal(assistant.artifacts[0].format, 'json')
+  assert.deepEqual(assistant.artifacts[0].chunks, [])
   assert.equal(assistant.artifacts[1].format, 'xlsx')
   assert.equal(assistant.artifacts[1].chunks[0], '<large base64 xlsx chunk>')
   assert.deepEqual(assistant.patent_ids, ['US12000123B2'])
@@ -124,6 +127,7 @@ test('persistChatToStorage round-trips a pruned conversation', () => {
   assert.equal(restored[0].content, '搜索图像处理专利')
   assert.equal(restored[1].content, '为你找到以下专利。')
   assert.equal(restored[1].artifacts.length, 2)
+  assert.deepEqual(restored[1].artifacts[0].chunks, []) // json chunks dropped
   assert.equal(restored[1].artifacts[1].chunks[0], '<large base64 xlsx chunk>')
   assert.ok(restored[1].results)
 })

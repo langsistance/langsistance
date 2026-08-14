@@ -29,9 +29,18 @@ export function pruneMessagesForPersistence(messages) {
         role: msg.role,
         content: msg.content,
         // Artifact chunks are preserved so the Excel/CSV download buttons
-        // keep working after a provider remount.  saveChatStore strips
-        // them only when the storage quota forces it.
-        artifacts: Array.isArray(msg.artifacts) ? msg.artifacts : [],
+        // keep working after a provider remount.  The json artifact's
+        // chunks are dropped — its data already lives in msg.results and
+        // the results store, and its chunks are the largest payload
+        // (repeated rows) — keeping only csv/xlsx chunks fits the
+        // sessionStorage quota.  saveChatStore strips the rest only when
+        // the quota still forces it.
+        artifacts: (Array.isArray(msg.artifacts) ? msg.artifacts : []).map((artifact) => {
+          if (artifact && artifact.format === 'json') {
+            return { ...artifact, chunks: [] }
+          }
+          return artifact
+        }),
       }
       if (msg.taskId) pruned.taskId = msg.taskId
       if (msg.resultSummary) pruned.resultSummary = String(msg.resultSummary).slice(0, MAX_PERSIST_SUMMARY_CHARS)
