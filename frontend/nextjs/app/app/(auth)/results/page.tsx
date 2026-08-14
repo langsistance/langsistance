@@ -178,6 +178,10 @@ export default function ResultsPage() {
                     resultSummary={msg.resultSummary}
                     streaming={streaming && streamingId === msg.id}
                     transientStatus={streaming && streamingId === msg.id ? transientStatus : ''}
+                    analysisType={(msg as any).analysisType}
+                    tableColumns={(msg as any).tableColumns}
+                    familyOverview={(msg as any).familyOverview}
+                    jurisdictions={(msg as any).jurisdictions}
                   />
                 ) : (
                   <div className="chat-message user">
