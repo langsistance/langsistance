@@ -27,7 +27,8 @@ from sources.tool_result_filter import (
     unfiltered_result,
 )
 from sources.result_export import build_result_artifacts
-from sources.workflow.workflow_executor import WorkflowExecutor, is_workflow_knowledge
+from sources.agents.react_loop import ReActLoop, make_event_emitter, make_llm_call
+from sources.agents.react_tools import build_tool_set, make_action_executor
 from sources.http_outbound import outbound_http
 
 from langchain_core.tools import StructuredTool
@@ -671,6 +672,23 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         Do NOT mix languages. Do NOT answer an English question with Chinese text
         or vice versa. Match the user's language exactly throughout your entire response.
         """
+    def _loop_system_guidance(self) -> str:
+        """Tool-usage guidance appended to the ReAct loop system prompt."""
+        return """
+
+## Tool Usage
+
+- You have tools built from the user's knowledge base, plus `search_my_knowledge`
+  to find more. Use them to complete the user's task.
+- Work step by step: think about what is needed, call the right tool, observe
+  the result, then decide the next step or write the final answer.
+- You may call several tools in sequence and combine their results.
+- If no tool matches the task, answer directly and suggest the user check the
+  community for shared knowledge that may help.
+- Never fabricate tool results. If a tool fails, try another approach or
+  explain the failure honestly.
+"""
+
 
     def generate_fixed_system_prompt(self) -> str:
         """Generate system prompt for fixed (no-parameter) tools."""
@@ -1224,249 +1242,114 @@ Begin your response now:
             self.logger.error(f"Failed to generate tool direct system prompt: {str(e)}")
             return self.generate_system_prompt(result_str)
 
+    def get_dynamic_tool_for(self, knowledge_item, tool_info):
+        """Build the LangChain StructuredTool for one knowledge/tool pair.
+
+        Extracted from get_dynamic_tools so the ReAct loop can build tools
+        for arbitrary knowledge items (top-N recall + search results),
+        not just the single self.knowledgeTool pairing.
+        """
+        if tool_info is None:
+            return None
+        # -- closures moved verbatim from get_dynamic_tools --
+        def dynamic_frontend_tool_function(user_id: str, query_id: str, params: str):
+            # Always use stored values -- ignore LLM-provided IDs
+            user_id = self._last_user_id
+            query_id = self._last_query_id
+            self.logger.info(f"dynamic_frontend_tool_function user id is {user_id} - query id is {query_id} - param is {params}")
+            try:
+                redis_conn = get_redis_connection()
+                redis_key = f"tool_request_{query_id}_{user_id}"
+                params_json = json.dumps(params)
+                redis_conn.set(redis_key, params_json, ex=1200)
+                response_key = f"tool_response_{query_id}_{user_id}"
+                timeout = 300  # 5 minutes
+                interval = 1
+                elapsed = 0
+                while elapsed < timeout:
+                    response_value = redis_conn.get(response_key)
+                    if response_value is not None:
+                        return response_value
+                    time.sleep(interval)
+                    elapsed += interval
+                return None
+            except Exception as e:
+                self.logger.error(f"Failed to write to Redis: {str(e)}")
+                return None
+
+        def dynamic_backend_tool_function(user_id: str, query_id: str, params: Dict[str, Any] | str):
+            # Always use stored values -- ignore LLM-provided IDs
+            user_id = self._last_user_id
+            query_id = self._last_query_id
+            self.logger.info(
+                f"dynamic_backend_tool_function user_id={user_id} query_id={query_id}"
+            )
+            tool_result = execute_backend_tool_request(tool_info, params)
+            raw_items = tool_result.get("raw_items")
+            if raw_items:
+                list_count = len(raw_items)
+                self._pending_raw_items = raw_items
+                return (
+                    f"The query returned {list_count} items. "
+                    f"Please write a brief 2-3 sentence summary of what was found. "
+                    f"The complete list will be analyzed and displayed item by item automatically - "
+                    f"do NOT enumerate the items yourself."
+                )
+            data = tool_result.get("data")
+            if isinstance(data, dict):
+                pruned = _prune_item_for_llm(data)
+                self._pending_raw_items = [pruned]
+                return (
+                    "The query returned structured data. "
+                    "Please write a brief 1-2 sentence summary of what was found. "
+                    "The complete data will be displayed automatically - "
+                    "do NOT enumerate the fields yourself."
+                )
+            if isinstance(data, list):
+                return json.dumps(data, ensure_ascii=False, indent=2)
+            return data
+
+        # -- name / schema / push selection (same as before) --
+        tool_name = tool_info.title if tool_info.title else "dynamic_knowledge_tool"
+        cleaned_tool_name = re.sub(r'[^a-zA-Z0-9_-]', '_', tool_name)
+        if not cleaned_tool_name or cleaned_tool_name.strip() == "":
+            cleaned_tool_name = "dynamic_knowledge_tool"
+
+        if tool_info.push == 1 or tool_info.push == 3:
+            tool_func = dynamic_frontend_tool_function
+        elif tool_info.push == 2:
+            tool_func = dynamic_backend_tool_function
+        else:
+            tool_func = dynamic_frontend_tool_function
+
+        args_schema = (
+            DynamicBackendToolFunction
+            if tool_info.push == 2
+            else DynamicToolFunction
+        )
+        return StructuredTool.from_function(
+            func=tool_func,
+            name=cleaned_tool_name,
+            description=tool_info.description if tool_info.description else "Dynamic knowledge tool",
+            args_schema=args_schema,
+        )
+
     async def get_dynamic_tools(self) -> list:
+        """Backwards-compatible wrapper: dynamic tools for self.knowledgeTool."""
         try:
-            tools = {}
-            # 濡傛灉鏈夌煡璇嗗簱涓殑宸ュ叿淇℃伅锛屽垯鍔ㄦ€佹瀯寤篗CP宸ュ叿
-            if hasattr(self, 'knowledgeTool') and self.knowledgeTool:
-                # 鑾峰彇宸ュ叿淇℃伅
-                knowledge_item, tool_info = self.knowledgeTool
-
-                if tool_info:
-
-                    # Dynamic tool functions — the schema still requires user_id /
-                    # query_id so the LLM sees a 3-parameter function and follows
-                    # the full template format, but the actual values are taken
-                    # from the agent instance (what the LLM passes is ignored).
-                    def dynamic_frontend_tool_function(user_id: str, query_id: str, params: str):
-                        # Always use stored values — ignore LLM-provided IDs
-                        user_id = self._last_user_id
-                        query_id = self._last_query_id
-                        self.logger.info(f"dynamic_frontend_tool_function user id is {user_id} - query id is {query_id} - param is {params}")
-                        try:
-                            # Connect Redis
-                            redis_conn = get_redis_connection()
-
-                            # 鏋勯€燫edis閿?
-                            redis_key = f"tool_request_{query_id}_{user_id}"
-
-                            # param_dict = {"origin_params": json.loads(tool_info.params)}
-                            # if params:
-                            #     # 灏嗗弬鏁拌浆鎹负JSON骞跺瓨鍌ㄥ埌Redis
-                            #     param_dict["llm_params"] = params
-
-                            params_json = json.dumps(params)
-
-                            redis_conn.set(redis_key, params_json, ex=1200)
-
-                            # 杞璇诲彇tool_response_{query_id}
-                            response_key = f"tool_response_{query_id}_{user_id}"
-                            timeout = 300  # 5鍒嗛挓瓒呮椂
-                            interval = 1  # 姣忕鏌ヨ涓€娆?
-                            elapsed = 0
-
-                            while elapsed < timeout:
-                                response_value = redis_conn.get(response_key)
-
-                                if response_value is not None:
-                                    # 鎴愬姛鑾峰彇鍒板搷搴斿€?
-                                    return response_value
-                                # 绛夊緟1绉掑悗鍐嶆灏濊瘯
-                                time.sleep(interval)
-                                elapsed += interval
-
-                            # 瓒呮椂鏈幏鍙栧埌鍝嶅簲鍊?
-                            return None
-                        except Exception as e:
-                            # 濡傛灉Redis鎿嶄綔澶辫触锛岃褰曟棩蹇椾絾浠嶇户缁墽琛屽伐鍏?
-                            self.logger.error(f"Failed to write to Redis: {str(e)}")
-                            return None
-
-                    def dynamic_backend_tool_function(user_id: str, query_id: str, params: Dict[str, Any] | str):
-                        # Always use stored values — ignore LLM-provided IDs
-                        user_id = self._last_user_id
-                        query_id = self._last_query_id
-                        if isinstance(params, str):
-                            self.logger.info(
-                                f"dynamic_backend_tool_function user_id={user_id} query_id={query_id} "
-                                f"params_type=str params_len={len(params)}"
-                            )
-                        else:
-                            self.logger.info(
-                                f"dynamic_backend_tool_function user_id={user_id} query_id={query_id} "
-                                f"params_type={type(params).__name__}"
-                            )
-                        tool_result = execute_backend_tool_request(tool_info, params)
-                        raw_items = tool_result.get("raw_items")
-                        if raw_items:
-                            list_count = len(raw_items)
-                            self._pending_raw_items = raw_items
-                            return (
-                                f"The query returned {list_count} items. "
-                                f"Please write a brief 2-3 sentence summary of what was found. "
-                                f"The complete list will be analyzed and displayed item by item automatically - "
-                                f"do NOT enumerate the items yourself."
-                            )
-                        data = tool_result.get("data")
-                        if isinstance(data, dict):
-                            # dict 鍖呰涓哄崟鍏冪礌鍒楄〃锛岃蛋 Phase 2 蹇犲疄杈撳嚭
-                            pruned = _prune_item_for_llm(data)
-                            self._pending_raw_items = [pruned]
-                            return (
-                                "The query returned structured data. "
-                                "Please write a brief 1-2 sentence summary of what was found. "
-                                "The complete data will be displayed automatically - "
-                                "do NOT enumerate the fields yourself."
-                            )
-                        if isinstance(data, list):
-                            return json.dumps(data, ensure_ascii=False, indent=2)
-                        return data
-                        # 浠巘ool_info涓幏鍙朥RL
-                        url = tool_info.url
-
-                        # 瑙ｆ瀽鍙傛暟JSON
-                        params_data = _coerce_json_object(tool_info.params, "tool_info.params")
-                        user_params = _coerce_json_object(params, "LLM tool params")
-                        url = _append_path_to_url(
-                            url,
-                            user_params.get("path", params_data.get("path", ""))
-                        )
-
-                        # 鑾峰彇HTTP鏂规硶鍜孋ontent-Type
-                        method = params_data.get("method", "GET").upper()
-                        content_type = params_data.get("Content-Type", "application/json")
-
-                        # Prepare HTTP headers from server-side tool_info.params only.
-                        # Never use LLM-provided header values 鈥?the LLM only sees
-                        # sanitised (****) placeholders and must not control auth headers.
-                        headers = {
-                            "Content-Type": content_type
-                        }
-                        server_headers = params_data.get("header", {})
-                        if isinstance(server_headers, dict):
-                            headers.update(server_headers)
-
-                        request_params = user_params.get("query")
-                        request_body = user_params.get("body")
-
-                        # 娣诲姞鏃堕棿鎴冲弬鏁扮粫杩?CDN 缂撳瓨
-                        if request_params is None:
-                            request_params = {}
-                        request_params["_t"] = str(int(time.time() * 1000))
-                        self.logger.info(f"tool url is {url}")
-                        if method not in {"GET", "POST", "PUT", "DELETE", "PATCH"}:
-                            raise ValueError(f"Unsupported HTTP method: {method}")
-                        request_kwargs = {
-                            "params": request_params,
-                            "headers": headers,
-                        }
-                        if method in {"POST", "PUT", "PATCH"}:
-                            request_kwargs["json"] = request_body
-                        response = outbound_http.request(method, url, purpose="backend_tool", **request_kwargs)
-
-                        # 鎵撳嵃 response 淇℃伅
-                        self.logger.info(f"Response status code: {response.status_code}")
-                        self.logger.info(f"Response headers: {response.headers}")
-                        # self.logger.info(f"Response content: {response.text}")
-                        # 澶勭悊鍝嶅簲缁撴灉
-                        if response.status_code == 200:
-                            content_type = response.headers.get("Content-Type", "").lower()
-
-                            if "text/html" in content_type:
-                                # HTML 鍐呭锛屼娇鐢?BeautifulSoup 娓呯悊
-                                result = BeautifulSoup(response.content, "html.parser").get_text()
-                            elif "application/xml" in content_type or "text/xml" in content_type:
-                                # XML 鍐呭锛屽皾璇曡В鏋愬苟鎻愬彇鏂囨湰
-                                try:
-                                    soup = BeautifulSoup(response.content, "xml")
-                                    result = soup.get_text()
-                                    if not result.strip():
-                                        result = response.text
-                                except Exception as xml_e:
-                                    self.logger.warning(f"XML parsing failed: {str(xml_e)}, using raw content")
-                                    result = response.text
-                            else:
-                                # JSON 鎴栧叾浠栨牸寮?
-                                try:
-                                    result_data = response.json() if response.content else None
-                                    if isinstance(result_data, (dict, list)):
-                                        # Extract raw items list for batch LLM analysis
-                                        if isinstance(result_data, list) and result_data:
-                                            raw_items = result_data
-                                        elif isinstance(result_data, dict):
-                                            raw_items = next(
-                                                (v for v in result_data.values() if isinstance(v, list) and v),
-                                                None
-                                            )
-                                        else:
-                                            raw_items = None
-
-                                        if raw_items:
-                                            list_count = len(raw_items)
-                                            # Store raw items; invoke_agent will batch-analyze them via LLM
-                                            self._pending_raw_items = raw_items
-                                            result = (
-                                                f"The query returned {list_count} items. "
-                                                f"Please write a brief 2鈥? sentence summary of what was found. "
-                                                f"The complete list will be analyzed and displayed item by item automatically 鈥?"
-                                                f"do NOT enumerate the items yourself."
-                                            )
-                                        else:
-                                            result = json.dumps(result_data, ensure_ascii=False, indent=2)
-                                    else:
-                                        result = result_data
-                                except json.JSONDecodeError:
-                                    # JSON 瑙ｆ瀽澶辫触锛岃繑鍥炲師濮嬫枃鏈?
-                                    result = response.text if response.text else None
-                        else:
-                            # 璇锋眰澶辫触锛岃繑鍥為敊璇俊鎭?
-                            result = f"Request failed, status code: {response.status_code}"
-
-                        return result
-
-                    # 娓呯悊宸ュ叿鍚嶇О浠ョ鍚圓PI瑕佹眰
-                    tool_name = tool_info.title if tool_info.title else "dynamic_knowledge_tool"
-                    # 鍙繚鐣欏瓧姣嶃€佹暟瀛椼€佷笅鍒掔嚎鍜岃繛瀛楃
-                    cleaned_tool_name = re.sub(r'[^a-zA-Z0-9_-]', '_', tool_name)
-                    # 纭繚鍚嶇О涓嶄负绌?
-                    if not cleaned_tool_name or cleaned_tool_name.strip() == "":
-                        cleaned_tool_name = "dynamic_knowledge_tool"
-
-                    # 鏍规嵁tool_info.push鐨勫€奸€夋嫨涓嶅悓鐨勫伐鍏峰嚱鏁?
-                    if tool_info.push == 1 or tool_info.push == 3:
-                        tool_func = dynamic_frontend_tool_function
-                    elif tool_info.push == 2:
-                        tool_func = dynamic_backend_tool_function
-                    else:
-                        # 榛樿鎯呭喌涓嬩娇鐢ㄥ墠绔伐鍏峰嚱鏁?
-                        tool_func = dynamic_frontend_tool_function
-
-                    args_schema = (
-                        DynamicBackendToolFunction
-                        if tool_info.push == 2
-                        else DynamicToolFunction
-                    )
-
-                    dynamic_tool = StructuredTool.from_function(
-                        func=tool_func,
-                        name=cleaned_tool_name,
-                        description=tool_info.description if tool_info.description else "Dynamic knowledge tool",
-                        args_schema=args_schema
-                    )
-
-                    # 鍚堝苟鍔ㄦ€佸伐鍏?
-                    tools = [dynamic_tool]
-                else:
-                    # 濡傛灉娌℃湁鍔ㄦ€佸伐鍏蜂俊鎭紝浣跨敤榛樿閰嶇疆
-                    tools = None
-            else:
-                # 濡傛灉娌℃湁鍔ㄦ€佸伐鍏蜂俊鎭紝浣跨敤榛樿閰嶇疆
-                tools = None
-
-            self.logger.info(f"tools{tools}")
-            return tools
+            if not hasattr(self, 'knowledgeTool') or not self.knowledgeTool:
+                return None
+            knowledge_item, tool_info = self.knowledgeTool
+            if not tool_info:
+                return None
+            dynamic_tool = self.get_dynamic_tool_for(knowledge_item, tool_info)
+            if dynamic_tool is None:
+                return None
+            self.logger.info(f"tools{[dynamic_tool]}")
+            return [dynamic_tool]
         except Exception as e:
             raise Exception(f"get_tool failed: {str(e)}") from e
+
 
     async def get_tools(self, tool_data: str = "") -> list:
         """Select and return the appropriate LangChain tool list based on push mode."""
@@ -1576,104 +1459,73 @@ Begin your response now:
             )
 
     async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler, push_filter=None):
-        #self.knowledgeTool = get_knowledge_tool(user_id,  prompt)
+        """Build the ReAct tool set and run the loop for one user query.
+
+        Long-task tool calls surface as the same {'intent': 'long_task'}
+        marker core.py already handles; every other outcome streams through
+        the callback handler inside the loop and returns None.
+        """
+        # -- per-request state reset (agents are pooled and reused) --
         self._last_user_prompt = prompt
         self._last_query_id = query_id
         self._last_user_id = user_id
+        self._pending_raw_items = None
+        self._workflow_result = None
+        self._react_loop_ran = False
+        self.knowledgeTool = (None, None)  # (knowledge_item, tool_info) — selected inside the loop
+        self.tools = []
         lang = self._detect_lang(prompt)
         self._lang = lang
         if callback_handler:
             await _emit_status(callback_handler,
                 "正在分析您的问题..." if lang == 'zh' else "Analyzing your question...")
-        # Knowledge selection does not need conversation history — stale
-        # messages from prior calls (different tools, different users)
-        # only add noise and risk confusing the routing LLM.
-        self.knowledgeTool = await select_knowledge_tool_with_llm(
-            user_id,
-            prompt,
-            self.llm.complete_json,
-            push_filter=push_filter,
-            conversation_history=[],
-        )
-        knowledge_item, tool_info = self.knowledgeTool
-        self.logger.info(
-            f"Knowledge selected: id={getattr(knowledge_item, 'id', None)}, "
-            f"type={getattr(knowledge_item, 'type', None) if knowledge_item else None}"
-        )
-        # Long task detection: type=3 knowledge triggers async Celery pipeline
-        if _is_long_task_knowledge(knowledge_item):
-            self.logger.info("Long task detected 鈥?returning long_task intent")
-            if callback_handler:
-                try:
-                    await asyncio.wait_for(
-                        _emit_status(callback_handler,
-                            "正在启动批量专利分析任务..." if lang == 'zh' else "Starting batch patent analysis..."),
-                        timeout=5.0,
-                    )
-                except Exception:
-                    pass
-            # Return special marker 鈥?caller (run_pipeline) handles submission
-            self._long_task_intent = _build_long_task_intent(knowledge_item, tool_info)
-            return self._long_task_intent
-        if is_workflow_knowledge(knowledge_item):
-            if callback_handler:
-                await callback_handler.on_llm_new_token(
-                    f"Matched workflow: {knowledge_item.question}\n\n"
-                    if lang != 'zh'
-                    else f"已匹配组合知识：{knowledge_item.question}\n\n"
-                )
-                await _emit_status(callback_handler,
-                    "正在执行组合知识流程..." if lang == 'zh' else "Executing workflow...")
-            workflow_result = await WorkflowExecutor(
-                self.llm,
-                status_callback=_status_callback_for(callback_handler),
-            ).execute(
-                workflow_spec=knowledge_item.params,
-                user_prompt=prompt,
-                workflow_knowledge=knowledge_item,
-            )
-            self.knowledgeTool = (knowledge_item, tool_info)
-            self._workflow_result = workflow_result
-            self.tools = []
-            return None
-        user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
-        system_prompt = self.generate_system_prompt(tool_data)
 
-        # ── Multi-turn memory ──────────────────────────────────────
-        # LangChain's openai_create / openai_invoke expect a specific
-        # shape: history[1] is the system prompt, history[0] is the
-        # first user message.  We merge the fixed prefix, conversation
-        # history, and tool template into a single system prompt at [1],
-        # and put the current query at [0].
+        # Wrap the handler so the final answer text is collected for
+        # multi-turn storage (_store_current_turn).
+        wrapped = _ResponseCollector(callback_handler)
+        self._active_collector = wrapped
+
+        user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
+
+        # -- Multi-turn memory (same mechanics as before) --
         conversation_block = ""
         for turn in getattr(self, '_conversation_turns', []):
             clean_user = _STRIP_IDS_RE.sub('', turn['user']).strip()
             conversation_block += f"\n\n## Previous conversation\n\nUser: {clean_user}\n\nAssistant: {turn['assistant']}"
 
-        combined_system = (
+        system_prompt = (
             self._get_fixed_system_prefix()
             + conversation_block
-            + "\n\n"
-            + system_prompt
+            + self._loop_system_guidance()
         )
-
-        memory_msgs = [
+        self.memory.reset([
             {'role': 'user', 'content': user_prompt},
-            {'role': 'system', 'content': combined_system},
-        ]
-        self.memory.reset(memory_msgs)
-
+            {'role': 'system', 'content': system_prompt},
+        ])
         self.logger.info(f"memory.get():{self.memory.get()}")
-        self.tools = await self.get_tools(tool_data)
 
-        # Wrap the callback handler so we can collect the response text
-        # for multi-turn conversation storage.  The wrapper is registered
-        # on the LLM via _get_langchain_llm so streaming works without
-        # double-registration in agent.ainvoke.
-        wrapped = _ResponseCollector(callback_handler)
-        self._active_collector = wrapped
+        registry, bind_tools = await build_tool_set(self, user_id, prompt, push_filter)
+        self._react_registry = registry
 
-        return self.llm.openai_create(self.tools, self.memory.get(), wrapped)
+        loop = ReActLoop(
+            llm_call=make_llm_call(self.llm, wrapped),
+            execute_action=await make_action_executor(self, registry, push_filter),
+            emit=make_event_emitter(wrapped),
+            lang=lang,
+            should_stop=lambda: bool(getattr(self, "stop", False)),
+        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        result = await loop.run(messages, bind_tools)
+        self._react_loop_ran = True
+        if result.kind == 'long_task':
+            self.logger.info("Long task triggered inside ReAct loop — returning intent")
+            return _build_long_task_intent(result.long_task_knowledge,
+                                           result.long_task_tool_info)
+        return None
+
 
 
     async def _stream_workflow_final_result(self, workflow_result, callback_handler):
@@ -2225,44 +2077,18 @@ Begin your response now:
         )
 
     async def invoke_agent(self, agent, callback_handler):
-        try:
-            lang = self._detect_lang(getattr(self, '_last_user_prompt', ''))
-            workflow_result = getattr(self, "_workflow_result", None)
-            if workflow_result is not None:
-                self._workflow_result = None
-                await _emit_status(callback_handler,
-                    "正在整理结果..." if lang == 'zh' else "Organizing results...")
-                output_mode = getattr(workflow_result, "output_mode", "last")
-                raw_items = getattr(workflow_result, "raw_items", None)
-                if output_mode == "all":
-                    await self._stream_workflow_final_result(workflow_result, callback_handler)
-                elif raw_items:
-                    await self._stream_raw_items(raw_items, callback_handler)
-                else:
-                    await self._stream_workflow_final_result(workflow_result, callback_handler)
-                self._store_current_turn()
-                return
+        """Post-loop wrap-up: stream pending raw items, store the turn."""
+        if not getattr(self, "_react_loop_ran", False):
+            self.logger.warning("invoke_agent called before the ReAct loop ran — no-op")
+            return
+        pending = getattr(self, "_pending_raw_items", None)
+        if pending:
+            await self._stream_raw_items(pending, callback_handler)
+        collector = getattr(self, "_active_collector", None)
+        self._store_current_turn(
+            getattr(collector, "collected_text", "") if collector else ""
+        )
 
-            # The callback handler was wrapped by create_agent with a
-            # _ResponseCollector so the LLM streams through it.  Re-use
-            # the same collector to avoid double-registration.
-            collector = getattr(self, '_active_collector', None)
-            try:
-                await self.llm.openai_invoke(agent, self.memory.get())
-                # LangGraph agents don't call on_agent_finish — inject batch
-                # analysis here, after all LLM tokens have been streamed but
-                # before core.py sends 'end'.
-                pending = getattr(self, '_pending_raw_items', None)
-                if pending:
-                    await self._stream_raw_items(pending, callback_handler)
-            finally:
-                # Always store the conversation turn — even on partial failure
-                # we want to preserve what the LLM managed to produce.
-                self._store_current_turn(
-                    getattr(collector, 'collected_text', '') if collector else ''
-                )
-        except Exception as e:
-            raise e
 
 if __name__ == "__main__":
     pass
