@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useContext, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
+import { createContext, useContext, useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 
 export interface ChatArtifact {
   artifactId: string
@@ -47,7 +47,22 @@ interface ChatContextValue {
 
 const ChatContext = createContext<ChatContextValue | null>(null)
 
+// [DIAG] Window-lifetime marker: survives SPA navigations, dies on a full
+// page load.  Lets the results page tell the two apart.
+if (typeof window !== 'undefined') {
+  ;(window as any).__copiioaiAlive = true
+}
+
 export function ChatProvider({ children }: { children: React.ReactNode }) {
+  // [DIAG]
+  useEffect(() => {
+    try {
+      const key = 'copiioai_diag'
+      sessionStorage.setItem(key, (sessionStorage.getItem(key) || '') + '|P:mount')
+      console.log('[copiioai-diag] provider-mount breadcrumb=', sessionStorage.getItem(key))
+    } catch {}
+  }, [])
+
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)

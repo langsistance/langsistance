@@ -90,6 +90,12 @@ export default function Chat() {
       // unmounts — clearing then would wipe the shared conversation out
       // from under the incoming page.
       if (!shouldResetConversationOnNavigation(pathname)) return
+      // [DIAG]
+      try {
+        const key = 'copiioai_diag'
+        sessionStorage.setItem(key, (sessionStorage.getItem(key) || '') + '|C:clear')
+        console.log('[copiioai-diag] chat-clear fired breadcrumb=', sessionStorage.getItem(key))
+      } catch {}
       stopLongTaskPolling()
       setMessages([])
       setSessionId(null)
@@ -129,6 +135,12 @@ export default function Chat() {
               m.taskId || (!m.content.includes('🔬') && !m.content.includes('✅') && !m.content.includes('❌'))
             )
           if (loaded.length > 0) {
+            // [DIAG]
+            try {
+              const key = 'copiioai_diag'
+              sessionStorage.setItem(key, (sessionStorage.getItem(key) || '') + `|C:load=${loaded.length}`)
+              console.log('[copiioai-diag] chat-session-load replacing with', loaded.length, 'breadcrumb=', sessionStorage.getItem(key))
+            } catch {}
             setMessages(restoreResultsInMessages(loaded, loadResultsStore(window.localStorage)))
             // Scroll to bottom after loading session messages
             requestAnimationFrame(() => {

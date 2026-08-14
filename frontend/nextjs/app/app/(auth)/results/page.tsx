@@ -64,6 +64,12 @@ export default function ResultsPage() {
             results: m.results || undefined,
             artifacts: [],
           }))
+        // [DIAG]
+        try {
+          const key = 'copiioai_diag'
+          sessionStorage.setItem(key, (sessionStorage.getItem(key) || '') + `|R:hydrate=${loaded.length}`)
+          console.log('[copiioai-diag] results-hydration replacing with', loaded.length, 'breadcrumb=', sessionStorage.getItem(key))
+        } catch {}
         setMessages(restoreResultsInMessages(loaded, loadResultsStore(window.localStorage)))
         setSessionId(sid)
       } catch {
@@ -87,6 +93,18 @@ export default function ResultsPage() {
 
   useEffect(() => {
     setResultsStore(loadResultsStore(window.localStorage))
+  }, [])
+
+  // [DIAG] One-shot mount probe: window marker tells SPA transition from
+  // full page load; messages length shows whether the conversation made it.
+  useEffect(() => {
+    try {
+      const key = 'copiioai_diag'
+      const alive = Boolean((window as any).__copiioaiAlive)
+      const entry = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined
+      sessionStorage.setItem(key, (sessionStorage.getItem(key) || '') + `|R:mount:msgs=${messages.length}:alive=${alive}:nav=${entry?.type || '?'}`)
+      console.log('[copiioai-diag] results-mount msgs=', messages.length, 'windowAlive=', alive, 'navType=', entry?.type, 'href=', window.location.href, 'breadcrumb=', sessionStorage.getItem(key))
+    } catch {}
   }, [])
 
   const activeMessage: ChatMessage | undefined = useMemo(() => {

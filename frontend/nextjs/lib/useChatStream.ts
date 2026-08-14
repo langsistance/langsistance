@@ -356,6 +356,12 @@ export function useChatStream() {
       if (decodedSetId) {
         const params = new URLSearchParams({ set: decodedSetId })
         if (sessionId) params.set('session_id', sessionId)
+        // [DIAG]
+        try {
+          const key = 'copiioai_diag'
+          sessionStorage.setItem(key, (sessionStorage.getItem(key) || '') + `|N:push=${decodedSetId}`)
+          console.log('[copiioai-diag] auto-navigation to', `/app/results?${params.toString()}`)
+        } catch {}
         router.push(`/app/results?${params.toString()}`)
       }
     }
