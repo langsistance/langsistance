@@ -10,6 +10,7 @@ import MessageBell from '@/components/app/MessageBell'
 import FeedbackFAB from '@/components/app/FeedbackFAB'
 import { getSessions, type SessionItem } from '@/services/api'
 import { chatPath } from '@/lib/appRoutes'
+import { CHAT_STORE_KEY } from '@/lib/chatStore'
 
 const NAV_ITEMS = [
   {
@@ -155,6 +156,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   async function handleLogout() {
     await logout()
+    // The in-progress conversation persists in sessionStorage to survive
+    // navigation; clear it so the next user of this tab starts fresh.
+    try { sessionStorage.removeItem(CHAT_STORE_KEY) } catch {}
     router.push('/app/login/')
   }
 

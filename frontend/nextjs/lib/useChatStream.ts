@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { queryStream, queryStreamWithFiles, pollLongTaskBatchStatus, getLongTaskReportUrl, getSession, saveSessionMessages } from '@/services/api'
 import { pollRecoverLongTask } from '@/lib/longTaskRecovery'
@@ -9,6 +9,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useChatSession, type ChatMessage } from '@/contexts/ChatContext'
 import { decodeArtifactChunksToResults, decodeResultsArtifact } from '@/lib/chatSession'
 import { persistResultsSetToStorage } from '@/lib/resultsStore'
+import { persistChatToStorage } from '@/lib/chatStore'
 import { resultsPath } from '@/lib/appRoutes'
 import {
   addAssistantArtifactChunk,
@@ -86,6 +87,15 @@ export function useChatStream() {
   // stale one from the anonymous render where `user` was null.
   const sendRef = useRef<(presetText?: string) => Promise<void>>(async () => {})
   sendRef.current = send
+
+  // Snapshot of the message list for the pre-navigation persistence in
+  // the stream finally block.  A layout effect (not a passive one) keeps
+  // it fresh as soon as each commit lands; the finally block yields a
+  // task before reading it so the final streaming update is committed.
+  const messagesRef = useRef<ChatMessage[]>(messages)
+  useLayoutEffect(() => {
+    messagesRef.current = messages
+  })
 
   async function send(presetText: string = '') {
     const text = (presetText || input).trim()
@@ -355,13 +365,13 @@ export function useChatStream() {
       // assigned synchronously in the SSE loop (independent of React commit
       // timing), so this check is deterministic.
       if (decodedSetId) {
-        // [DIAG]
-        try {
-          const key = 'copiioai_diag'
-          const domMsgs = document.querySelectorAll('.chat-message-wrapper').length
-          sessionStorage.setItem(key, (sessionStorage.getItem(key) || '') + `|N:push=${decodedSetId}:domMsgs=${domMsgs}`)
-          console.log('[copiioai-diag] auto-navigation to', resultsPath(decodedSetId, sessionId), 'closureMsgs=', messages.length, 'domMsgs=', domMsgs)
-        } catch {}
+        // Yield a task so React commits the final streaming update (and
+        // its layout effects) before the snapshot is persisted.  Then
+        // persist the conversation synchronously before navigating: the
+        // results page mounts a fresh ChatProvider (separate instance
+        // from the landing page's) and hydrates it from this copy.
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        persistChatToStorage(window.sessionStorage, messagesRef.current)
         router.push(resultsPath(decodedSetId, sessionId))
       }
     }

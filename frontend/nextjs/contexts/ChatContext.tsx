@@ -1,6 +1,8 @@
 'use client'
 
 import { createContext, useContext, useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
+import { loadChatStore, persistChatToStorage } from '@/lib/chatStore'
+import { loadResultsStore, restoreResultsInMessages } from '@/lib/resultsStore'
 
 export interface ChatArtifact {
   artifactId: string
@@ -47,41 +49,7 @@ interface ChatContextValue {
 
 const ChatContext = createContext<ChatContextValue | null>(null)
 
-// [DIAG] Window-lifetime marker: survives SPA navigations, dies on a full
-// page load.  Lets the results page tell the two apart.
-if (typeof window !== 'undefined') {
-  ;(window as any).__copiioaiAlive = true
-}
-
-// [DIAG] Wrap fetch to trace the RSC flight requests Next makes during
-// client-side navigation — the decisive evidence for the full-page-load
-// fallback (404? blocked? redirect?).
-if (typeof window !== 'undefined' && !(window as any).__copiioaiFetchDiag) {
-  ;(window as any).__copiioaiFetchDiag = true
-  const origFetch = window.fetch.bind(window)
-  window.fetch = (async (...args: Parameters<typeof fetch>) => {
-    const res = await origFetch(...args)
-    try {
-      const input = args[0]
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input?.url || ''
-      if (url.includes('_rsc') || url.endsWith('.txt') || url.includes('index.txt')) {
-        console.log('[copiioai-diag] fetch', url, '->', res.status, 'type=' + res.type, 'redirected=' + res.redirected, 'final=' + res.url)
-      }
-    } catch {}
-    return res
-  }) as typeof fetch
-}
-
 export function ChatProvider({ children }: { children: React.ReactNode }) {
-  // [DIAG]
-  useEffect(() => {
-    try {
-      const key = 'copiioai_diag'
-      sessionStorage.setItem(key, (sessionStorage.getItem(key) || '') + '|P:mount')
-      console.log('[copiioai-diag] provider-mount breadcrumb=', sessionStorage.getItem(key))
-    } catch {}
-  }, [])
-
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -89,6 +57,34 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [resultsSetId, setResultsSetId] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+
+  // Two-phase hydration: the landing page (/) and /app/* routes mount
+  // separate ChatProvider instances, so a client-side navigation between
+  // them would otherwise discard the in-memory conversation.  Restore the
+  // copy persisted by the previous provider after mount (the prerendered
+  // static HTML must stay empty to avoid a hydration mismatch), and
+  // re-attach full result payloads from the results store — the same
+  // restore path the chat page uses for backend session loads.
+  const restorePendingRef = useRef(false)
+  useEffect(() => {
+    const stored = loadChatStore(window.sessionStorage)
+    if (stored.length > 0) {
+      restorePendingRef.current = true
+      setMessages(restoreResultsInMessages(stored, loadResultsStore(window.localStorage)))
+    }
+  }, [])
+
+  // Persist every change so the next provider mount (navigation, refresh,
+  // full-page fallback) can rebuild the conversation.  While a restore is
+  // pending, the pre-restore empty pass must not overwrite the stored
+  // copy before it has been applied.
+  useEffect(() => {
+    if (restorePendingRef.current) {
+      if (messages.length === 0) return
+      restorePendingRef.current = false
+    }
+    persistChatToStorage(window.sessionStorage, messages)
+  }, [messages])
 
   return (
     <ChatContext.Provider
