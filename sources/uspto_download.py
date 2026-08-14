@@ -12,12 +12,210 @@ from sources.logger import Logger
 
 logger = Logger("backend.log")
 
+USPTO_DOCUMENTS_API_URL = (
+    "https://api.uspto.gov/api/v1/patent/applications/{app_number}/documents"
+)
+USPTO_SEARCH_API_URL = "https://api.uspto.gov/api/v1/patent/applications/search"
+
 
 @dataclass
 class UsptoDownloadFile:
     content: bytes
     media_type: str
     filename: str
+
+
+@dataclass
+class UsptoHttpResponse:
+    """Response-like object returned by the internal _download seam."""
+
+    status_code: int
+    content: bytes
+    content_type: str
+
+    @property
+    def text(self) -> str:
+        return self.content.decode("utf-8", errors="replace")
+
+
+def _api_key() -> str:
+    return os.getenv("USPTO_API_KEY") or os.getenv("USPTO_DOWNLOAD_API_KEY") or ""
+
+
+async def _uspto_headers(extra: dict | None = None) -> dict:
+    headers = {"Accept": "application/json"}
+    api_key = _api_key()
+    if api_key:
+        headers["X-API-KEY"] = api_key
+    if extra:
+        headers.update(extra)
+    return headers
+
+
+async def _request_json(method: str, url: str, body: dict | None = None) -> dict | None:
+    """Internal HTTP seam for USPTO JSON APIs (patchable in tests)."""
+    import httpx
+
+    headers = await _uspto_headers()
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.request(method, url, headers=headers, json=body)
+    except Exception:
+        return None
+    if response.status_code != 200:
+        return None
+    try:
+        payload = response.json()
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+async def _download(url: str) -> UsptoHttpResponse | None:
+    """Internal HTTP seam for document downloads (patchable in tests)."""
+    import httpx
+
+    headers = await _uspto_headers({"Accept": "*/*"})
+    try:
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+            response = await client.get(url, headers=headers)
+    except Exception:
+        return None
+    return UsptoHttpResponse(
+        status_code=response.status_code,
+        content=response.content,
+        content_type=response.headers.get("Content-Type", "").lower(),
+    )
+
+
+# ── Patent detail (spec / claims) helpers ─────────────────────────────────────
+#
+# The split-view spec/claims endpoints reuse the prosecution-history
+# download mechanism: PEDS document list → locate SPEC/CLM → download →
+# text extraction.
+
+
+async def fetch_document_bag(app_number: str) -> list | None:
+    """Fetch the PEDS document list for *app_number*.
+
+    Returns the ``documentBag`` list (possibly empty) or None when the
+    API call failed — None distinguishes "id is not a valid application
+    number" from "application exists but has no documents".
+    """
+    payload = await _request_json(
+        "GET", USPTO_DOCUMENTS_API_URL.format(app_number=app_number)
+    )
+    if payload is None:
+        return None
+    bag = payload.get("documentBag", [])
+    return bag if isinstance(bag, list) else []
+
+
+async def _search_application_number_by_patent_number(patent_number: str) -> str | None:
+    """Search PEDS for the application number of a granted patent number."""
+    query = f'applicationMetaData.patentNumber:"{patent_number}"'
+    payload = await _request_json(
+        "POST",
+        USPTO_SEARCH_API_URL,
+        {
+            "q": query,
+            "pagination": {"offset": 0, "limit": 1},
+            "fields": ["applicationNumberText", "applicationMetaData.patentNumber"],
+        },
+    )
+    if not payload:
+        return None
+    results = (
+        payload.get("patentFileWrapperDataBag")
+        or payload.get("results")
+        or payload.get("patentFileBag")
+        or []
+    )
+    if not isinstance(results, list) or not results or not isinstance(results[0], dict):
+        return None
+    app_number = str(results[0].get("applicationNumberText") or "").strip()
+    return app_number or None
+
+
+async def resolve_application_number(patent_id: str) -> str:
+    """Resolve a US patent/application id → applicationNumberText.
+
+    The id may be an application number (usable directly with the PEDS
+    documents endpoint) or a granted patent number (requires a PEDS
+    search).  Try the documents endpoint with the digits as-is first;
+    when that fails or yields no documents, search by patentNumber.
+    """
+    digits = "".join(c for c in (patent_id or "") if c.isdigit())
+    if not digits or len(digits) < 6:
+        raise ValueError(f"Invalid patent id: {patent_id!r}")
+
+    document_bag = await fetch_document_bag(digits)
+    if document_bag:
+        return digits
+
+    app_number = await _search_application_number_by_patent_number(digits)
+    if app_number:
+        return app_number
+    raise ValueError(f"Could not resolve USPTO application for id {patent_id!r}")
+
+
+async def download_document_text(doc: dict) -> str:
+    """Download a USPTO documentBag entry and extract its text.
+
+    Follows the prosecution pattern: pick the best downloadOptionBag URL
+    (DOCX > XML > PDF for text), follow at most one in-body redirect, and
+    extract text via the shared binary extractor (PDF text extraction is
+    enabled — SPEC/CLM documents are usually text-based; scanned
+    documents degrade to an empty string).
+    """
+    import asyncio
+
+    from sources.long_task.text_extractor import (
+        extract_text_from_binary,
+        get_download_url_from_doc,
+    )
+
+    download_url = get_download_url_from_doc(doc or {})
+    if not download_url:
+        return ""
+
+    for _hop in range(2):
+        response = await _download(download_url)
+        if response is None or response.status_code != 200:
+            return ""
+
+        # xmlarchive URLs deliver tar binaries even when labelled XML;
+        # binary content mislabelled as text shows NUL bytes.
+        force_binary = "xmlarchive" in download_url.lower() or (
+            b"\x00" in response.content[:2048]
+        )
+
+        if response.content_type and (
+            force_binary
+            or not any(
+                t in response.content_type for t in ("text/", "json", "xml", "html")
+            )
+        ):
+            text = await asyncio.to_thread(
+                extract_text_from_binary,
+                response.content,
+                response.content_type,
+                download_url,
+                None,  # on_progress
+                False,  # skip_pdf_extraction
+            )
+            return (text or "").strip()
+
+        body = response.text.strip()
+        redirect_url = _extract_first_url(body)
+        if redirect_url and redirect_url != download_url:
+            download_url = redirect_url
+            continue
+        return body
+
+    return ""
 
 
 def get_uspto_download_headers() -> Dict[str, str]:
