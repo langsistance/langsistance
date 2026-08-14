@@ -652,6 +652,7 @@ export default {
     specTab: 'Patent specification',
     specPdfLink: 'Original PDF',
     claimIndependent: 'Independent claim',
+    claimCanceled: 'Canceled',
     claimsLoading: 'Loading claims…',
     claimsError: 'Failed to load claims',
     claimCopy: 'Copy',

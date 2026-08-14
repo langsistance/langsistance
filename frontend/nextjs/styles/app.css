@@ -1794,6 +1794,18 @@ button { cursor: pointer; }
   border-color: var(--color-primary-soft);
 }
 
+/* Canceled claims are muted */
+.results-claim.canceled {
+  opacity: 0.6;
+  border-left-style: dashed;
+}
+
+.results-claim-canceled {
+  color: var(--color-text-secondary);
+  font-style: italic;
+  margin: 0;
+}
+
 .results-claim-header {
   display: flex;
   align-items: center;

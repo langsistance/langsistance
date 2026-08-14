@@ -46,6 +46,25 @@ _DEPENDENT_OPENERS_CN = re.compile(
 
 _XML_TAG_PATTERN = re.compile(r"<[^>]+>")
 
+# Amendment status markers prefixing claims in response/amendment documents:
+# "(original) …", "(previously presented) …", "(canceled)" …
+_AMENDMENT_STATUS_PATTERN = re.compile(
+    r"^\s*\(?\s*(original|previously presented|new|currently amended|amended|"
+    r"canceled|withdrawn)\s*\)?\s*[:.\-]?\s*",
+    re.IGNORECASE,
+)
+
+# Document header/footer noise lines that pollute OCR/extracted claims text.
+_NOISE_LINE_PATTERNS = [
+    re.compile(r"^page\s+\d+\s+of\s+\d+\s*$", re.IGNORECASE),
+    re.compile(r"^serial\s+no\.?\s*:?\s*\S", re.IGNORECASE),
+    re.compile(r"^response to office action\s*$", re.IGNORECASE),
+    re.compile(r"^mailed on\s+\S", re.IGNORECASE),
+    re.compile(r"^amendments? to the claims", re.IGNORECASE),
+    re.compile(r"^the following is a complete listing", re.IGNORECASE),
+    re.compile(r"^(application|filing|docket)\s+(number|date)\s*:?", re.IGNORECASE),
+]
+
 
 class PatentDetailError(Exception):
     """Base error for patent detail fetch failures."""
@@ -57,10 +76,12 @@ def build_claims_payload(claims: list[str]) -> dict:
         return {"success": False, "claims": []}
     payload_claims = []
     for index, text in enumerate(claims, start=1):
+        cleaned, status = _strip_claim_status_markers(text)
         payload_claims.append({
             "number": index,
-            "text": text,
-            "independent": _is_independent_claim(text, index == 1),
+            "text": cleaned,
+            "status": status,
+            "independent": status == "active" and _is_independent_claim(cleaned, index == 1),
         })
     return {"success": True, "claims": payload_claims}
 
@@ -75,6 +96,38 @@ def _is_independent_claim(claim_text: str, is_first: bool) -> bool:
     # Tolerate a leading claim-number prefix ("2. The method of claim 1…")
     line = re.sub(r"^\d{1,3}\.\s*", "", first_line[0].strip(), count=1)
     return not (_DEPENDENT_OPENERS.match(line) or _DEPENDENT_OPENERS_CN.match(line))
+
+
+def _strip_claim_status_markers(claim_text: str) -> tuple[str, str]:
+    """Strip a leading claim-number prefix and amendment status marker.
+
+    Returns ``(cleaned_text, status)`` where status is ``"active"`` or
+    ``"canceled"`` — amendment documents prefix claims with
+    "(original) …" / "(previously presented) …" / "(canceled)".
+    """
+    text = re.sub(
+        r"^\d{1,3}\.\s*", "", (claim_text or "").strip(), count=1
+    )
+    match = _AMENDMENT_STATUS_PATTERN.match(text)
+    if not match:
+        return text.strip(), "active"
+    status = (
+        "canceled"
+        if match.group(1).lower() in ("canceled", "withdrawn")
+        else "active"
+    )
+    return text[match.end():].strip(), status
+
+
+def _strip_document_noise(text: str) -> str:
+    """Remove header/footer noise lines from extracted document text."""
+    lines = (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    kept = [
+        line
+        for line in lines
+        if not any(pattern.match(line.strip()) for pattern in _NOISE_LINE_PATTERNS)
+    ]
+    return "\n".join(kept)
 
 
 def split_claims_text(text: str) -> list[str]:
@@ -247,7 +300,8 @@ async def _fetch_claims(source: str, patent_id: str) -> dict:
     structured = _parse_claims_xml(text)
     if structured:
         return build_claims_payload([claim["text"] for claim in structured])
-    return build_claims_payload(split_claims_text(_strip_xml_tags(text)))
+    cleaned = _strip_document_noise(_strip_xml_tags(text))
+    return build_claims_payload(split_claims_text(cleaned))
 
 
 def register_patent_detail_routes(logger, config):

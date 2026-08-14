@@ -52,14 +52,25 @@ export default function ClaimsTab({ row }: { row: any }) {
   return (
     <div className="results-detail-card">
       {data.claims.map((claim) => (
-        <div key={claim.number} className={`results-claim${claim.independent ? ' independent' : ''}`}>
+        <div
+          key={claim.number}
+          className={`results-claim${claim.independent ? ' independent' : ''}${claim.status === 'canceled' ? ' canceled' : ''}`}
+        >
           <div className="results-claim-header">
-            <span>{claim.independent ? t('results.claimIndependent') : `#${claim.number}`}</span>
-            <button onClick={() => handleCopy(claim.number, claim.text)}>
-              {copiedNumber === claim.number ? '✓' : t('results.claimCopy')}
-            </button>
+            <span>
+              {claim.status === 'canceled'
+                ? `#${claim.number} · ${t('results.claimCanceled')}`
+                : claim.independent
+                  ? t('results.claimIndependent')
+                  : `#${claim.number}`}
+            </span>
+            {claim.text && (
+              <button onClick={() => handleCopy(claim.number, claim.text)}>
+                {copiedNumber === claim.number ? '✓' : t('results.claimCopy')}
+              </button>
+            )}
           </div>
-          <p>{claim.text}</p>
+          {claim.text ? <p>{claim.text}</p> : <p className="results-claim-canceled">({t('results.claimCanceled')})</p>}
         </div>
       ))}
     </div>

@@ -311,6 +311,7 @@ export interface PatentSpecResponse {
 export interface PatentClaim {
   number: number
   text: string
+  status: 'active' | 'canceled'
   independent: boolean
 }
 

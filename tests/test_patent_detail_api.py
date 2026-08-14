@@ -18,6 +18,8 @@ from api_routes.patent_detail import (
     _find_claims_document,
     _find_spec_document,
     _parse_claims_xml,
+    _strip_claim_status_markers,
+    _strip_document_noise,
     _strip_xml_tags,
 )
 
@@ -46,6 +48,81 @@ class TestBuildClaimsPayload(unittest.TestCase):
         payload = build_claims_payload(claims)
         independent = [c["number"] for c in payload["claims"] if c["independent"]]
         self.assertEqual(independent, [1, 6])
+
+    def test_dependent_detection_survives_amendment_markers(self):
+        claims = [
+            "1. A welding contact tip.",
+            "2. (original) The contact tip of claim 1, comprising a brush.",
+            "3. (previously presented) The method of claim 11, comprising forming.",
+        ]
+        payload = build_claims_payload(claims)
+        self.assertTrue(payload["claims"][0]["independent"])
+        self.assertFalse(payload["claims"][1]["independent"])
+        self.assertFalse(payload["claims"][2]["independent"])
+        # Markers stripped from the displayed text
+        self.assertTrue(payload["claims"][1]["text"].startswith("The contact tip of claim 1"))
+
+    def test_canceled_claims_are_marked_not_independent(self):
+        claims = ["1. A widget.", "2. (canceled)", "3. Another widget."]
+        payload = build_claims_payload(claims)
+        self.assertEqual(payload["claims"][1]["status"], "canceled")
+        self.assertFalse(payload["claims"][1]["independent"])
+        self.assertEqual(payload["claims"][0]["status"], "active")
+        self.assertEqual(payload["claims"][2]["status"], "active")
+
+
+class TestStripClaimStatusMarkers(unittest.TestCase):
+    def test_strips_original_marker(self):
+        text, status = _strip_claim_status_markers(
+            "(original) The contact tip of claim 1, comprising a widget."
+        )
+        self.assertEqual(status, "active")
+        self.assertTrue(text.startswith("The contact tip of claim 1"))
+
+    def test_strips_previously_presented_marker(self):
+        text, status = _strip_claim_status_markers(
+            "(previously presented) A method for making a welding device."
+        )
+        self.assertEqual(status, "active")
+        self.assertTrue(text.startswith("A method for"))
+
+    def test_detects_canceled_claims(self):
+        text, status = _strip_claim_status_markers("(canceled)")
+        self.assertEqual(status, "canceled")
+        self.assertEqual(text, "")
+
+    def test_no_marker_passes_through(self):
+        text, status = _strip_claim_status_markers("A method comprising steps.")
+        self.assertEqual((text, status), ("A method comprising steps.", "active"))
+
+
+class TestStripDocumentNoise(unittest.TestCase):
+    def test_removes_page_headers_and_footers(self):
+        raw = (
+            "1. A first claim.\n\n"
+            "Page 2 of 12\n\n"
+            "Serial No. 12/098,926\n\n"
+            "Response to Office Action\n\n"
+            "Mailed on November 2, 2011\n\n"
+            "2. A second claim.\n"
+        )
+        cleaned = _strip_document_noise(raw)
+        self.assertNotIn("Page 2 of 12", cleaned)
+        self.assertNotIn("Serial No.", cleaned)
+        self.assertNotIn("Mailed on", cleaned)
+        self.assertIn("1. A first claim.", cleaned)
+        self.assertIn("2. A second claim.", cleaned)
+
+    def test_removes_amendments_preamble(self):
+        raw = (
+            "AMENDMENTS TO THE CLAIMS\n"
+            "The following is a complete listing of the claims.\n\n"
+            "1. A real claim.\n"
+        )
+        cleaned = _strip_document_noise(raw)
+        self.assertNotIn("AMENDMENTS", cleaned)
+        self.assertNotIn("complete listing", cleaned)
+        self.assertIn("1. A real claim.", cleaned)
 
 
 class TestSplitClaimsText(unittest.TestCase):

@@ -652,6 +652,7 @@ export default {
     specTab: '专利说明书',
     specPdfLink: 'PDF 原文',
     claimIndependent: '独立权利要求',
+    claimCanceled: '已取消',
     claimsLoading: '正在加载权利要求…',
     claimsError: '权利要求加载失败',
     claimCopy: '复制',
