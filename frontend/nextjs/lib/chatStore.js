@@ -45,6 +45,10 @@ export function pruneMessagesForPersistence(messages) {
       if (msg.taskId) pruned.taskId = msg.taskId
       if (msg.resultSummary) pruned.resultSummary = String(msg.resultSummary).slice(0, MAX_PERSIST_SUMMARY_CHARS)
       if (Array.isArray(msg.patent_ids) && msg.patent_ids.length > 0) pruned.patent_ids = msg.patent_ids
+      // ReAct step timeline is small (bounded text per step) — keep it so
+      // the collapsed "elapsed · N steps" header survives remounts.
+      if (Array.isArray(msg.agentSteps) && msg.agentSteps.length > 0) pruned.agentSteps = msg.agentSteps
+      if (Number.isFinite(msg.elapsedSeconds)) pruned.elapsedSeconds = msg.elapsedSeconds
       if (msg.results) pruned.results = pruneResultsForPersistence(msg.results)
       return pruned
     })

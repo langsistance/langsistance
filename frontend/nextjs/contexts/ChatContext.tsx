@@ -15,6 +15,16 @@ export interface ChatArtifact {
   complete: boolean
 }
 
+export interface AgentStep {
+  round: number
+  thought: string
+  action: string
+  paramsBrief?: string
+  observationBrief?: string
+  reasoningText?: string
+  status: 'running' | 'done' | 'error'
+}
+
 export interface ChatMessage {
   id: string
   role: string
@@ -29,6 +39,8 @@ export interface ChatMessage {
     columns: Array<{ key: string; label: string; role: string }>
     rows: Array<Record<string, unknown>>
   }
+  agentSteps?: AgentStep[]  // ReAct loop timeline — collapsed after completion
+  elapsedSeconds?: number   // set by agent_elapsed; drives the collapse header
 }
 
 interface ChatContextValue {

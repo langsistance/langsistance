@@ -16,6 +16,9 @@ import {
   addAssistantArtifactEnd,
   addAssistantArtifactStart,
   addAssistantPatentIds,
+  applyAgentElapsed,
+  applyAgentObservation,
+  applyAgentStep,
   createChatId,
   createChatMessage,
   updateAssistantMessage,
@@ -276,6 +279,18 @@ export function useChatStream() {
               }
               // Start polling for progress updates
               startLongTaskPolling(taskId, assistantId)
+              continue
+            }
+            if (event.type === 'step') {
+              setMessages((m) => applyAgentStep(m, assistantId, event))
+              continue
+            }
+            if (event.type === 'observation') {
+              setMessages((m) => applyAgentObservation(m, assistantId, event))
+              continue
+            }
+            if (event.type === 'agent_elapsed') {
+              setMessages((m) => applyAgentElapsed(m, assistantId, event))
               continue
             }
           }

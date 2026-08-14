@@ -200,3 +200,62 @@ export function decodeResultsArtifact(messages, messageId) {
 export function shouldResetConversationOnNavigation(pathname) {
   return pathname === '/app/chat' || pathname === '/app/chat/'
 }
+
+/**
+ * ReAct loop step events → message.agentSteps timeline.
+ * step appends/merges a running step; observation closes it; agent_elapsed
+ * stamps elapsedSeconds and closes any step still running.
+ */
+export function applyAgentStep(messages, messageId, event) {
+  if (!event || !Number.isFinite(event.round)) return messages
+  return messages.map((msg) => {
+    if (msg.id !== messageId) return msg
+    const steps = Array.isArray(msg.agentSteps) ? msg.agentSteps : []
+    const idx = steps.findIndex((s) => s.round === event.round)
+    const patch = {
+      round: event.round,
+      thought: event.thought || '',
+      action: event.action || '',
+      paramsBrief: event.params_brief || '',
+      status: 'running',
+    }
+    if (event.reasoning_text) patch.reasoningText = event.reasoning_text
+    if (idx >= 0) {
+      const merged = { ...steps[idx], ...patch }
+      return { ...msg, agentSteps: steps.map((s, i) => (i === idx ? merged : s)) }
+    }
+    return { ...msg, agentSteps: [...steps, patch] }
+  })
+}
+
+export function applyAgentObservation(messages, messageId, event) {
+  if (!event || !Number.isFinite(event.round)) return messages
+  return messages.map((msg) => {
+    if (msg.id !== messageId) return msg
+    const steps = Array.isArray(msg.agentSteps) ? msg.agentSteps : []
+    return {
+      ...msg,
+      agentSteps: steps.map((s) =>
+        s.round === event.round
+          ? { ...s, observationBrief: event.result_brief || '', status: 'done' }
+          : s
+      ),
+    }
+  })
+}
+
+export function applyAgentElapsed(messages, messageId, event) {
+  const seconds = Number(event.elapsed_seconds)
+  if (!Number.isFinite(seconds)) return messages
+  return messages.map((msg) => {
+    if (msg.id !== messageId) return msg
+    const steps = Array.isArray(msg.agentSteps) ? msg.agentSteps : []
+    return {
+      ...msg,
+      elapsedSeconds: seconds,
+      agentSteps: steps.map((s) =>
+        s.status === 'running' ? { ...s, status: 'done' } : s
+      ),
+    }
+  })
+}
