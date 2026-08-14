@@ -9,7 +9,9 @@ import AppLayout from '@/components/app/AppLayout'
 import SceneOnboardingModal from '@/components/app/SceneOnboardingModal'
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth()
+  // [LOCAL-DIAG] fake user (client only) so headless browser can reach (auth) pages
+  const { user: _realUser } = useAuth()
+  const user = typeof window !== 'undefined' && (_realUser === null || _realUser === undefined) ? { email: 'diag@local.test', uid: 'diag' } : _realUser
   const router = useRouter()
 
   useEffect(() => {
