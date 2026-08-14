@@ -29,7 +29,7 @@ function formatFileSize(bytes: number): string {
 }
 
 export default function ResultsPage() {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const [activeRowId, setActiveRowId] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<string>('details')
   const [listCollapsed, setListCollapsed] = useState(false)
@@ -131,9 +131,16 @@ export default function ResultsPage() {
     // the chat page would unmount this view entirely.
     const identifier = model.patentId || model.applicationNumber
     const isUsAppNumber = /^\d{8}$/.test(model.applicationNumber || '')
+    // The query language follows the system language — the backend
+    // detects zh/en from the query text, so the analysis card and the
+    // generated report follow it too.
     const queryText = isUsAppNumber
-      ? `分析专利 ${identifier} 的审查历史`
-      : `分析 ${identifier} 及其全球同族申请的审查差异`
+      ? (lang === 'en'
+          ? `Analyze the prosecution history of patent ${identifier}`
+          : `分析专利 ${identifier} 的审查历史`)
+      : (lang === 'en'
+          ? `Analyze ${identifier} and the prosecution differences of its global family applications`
+          : `分析 ${identifier} 及其全球同族申请的审查差异`)
     send([], queryText)
   }
 
