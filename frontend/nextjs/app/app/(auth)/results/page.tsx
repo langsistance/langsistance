@@ -112,6 +112,19 @@ export default function ResultsPage() {
     [messages, activeMessage, setId, resultsStore],
   )
 
+  // [DIAG2] What the page resolved from URL + messages (skips streaming noise)
+  useEffect(() => {
+    if (streaming) return
+    console.log(
+      '[copiioai-diag2] results-render setId=', setId,
+      'activeSetId=', (activeMessage as any)?.results?.setId ?? null,
+      'activeMsgContent=', (activeMessage?.content || '').slice(0, 40),
+      'msgResults=', messages.map((m: any) => m.results?.setId ?? '-').join(','),
+      'href=', window.location.href,
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- diag probe
+  }, [setId, activeMessage, messages])
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
