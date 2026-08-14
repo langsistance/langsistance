@@ -53,15 +53,36 @@ async def _uspto_headers(extra: dict | None = None) -> dict:
 
 
 async def _request_json(method: str, url: str, body: dict | None = None) -> dict | None:
-    """Internal HTTP seam for USPTO JSON APIs (patchable in tests)."""
-    import httpx
+    """Internal HTTP seam for USPTO JSON APIs (patchable in tests).
+
+    Uses outbound_http so USPTO 400/429 rate-limit responses get the same
+    central retry handling as the prosecution pipeline.
+    """
+    import asyncio
+
+    from sources.http_outbound import outbound_http
 
     headers = await _uspto_headers()
     if body is not None:
         headers["Content-Type"] = "application/json"
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.request(method, url, headers=headers, json=body)
+        if body is not None:
+            response = await asyncio.to_thread(
+                outbound_http.post,
+                url,
+                purpose="patent_detail",
+                headers=headers,
+                json=body,
+                timeout=30,
+            )
+        else:
+            response = await asyncio.to_thread(
+                outbound_http.get,
+                url,
+                purpose="patent_detail",
+                headers=headers,
+                timeout=30,
+            )
     except Exception:
         return None
     if response.status_code != 200:
@@ -74,19 +95,30 @@ async def _request_json(method: str, url: str, body: dict | None = None) -> dict
 
 
 async def _download(url: str) -> UsptoHttpResponse | None:
-    """Internal HTTP seam for document downloads (patchable in tests)."""
-    import httpx
+    """Internal HTTP seam for document downloads (patchable in tests).
+
+    Uses outbound_http so USPTO 400/429 rate-limit responses get the same
+    central retry handling as the prosecution pipeline.
+    """
+    import asyncio
+
+    from sources.http_outbound import outbound_http
 
     headers = await _uspto_headers({"Accept": "*/*"})
     try:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-            response = await client.get(url, headers=headers)
+        response = await asyncio.to_thread(
+            outbound_http.get,
+            url,
+            purpose="patent_download",
+            headers=headers,
+            timeout=60,
+        )
     except Exception:
         return None
     return UsptoHttpResponse(
         status_code=response.status_code,
         content=response.content,
-        content_type=response.headers.get("Content-Type", "").lower(),
+        content_type=(response.headers.get("Content-Type", "") or "").lower(),
     )
 
 
@@ -176,7 +208,8 @@ async def download_document_text(doc: dict) -> str:
     (DOCX > XML > PDF for text), follow at most one in-body redirect, and
     extract text via the shared binary extractor (PDF text extraction is
     enabled — SPEC/CLM documents are usually text-based; scanned
-    documents degrade to an empty string).
+    documents degrade to an empty string).  Failure modes are logged so
+    an empty result is diagnosable from backend.log alone.
     """
     import asyncio
 
@@ -185,13 +218,24 @@ async def download_document_text(doc: dict) -> str:
         get_download_url_from_doc,
     )
 
+    def _doc_summary() -> str:
+        code = str((doc or {}).get("documentCode") or "").strip()
+        desc = str((doc or {}).get("documentCodeDescriptionText") or "").strip()[:60]
+        return f"code={code}, desc={desc}"
+
     download_url = get_download_url_from_doc(doc or {})
     if not download_url:
+        logger.warning(f"uspto_download no_url — {_doc_summary()}")
         return ""
 
     for _hop in range(2):
         response = await _download(download_url)
         if response is None or response.status_code != 200:
+            logger.warning(
+                f"uspto_download http_fail — "
+                f"status={None if response is None else response.status_code}, "
+                f"url={download_url[:120]}"
+            )
             return ""
 
         # xmlarchive URLs deliver tar binaries even when labelled XML;
@@ -214,7 +258,14 @@ async def download_document_text(doc: dict) -> str:
                 None,  # on_progress
                 False,  # skip_pdf_extraction
             )
-            return (text or "").strip()
+            text = (text or "").strip()
+            if not text:
+                logger.warning(
+                    f"uspto_download extract_empty — "
+                    f"type={response.content_type}, "
+                    f"len={len(response.content)}, url={download_url[:120]}"
+                )
+            return text
 
         body = response.text.strip()
         redirect_url = _extract_first_url(body)
