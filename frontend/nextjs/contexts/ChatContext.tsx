@@ -53,6 +53,25 @@ if (typeof window !== 'undefined') {
   ;(window as any).__copiioaiAlive = true
 }
 
+// [DIAG] Wrap fetch to trace the RSC flight requests Next makes during
+// client-side navigation — the decisive evidence for the full-page-load
+// fallback (404? blocked? redirect?).
+if (typeof window !== 'undefined' && !(window as any).__copiioaiFetchDiag) {
+  ;(window as any).__copiioaiFetchDiag = true
+  const origFetch = window.fetch.bind(window)
+  window.fetch = (async (...args: Parameters<typeof fetch>) => {
+    const res = await origFetch(...args)
+    try {
+      const input = args[0]
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input?.url || ''
+      if (url.includes('_rsc') || url.endsWith('.txt') || url.includes('index.txt')) {
+        console.log('[copiioai-diag] fetch', url, '->', res.status, 'type=' + res.type, 'redirected=' + res.redirected, 'final=' + res.url)
+      }
+    } catch {}
+    return res
+  }) as typeof fetch
+}
+
 export function ChatProvider({ children }: { children: React.ReactNode }) {
   // [DIAG]
   useEffect(() => {
