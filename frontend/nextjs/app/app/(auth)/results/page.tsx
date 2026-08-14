@@ -33,6 +33,18 @@ export default function ResultsPage() {
   const [activeRowId, setActiveRowId] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<string>('details')
   const [listCollapsed, setListCollapsed] = useState(false)
+  // Adjustable sidebar/list width ratio (persisted per browser).
+  const [sidebarRatio, setSidebarRatio] = useState<number>(() => {
+    if (typeof window === 'undefined') return 0.5
+    try {
+      const saved = Number(window.localStorage.getItem('copiioai_results_sidebar_ratio'))
+      return saved > 0.2 && saved < 0.8 ? saved : 0.5
+    } catch {
+      return 0.5
+    }
+  })
+  const layoutRef = useRef<HTMLDivElement | null>(null)
+  const resizingRef = useRef(false)
   const router = useRouter()
   const searchParams = useSearchParams()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -124,6 +136,29 @@ export default function ResultsPage() {
     }
   }
 
+  function handleResizePointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    resizingRef.current = true
+    e.currentTarget.setPointerCapture(e.pointerId)
+    e.currentTarget.classList.add('dragging')
+  }
+
+  function handleResizePointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (!resizingRef.current || !layoutRef.current) return
+    const rect = layoutRef.current.getBoundingClientRect()
+    const ratio = rect.width > 0 ? (e.clientX - rect.left) / rect.width : 0.5
+    setSidebarRatio(Math.min(0.75, Math.max(0.25, ratio)))
+  }
+
+  function handleResizePointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    if (!resizingRef.current) return
+    resizingRef.current = false
+    e.currentTarget.classList.remove('dragging')
+    try { e.currentTarget.releasePointerCapture(e.pointerId) } catch {}
+    try {
+      window.localStorage.setItem('copiioai_results_sidebar_ratio', String(sidebarRatio))
+    } catch {}
+  }
+
   function handleProsecution(model: any) {
     // Send the analysis query through the results sidebar's own chat
     // pipeline — the long task card and its progress render right here
@@ -158,7 +193,23 @@ export default function ResultsPage() {
 
   return (
     <div className="page active results-page">
-      <div className={`results-layout${listCollapsed ? ' collapsed' : ''}`}>
+      <div
+        ref={layoutRef}
+        className={`results-layout${listCollapsed ? ' collapsed' : ''}`}
+        style={{ '--results-sidebar-ratio': sidebarRatio } as React.CSSProperties}
+      >
+        {!listCollapsed && (
+          <div
+            className="results-resize-handle"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={t('results.resizeDivider') || 'Adjust panel width'}
+            onPointerDown={handleResizePointerDown}
+            onPointerMove={handleResizePointerMove}
+            onPointerUp={handleResizePointerUp}
+            onPointerCancel={handleResizePointerUp}
+          />
+        )}
         <aside className="results-chat-sidebar">
           <div className="chat-messages">
             {messages.length === 0 && (

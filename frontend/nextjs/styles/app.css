@@ -997,12 +997,36 @@ button { cursor: pointer; }
   flex: 1;
   min-height: 0;
   display: grid;
-  /* Default: chat + results list share the width equally.  The detail
-     pane only appears after a row is selected. */
-  grid-template-columns: 1fr 1fr;
+  position: relative;
+  /* Chat sidebar / results list share the width; the ratio is adjustable
+     by dragging the divider between them (--results-sidebar-ratio is set
+     inline from React state, defaulting to 50/50).  The detail pane only
+     appears after a row is selected. */
+  --results-sidebar-ratio: 0.5;
+  grid-template-columns: calc(var(--results-sidebar-ratio) * 100%) minmax(0, 1fr);
   grid-template-rows: 100%;
   align-items: stretch;
   overflow: hidden;
+}
+
+/* Draggable divider between the chat sidebar and the results list */
+.results-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--results-sidebar-ratio) * 100%);
+  width: 8px;
+  margin-left: -4px;
+  cursor: col-resize;
+  z-index: 5;
+  touch-action: none;
+}
+
+.results-resize-handle:hover,
+.results-resize-handle.dragging {
+  background: var(--color-primary-faint);
+  border-left: 1px solid var(--color-primary);
+  border-right: 1px solid var(--color-primary);
 }
 
 /* Main column hosts the result list; the detail overlay floats above it */
