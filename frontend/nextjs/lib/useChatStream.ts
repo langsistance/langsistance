@@ -358,8 +358,9 @@ export function useChatStream() {
         // [DIAG]
         try {
           const key = 'copiioai_diag'
-          sessionStorage.setItem(key, (sessionStorage.getItem(key) || '') + `|N:push=${decodedSetId}`)
-          console.log('[copiioai-diag] auto-navigation to', resultsPath(decodedSetId, sessionId))
+          const domMsgs = document.querySelectorAll('.chat-message-wrapper').length
+          sessionStorage.setItem(key, (sessionStorage.getItem(key) || '') + `|N:push=${decodedSetId}:domMsgs=${domMsgs}`)
+          console.log('[copiioai-diag] auto-navigation to', resultsPath(decodedSetId, sessionId), 'closureMsgs=', messages.length, 'domMsgs=', domMsgs)
         } catch {}
         router.push(resultsPath(decodedSetId, sessionId))
       }

@@ -103,8 +103,9 @@ export default function ResultsPage() {
       const key = 'copiioai_diag'
       const alive = Boolean((window as any).__copiioaiAlive)
       const entry = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined
-      sessionStorage.setItem(key, (sessionStorage.getItem(key) || '') + `|R:mount:msgs=${messages.length}:alive=${alive}:nav=${entry?.type || '?'}`)
-      console.log('[copiioai-diag] results-mount msgs=', messages.length, 'windowAlive=', alive, 'navType=', entry?.type, 'href=', window.location.href, 'breadcrumb=', sessionStorage.getItem(key))
+      const domMsgs = document.querySelectorAll('.chat-message-wrapper').length
+      sessionStorage.setItem(key, (sessionStorage.getItem(key) || '') + `|R:mount:msgs=${messages.length}:domMsgs=${domMsgs}:alive=${alive}:nav=${entry?.type || '?'}`)
+      console.log('[copiioai-diag] results-mount msgs=', messages.length, 'domMsgs=', domMsgs, 'windowAlive=', alive, 'navType=', entry?.type, 'href=', window.location.href, 'breadcrumb=', sessionStorage.getItem(key))
     } catch {}
   }, [])
 
