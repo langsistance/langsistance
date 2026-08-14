@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   buildRowModel,
+  findQueryForResultsMessage,
   findRoleColumn,
   pruneResultsForPersistence,
   resolveActiveResultsMessage,
@@ -135,4 +136,61 @@ test('resolveActiveResultsMessage keeps newest fallback when store misses', () =
   const messages = [RESULT_MESSAGE('set-a')]
   const store = { sets: {}, index: [] }
   assert.equal(resolveActiveResultsMessage(messages, 'missing', store).id, 'm-set-a')
+})
+
+test('findQueryForResultsMessage returns the user question before the results message', () => {
+  const messages = [
+    { id: 'u1', role: 'user', content: '找华为的 5G 专利' },
+    RESULT_MESSAGE('set-a'),
+    { id: 'u2', role: 'user', content: '另一个问题' },
+    RESULT_MESSAGE('set-b'),
+  ]
+  const active = resolveActiveResultsMessage(messages, 'set-b')
+  assert.equal(findQueryForResultsMessage(messages, active, 'set-b', null), '另一个问题')
+})
+
+test('findQueryForResultsMessage skips non-user messages when walking back', () => {
+  const messages = [
+    { id: 'u1', role: 'user', content: '原始问题' },
+    { id: 'a1', role: 'assistant', content: '中间回复' },
+    RESULT_MESSAGE('set-a'),
+  ]
+  const active = resolveActiveResultsMessage(messages, 'set-a')
+  assert.equal(findQueryForResultsMessage(messages, active, 'set-a', null), '原始问题')
+})
+
+test('findQueryForResultsMessage falls back to store index for stored-only messages', () => {
+  const messages = [{ id: 'u1', role: 'user', content: '内存里的问题' }]
+  const store = {
+    sets: { 'stored-x': { source: 'uspto', columns: [], rows: [] } },
+    index: [{ setId: 'stored-x', sessionId: null, queryText: '存储里的问题', savedAt: 1 }],
+  }
+  const active = resolveActiveResultsMessage(messages, 'stored-x', store)
+  assert.equal(findQueryForResultsMessage(messages, active, 'stored-x', store), '存储里的问题')
+})
+
+test('findQueryForResultsMessage returns empty string when nothing matches', () => {
+  const messages = [RESULT_MESSAGE('set-a')]
+  const active = resolveActiveResultsMessage(messages, 'set-a')
+  assert.equal(findQueryForResultsMessage(messages, active, 'set-a', null), '')
+  assert.equal(findQueryForResultsMessage([], null, null, null), '')
+  assert.equal(findQueryForResultsMessage(null, null, null, null), '')
+})
+
+test('findQueryForResultsMessage labels the active set, not a stale URL set', () => {
+  // Stale setId in URL + newest-fallback message → the question must
+  // belong to the displayed set (set-b), never the stale one.  The stale
+  // set survives only as an index entry — no stored set — so resolution
+  // falls through to the newest in-memory message.
+  const messages = [RESULT_MESSAGE('set-b')]
+  const store = {
+    sets: { 'set-b': { source: 'uspto', columns: [], rows: [] } },
+    index: [
+      { setId: 'stale-a', sessionId: null, queryText: '过期问题', savedAt: 1 },
+      { setId: 'set-b', sessionId: null, queryText: '当前问题', savedAt: 2 },
+    ],
+  }
+  const active = resolveActiveResultsMessage(messages, 'stale-a', store)
+  assert.equal(active.id, 'm-set-b')
+  assert.equal(findQueryForResultsMessage(messages, active, 'stale-a', store), '当前问题')
 })

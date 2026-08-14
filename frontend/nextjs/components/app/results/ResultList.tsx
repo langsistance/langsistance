@@ -25,10 +25,11 @@ interface RowModel {
 }
 
 export default function ResultList({
-  results, activeRowId, onSelect, onOpenTab, onProsecution, onCollapse,
+  results, activeRowId, queryText, onSelect, onOpenTab, onProsecution, onCollapse,
 }: {
   results: ResultsPayload
   activeRowId: string | null
+  queryText?: string
   onSelect: (model: RowModel) => void
   onOpenTab: (model: RowModel, tab: string) => void
   onProsecution: (model: RowModel) => void
@@ -88,6 +89,9 @@ export default function ResultList({
           >
             ⟨
           </button>
+        )}
+        {queryText && (
+          <span className="results-list-query" title={queryText}>{queryText}</span>
         )}
         <span className="results-list-count">{t('results.selectedCount').replace('{count}', String(models.length))}</span>
         <select value={sort} onChange={(e) => setSort(e.target.value as any)} aria-label="sort">

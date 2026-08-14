@@ -118,3 +118,32 @@ export function resolveActiveResultsMessage(messages, urlSetId, store) {
   }
   return newest || undefined
 }
+
+/**
+ * Find the user question that produced a results message.  Prefers the
+ * nearest in-memory user message preceding it (the assistant results
+ * message always follows the user turn that triggered the search); when
+ * the active message was synthesized from the results store and is not
+ * present in `messages`, falls back to the store index entry's queryText.
+ * The store lookup keys off the message's own setId so a stale URL set
+ * can never label another set's results; the URL setId is only a last
+ * resort when no message resolved at all.
+ */
+export function findQueryForResultsMessage(messages, activeMessage, setId, store) {
+  const list = Array.isArray(messages) ? messages : []
+  if (activeMessage) {
+    const index = list.findIndex((message) => message === activeMessage)
+    if (index > 0) {
+      for (let i = index - 1; i >= 0; i--) {
+        if (list[i] && list[i].role === 'user' && list[i].content) return list[i].content
+      }
+    }
+  }
+  const messageSetId = activeMessage && activeMessage.results ? activeMessage.results.setId : null
+  const lookupId = messageSetId || setId
+  if (lookupId && store && Array.isArray(store.index)) {
+    const entry = store.index.find((item) => item && item.setId === lookupId)
+    if (entry && entry.queryText) return entry.queryText
+  }
+  return ''
+}

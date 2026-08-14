@@ -11,7 +11,7 @@ import UserCopyButton from '@/components/app/UserCopyButton'
 import SceneHint from '@/components/app/SceneHint'
 import ResultList from '@/components/app/results/ResultList'
 import DetailPanel from '@/components/app/results/DetailPanel'
-import { buildRowModel, resolveActiveResultsMessage } from '@/lib/results'
+import { buildRowModel, findQueryForResultsMessage, resolveActiveResultsMessage } from '@/lib/results'
 import { loadResultsStore, restoreResultsInMessages } from '@/lib/resultsStore'
 
 function getFileTypeBadge(file: File): string {
@@ -104,6 +104,12 @@ export default function ResultsPage() {
     const row = results.rows.find((r: any) => buildRowModel(r, results.columns, results.source).id === activeRowId)
     return row ? buildRowModel(row, results.columns, results.source) : null
   }, [activeMessage, activeRowId])
+
+  // The user question behind the active result set, shown in the list header.
+  const queryText = useMemo(
+    () => findQueryForResultsMessage(messages, activeMessage, setId, resultsStore),
+    [messages, activeMessage, setId, resultsStore],
+  )
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -268,11 +274,14 @@ export default function ResultsPage() {
         </aside>
         {listCollapsed && (
           <button
+            type="button"
             className="results-expand-btn"
             onClick={() => setListCollapsed(false)}
+            aria-label={t('results.expandList')}
             title={t('results.expandList')}
           >
-            ⟩ {t('results.expandList')}
+            <span className="results-expand-arrow" aria-hidden="true">⟩</span>
+            <span className="results-expand-label">{t('results.expandList')}</span>
           </button>
         )}
         {!listCollapsed && (
@@ -280,6 +289,7 @@ export default function ResultsPage() {
           <ResultList
             results={(activeMessage as any).results}
             activeRowId={activeRowId}
+            queryText={queryText}
             onSelect={(model) => { setActiveRowId(model.id); setActiveTab(model.isDocument ? 'doc' : 'details') }}
             onOpenTab={(model, tab) => { setActiveRowId(model.id); setActiveTab(tab) }}
             onProsecution={handleProsecution}
