@@ -22,7 +22,10 @@ from html import unescape
 
 from fastapi import APIRouter, HTTPException, Request
 
+from sources.logger import Logger
 from sources.user.passport import verify_firebase_token
+
+logger = Logger("backend.log")
 
 VALID_SOURCES = {"uspto", "google_patents"}
 
@@ -301,7 +304,16 @@ async def _fetch_claims(source: str, patent_id: str) -> dict:
     if structured:
         return build_claims_payload([claim["text"] for claim in structured])
     cleaned = _strip_document_noise(_strip_xml_tags(text))
-    return build_claims_payload(split_claims_text(cleaned))
+    claims = split_claims_text(cleaned)
+    if not claims:
+        # Diagnostic: the document downloaded and extracted but no
+        # "N. " claim starts were found — e.g. DOCX auto-numbered lists
+        # whose numbers live in numbering.xml and never reach the text.
+        logger.warning(
+            f"claims parse found no numbered claims — source={source}, "
+            f"id={patent_id}, chars={len(cleaned)}, head={cleaned[:300]!r}"
+        )
+    return build_claims_payload(claims)
 
 
 def register_patent_detail_routes(logger, config):
