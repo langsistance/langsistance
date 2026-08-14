@@ -15,6 +15,32 @@ class CaptureLogger:
 
 class TestToolResultFilter(unittest.IsolatedAsyncioTestCase):
 
+    def test_toggle_defaults_off(self):
+        from unittest.mock import patch
+        from sources.tool_result_filter import tool_result_filter_enabled
+
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertFalse(tool_result_filter_enabled())
+
+    def test_toggle_reads_env(self):
+        from unittest.mock import patch
+        from sources.tool_result_filter import tool_result_filter_enabled
+
+        with patch.dict("os.environ", {"TOOL_RESULT_FILTER_ENABLED": "1"}):
+            self.assertTrue(tool_result_filter_enabled())
+        with patch.dict("os.environ", {"TOOL_RESULT_FILTER_ENABLED": "0"}):
+            self.assertFalse(tool_result_filter_enabled())
+
+    def test_unfiltered_result_passes_items_through(self):
+        from sources.tool_result_filter import unfiltered_result
+
+        items = [{"a": 1}, {"b": 2}]
+        result = unfiltered_result(items)
+        self.assertEqual(result.items, items)
+        self.assertFalse(result.applied)
+        self.assertEqual(result.original_count, 2)
+        self.assertEqual(result.filtered_count, 2)
+
     def test_filter_prompt_prevents_related_property_substitution_and_inconsistent_decisions(self):
         from sources.tool_result_filter import FILTER_SYSTEM_PROMPT
 

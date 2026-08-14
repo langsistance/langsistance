@@ -1,5 +1,6 @@
 import inspect
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
@@ -163,6 +164,27 @@ async def extract_result_filter_criteria(
         )
 
     return None
+
+
+def tool_result_filter_enabled() -> bool:
+    """Feature toggle — LLM result filtering is off unless explicitly enabled.
+
+    The filter added per-query LLM latency for little benefit once the
+    results display moved to the split view.  Set
+    ``TOOL_RESULT_FILTER_ENABLED=1`` to re-enable.
+    """
+    return os.getenv("TOOL_RESULT_FILTER_ENABLED", "0") == "1"
+
+
+def unfiltered_result(items: list[Any]) -> FilterResult:
+    """Pass-through FilterResult used when the feature toggle is off."""
+    count = len(items) if items else 0
+    return FilterResult(
+        items=list(items or []),
+        applied=False,
+        original_count=count,
+        filtered_count=count,
+    )
 
 
 def _decision_index(decision: dict[str, Any]) -> int | None:

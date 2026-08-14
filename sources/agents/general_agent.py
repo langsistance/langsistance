@@ -21,7 +21,11 @@ from sources.dynamic_tool_params import (
     _replace_uspto_download_urls_for_batch,
     execute_backend_tool_request,
 )
-from sources.tool_result_filter import filter_tool_result_items
+from sources.tool_result_filter import (
+    filter_tool_result_items,
+    tool_result_filter_enabled,
+    unfiltered_result,
+)
 from sources.result_export import build_result_artifacts
 from sources.workflow.workflow_executor import WorkflowExecutor, is_workflow_knowledge
 from sources.http_outbound import outbound_http
@@ -2006,13 +2010,18 @@ Begin your response now:
             return
         # 鈹€鈹€ 澶у垪琛細璧板師鏈夌殑杩囨护 + 鎵归噺鏍煎紡鍖栬矾寰?鈹€鈹€
 
-        filter_result = await filter_tool_result_items(
-            raw_items,
-            user_prompt,
-            self.llm.complete_json,
-            batch_size=batch_size,
-            status_callback=emit_filter_status,
-        )
+        if tool_result_filter_enabled():
+            filter_result = await filter_tool_result_items(
+                raw_items,
+                user_prompt,
+                self.llm.complete_json,
+                batch_size=batch_size,
+                status_callback=emit_filter_status,
+            )
+        else:
+            # Feature off (default): results pass through unfiltered —
+            # skips the per-query filter-criteria LLM call entirely.
+            filter_result = unfiltered_result(raw_items)
         pending = filter_result.items
 
         # Save the original (filtered but un-pruned) items for Excel / CSV
