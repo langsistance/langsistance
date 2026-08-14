@@ -156,6 +156,11 @@ export default {
     longTaskQueuedWithId: '🔬 深度分析排队中，将在当前任务完成后自动开始... 任务ID: {taskId}',
     longTaskStopping: '⏹ 正在停止... {pct} 任务ID: {taskId}',
     phasePreparing: '正在准备专利分析...',
+    agentElapsed: '已用时间 {seconds} 秒 · {steps} 步',
+    agentStepAction: '调用',
+    agentStepObservation: '观察',
+    agentExpandSteps: '展开详细步骤',
+    agentCollapseSteps: '收起详细步骤',
   },
 
   // 侧边栏

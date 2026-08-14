@@ -156,6 +156,11 @@ export default {
     longTaskQueuedWithId: '🔬 Analysis queued, will start automatically after current task completes... Task ID: {taskId}',
     longTaskStopping: '⏹ Stopping... {pct} Task ID: {taskId}',
     phasePreparing: 'Preparing patent analysis...',
+    agentElapsed: 'Elapsed {seconds}s · {steps} steps',
+    agentStepAction: 'Action',
+    agentStepObservation: 'Observed',
+    agentExpandSteps: 'Expand detailed steps',
+    agentCollapseSteps: 'Collapse detailed steps',
   },
 
   // Sidebar

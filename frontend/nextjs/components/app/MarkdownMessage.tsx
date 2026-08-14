@@ -31,6 +31,8 @@ interface Props {
     file_count: number
     files_done: number
   }>
+  agentSteps?: AgentStep[]
+  elapsedSeconds?: number
 }
 
 interface ChatArtifact {
@@ -42,6 +44,16 @@ interface ChatArtifact {
   columnCount: number
   chunks: string[]
   complete: boolean
+}
+
+export interface AgentStep {
+  round: number
+  thought: string
+  action: string
+  paramsBrief?: string
+  observationBrief?: string
+  reasoningText?: string
+  status: 'running' | 'done' | 'error'
 }
 
 const THROTTLE_MS = 1000
@@ -92,12 +104,13 @@ function base64ChunksToBlob(chunks: string[], mimeType: string) {
   return new Blob(byteArrays, { type: mimeType })
 }
 
-export default function MarkdownMessage({ content, artifacts = [], resultSummary, streaming, transientStatus = '', analysisType, tableColumns, familyOverview, jurisdictions }: Props) {
+export default function MarkdownMessage({ content, artifacts = [], resultSummary, streaming, transientStatus = '', analysisType, tableColumns, familyOverview, jurisdictions, agentSteps = [], elapsedSeconds }: Props) {
   const { t } = useI18n()
   const [copied, setCopied] = useState(false)
   const [downloaded, setDownloaded] = useState(false)
   const [downloadedArtifactId, setDownloadedArtifactId] = useState<string | null>(null)
   const [html, setHtml] = useState('')
+  const [stepsExpanded, setStepsExpanded] = useState(false)
 
   const lastRenderTimeRef = useRef(0)
   const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -106,6 +119,11 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
   const messageContentRef = useRef<HTMLDivElement | null>(null)
   const showWaiting = shouldShowAssistantWaiting(content, streaming)
   const showTransientStatus = shouldShowAssistantTransientStatus(transientStatus, streaming)
+
+  const steps = agentSteps ?? []
+  const hasSteps = steps.length > 0
+  const doneSteps = steps.filter((s) => s.status === 'done')
+  const runningStep = steps.find((s) => s.status === 'running')
 
   const doRender = useCallback((text: string, isStreaming: boolean) => {
     const src = isStreaming ? text + ' ▋' : text
@@ -208,6 +226,63 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
 
   return (
     <div ref={messageContentRef} className={`chat-message assistant${showWaiting ? ' assistant-is-waiting' : ''}`}>
+      {streaming && hasSteps && (
+        <div className="agent-steps" role="status" aria-live="polite">
+          {doneSteps.map((step) => (
+            <div key={step.round} className="agent-step-row agent-step-done">
+              <span className="agent-step-check" aria-hidden="true">✓</span>
+              <span className="agent-step-thought">{step.thought}</span>
+            </div>
+          ))}
+          {runningStep && (
+            <div key={`running-${runningStep.round}`} className="agent-step-row agent-step-running">
+              <span className="agent-step-spinner" aria-hidden="true" />
+              <span className="agent-step-thought">{runningStep.thought}</span>
+            </div>
+          )}
+        </div>
+      )}
+      {!streaming && hasSteps && (
+        <div className="agent-steps-collapsed">
+          <button
+            type="button"
+            className="agent-steps-toggle"
+            onClick={() => setStepsExpanded((v) => !v)}
+            aria-expanded={stepsExpanded}
+            aria-label={stepsExpanded ? t('chat.agentCollapseSteps') : t('chat.agentExpandSteps')}
+          >
+            <span aria-hidden="true">⏱</span>
+            <span>
+              {t('chat.agentElapsed')
+                .replace('{seconds}', String(elapsedSeconds ?? 0))
+                .replace('{steps}', String(steps.length))}
+            </span>
+            <span className={`agent-steps-chevron${stepsExpanded ? ' expanded' : ''}`} aria-hidden="true">▾</span>
+          </button>
+          {stepsExpanded && (
+            <div className="agent-steps-expanded">
+              {steps.map((step) => (
+                <div key={step.round} className="agent-step-detail">
+                  <div className="agent-step-detail-header">{step.thought}</div>
+                  {step.reasoningText && (
+                    <div className="agent-step-reasoning">{step.reasoningText}</div>
+                  )}
+                  <div className="agent-step-action">
+                    <span className="agent-step-label">{t('chat.agentStepAction')}</span>
+                    {step.action}{step.paramsBrief ? ` (${step.paramsBrief})` : ''}
+                  </div>
+                  {step.observationBrief && (
+                    <div className="agent-step-observation">
+                      <span className="agent-step-label">{t('chat.agentStepObservation')}</span>
+                      {step.observationBrief}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       {showWaiting && (
         <div className="assistant-waiting" role="status" aria-live="polite" aria-label={t('chat.processing')}>
           <span className="assistant-waiting-orbit" aria-hidden="true">

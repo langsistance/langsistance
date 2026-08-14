@@ -233,6 +233,8 @@ export default function ResultsPage() {
                     tableColumns={(msg as any).tableColumns}
                     familyOverview={(msg as any).familyOverview}
                     jurisdictions={(msg as any).jurisdictions}
+                    agentSteps={msg.agentSteps}
+                    elapsedSeconds={msg.elapsedSeconds}
                   />
                 ) : (
                   <div className="chat-message user">
