@@ -191,6 +191,81 @@ class TestParseClaimsXml(unittest.TestCase):
         claims = _parse_claims_xml(xml)
         self.assertEqual([c["number"] for c in claims], [1, 3])
 
+    def test_parses_xml_with_doctype_declaration(self):
+        # USPTO CLM.XML carries DOCTYPE/ENTITY declarations that make a
+        # plain ElementTree parse fail — the parser must strip them.
+        xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<!DOCTYPE us-patent-application PUBLIC "-//USPTO//DTD CLM 1.0//EN" "USPTO-CLM-1.0.dtd">\n'
+            "<us-patent-application>"
+            "<claims><claim num='00001'><claim-text>First claim text.</claim-text></claim>"
+            "<claim num='00002'><claim-text>Second claim text.</claim-text></claim>"
+            "</claims></us-patent-application>"
+        )
+        claims = _parse_claims_xml(xml)
+        self.assertEqual(len(claims), 2)
+        self.assertEqual(claims[1]["number"], 2)
+
+    def test_parses_st96_vastec_claims_schema(self):
+        # Modern USPTO CLM.XML (ST.96 VASTEC): namespaced <uspat:Claim>,
+        # number in a <pat:ClaimNumber> child, text in <uspat:ClaimText>
+        # segments (no hyphen!), status in <uspat:ClaimStatusCategory>.
+        xml = (
+            '<?xml version="1.0" encoding="utf-8"?>'
+            '<uspat:ClaimsDocument xmlns:uspat="urn:us:gov:doc:uspto:patent" '
+            'xmlns:pat="http://www.wipo.int/standards/XMLSchema/ST96/Patent" '
+            'xmlns:uscom="urn:us:gov:doc:uspto:common" '
+            'xmlns:com="http://www.wipo.int/standards/XMLSchema/ST96/Common">'
+            '<uspat:Claims com:id="CLM-00000">'
+            '<uspat:Claim com:id="CLM-00001">'
+            '<pat:ClaimNumber>1</pat:ClaimNumber>'
+            '<uspat:ClaimText>1. (Previously Presented) A display device comprising:</uspat:ClaimText>'
+            '<uspat:ClaimText>a first light emission area;</uspat:ClaimText>'
+            '<uspat:ClaimStatusCategory>Previously presented</uspat:ClaimStatusCategory>'
+            '</uspat:Claim>'
+            '<uspat:Claim com:id="CLM-00002">'
+            '<pat:ClaimNumber>2</pat:ClaimNumber>'
+            '<uspat:ClaimText>2. (Previously Presented) The display device of claim 1, further comprising:</uspat:ClaimText>'
+            '<uspat:ClaimText>7C2B18MM\\261532 Amendment to 2025-09-10 FOA 4937-</uspat:ClaimText>'
+            '<uspat:ClaimStatusCategory>Previously presented</uspat:ClaimStatusCategory>'
+            '</uspat:Claim>'
+            '</uspat:Claims>'
+            '</uspat:ClaimsDocument>'
+        )
+        claims = _parse_claims_xml(xml)
+        self.assertEqual(len(claims), 2)
+        self.assertEqual([c["number"] for c in claims], [1, 2])
+        self.assertIn("display device", claims[0]["text"])
+        self.assertIn("light emission area", claims[0]["text"])
+        # OCR page-footer garbage segments are dropped
+        self.assertNotIn("FOA", claims[1]["text"])
+        self.assertNotIn("7C2B18MM", claims[1]["text"])
+
+    def test_st96_claims_flow_into_payload_cleanly(self):
+        xml = (
+            '<?xml version="1.0" encoding="utf-8"?>'
+            '<uspat:ClaimsDocument xmlns:uspat="urn:us:gov:doc:uspto:patent" '
+            'xmlns:pat="http://www.wipo.int/standards/XMLSchema/ST96/Patent">'
+            '<uspat:Claims>'
+            '<uspat:Claim>'
+            '<pat:ClaimNumber>1</pat:ClaimNumber>'
+            '<uspat:ClaimText>1. (Previously Presented) A display device comprising:</uspat:ClaimText>'
+            '<uspat:ClaimText>a first light emission area.</uspat:ClaimText>'
+            '</uspat:Claim>'
+            '<uspat:Claim>'
+            '<pat:ClaimNumber>2</pat:ClaimNumber>'
+            '<uspat:ClaimText>2. (Previously Presented) The display device of claim 1, further comprising a lens.</uspat:ClaimText>'
+            '</uspat:Claim>'
+            '</uspat:Claims>'
+            '</uspat:ClaimsDocument>'
+        )
+        payload = build_claims_payload([c["text"] for c in _parse_claims_xml(xml)])
+        self.assertTrue(payload["claims"][0]["independent"])
+        self.assertFalse(payload["claims"][1]["independent"])
+        # Number + marker stripped from the displayed text
+        self.assertTrue(payload["claims"][0]["text"].startswith("A display device"))
+        self.assertTrue(payload["claims"][1]["text"].startswith("The display device"))
+
     def test_skips_claims_without_text(self):
         xml = (
             "<claims>"
@@ -212,6 +287,23 @@ class TestStripXmlTags(unittest.TestCase):
 
     def test_plain_text_passes_through(self):
         self.assertEqual(_strip_xml_tags("plain text"), "plain text")
+
+    def test_preserves_newlines_for_block_elements(self):
+        # Closing tags of claim/paragraph elements must become newlines so
+        # numbered-claim splitting still works after tag stripping.
+        xml = (
+            "<claims><claim num='1'><claim-text>1. First claim text</claim-text></claim>"
+            "<claim num='2'><claim-text>2. Second claim text</claim-text></claim></claims>"
+        )
+        stripped = _strip_xml_tags(xml)
+        self.assertTrue(stripped.startswith("1. First claim text"))
+        # Line-start numbered claims survive — exactly what
+        # split_claims_text matches.
+        from api_routes.patent_detail import split_claims_text
+        self.assertEqual(
+            split_claims_text(stripped),
+            ["First claim text", "Second claim text"],
+        )
 
 
 class TestDocumentSelection(unittest.TestCase):

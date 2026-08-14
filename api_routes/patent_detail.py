@@ -49,6 +49,14 @@ _DEPENDENT_OPENERS_CN = re.compile(
 
 _XML_TAG_PATTERN = re.compile(r"<[^>]+>")
 
+# Block-ish elements whose closing tags become line breaks when tags are
+# stripped — keeps claim-number line starts intact for text fallback.
+_BLOCK_CLOSE_PATTERN = re.compile(
+    r"</(?:claim-text|claim|claims|amended-claim|p|paragraph|heading|"
+    r"section|div)\s*>|<br\s*/?>",
+    re.IGNORECASE,
+)
+
 # Amendment status markers prefixing claims in response/amendment documents:
 # "(original) …", "(previously presented) …", "(canceled)" …
 _AMENDMENT_STATUS_PATTERN = re.compile(
@@ -66,6 +74,12 @@ _NOISE_LINE_PATTERNS = [
     re.compile(r"^amendments? to the claims", re.IGNORECASE),
     re.compile(r"^the following is a complete listing", re.IGNORECASE),
     re.compile(r"^(application|filing|docket)\s+(number|date)\s*:?", re.IGNORECASE),
+    re.compile(r"^-?\d+-$"),  # page numbers like "-2-"
+    re.compile(r"^amdt\s+date\s", re.IGNORECASE),
+    # OCR page-footer garbage in VASTEC CLM.XML, e.g.
+    # "7C2B18MM\261532 Amendment to 2025-09-10 FOA 4937-"
+    re.compile(r"^[A-Z0-9]{4,}\\\d+"),
+    re.compile(r"^.*Amendment to \d{4}-\d{2}-\d{2} FOA", re.IGNORECASE),
 ]
 
 
@@ -155,10 +169,16 @@ def split_claims_text(text: str) -> list[str]:
 
 
 def _strip_xml_tags(text: str) -> str:
-    """Strip XML tags (SPEC.XML / CLM.XML payloads) and unescape entities."""
+    """Strip XML tags (SPEC.XML / CLM.XML payloads) and unescape entities.
+
+    Closing tags of block-ish elements become newlines so line-start
+    patterns (claim numbering) survive the strip; inline tags collapse
+    to spaces.
+    """
     if not text or "<" not in text:
         return text
-    stripped = _XML_TAG_PATTERN.sub(" ", text)
+    stripped = _BLOCK_CLOSE_PATTERN.sub("\n", text)
+    stripped = _XML_TAG_PATTERN.sub(" ", stripped)
     stripped = re.sub(r"[ \t]{2,}", " ", stripped)
     return unescape(stripped).strip()
 
@@ -196,16 +216,35 @@ def _find_claims_document(document_bag: list) -> dict | None:
     return None
 
 
+def _claim_number_from(element) -> int | None:
+    """Extract a claim number — ``num`` attribute (classic) or a
+    ``ClaimNumber`` child element (ST.96 VASTEC schema)."""
+    num = str(element.get("num") or "").lstrip("0")
+    if num.isdigit():
+        return int(num)
+    for child in element:
+        if child.tag.rsplit("}", 1)[-1].lower() not in ("claimnumber", "claim-number"):
+            continue
+        num = "".join(child.itertext()).strip().lstrip("0")
+        if num.isdigit():
+            return int(num)
+    return None
+
+
 def _parse_claims_xml(text: str) -> list[dict] | None:
     """Parse a USPTO CLM.xml payload into structured claims.
 
-    USPTO claims documents download as xmlarchive tars whose member is a
-    ``CLM.xml`` file: each ``<claim num="…">`` element carries its
-    ``<claim-text>`` children.  Returns ``[{"number": int, "text": str}]``
-    in document order, or None when the payload is not claims XML (or no
-    claims could be found) so callers can fall back to text parsing.
+    Handles both claim schemas in the wild:
+    - classic ``<claim num="…">`` with ``<claim-text>`` children;
+    - ST.96 VASTEC ``<uspat:Claim>`` with a ``<pat:ClaimNumber>`` child
+      and ``<uspat:ClaimText>`` segments (namespaces are matched by local
+      name, and OCR footer segments are dropped).
+
+    Returns ``[{"number": int, "text": str}]`` in document order, or None
+    when the payload is not claims XML (or no claims could be found) so
+    callers can fall back to text parsing.
     """
-    if not text or "<claim" not in text:
+    if not text:
         return None
     try:
         import xml.etree.ElementTree as _ET
@@ -219,19 +258,21 @@ def _parse_claims_xml(text: str) -> list[dict] | None:
             continue
         parts = []
         for child in element:
-            if child.tag.rsplit("}", 1)[-1].lower() != "claim-text":
+            if child.tag.rsplit("}", 1)[-1].lower() not in ("claimtext", "claim-text"):
                 continue
             part = "".join(child.itertext()).strip()
-            if part:
-                parts.append(part)
+            if not part:
+                continue
+            if any(pattern.match(part) for pattern in _NOISE_LINE_PATTERNS):
+                continue
+            parts.append(part)
         claim_text = " ".join(parts).strip()
         if not claim_text:
             continue
-        number = len(claims) + 1
-        num = str(element.get("num") or "").lstrip("0")
-        if num.isdigit():
-            number = int(num)
-        claims.append({"number": number, "text": claim_text})
+        claims.append({
+            "number": _claim_number_from(element) or len(claims) + 1,
+            "text": claim_text,
+        })
 
     return claims or None
 
@@ -303,6 +344,13 @@ async def _fetch_claims(source: str, patent_id: str) -> dict:
     structured = _parse_claims_xml(text)
     if structured:
         return build_claims_payload([claim["text"] for claim in structured])
+    if "<claim" in (text or ""):
+        # Diagnostic: the payload looked like claims XML but structured
+        # parsing found nothing — log the raw head to see the shape.
+        logger.warning(
+            f"claims xml parse found no claims — source={source}, "
+            f"id={patent_id}, raw_head={text[:500]!r}"
+        )
     cleaned = _strip_document_noise(_strip_xml_tags(text))
     claims = split_claims_text(cleaned)
     if not claims:
