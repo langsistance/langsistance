@@ -272,7 +272,15 @@ LARGE_LIST_SUMMARY_MAX_VALUE_CHARS = 5000
 
 
 def _prune_for_summary(items: list, max_value_chars: int = None) -> list:
-    """Return a copy of items with keys whose string value exceeds max_value_chars removed."""
+    """Return a copy of items pruned so the whole summary payload stays bounded.
+
+    The shallow per-key check was not enough: PEDS items carry huge bags
+    (eventDataBag, parentContinuityBag, ...) whose direct values are
+    lists, which the old check kept wholesale — the summary LLM call blew
+    past its 400k-token context limit.  Reuse the recursive pruner so
+    oversized nested arrays are dropped entirely and long strings are
+    truncated.
+    """
     if max_value_chars is None:
         max_value_chars = LARGE_LIST_SUMMARY_MAX_VALUE_CHARS
     result = []
@@ -280,12 +288,7 @@ def _prune_for_summary(items: list, max_value_chars: int = None) -> list:
         if not isinstance(item, dict):
             result.append(item)
             continue
-        pruned = {}
-        for k, v in item.items():
-            if isinstance(v, str) and len(v) > max_value_chars:
-                continue
-            pruned[k] = v
-        result.append(pruned)
+        result.append(_prune_item_for_llm(item, MAX_ITEM_CHARS_FOR_LLM, max_value_chars))
     return result
 
 # 瀹氫箟鍙傛暟妯″瀷

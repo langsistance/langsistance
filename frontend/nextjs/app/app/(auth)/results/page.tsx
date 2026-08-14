@@ -116,12 +116,18 @@ export default function ResultsPage() {
   useEffect(() => {
     if (streaming) return
     const ar = (activeMessage as any)?.results
+    const rowModels = (ar?.rows ?? []).slice(0, 3).map((r: any) => {
+      const m = buildRowModel(r, ar.columns, ar.source)
+      return { id: String(m.id).slice(0, 30), title: String(m.title).slice(0, 30), isDoc: m.isDocument }
+    })
     console.log(
       '[copiioai-diag2] results-render setId=', setId,
       'activeSetId=', ar?.setId ?? null,
       'activeSource=', ar?.source ?? null,
       'activeRows=', ar?.rows?.length ?? null,
-      'firstRow=', JSON.stringify(ar?.rows?.[0] ?? null).slice(0, 200),
+      'rowModels=', JSON.stringify(rowModels),
+      'activeRowId=', activeRowId,
+      'activeRowResolved=', activeRow ? String(activeRow.id).slice(0, 30) : null,
       'queryText=', queryText?.slice(0, 60),
       'activeMsgContent=', (activeMessage?.content || '').slice(0, 40),
       'msgResults=', messages.map((m: any) => m.results?.setId ?? '-').join(','),
@@ -309,7 +315,7 @@ export default function ResultsPage() {
             results={(activeMessage as any).results}
             activeRowId={activeRowId}
             queryText={queryText}
-            onSelect={(model) => { setActiveRowId(model.id); setActiveTab(model.isDocument ? 'doc' : 'details') }}
+            onSelect={(model) => { console.log('[copiioai-diag2] row-click id=', String(model.id).slice(0, 40), 'title=', String(model.title).slice(0, 30), 'isDoc=', model.isDocument); setActiveRowId(model.id); setActiveTab(model.isDocument ? 'doc' : 'details') }}
             onOpenTab={(model, tab) => { setActiveRowId(model.id); setActiveTab(tab) }}
             onProsecution={handleProsecution}
             onCollapse={() => setListCollapsed(true)}
