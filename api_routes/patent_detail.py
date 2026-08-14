@@ -73,6 +73,7 @@ _NOISE_LINE_PATTERNS = [
     re.compile(r"^mailed on\s+\S", re.IGNORECASE),
     re.compile(r"^amendments? to the claims", re.IGNORECASE),
     re.compile(r"^the following is a complete listing", re.IGNORECASE),
+    re.compile(r"^(what is claimed is|we claim|claims?)\s*:?\s*$", re.IGNORECASE),
     re.compile(r"^(application|filing|docket)\s+(number|date)\s*:?", re.IGNORECASE),
     re.compile(r"^-?\d+-$"),  # page numbers like "-2-"
     re.compile(r"^amdt\s+date\s", re.IGNORECASE),
@@ -165,6 +166,54 @@ def split_claims_text(text: str) -> list[str]:
         body = text[start:end].strip()
         if body:
             claims.append(body)
+    return claims
+
+
+# Sentence-case articles open new claims ("A system …", "An apparatus …");
+# lowercase continuations ("a data collection …", "an element …") do not.
+_UNNUMBERED_CLAIM_STARTERS = re.compile(r"^(?:A|An)\s+\S")
+
+
+def split_unnumbered_claims(text: str) -> list[str]:
+    """Split an unnumbered claims section into claims by paragraph.
+
+    Fallback for documents whose claims carry no "N. " numbers (Word
+    auto-numbered lists lose their numbers in extraction).  A paragraph
+    starts a new claim when it opens with "A/An <Noun>" or with a
+    dependent claim opener ("The X of claim N …"); every other paragraph
+    joins the previous claim as a continuation.
+    """
+    if re.search(r"\n\s*\n", text or ""):
+        # PDF-style: paragraphs separated by blank lines
+        paragraphs = [
+            p.strip()
+            for p in re.split(r"\n\s*\n", text)
+            if p.strip()
+        ]
+    else:
+        # DOCX-style: one paragraph per line, single newlines
+        paragraphs = [
+            line.strip()
+            for line in (text or "").splitlines()
+            if line.strip()
+        ]
+    claims: list[str] = []
+    for paragraph in paragraphs:
+        first_line = paragraph.splitlines()[0].strip()
+        stripped = re.sub(r"^\d{1,3}\.\s*", "", first_line, count=1)
+        starts_new = bool(
+            _UNNUMBERED_CLAIM_STARTERS.match(stripped)
+            or _DEPENDENT_OPENERS.match(stripped)
+            or _DEPENDENT_OPENERS_CN.match(stripped)
+        )
+        if not claims and not starts_new:
+            # Preamble ("What is claimed is:", "We claim:") — skip until
+            # the first claim actually starts.
+            continue
+        if not starts_new:
+            claims[-1] = f"{claims[-1]}\n{paragraph}"
+        else:
+            claims.append(paragraph)
     return claims
 
 
@@ -353,6 +402,10 @@ async def _fetch_claims(source: str, patent_id: str) -> dict:
         )
     cleaned = _strip_document_noise(_strip_xml_tags(text))
     claims = split_claims_text(cleaned)
+    if not claims:
+        # Word auto-numbered lists lose their numbers in extraction —
+        # split by paragraph with claim-starter heuristics instead.
+        claims = split_unnumbered_claims(cleaned)
     if not claims:
         # Diagnostic: the document downloaded and extracted but no
         # "N. " claim starts were found — e.g. DOCX auto-numbered lists

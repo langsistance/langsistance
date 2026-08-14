@@ -61,6 +61,38 @@ class TestResolveApplicationNumber(unittest.IsolatedAsyncioTestCase):
                 await resolve_application_number("12429341"), "18893954"
             )
 
+    async def test_design_patent_keeps_d_prefix_in_search(self):
+        # Design patents are numbered D754082 — the D prefix must survive
+        # into the patentNumber search (the documents endpoint only takes
+        # pure-digit application numbers).
+        fetch_mock = AsyncMock(return_value=[])
+        search_mock = AsyncMock(return_value="29754082")
+        with patch(
+            "sources.uspto_download.fetch_document_bag", new=fetch_mock
+        ), patch(
+            "sources.uspto_download._search_application_number_by_patent_number",
+            new=search_mock,
+        ):
+            self.assertEqual(
+                await resolve_application_number("D754082"), "29754082"
+            )
+        fetch_mock.assert_awaited_once_with("754082")
+        search_mock.assert_awaited_once_with("D754082")
+
+    async def test_design_patent_falls_back_to_bare_digits_search(self):
+        # Some sources store design numbers without the D prefix.
+        search_mock = AsyncMock(side_effect=[None, "29754082"])
+        with patch(
+            "sources.uspto_download.fetch_document_bag",
+            new=AsyncMock(return_value=[]),
+        ), patch(
+            "sources.uspto_download._search_application_number_by_patent_number",
+            new=search_mock,
+        ):
+            self.assertEqual(
+                await resolve_application_number("D754082"), "29754082"
+            )
+
     async def test_raises_when_unresolvable(self):
         with patch(
             "sources.uspto_download.fetch_document_bag",

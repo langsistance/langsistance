@@ -145,9 +145,14 @@ async def resolve_application_number(patent_id: str) -> str:
     The id may be an application number (usable directly with the PEDS
     documents endpoint) or a granted patent number (requires a PEDS
     search).  Try the documents endpoint with the digits as-is first;
-    when that fails or yields no documents, search by patentNumber.
+    when that fails or yields no documents, search by patentNumber —
+    preserving non-digit prefixes, because design patents are numbered
+    ``D754082`` and the D prefix must survive into the search query
+    (falling back to the bare digits for sources that store them
+    unprefixed).
     """
-    digits = "".join(c for c in (patent_id or "") if c.isdigit())
+    normalized = re.sub(r"\s+", "", (patent_id or "").strip())
+    digits = "".join(c for c in normalized if c.isdigit())
     if not digits or len(digits) < 6:
         raise ValueError(f"Invalid patent id: {patent_id!r}")
 
@@ -155,7 +160,10 @@ async def resolve_application_number(patent_id: str) -> str:
     if document_bag:
         return digits
 
-    app_number = await _search_application_number_by_patent_number(digits)
+    search_id = normalized.upper()
+    app_number = await _search_application_number_by_patent_number(search_id)
+    if not app_number and search_id != digits:
+        app_number = await _search_application_number_by_patent_number(digits)
     if app_number:
         return app_number
     raise ValueError(f"Could not resolve USPTO application for id {patent_id!r}")

@@ -71,6 +71,65 @@ class TestBuildClaimsPayload(unittest.TestCase):
         self.assertEqual(payload["claims"][2]["status"], "active")
 
 
+class TestSplitUnnumberedClaims(unittest.TestCase):
+    def test_splits_paragraph_claims_by_starters(self):
+        from api_routes.patent_detail import split_unnumbered_claims
+        text = (
+            "What is claimed is:\n\n"
+            "A system for generating automated post-mission logs for an "
+            "unmanned vehicle, the system comprising:\n\n"
+            "a data collection module configured to receive flight telemetry "
+            "data, operator inputs, and maintenance status information from an "
+            "unmanned vehicle;\n\n"
+            "a preprocessing module configured to normalize the telemetry data;\n\n"
+            "The system of claim 1, wherein the preprocessing module further "
+            "filters noise.\n\n"
+            "An apparatus comprising a widget and a spring.\n"
+        )
+        claims = split_unnumbered_claims(text)
+        self.assertEqual(len(claims), 3)
+        self.assertTrue(claims[0].startswith("A system for"))
+        self.assertIn("data collection module", claims[0])
+        self.assertIn("preprocessing module", claims[0])
+        self.assertTrue(claims[1].startswith("The system of claim 1"))
+        self.assertTrue(claims[2].startswith("An apparatus comprising"))
+
+    def test_continuation_paragraphs_join_previous_claim(self):
+        from api_routes.patent_detail import split_unnumbered_claims
+        text = (
+            "A method comprising:\n\n"
+            "providing a substrate;\n\n"
+            "depositing a layer on the substrate;\n\n"
+            "wherein the layer is heated.\n\n"
+            "A second independent method.\n"
+        )
+        claims = split_unnumbered_claims(text)
+        self.assertEqual(len(claims), 2)
+        self.assertIn("depositing a layer", claims[0])
+        self.assertIn("wherein the layer is heated", claims[0])
+
+    def test_splits_docx_single_newline_paragraphs(self):
+        # DOCX extraction emits one paragraph per line (no blank lines).
+        from api_routes.patent_detail import split_unnumbered_claims
+        text = (
+            "What is claimed is:\n"
+            "A system for generating automated post-mission logs.\n"
+            "a data collection module;\n"
+            "The system of claim 1, further comprising a lens.\n"
+            "An apparatus with a spring.\n"
+        )
+        claims = split_unnumbered_claims(text)
+        self.assertEqual(len(claims), 3)
+        self.assertTrue(claims[0].startswith("A system for"))
+        self.assertIn("data collection module", claims[0])
+        self.assertTrue(claims[1].startswith("The system of claim 1"))
+        self.assertTrue(claims[2].startswith("An apparatus"))
+
+    def test_empty_text(self):
+        from api_routes.patent_detail import split_unnumbered_claims
+        self.assertEqual(split_unnumbered_claims(""), [])
+
+
 class TestStripClaimStatusMarkers(unittest.TestCase):
     def test_strips_original_marker(self):
         text, status = _strip_claim_status_markers(
