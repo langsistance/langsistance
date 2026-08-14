@@ -9,6 +9,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useChatSession, type ChatMessage } from '@/contexts/ChatContext'
 import { decodeArtifactChunksToResults, decodeResultsArtifact } from '@/lib/chatSession'
 import { persistResultsSetToStorage } from '@/lib/resultsStore'
+import { resultsPath } from '@/lib/appRoutes'
 import {
   addAssistantArtifactChunk,
   addAssistantArtifactEnd,
@@ -354,15 +355,13 @@ export function useChatStream() {
       // assigned synchronously in the SSE loop (independent of React commit
       // timing), so this check is deterministic.
       if (decodedSetId) {
-        const params = new URLSearchParams({ set: decodedSetId })
-        if (sessionId) params.set('session_id', sessionId)
         // [DIAG]
         try {
           const key = 'copiioai_diag'
           sessionStorage.setItem(key, (sessionStorage.getItem(key) || '') + `|N:push=${decodedSetId}`)
-          console.log('[copiioai-diag] auto-navigation to', `/app/results?${params.toString()}`)
+          console.log('[copiioai-diag] auto-navigation to', resultsPath(decodedSetId, sessionId))
         } catch {}
-        router.push(`/app/results?${params.toString()}`)
+        router.push(resultsPath(decodedSetId, sessionId))
       }
     }
   }

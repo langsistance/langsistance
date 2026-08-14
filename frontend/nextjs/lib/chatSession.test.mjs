@@ -196,10 +196,13 @@ test('decodeArtifactChunksToResults returns null for malformed data', () => {
 
 test('shouldResetConversationOnNavigation only resets on the chat route', () => {
   assert.equal(shouldResetConversationOnNavigation('/app/chat'), true)
+  // trailingSlash: true — usePathname() returns the slash variant
+  assert.equal(shouldResetConversationOnNavigation('/app/chat/'), true)
   // The results page auto-opens after a search with no session_id — the
   // transition must not wipe the shared conversation (regression: the chat
   // page's session-load effect re-renders with the new URL before unmount).
   assert.equal(shouldResetConversationOnNavigation('/app/results'), false)
+  assert.equal(shouldResetConversationOnNavigation('/app/results/'), false)
   assert.equal(shouldResetConversationOnNavigation('/app/knowledge'), false)
   assert.equal(shouldResetConversationOnNavigation('/app'), false)
 })

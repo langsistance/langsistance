@@ -28,7 +28,7 @@ export default function MessageBell() {
   }, [fetchUnreadCount])
 
   function handleClick() {
-    router.push('/app/messages')
+    router.push('/app/messages/')
   }
 
   return (

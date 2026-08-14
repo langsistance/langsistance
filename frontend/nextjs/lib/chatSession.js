@@ -194,7 +194,9 @@ export function decodeResultsArtifact(messages, messageId) {
  * the router context updates before the page unmounts, and treating that
  * moment as "new conversation" would wipe the shared message list out
  * from under the incoming page.
+ * With `trailingSlash: true` usePathname() returns the trailing slash
+ * variant, so both forms must match.
  */
 export function shouldResetConversationOnNavigation(pathname) {
-  return pathname === '/app/chat'
+  return pathname === '/app/chat' || pathname === '/app/chat/'
 }

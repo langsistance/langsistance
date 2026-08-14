@@ -13,6 +13,7 @@ import ResultList from '@/components/app/results/ResultList'
 import DetailPanel from '@/components/app/results/DetailPanel'
 import { buildRowModel, findQueryForResultsMessage, resolveActiveResultsMessage } from '@/lib/results'
 import { loadResultsStore, restoreResultsInMessages } from '@/lib/resultsStore'
+import { chatPath } from '@/lib/appRoutes'
 
 function getFileTypeBadge(file: File): string {
   const ext = '.' + file.name.split('.').pop()?.toLowerCase()
@@ -148,7 +149,7 @@ export default function ResultsPage() {
     const params = new URLSearchParams()
     if (sessionId) params.set('session_id', sessionId)
     params.set('pending_query', queryText)
-    router.push(`/app/chat?${params.toString()}`)
+    router.push(chatPath(params.toString()))
   }
 
   if (!activeMessage) {
@@ -157,7 +158,7 @@ export default function ResultsPage() {
         <div className="results-empty">
           <h3>{t('results.emptyTitle')}</h3>
           <p>{t('results.emptyHint')}</p>
-          <button onClick={() => router.push('/app/chat')}>{t('results.backToChat')}</button>
+          <button onClick={() => router.push(chatPath())}>{t('results.backToChat')}</button>
         </div>
       </div>
     )

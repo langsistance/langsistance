@@ -9,6 +9,7 @@ import LanguageToggleButton from '@/components/app/LanguageToggleButton'
 import MessageBell from '@/components/app/MessageBell'
 import FeedbackFAB from '@/components/app/FeedbackFAB'
 import { getSessions, type SessionItem } from '@/services/api'
+import { chatPath } from '@/lib/appRoutes'
 
 const NAV_ITEMS = [
   {
@@ -114,7 +115,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   function selectSession(sid: string) {
     sessionStorage.setItem('copiioai_active_session', sid)
     setActiveSid(sid)
-    router.push(`/app/chat?session_id=${sid}`)
+    router.push(chatPath(`session_id=${sid}`))
   }
   const [menuOpen, setMenuOpen] = useState(false)
   const [sessions, setSessions] = useState<SessionItem[]>([])
@@ -154,7 +155,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   async function handleLogout() {
     await logout()
-    router.push('/app/login')
+    router.push('/app/login/')
   }
 
   function handleLoginClick() {
