@@ -15,7 +15,24 @@ from sources.logger import Logger
 logger = Logger("backend.log")
 USPTO_API_HOST = "api.uspto.gov"
 USPTO_API_CONCURRENCY_TIMEOUT_SECONDS = 1.0
+USPTO_API_MIN_INTERVAL_SECONDS = 1.0
 _uspto_api_semaphore = threading.BoundedSemaphore(value=1)
+_uspto_rate_lock = threading.Lock()
+_uspto_last_request_start: float = 0.0
+
+
+def _wait_for_uspto_rate_slot() -> None:
+    """Enforce the minimum interval between USPTO requests (one per second).
+
+    Process-local: multiple worker processes each enforce their own slot.
+    """
+    global _uspto_last_request_start
+    with _uspto_rate_lock:
+        now = time.monotonic()
+        wait = _uspto_last_request_start + USPTO_API_MIN_INTERVAL_SECONDS - now
+        if wait > 0:
+            time.sleep(wait)
+        _uspto_last_request_start = time.monotonic()
 
 
 class OutboundHttpError(Exception):
@@ -87,7 +104,9 @@ class OutboundHttpClient:
     # 429 is the official rate-limit code; 400 is often returned by USPTO
     # for transient issues (throttling, URL expiry, service instability).
     _USPTO_RETRYABLE_STATUSES: set[int] = {400, 429}
-    _USPTO_MAX_RETRIES: int = 10
+    # Unified USPTO policy: one request per second; on a retryable status,
+    # wait one second and retry exactly once (two attempts total).
+    _USPTO_MAX_RETRIES: int = 2
     _USPTO_RETRY_DELAY_SECONDS: float = 1.0
 
     def request(self, method: str, url: str, *, purpose: str = "general", **kwargs):
@@ -107,6 +126,7 @@ class OutboundHttpClient:
             acquired_uspto_slot = False
             if is_uspto:
                 acquired_uspto_slot = _acquire_uspto_api_slot(url)
+                _wait_for_uspto_rate_slot()
             try:
                 started_at = time.monotonic()
                 response = requests.request(method, url, **kwargs)
@@ -157,6 +177,7 @@ class OutboundHttpClient:
                     raise OutboundHttpConcurrencyTimeoutError(
                         f"Outbound HTTP concurrency limit reached for {USPTO_API_HOST}"
                     )
+                await asyncio.to_thread(_wait_for_uspto_rate_slot)
             try:
                 started_at = time.monotonic()
                 async with httpx.AsyncClient() as client:

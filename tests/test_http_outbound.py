@@ -99,6 +99,40 @@ class TestHttpOutbound(unittest.TestCase):
         self.assertGreaterEqual(elapsed, 1)
         self.assertLess(elapsed, 2)
 
+    def test_uspto_requests_are_spaced_at_least_one_second(self):
+        timestamps = []
+
+        class FakeResponse:
+            status_code = 200
+
+        def fake_request(method, url, **kwargs):
+            timestamps.append(time.monotonic())
+            return FakeResponse()
+
+        with patch("sources.http_outbound.requests.request", fake_request):
+            outbound_http.get("https://api.uspto.gov/first", purpose="patent_detail")
+            outbound_http.get("https://api.uspto.gov/second", purpose="patent_detail")
+
+        self.assertEqual(len(timestamps), 2)
+        self.assertGreaterEqual(timestamps[1] - timestamps[0], 0.95)
+
+    def test_uspto_429_retries_once(self):
+        calls = []
+
+        class FakeResponse:
+            status_code = 429
+
+        def fake_request(method, url, **kwargs):
+            calls.append(url)
+            return FakeResponse()
+
+        with patch("sources.http_outbound.requests.request", fake_request), \
+                patch("sources.http_outbound.time.sleep", side_effect=lambda s: None):
+            response = outbound_http.get("https://api.uspto.gov/x", purpose="patent_detail")
+
+        self.assertEqual(len(calls), 2)  # initial + one retry
+        self.assertEqual(response.status_code, 429)
+
 
 if __name__ == "__main__":
     unittest.main()
