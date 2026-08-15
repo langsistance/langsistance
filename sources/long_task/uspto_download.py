@@ -90,14 +90,7 @@ async def download_uspto_patent_text(
             )
             return (None, None)
 
-        # Read the document-list JSON body.  The original guarded on resp.text
-        # being truthy; the shared-module tests drive the seam with a response
-        # whose body is a JSON dict, so read .json() directly (real USPTO JSON
-        # responses always expose a usable body and .json()).
-        try:
-            doc_list = resp.json() or {}
-        except Exception:
-            doc_list = {}
+        doc_list = resp.json() if resp.text else {}
         documents = (
             doc_list.get('documentBag', [])
             if isinstance(doc_list, dict)
@@ -290,7 +283,12 @@ async def _download_uspto_spec_with_redirect(
     redirect.  Pattern taken from uspto_download.py.
 
     Returns (text, binary):
+      - (text, None)          — text extracted successfully
+      - (None, binary_bytes)  — binary downloaded but text extraction failed
+      - (None, None)          — download failed entirely
     """
+
+    import asyncio
 
     from sources.http_outbound import outbound_http
 

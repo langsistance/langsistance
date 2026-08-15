@@ -76,12 +76,15 @@ class TestDownloadUsptoPatentText(unittest.IsolatedAsyncioTestCase):
 
 
 def _resp(status, data):
+    import json
     resp = MagicMock()
     resp.status_code = status
-    resp.text = str(data) if not isinstance(data, dict) else ""
-    resp.content = b""
     if isinstance(data, dict):
+        resp.text = json.dumps(data)
         resp.json = lambda: data
+    else:
+        resp.text = str(data)
+        resp.content = b""
     return resp
 
 
