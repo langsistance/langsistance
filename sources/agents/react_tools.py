@@ -557,11 +557,15 @@ async def make_action_executor(agent, registry, push_filter=None):
                 digest = _ranked_digest(ranked, lang=lang)
             else:
                 shown, note = _cap_patent_list(entry.tool_info, pending, lang)
-                # A ranked pool exists for this turn — keep its display
-                # list; this legacy result still feeds the observation
-                # digest but must not overwrite the ranked display.
-                pool_exists = bool(getattr(agent, "_search_pool", None))
-                if not pool_exists:
+                pool = getattr(agent, "_search_pool", None)
+                if pool is not None:
+                    # The tool function already wrote this legacy result
+                    # into _pending_raw_items; restore the turn's ranked
+                    # pool as the display list — the legacy result still
+                    # feeds the observation digest below.
+                    ranked = pool.ranked(MAX_PATENT_LIST_ITEMS)
+                    agent._pending_raw_items = [c["_raw"] for c in ranked]
+                else:
                     agent._pending_raw_items = shown
                 digest = _items_digest(shown, lang=lang)
             total = getattr(agent, "_last_search_total", None)

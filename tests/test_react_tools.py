@@ -798,8 +798,13 @@ class TestExecuteActionPoolPath(unittest.TestCase):
                                  tool=legacy_tool)
         executor2 = asyncio.run(
             make_action_executor(agent, {legacy_entry.name: legacy_entry}, None))
+        agent._pending_raw_items = [_usp_raw_item("18184836", "Legacy noise")]
         result = asyncio.run(executor2(legacy_entry.name, {"params": "{}"}, 2))
-        self.assertIs(agent._pending_raw_items, pooled_display)
+        # production clobber happened above; the legacy branch must RESTORE
+        # the ranked pool display (content equality — ranked() rebuilds the list)
+        restored_ids = [str(i.get("applicationNumberText"))
+                        for i in agent._pending_raw_items]
+        self.assertEqual(restored_ids, ["19511555"])
         self.assertNotIn("已按相关度排序", result["text"])
 
 
