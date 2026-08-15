@@ -624,6 +624,7 @@ class TestRankedDigest(unittest.TestCase):
 
 
 class TestExecuteActionPoolPath(unittest.TestCase):
+    @patch("sources.agents.react_tools.RELEVANCE_RANK_ENABLED", True)
     def test_pool_path_ranks_observation_by_score(self):
         agent = _PoolAgent()
         agent.llm.set_scores({"19511555": 1, "18184836": 5})
@@ -653,6 +654,7 @@ class TestExecuteActionPoolPath(unittest.TestCase):
                for i in agent._pending_raw_items]
         self.assertEqual(ids, ["18184836", "19511555"])
 
+    @patch("sources.agents.react_tools.RELEVANCE_RANK_ENABLED", True)
     def test_pool_merges_across_calls(self):
         agent = _PoolAgent()
         agent.llm.set_scores({})
@@ -673,6 +675,7 @@ class TestExecuteActionPoolPath(unittest.TestCase):
         self.assertIn("18184836", result["text"])
         self.assertIn("池共 2 条", result["text"])
 
+    @patch("sources.agents.react_tools.RELEVANCE_RANK_ENABLED", True)
     def test_pool_skipped_for_non_keyword_title(self):
         agent = _PoolAgent()
         entry_k = _Knowledge(3, ktype=1)
@@ -684,6 +687,7 @@ class TestExecuteActionPoolPath(unittest.TestCase):
         self.assertNotIn("已按相关度排序", result["text"])
         self.assertFalse(getattr(agent, "_search_ranked", False))
 
+    @patch("sources.agents.react_tools.RELEVANCE_RANK_ENABLED", True)
     def test_pool_skipped_for_non_usp_shape(self):
         agent = _PoolAgent()
         entry_k = _Knowledge(3, ktype=1)
@@ -716,6 +720,7 @@ class TestExecuteActionPoolPath(unittest.TestCase):
         self.assertNotIn("已按相关度排序", result["text"])
         self.assertIn("完整列表已展示", result["text"])
 
+    @patch("sources.agents.react_tools.RELEVANCE_RANK_ENABLED", True)
     def test_scoring_failure_keeps_rank_stable(self):
         agent = _PoolAgent()
         agent.llm.fail = True
