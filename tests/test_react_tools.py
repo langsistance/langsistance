@@ -682,6 +682,24 @@ class TestExecuteActionPoolPath(unittest.TestCase):
         self.assertIn("18184836", result["text"])
         self.assertIn("池共 2 条", result["text"])
 
+    def test_only_head_scored_per_call(self):
+        agent = _PoolAgent()
+        entry_k = _Knowledge(3, ktype=1)
+        agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
+        tool_info = _ToolInfo("search_patent_by_key_word", url=_USPTO_URL)
+        from sources.agents.react_tools import ToolEntry
+        dynamic_tool = agent.get_dynamic_tool_for(entry_k, tool_info)
+        entry = ToolEntry(name=dynamic_tool.name, kind="knowledge",
+                          knowledge=entry_k, tool_info=tool_info,
+                          tool=dynamic_tool)
+        executor = asyncio.run(make_action_executor(agent, {entry.name: entry}, None))
+        agent._pending_raw_items = [
+            _usp_raw_item(str(19500000 + i), f"T{i}") for i in range(80)]
+        with patch("sources.agents.react_tools.SCORE_PER_CALL", 50):
+            result = asyncio.run(executor(entry.name, {"params": "{}"}, 1))
+        # 80 new, head 50 scored → note reports 本次新评分 50 条
+        self.assertIn("本次新评分 50 条", result["text"])
+
     @patch("sources.agents.react_tools.RELEVANCE_RANK_ENABLED", True)
     def test_pool_skipped_for_non_uspto_url(self):
         agent = _PoolAgent()

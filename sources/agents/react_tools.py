@@ -26,7 +26,11 @@ from sources.long_task.candidate_metadata import (
     is_keyword_search_tool,
     is_uspto_tool,
 )
-from sources.long_task.chat_relevance import SearchPool
+from sources.long_task.chat_relevance import (
+    SCORE_PER_CALL,
+    SearchPool,
+    score_candidates_concurrent,
+)
 
 TOP_N = int(os.getenv("REACT_TOOL_TOP_N", "5"))
 MAX_PATENT_LIST_ITEMS = int(os.getenv("REACT_MAX_PATENT_LIST_ITEMS", "100"))
@@ -478,8 +482,10 @@ async def _rank_pending_pool(agent, candidates, lang) -> Tuple[list, str]:
     if pool is None:
         pool = SearchPool(getattr(agent, "_last_user_prompt", "") or "")
         agent._search_pool = pool
-    pool.add_from_candidates(candidates)
-    scored = await pool.score_new(
+    new_cands = pool.add_from_candidates(candidates)
+    head = new_cands[:SCORE_PER_CALL]
+    scored = await score_candidates_concurrent(
+        head, pool.query,
         _get_flash_provider(agent) or getattr(agent, "llm", None))
     pool.prune()
     ranked = pool.ranked(MAX_PATENT_LIST_ITEMS)

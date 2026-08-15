@@ -127,9 +127,37 @@ class TestSearchPoolConcurrentScoring(unittest.IsolatedAsyncioTestCase):
                   for i in range(250)])
         provider = _ConcurrentProvider()
         scored = await pool.score_new(provider)
-        self.assertEqual(provider.calls, 3)          # 3 batches of ≤100
-        self.assertEqual(provider.max_inflight, 3)   # gathered, not sequential
+        # SCORE_BATCH_SIZE=25 → 250/25 = 10 batches, gathered concurrently
+        self.assertEqual(provider.calls, 10)
+        self.assertEqual(provider.max_inflight, 10)  # gathered, not sequential
         self.assertEqual(scored, 250)
+
+
+class TestHeadScoringAndConcurrency(unittest.IsolatedAsyncioTestCase):
+    async def test_score_concurrent_uses_small_batches(self):
+        from sources.long_task.chat_relevance import (
+            SCORE_BATCH_SIZE, score_candidates_concurrent)
+        from sources.long_task.candidate_metadata import build_candidates
+        items = [_usp_raw_item(str(19500000 + i), f"T{i}")
+                 for i in range(60)]
+        cands = build_candidates(items)
+        provider = _ConcurrentProvider()
+        scored = await score_candidates_concurrent(cands, "q", provider)
+        self.assertEqual(provider.calls, 3)          # 60/25 → 3 batches
+        self.assertEqual(provider.max_inflight, 3)   # gathered concurrently
+        self.assertEqual(scored, 60)
+
+    async def test_add_from_candidates_returns_new_list(self):
+        pool = SearchPool("测试问题")
+        new = pool.add_from_candidates(
+            [{"patent_id": "19511555", "title": "A"},
+             {"patent_id": "18184836", "title": "B"}])
+        self.assertEqual([c["patent_id"] for c in new],
+                         ["19511555", "18184836"])
+        again = pool.add_from_candidates(
+            [{"patent_id": "19511555", "title": "A"},
+             {"patent_id": "17222222", "title": "C"}])
+        self.assertEqual([c["patent_id"] for c in again], ["17222222"])
 
 
 class TestSearchPoolRanking(unittest.TestCase):

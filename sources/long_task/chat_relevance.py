@@ -11,18 +11,43 @@ Scoring failures never raise: unscored candidates sink to the bottom of
 the ranking, keeping their pool order.
 """
 import asyncio
+import os
 from typing import Any, List
 
 from sources.long_task.candidate_metadata import (
     build_candidates,
     dedupe_candidates,
 )
-from sources.long_task.relevance_gate import (
-    GATE_MAX_CANDIDATES_PER_CALL,
-    score_candidates,
-)
+from sources.long_task.relevance_gate import score_candidates
 
 POOL_MAX_CANDIDATES = 300
+SCORE_PER_CALL = int(os.getenv("REACT_SCORE_PER_CALL", "50"))
+SCORE_BATCH_SIZE = int(os.getenv("REACT_SCORE_BATCH_SIZE", "25"))
+
+
+async def score_candidates_concurrent(candidates: list, query: str,
+                                      provider: Any) -> int:
+    """Score unscored candidates in concurrent small batches.
+
+    The Flash provider is slow on 100-entry batches (~50s); 25-entry
+    batches gathered concurrently cut wall-clock substantially.  Never
+    raises.  Returns how many candidates gained a score.
+    """
+    if provider is None:
+        return 0
+    pending = [c for c in candidates
+               if "relevance_score" not in c]
+    if not pending:
+        return 0
+    batches = [
+        pending[i:i + SCORE_BATCH_SIZE]
+        for i in range(0, len(pending), SCORE_BATCH_SIZE)
+    ]
+    await asyncio.gather(
+        *(score_candidates(batch, query, provider) for batch in batches)
+    )
+    return len(pending) - len([c for c in pending
+                               if "relevance_score" not in c])
 
 
 class SearchPool:
@@ -49,17 +74,17 @@ class SearchPool:
             new += 1
         return new
 
-    def add_from_candidates(self, candidates: list) -> int:
+    def add_from_candidates(self, candidates: list) -> list:
         """Merge pre-built candidate dicts into the pool; return the
-        number of NEW candidates added."""
-        new = 0
+        list of NEW candidates added (insertion order)."""
+        new: list = []
         for c in candidates or []:
             pid = c.get("patent_id")
             if not pid or pid in self._by_id:
                 continue
             self._by_id[pid] = c
             self._order.append(pid)
-            new += 1
+            new.append(c)
         return new
 
     def unscored(self) -> list:
@@ -68,26 +93,11 @@ class SearchPool:
                 if "relevance_score" not in self._by_id[pid]]
 
     async def score_new(self, provider: Any) -> int:
-        """Score unscored candidates via the Flash LLM.
-
-        Batches at GATE_MAX_CANDIDATES_PER_CALL candidates per call and
-        runs the batches CONCURRENTLY (the pool can hold several batches
-        of unscored candidates after merges or retries).  Never raises.
-        Returns how many candidates gained a score.
-        """
-        if provider is None:
-            return 0
-        pending = self.unscored()
-        if not pending:
-            return 0
-        batches = [
-            pending[i:i + GATE_MAX_CANDIDATES_PER_CALL]
-            for i in range(0, len(pending), GATE_MAX_CANDIDATES_PER_CALL)
-        ]
-        await asyncio.gather(
-            *(score_candidates(batch, self.query, provider) for batch in batches)
-        )
-        return len(pending) - len(self.unscored())
+        """Score unscored candidates via the Flash LLM in concurrent
+        small batches.  Never raises.  Returns how many candidates
+        gained a score."""
+        return await score_candidates_concurrent(
+            self.unscored(), self.query, provider)
 
     def ranked(self, limit: int) -> list:
         """Family-deduped candidates ordered granted-first, then
