@@ -1,4 +1,5 @@
 """Tests for chat-path relevance ranking pool (chat_relevance)."""
+import asyncio
 import re
 import unittest
 
@@ -36,6 +37,22 @@ class _FakeProvider:
         ids = re.findall(r"id=(\d+)", user)
         return {"scores": [
             {"id": i, "score": self._scores.get(i, 3)} for i in ids]}
+
+
+class _ConcurrentProvider:
+    def __init__(self):
+        self.calls = 0
+        self.inflight = 0
+        self.max_inflight = 0
+
+    async def complete_json(self, system, user):
+        self.calls += 1
+        self.inflight += 1
+        self.max_inflight = max(self.max_inflight, self.inflight)
+        await asyncio.sleep(0.05)
+        self.inflight -= 1
+        ids = re.findall(r"id=(\d+)", user)
+        return {"scores": [{"id": i, "score": 3} for i in ids]}
 
 
 class TestSearchPoolMerge(unittest.TestCase):
@@ -101,6 +118,18 @@ class TestSearchPoolScoring(unittest.IsolatedAsyncioTestCase):
         scored = await pool.score_new(_FakeProvider(fail=True))
         self.assertEqual(scored, 0)
         self.assertEqual(pool.unscored().__len__(), 1)
+
+
+class TestSearchPoolConcurrentScoring(unittest.IsolatedAsyncioTestCase):
+    async def test_batches_scored_concurrently(self):
+        pool = SearchPool("测试问题")
+        pool.add([_usp_raw_item(str(19500000 + i), f"T{i}")
+                  for i in range(250)])
+        provider = _ConcurrentProvider()
+        scored = await pool.score_new(provider)
+        self.assertEqual(provider.calls, 3)          # 3 batches of ≤100
+        self.assertEqual(provider.max_inflight, 3)   # gathered, not sequential
+        self.assertEqual(scored, 250)
 
 
 class TestSearchPoolRanking(unittest.TestCase):

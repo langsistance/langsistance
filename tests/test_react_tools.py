@@ -1,6 +1,8 @@
 """Tests for ReAct tool supply and action dispatch (react_tools)."""
 import asyncio
 import re
+import sys
+import types
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -567,7 +569,7 @@ class TestSearchObservationTotalCount(unittest.TestCase):
 
 # ── Chat-path relevance ranking pool ─────────────────────────────────────────
 
-from sources.agents.react_tools import _ranked_digest
+from sources.agents.react_tools import _get_flash_provider, _ranked_digest
 
 
 class _PoolAgent(_FakeAgent):
@@ -596,6 +598,7 @@ class _PoolAgent(_FakeAgent):
                     {"id": i, "score": self._scores.get(i, 3)} for i in ids]}
 
         self.llm = _LLM()
+        self._flash_llm = self.llm  # pre-seeded cache: fake scores via flash path
 
 
 async def _pool_executor(agent, registry):
@@ -621,6 +624,7 @@ class TestRankedDigest(unittest.TestCase):
         text = _ranked_digest(build_candidates(items))
         self.assertNotIn("Title 20", text)
         self.assertIn("共 30 条", text)
+        self.assertIn("已按相关度排序", text)
 
 
 class TestExecuteActionPoolPath(unittest.TestCase):
@@ -738,6 +742,52 @@ class TestExecuteActionPoolPath(unittest.TestCase):
         result = asyncio.run(executor("uspto_search", {"params": "{}"}, 1))
         self.assertIn("已按相关度排序", result["text"])
         self.assertIn("本次新评分 0 条", result["text"])
+
+
+# sources/llm_provider imports `ollama` (optional, not installed here); that
+# would break patch("sources.llm_provider.Provider", ...) resolution.  Pre-
+# register a stub module so the patch target resolves without the real import.
+_LLM_MODULE_STUB = types.ModuleType("sources.llm_provider")
+_LLM_MODULE_STUB.Provider = object  # patch target must pre-exist (no create=True)
+sys.modules.setdefault("sources.llm_provider", _LLM_MODULE_STUB)
+
+
+class TestFlashProviderSelection(unittest.TestCase):
+    def test_returns_cached_provider(self):
+        agent = _PoolAgent()
+        self.assertIs(_get_flash_provider(agent), agent.llm)
+
+    def test_constructs_deepseek_flash_when_cache_empty(self):
+        agent = _FakeAgent()
+        fake_provider = object()
+        with patch("sources.llm_provider.Provider",
+                   return_value=fake_provider) as mock_provider, \
+             patch("sources.long_task.config.get_long_task_config",
+                   return_value={"provider_family": "deepseek"}):
+            result = _get_flash_provider(agent)
+        self.assertIs(result, fake_provider)
+        mock_provider.assert_called_once_with(
+            provider_name="deepseek", model="deepseek-v4-flash",
+            server_address="", is_local=False)
+        self.assertIs(agent._flash_llm, fake_provider)
+
+    def test_constructs_minimax_highspeed_for_minimax_family(self):
+        agent = _FakeAgent()
+        fake_provider = object()
+        with patch("sources.llm_provider.Provider",
+                   return_value=fake_provider) as mock_provider, \
+             patch("sources.long_task.config.get_long_task_config",
+                   return_value={"provider_family": "minimax"}):
+            result = _get_flash_provider(agent)
+        mock_provider.assert_called_once_with(
+            provider_name="minimax", model="MiniMax-M2.7-highspeed",
+            server_address="", is_local=False)
+
+    def test_construction_failure_returns_none(self):
+        agent = _FakeAgent()
+        with patch("sources.llm_provider.Provider",
+                   side_effect=RuntimeError("no keys")):
+            self.assertIsNone(_get_flash_provider(agent))
 
 
 if __name__ == "__main__":

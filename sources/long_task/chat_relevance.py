@@ -10,13 +10,17 @@ display and observation digests.
 Scoring failures never raise: unscored candidates sink to the bottom of
 the ranking, keeping their pool order.
 """
+import asyncio
 from typing import Any, List
 
 from sources.long_task.candidate_metadata import (
     build_candidates,
     dedupe_candidates,
 )
-from sources.long_task.relevance_gate import score_candidates
+from sources.long_task.relevance_gate import (
+    GATE_MAX_CANDIDATES_PER_CALL,
+    score_candidates,
+)
 
 POOL_MAX_CANDIDATES = 300
 
@@ -53,14 +57,23 @@ class SearchPool:
     async def score_new(self, provider: Any) -> int:
         """Score unscored candidates via the Flash LLM.
 
-        Never raises.  Returns how many candidates gained a score.
+        Batches at GATE_MAX_CANDIDATES_PER_CALL candidates per call and
+        runs the batches CONCURRENTLY (the pool can hold several batches
+        of unscored candidates after merges or retries).  Never raises.
+        Returns how many candidates gained a score.
         """
         if provider is None:
             return 0
         pending = self.unscored()
         if not pending:
             return 0
-        await score_candidates(pending, self.query, provider)
+        batches = [
+            pending[i:i + GATE_MAX_CANDIDATES_PER_CALL]
+            for i in range(0, len(pending), GATE_MAX_CANDIDATES_PER_CALL)
+        ]
+        await asyncio.gather(
+            *(score_candidates(batch, self.query, provider) for batch in batches)
+        )
         return len(pending) - len(self.unscored())
 
     def ranked(self, limit: int) -> list:

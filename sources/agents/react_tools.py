@@ -276,10 +276,36 @@ def _ranked_digest(candidates, limit: int = SEARCH_DIGEST_LIMIT,
         lines.append(" | ".join(str(p) for p in parts) + score_txt)
     text = "\n".join(lines)
     if len(candidates) > limit:
-        note = (f"\n…共 {len(candidates)} 条" if lang == "zh"
-                else f"\n...{len(candidates)} items total")
+        note = (f"\n…共 {len(candidates)} 条，已按相关度排序" if lang == "zh"
+                else f"\n...{len(candidates)} items total, relevance-ranked")
         text += note
     return text[:SEARCH_DIGEST_CHARS]
+
+
+def _get_flash_provider(agent):
+    """Return the agent's cached Flash scoring provider, constructing it
+    lazily from the long-task config (deepseek-v4-flash / MiniMax
+    M2.7-highspeed, following api_routes/core.py's pattern).
+
+    Construction failure returns None — callers fall back to the main
+    LLM so scoring degrades instead of breaking.
+    """
+    cached = getattr(agent, "_flash_llm", None)
+    if cached is not None:
+        return cached
+    try:
+        from sources.llm_provider import Provider
+        from sources.long_task.config import get_long_task_config
+        family = ((get_long_task_config() or {}).get("provider_family")
+                  or "deepseek")
+        model = ("deepseek-v4-flash" if family == "deepseek"
+                 else "MiniMax-M2.7-highspeed")
+        cached = Provider(provider_name=family, model=model,
+                          server_address="", is_local=False)
+    except Exception:
+        cached = None
+    agent._flash_llm = cached
+    return cached
 
 
 async def _rank_pending_pool(agent, raw_items, lang) -> Tuple[list, str]:
@@ -294,7 +320,8 @@ async def _rank_pending_pool(agent, raw_items, lang) -> Tuple[list, str]:
         pool = SearchPool(getattr(agent, "_last_user_prompt", "") or "")
         agent._search_pool = pool
     pool.add(raw_items)
-    scored = await pool.score_new(getattr(agent, "llm", None))
+    scored = await pool.score_new(
+        _get_flash_provider(agent) or getattr(agent, "llm", None))
     pool.prune()
     ranked = pool.ranked(MAX_PATENT_LIST_ITEMS)
     if lang == "en":
