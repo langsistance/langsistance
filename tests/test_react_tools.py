@@ -426,6 +426,26 @@ class TestMaybeRewriteSearchQuery(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(agent.llm.calls, 1)
         self.assertEqual(out2["q"], out["q"])
 
+    async def test_lazy_build_failure_keeps_original_args(self):
+        class _FailingLLM:
+            async def complete_json(self, system, user):
+                raise RuntimeError("down")
+        agent = _RewriteAgent()
+        agent._search_rewrite = None
+        agent.llm = _FailingLLM()
+        out = await _maybe_rewrite_search_query(
+            agent, _ToolInfo("search_patent_by_key_word"), {"q": ""})
+        # build failure degrades to empty queries → original args untouched
+        self.assertEqual(out, {"q": ""})
+
+    async def test_malformed_params_json_keeps_original_args(self):
+        agent = _RewriteAgent()
+        agent._search_rewrite = {"queries": ['("a" OR "b")']}
+        out = await _maybe_rewrite_search_query(
+            agent, _ToolInfo("search_patent_by_key_word"),
+            {"params": "not valid json{{{"})
+        self.assertEqual(out, {"params": "not valid json{{{"})
+
 
 # ── fetch_patent_spec built-in tool ──────────────────────────────────────────
 
