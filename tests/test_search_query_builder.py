@@ -99,5 +99,49 @@ class TestBuildSearchQueries(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["queries"], [])
 
 
+# ── Ladder ordering + guidance formatting ────────────────────────────────────
+
+from sources.long_task.search_query_builder import (
+    REWRITE_SYSTEM_PROMPT,
+    format_ladder_guidance,
+)
+
+
+class TestRewritePromptLadderRules(unittest.TestCase):
+    def test_prompt_requires_tight_to_loose_ordering(self):
+        self.assertIn("最紧", REWRITE_SYSTEM_PROMPT)
+        self.assertIn("放宽", REWRITE_SYSTEM_PROMPT)
+
+    def test_prompt_allows_justified_domain_constraints(self):
+        self.assertIn("限定", REWRITE_SYSTEM_PROMPT)
+
+
+class TestFormatLadderGuidance(unittest.TestCase):
+    def test_renders_ordered_queries_with_lang_zh(self):
+        rewrite = {"queries": [
+            '("a" OR "b") AND ("c" OR "d") AND (x OR y)',
+            '("a" OR "b") AND ("c" OR "d")',
+            '("a" OR "b")',
+        ]}
+        text = format_ladder_guidance(rewrite, "zh")
+        self.assertIn("由紧到松", text)
+        # Each query renders on its own numbered line; prefix the find so a
+        # looser query's substring inside a tighter line does not mask it.
+        pos_0 = text.find('1. ("a" OR "b")')
+        pos_1 = text.find('2. ("a" OR "b")')
+        pos_2 = text.find('3. ("a" OR "b")')
+        self.assertLess(pos_0, pos_1)
+        self.assertLess(pos_1, pos_2)
+
+    def test_empty_rewrite_returns_empty(self):
+        self.assertEqual(format_ladder_guidance({}, "zh"), "")
+        self.assertEqual(format_ladder_guidance({"queries": []}, "zh"), "")
+
+    def test_english_variant(self):
+        text = format_ladder_guidance(
+            {"queries": ['"a" AND "b"']}, "en")
+        self.assertIn("tightest", text)
+
+
 if __name__ == "__main__":
     unittest.main()
