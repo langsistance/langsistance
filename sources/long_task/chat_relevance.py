@@ -49,6 +49,19 @@ class SearchPool:
             new += 1
         return new
 
+    def add_from_candidates(self, candidates: list) -> int:
+        """Merge pre-built candidate dicts into the pool; return the
+        number of NEW candidates added."""
+        new = 0
+        for c in candidates or []:
+            pid = c.get("patent_id")
+            if not pid or pid in self._by_id:
+                continue
+            self._by_id[pid] = c
+            self._order.append(pid)
+            new += 1
+        return new
+
     def unscored(self) -> list:
         """Candidates without a relevance_score, in pool order."""
         return [self._by_id[pid] for pid in self._order

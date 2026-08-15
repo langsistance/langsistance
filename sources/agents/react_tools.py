@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from sources.knowledge.knowledge import get_knowledge_tool_candidates
 from sources.long_task.candidate_metadata import (
     build_candidates,
+    ensure_search_fields,
     is_keyword_search_tool,
     is_uspto_tool,
 )
@@ -30,6 +31,7 @@ from sources.long_task.chat_relevance import SearchPool
 TOP_N = int(os.getenv("REACT_TOOL_TOP_N", "5"))
 MAX_PATENT_LIST_ITEMS = int(os.getenv("REACT_MAX_PATENT_LIST_ITEMS", "100"))
 RELEVANCE_RANK_ENABLED = os.getenv("REACT_RELEVANCE_RANK", "1") != "0"
+REACT_POOL_MAX_PAGES = int(os.getenv("REACT_POOL_MAX_PAGES", "2"))
 SEARCH_KNOWLEDGE_TOOL_NAME = "search_my_knowledge"
 MAX_SEARCH_RESULTS = 5
 MAX_OBSERVATION_CHARS = 300
@@ -245,15 +247,21 @@ def _cap_patent_list(tool_info, items: list, lang: str) -> Tuple[list, str]:
     return items, note
 
 
-def _relevance_pool_applies(agent, tool_info, raw_items) -> bool:
-    """Pool + ranking applies to backend USPTO search tools whose results
-    flatten via build_candidates (any USPTO-shaped patent list — keyword,
-    assignee, or otherwise — merges into the turn's ranked pool)."""
+def _relevance_pool_applies_tool(agent, tool_info) -> bool:
+    """Tool-level (pre-invoke) half of the pool gate: switch on, backend,
+    USPTO URL.  The parse check happens post-invoke on the results."""
     if not RELEVANCE_RANK_ENABLED:
         return False
     if getattr(tool_info, "push", None) != 2:
         return False
-    if not is_uspto_tool(tool_info):
+    return is_uspto_tool(tool_info)
+
+
+def _relevance_pool_applies(agent, tool_info, raw_items) -> bool:
+    """Pool + ranking applies to backend USPTO search tools whose results
+    flatten via build_candidates (any USPTO-shaped patent list — keyword,
+    assignee, or otherwise — merges into the turn's ranked pool)."""
+    if not _relevance_pool_applies_tool(agent, tool_info):
         return False
     return bool(build_candidates(raw_items or []))
 
@@ -310,9 +318,119 @@ def _get_flash_provider(agent):
     return cached
 
 
-async def _rank_pending_pool(agent, raw_items, lang) -> Tuple[list, str]:
-    """Merge raw_items into the turn's SearchPool, score new arrivals
-    against the user's question, and return (ranked candidates, note).
+_ENVELOPE_KEYS = frozenset({"method", "body", "query", "path", "header"})
+
+
+def _effective_query(args: dict) -> str:
+    """Extract the query string that actually reaches the search API.
+
+    Mirrors the flat-merge rule (first non-empty string value wins) and
+    also understands body.q and params-JSON shapes.  Returns "" when no
+    query can be recovered — callers then skip envelope building.
+    """
+    if not isinstance(args, dict):
+        return ""
+    body = args.get("body")
+    if isinstance(body, dict):
+        q = body.get("q")
+        if isinstance(q, str) and q.strip():
+            return q.strip()
+    params = args.get("params")
+    if isinstance(params, str) and params.strip():
+        try:
+            parsed = json.loads(params)
+            if isinstance(parsed, dict):
+                q = parsed.get("q")
+                if isinstance(q, str) and q.strip():
+                    return q.strip()
+                return ""  # params dict carries no q — nothing to recover
+        except (ValueError, TypeError):
+            pass  # malformed params string — fall through to flat scan
+    for value in args.values():
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _build_uspto_envelope(tool_info, q: str) -> dict:
+    """Build a template-faithful request envelope for a USPTO search tool.
+
+    Carries the tool template's body (fields list included), injects *q*
+    the way the flat-merge does, ensures the relevance fields
+    (cpcClassificationBag etc.) are requested, and preserves method /
+    query / path / header from the template.  Never raises — on any
+    template problem returns a minimal envelope with just q.
+    """
+    try:
+        from sources.dynamic_tool_params import _coerce_json_object
+        template = _coerce_json_object(tool_info.params, "tool_info.params") or {}
+        body = dict(template.get("body") or {})
+    except Exception:
+        template, body = {}, {}
+    body["q"] = q
+    try:
+        body = ensure_search_fields({"body": body})["body"]
+    except Exception:
+        pass
+    return {
+        "method": template.get("method", "POST"),
+        "body": body,
+        "query": template.get("query", {}),
+        "path": template.get("path"),
+        "header": template.get("header", {}),
+    }
+
+
+async def _collect_search_pages(agent, entry, args, first_raw: list) -> list:
+    """Fetch extra result pages for a USPTO search call and merge them.
+
+    Stops early when total hits are exhausted, when a page returns items
+    already seen (template ignored the offset), or after
+    REACT_POOL_MAX_PAGES extra pages.  Never raises — failures return
+    whatever was collected so far.
+    """
+    items = [c for c in build_candidates(first_raw or [])]
+    q = _effective_query(args or {})
+    if not q:
+        return items
+    seen_ids = {c["patent_id"] for c in items}
+    total = getattr(agent, "_last_search_total", None)
+    page_size = 50
+    try:
+        from sources.dynamic_tool_params import _coerce_json_object
+        template = _coerce_json_object(entry.tool_info.params,
+                                       "tool_info.params") or {}
+        body = template.get("body") or {}
+        page_size = int((body.get("pagination") or {}).get("limit", 50))
+    except Exception:
+        pass
+    offset = page_size
+    for _page in range(REACT_POOL_MAX_PAGES - 1):
+        if isinstance(total, int) and offset >= total:
+            break
+        envelope = _build_uspto_envelope(entry.tool_info, q)
+        envelope["body"]["pagination"] = {"offset": offset, "limit": page_size}
+        try:
+            await asyncio.to_thread(entry.tool.invoke, {"params": envelope})
+        except Exception:
+            break
+        raw = getattr(agent, "_pending_raw_items", None) or []
+        fresh = [c for c in build_candidates(raw) if c["patent_id"] not in seen_ids]
+        if not fresh:
+            break  # offset ignored or universe exhausted
+        for c in fresh:
+            seen_ids.add(c["patent_id"])
+        items.extend(fresh)
+        offset += page_size
+        if isinstance(total, int) and len(items) >= total:
+            break
+    return items
+
+
+async def _rank_pending_pool(agent, candidates, lang) -> Tuple[list, str]:
+    """Merge collected candidate dicts into the turn's SearchPool, score
+    new arrivals against the user's question, and return (ranked
+    candidates, note).
 
     The pool lives on the agent for the whole request (created lazily;
     create_agent resets it per request).
@@ -321,7 +439,7 @@ async def _rank_pending_pool(agent, raw_items, lang) -> Tuple[list, str]:
     if pool is None:
         pool = SearchPool(getattr(agent, "_last_user_prompt", "") or "")
         agent._search_pool = pool
-    pool.add(raw_items)
+    pool.add_from_candidates(candidates)
     scored = await pool.score_new(
         _get_flash_provider(agent) or getattr(agent, "llm", None))
     pool.prune()
@@ -528,7 +646,14 @@ async def make_action_executor(agent, registry, push_filter=None):
 
         try:
             args = await _maybe_rewrite_search_query(agent, entry.tool_info, args)
-            result = await asyncio.to_thread(entry.tool.invoke, args)
+            pool_eligible = _relevance_pool_applies_tool(agent, entry.tool_info)
+            invoke_args = args
+            if pool_eligible and isinstance(args, dict) \
+                    and not (_ENVELOPE_KEYS.intersection(args)):
+                q = _effective_query(args)
+                if q:
+                    invoke_args = _build_uspto_envelope(entry.tool_info, q)
+            result = await asyncio.to_thread(entry.tool.invoke, invoke_args)
         except Exception as exc:
             return {"kind": "observation", "text": f"Error: {exc}"}
 
@@ -550,7 +675,8 @@ async def make_action_executor(agent, registry, push_filter=None):
                     f"applies={applies}"
                 )
             if applies:
-                ranked, note = await _rank_pending_pool(agent, pending, lang)
+                collected = await _collect_search_pages(agent, entry, args, pending)
+                ranked, note = await _rank_pending_pool(agent, collected, lang)
                 shown = [c["_raw"] for c in ranked]
                 agent._pending_raw_items = shown
                 agent._search_ranked = True

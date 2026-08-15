@@ -889,5 +889,134 @@ class TestRelevancePoolGateLogging(unittest.TestCase):
         self.assertEqual(result["kind"], "observation")
 
 
-if __name__ == "__main__":
-    unittest.main()
+# ── USPTO envelope + pagination ─────────────────────────────────────────────
+
+from sources.agents.react_tools import (
+    REACT_POOL_MAX_PAGES,
+    _build_uspto_envelope,
+    _collect_search_pages,
+    _effective_query,
+)
+
+
+def _keyword_tool_template():
+    """A realistic push=2 USPTO keyword tool template (tool_info.params)."""
+    import json
+    return json.dumps({
+        "method": "POST",
+        "query": {},
+        "path": "/api/v1/patent/applications/search",
+        "header": {},
+        "body": {
+            "q": "",
+            "pagination": {"offset": 0, "limit": 50},
+            "fields": ["applicationNumberText", "applicationMetaData.inventionTitle"],
+            "sort": [{"field": "assignmentBag.assignmentRecordedDate", "order": "desc"}],
+        },
+    })
+
+
+class _PagedToolInfo(_ToolInfo):
+    def __init__(self):
+        super().__init__("search_patent_by_key_word",
+                         url="https://api.uspto.gov/api/v1/patent/applications/search")
+        self.params = _keyword_tool_template()
+
+
+class TestEffectiveQuery(unittest.TestCase):
+    def test_flat_first_string_wins(self):
+        self.assertEqual(
+            _effective_query({"q": '("dry air" OR drying)', "page": 1, "pageSize": 10}),
+            '("dry air" OR drying)')
+
+    def test_body_q_extracted(self):
+        self.assertEqual(
+            _effective_query({"method": "POST", "body": {"q": "dryer AND humidit*"}}),
+            "dryer AND humidit*")
+
+    def test_params_json_q_extracted(self):
+        self.assertEqual(
+            _effective_query({"params": '{"q": "dry* AND humid*", "page": 1}'}),
+            "dry* AND humid*")
+
+    def test_missing_returns_empty(self):
+        self.assertEqual(_effective_query({"page": 1}), "")
+        self.assertEqual(_effective_query(None), "")
+
+
+class TestBuildUsptoEnvelope(unittest.TestCase):
+    def test_envelope_carries_template_and_ensures_fields(self):
+        tool_info = _PagedToolInfo()
+        envelope = _build_uspto_envelope(tool_info, 'dry* AND humid*')
+        self.assertEqual(envelope["method"], "POST")
+        self.assertEqual(envelope["body"]["q"], "dry* AND humid*")
+        self.assertIn("applicationMetaData.cpcClassificationBag",
+                      envelope["body"]["fields"])
+        self.assertEqual(envelope["body"]["pagination"]["limit"], 50)
+        self.assertEqual(envelope["query"], {})
+        self.assertEqual(envelope["path"], "/api/v1/patent/applications/search")
+
+
+class TestCollectSearchPages(unittest.IsolatedAsyncioTestCase):
+    async def _agent_with_pages(self, pages_by_offset):
+        agent = _PoolAgent()
+        entry_k = _Knowledge(3, ktype=1)
+
+        def get_dynamic_tool_for(knowledge_item, tool_info):
+            from sources.agents.react_tools import StructuredTool
+            class _Args(BaseModel):
+                params: object = Field(description="params")
+            def _noop(**kwargs):
+                # production side effect: write page items + total hits
+                import json as _json
+                raw = kwargs.get("params")
+                if isinstance(raw, str):
+                    envelope = _json.loads(raw or "{}")
+                else:
+                    envelope = raw or {}
+                body = envelope.get("body") or {}
+                offset = (body.get("pagination") or {}).get("offset", 0)
+                page_items, total = pages_by_offset.get(offset, ([], 0))
+                agent._pending_raw_items = page_items
+                agent._last_search_total = total
+                return f"The query returned {len(page_items)} items."
+            return StructuredTool.from_function(_noop, name="search_patent_by_key_word",
+                                                description="d", args_schema=_Args)
+        agent.get_dynamic_tool_for = get_dynamic_tool_for
+        tool_info = _PagedToolInfo()
+        from sources.agents.react_tools import ToolEntry
+        dynamic_tool = agent.get_dynamic_tool_for(entry_k, tool_info)
+        entry = ToolEntry(name=dynamic_tool.name, kind="knowledge",
+                          knowledge=entry_k, tool_info=tool_info,
+                          tool=dynamic_tool)
+        return agent, entry
+
+    async def test_pages_merged_until_total_or_cap(self):
+        p0 = [_usp_raw_item("19500001", "P0-1"), _usp_raw_item("19500002", "P0-2")]
+        p50 = [_usp_raw_item("19500003", "P50-1")]
+        p100 = [_usp_raw_item("19500004", "P100-1")]
+        agent, entry = await self._agent_with_pages(
+            {0: (p0, 120), 50: (p50, 120), 100: (p100, 120)})
+        collected = await _collect_search_pages(agent, entry, {"q": "dry*"}, p0)
+        self.assertEqual([c["patent_id"] for c in collected],
+                         ["19500001", "19500002", "19500003"])
+        # page 3 (offset 100) NOT fetched: REACT_POOL_MAX_PAGES=2 pages after first
+
+    async def test_total_exhausted_stops_early(self):
+        p0 = [_usp_raw_item("19500001", "P0-1")]
+        agent, entry = await self._agent_with_pages({0: (p0, 51), 50: ([], 51)})
+        collected = await _collect_search_pages(agent, entry, {"q": "dry*"}, p0)
+        self.assertEqual(len(collected), 1)
+
+    async def test_duplicate_page_stops(self):
+        p0 = [_usp_raw_item("19500001", "P0-1")]
+        # template ignores offset → same items come back
+        agent, entry = await self._agent_with_pages(
+            {0: (p0, 200), 50: (p0, 200)})
+        collected = await _collect_search_pages(agent, entry, {"q": "dry*"}, p0)
+        self.assertEqual(len(collected), 1)
+
+    async def test_no_q_returns_first_page_only(self):
+        agent, entry = await self._agent_with_pages({})
+        collected = await _collect_search_pages(agent, entry, {"page": 1}, [])
+        self.assertEqual(collected, [])
