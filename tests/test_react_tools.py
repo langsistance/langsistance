@@ -960,6 +960,7 @@ class TestBuildUsptoEnvelope(unittest.TestCase):
 class TestCollectSearchPages(unittest.IsolatedAsyncioTestCase):
     async def _agent_with_pages(self, pages_by_offset):
         agent = _PoolAgent()
+        agent.invoked_offsets = []
         entry_k = _Knowledge(3, ktype=1)
 
         def get_dynamic_tool_for(knowledge_item, tool_info):
@@ -976,6 +977,7 @@ class TestCollectSearchPages(unittest.IsolatedAsyncioTestCase):
                     envelope = raw or {}
                 body = envelope.get("body") or {}
                 offset = (body.get("pagination") or {}).get("offset", 0)
+                agent.invoked_offsets.append(offset)
                 page_items, total = pages_by_offset.get(offset, ([], 0))
                 agent._pending_raw_items = page_items
                 agent._last_search_total = total
@@ -1004,9 +1006,11 @@ class TestCollectSearchPages(unittest.IsolatedAsyncioTestCase):
 
     async def test_total_exhausted_stops_early(self):
         p0 = [_usp_raw_item("19500001", "P0-1")]
-        agent, entry = await self._agent_with_pages({0: (p0, 51), 50: ([], 51)})
+        agent, entry = await self._agent_with_pages({0: (p0, 50)})
+        agent._last_search_total = 50  # universe exhausted at page 1
         collected = await _collect_search_pages(agent, entry, {"q": "dry*"}, p0)
         self.assertEqual(len(collected), 1)
+        self.assertEqual(agent.invoked_offsets, [])  # total-stop: zero extra invokes
 
     async def test_duplicate_page_stops(self):
         p0 = [_usp_raw_item("19500001", "P0-1")]
