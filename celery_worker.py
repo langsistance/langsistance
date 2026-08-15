@@ -585,6 +585,8 @@ async def _run_pipeline(
         )
     id_url_map = {}          # patent_id → document_url from search results
     id_pid_map = {}          # patent_id → pid from CNIPA search results
+    patent_meta_map = {}     # patent_id → candidate metadata (USPTO gated search)
+    search_meta = {}         # gated-search transparency data for the report
 
     # ==== Phase 0-prep: Extract patent IDs from query + conversation via LLM ====
     if not is_file_upload_mode and not is_direct_id_mode and not patent_ids:
@@ -836,39 +838,67 @@ async def _run_pipeline(
         if selected:
             update_task_status(task_id, 'searching_patents', 2,
                                _t('tool_search', batch_lang, reason=selected.get("reason", "")))
-            result = await execute_tool(selected['tool'], selected['params'])
-            raw_items = result.get('raw_items', []) or []
-            patent_ids = extract_patent_ids(raw_items)
-            id_url_map = extract_patent_id_url_map(raw_items)
+            from sources.long_task.candidate_metadata import is_uspto_tool
             from sources.long_task.scene_tools import extract_patent_id_pid_map
-            id_pid_map = extract_patent_id_pid_map(raw_items)
-            _pipeline_logger.info(
-                f"[task={task_id}] PHASE0 search_result — "
-                f"raw_items_count={len(raw_items)}, "
-                f"patent_ids_found={len(patent_ids)}, "
-                f"patent_ids={patent_ids[:10]}{'...' if len(patent_ids) > 10 else ''}, "
-                f"id_url_map_size={len(id_url_map)}, "
-                f"id_pid_map_size={len(id_pid_map)}"
-            )
             params['patent_source'] = _infer_source_from_tool(
                 selected['tool'], params.get('patent_source', 'cnipa'),
             )
-        if patent_ids:
             source_max = _get_max_patents_for_source(
                 params.get('patent_source', 'cnipa'), max_patents,
                 max_patents_cnipa, max_patents_uspto,
             )
-            if len(patent_ids) > source_max:
-                _pipeline_logger.info(
-                    f"[task={task_id}] PHASE0 truncating — "
-                    f"source={params.get('patent_source', 'cnipa')}, "
-                    f"max={source_max}, found={len(patent_ids)}, "
-                    f"truncated_to={source_max}"
-                )
-                patent_ids = patent_ids[:source_max]
+            if is_uspto_tool(selected['tool']):
+                from sources.long_task.relevance_gate import phase0_gated_search
+                try:
+                    gated = await phase0_gated_search(
+                        selected=selected,
+                        user_query=params['query'],
+                        provider=flash_provider,
+                        target_count=source_max,
+                        task_id=task_id,
+                        logger=_pipeline_logger,
+                    )
+                except Exception as e:
+                    _pipeline_logger.warning(
+                        f"[task={task_id}] PHASE0 gated_search_failed — {e}"
+                    )
+                    gated = None
+                if gated:
+                    candidates = gated.get('candidates') or []
+                    patent_ids = [c['patent_id'] for c in candidates]
+                    id_url_map = {
+                        c['patent_id']: (
+                            c.get('_raw', {}).get('document_url')
+                            or c.get('_raw', {}).get('fulltext_url')
+                            or c.get('_raw', {}).get('download_url')
+                            or c.get('_raw', {}).get('url')
+                            or ""
+                        )
+                        for c in candidates
+                    }
+                    patent_meta_map = {c['patent_id']: c for c in candidates}
+                    search_meta = gated.get('search_meta') or {}
+                    _pipeline_logger.info(
+                        f"[task={task_id}] PHASE0 gated_search_result — "
+                        f"final_count={len(patent_ids)}, "
+                        f"meta={json.dumps(search_meta, ensure_ascii=False)}"
+                    )
+                else:
+                    result = await execute_tool(selected['tool'], selected['params'])
+                    raw_items = result.get('raw_items', []) or []
+                    patent_ids = extract_patent_ids(raw_items)
+                    id_url_map = extract_patent_id_url_map(raw_items)
+            else:
+                # CNIPA / non-USPTO tools: legacy single-shot path unchanged
+                result = await execute_tool(selected['tool'], selected['params'])
+                raw_items = result.get('raw_items', []) or []
+                patent_ids = extract_patent_ids(raw_items)
+                id_url_map = extract_patent_id_url_map(raw_items)
+                id_pid_map = extract_patent_id_pid_map(raw_items)
+        if patent_ids:
+            # Safety net only — gated search already caps at source_max
+            patent_ids = patent_ids[:source_max]
             total = len(patent_ids)
-            # Only reset state for fresh runs — when resuming from checkpoint,
-            # pending and table_rows were already restored above.
             if not (checkpoint and checkpoint.get('pending')):
                 pending = patent_ids
                 table_rows = []
