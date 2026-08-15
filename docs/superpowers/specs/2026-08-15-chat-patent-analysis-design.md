@@ -72,15 +72,30 @@
 - 用户侧完整列表展示（`_pending_raw_items` → 100 条截断 → 前端列表/Excel）**不变**
 - 观察长度上限：搜索摘要 ~3000 字符；其余结果维持 300
 
-## 6. 单元 2：确定性查询改写
+## 6. 单元 2：自适应检索（v4 修订）
 
-**接入点**：`execute_action` 的 knowledge 分支，条件 = `tool_info.push == 2` 且 `is_keyword_search_tool(tool_info)`（Google 专利关键词搜索工具一并覆盖；assignee/文档类工具不动）。
+**接入点**：`execute_action` 的 knowledge 分支，条件 = `tool_info.push == 2` 且 `is_keyword_search_tool(tool_info)`。
 
-**流程**：
-1. 改写输入 = `agent._last_user_prompt`（用户原始问题，不用 LLM 已生成的 q）
-2. 首次执行时调用 `build_search_queries(用户问题, agent 的 provider)`，结果缓存到 `agent._search_rewrite`（同轮多次搜索复用，只调一次）
-3. 取 `queries[0]` 覆盖 args 的查询键——防御性处理三种形态：`args["q"]`、`args["query"]`、`args["params"]`（JSON 字符串内嵌 q/query 键）
-4. 降级：改写失败/返回空 → args 原样（现状行为），仅记录日志
+**改写阶梯**（search_query_builder 修订）：
+1. 改写输入 = `agent._last_user_prompt`（用户原始问题）
+2. 允许 agent 添加用户未提及的**有依据的领域限定**概念；`queries` 强制按**最紧在前、逐级放宽**排序（每级去掉最弱概念/限定），如 `[(A) AND (B) AND (限定), (A) AND (B), (A)]`
+3. 首次搜索前调用 `build_search_queries`，结果缓存到 `agent._search_rewrite`
+
+**q 控制权还给 agent**（react_tools 修订）：
+1. LLM **显式传了 q** → 直接使用（agent 自适应权限，不再强制覆盖）
+2. LLM **没传 q** → 默认使用阶梯最紧级 `queries[0]`
+3. 降级：改写失败/返回空 → args 原样，仅记录日志
+
+**同工具多调参**（循环指导，`_loop_system_guidance` 修订）：
+- 同一工具可多次调用、每次调整参数：0 命中 → 放宽（去掉最弱限定/换更松变体）；命中过多（噪声）→ 收紧（添加限定）；直到结果数量与相关性「比较合适」（建议同工具 ≤4 次；循环 10 轮上限兜底）
+
+**换工具契合度纪律**（循环指导修订）：
+- 同工具多次调整仍不理想 → 才评估下一个工具与当前问题的契合度；不契合则**如实说明检索失败及原因，禁止继续兜底**
+- 工具参数怎么传由 agent 自主判断，不设硬规则
+
+**总命中数进观察**（general_agent 修订）：
+- `dynamic_backend_tool_function` 捕获响应 `data.count` → `agent._last_search_total`
+- 观察文本追加「总命中 N 条」（与条目摘要并存），LLM 据此判断该收紧还是放宽
 
 ## 7. 单元 3：内置下载工具 + 共享模块 + flash 提炼
 
@@ -117,6 +132,7 @@
 | 环节 | 失败时行为 | 循环影响 |
 |---|---|---|
 | 改写 LLM 失败/空 | args 原样（现状） | 无 |
+| 搜索零命中（阶梯全部 0） | 观察 =「未检索到相关专利（检索式：…）」 | LLM 可换契合工具或如实告知用户 |
 | 摘要生成异常 | 回退现有计数消息 | 无 |
 | 下载失败（无 SPEC/网络/无文本） | 观察 = 明确错误文本 | LLM 可换策略或向用户说明 |
 | 提炼 LLM 失败 | 观察 = 前 16k 截断文本 | 无 |
