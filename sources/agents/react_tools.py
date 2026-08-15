@@ -20,7 +20,10 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from sources.knowledge.knowledge import get_knowledge_tool_candidates
-from sources.long_task.candidate_metadata import build_candidates
+from sources.long_task.candidate_metadata import (
+    build_candidates,
+    is_keyword_search_tool,
+)
 
 TOP_N = int(os.getenv("REACT_TOOL_TOP_N", "5"))
 MAX_PATENT_LIST_ITEMS = int(os.getenv("REACT_MAX_PATENT_LIST_ITEMS", "100"))
@@ -290,6 +293,60 @@ async def _run_search_knowledge(agent, registry, user_id, args, push_filter) -> 
     return {"kind": "observation", "text": text, "mount_tools": mount_tools}
 
 
+async def _maybe_rewrite_search_query(agent, tool_info, args) -> dict:
+    """Deterministically rewrite the q of keyword-search tool calls.
+
+    Uses the user's ORIGINAL question (agent._last_user_prompt) — not the
+    LLM's possibly garbled q — via the shared search_query_builder.  The
+    result is cached on the agent for the whole loop run.  Applies only to
+    backend (push=2) keyword search tools; every failure keeps the original
+    args untouched.
+    """
+    if getattr(tool_info, "push", None) != 2 or not is_keyword_search_tool(tool_info):
+        return args
+    cached = getattr(agent, "_search_rewrite", None)
+    if cached is None:
+        from sources.long_task.search_query_builder import build_search_queries
+        try:
+            cached = await build_search_queries(
+                getattr(agent, "_last_user_prompt", "") or "", agent.llm,
+            )
+        except Exception:
+            cached = {"queries": []}
+        agent._search_rewrite = cached
+    queries = (cached or {}).get("queries") or []
+    if not queries:
+        return args
+    rewritten = queries[0]
+    out = dict(args or {})
+    if "q" in out:
+        out["q"] = rewritten
+        return out
+    if "query" in out:
+        out["query"] = rewritten
+        return out
+    if "params" in out:
+        try:
+            import json
+            if isinstance(out["params"], str):
+                p = json.loads(out["params"])
+            elif isinstance(out["params"], dict):
+                p = dict(out["params"])
+            else:
+                return args
+            if "q" in p:
+                p["q"] = rewritten
+            elif "query" in p:
+                p["query"] = rewritten
+            else:
+                return args
+            out["params"] = json.dumps(p, ensure_ascii=False)
+            return out
+        except (ValueError, TypeError):
+            return args
+    return args
+
+
 async def make_action_executor(agent, registry, push_filter=None):
     """Return the loop's execute_action closure."""
     user_id = getattr(agent, "_last_user_id", None)
@@ -310,6 +367,7 @@ async def make_action_executor(agent, registry, push_filter=None):
                     "knowledge": entry.knowledge, "tool_info": entry.tool_info}
 
         try:
+            args = await _maybe_rewrite_search_query(agent, entry.tool_info, args)
             result = await asyncio.to_thread(entry.tool.invoke, args)
         except Exception as exc:
             return {"kind": "observation", "text": f"Error: {exc}"}

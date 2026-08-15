@@ -308,3 +308,90 @@ class TestSearchObservationContent(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── Deterministic search query rewriting ─────────────────────────────────────
+
+from sources.agents.react_tools import _maybe_rewrite_search_query
+
+
+class _RewriteAgent(_FakeAgent):
+    def __init__(self):
+        super().__init__()
+        self._last_user_prompt = "工业在线干燥空气源提供与湿度控制"
+        self._search_rewrite = None
+
+        class _LLM:
+            def __init__(self):
+                self.calls = 0
+
+            async def complete_json(self, system, user):
+                self.calls += 1
+                return {"queries": [
+                    '("compressed air dryer" OR "air dryer") AND ("humidity control" OR "dew point")',
+                ]}
+        self.llm = _LLM()
+
+
+class TestMaybeRewriteSearchQuery(unittest.IsolatedAsyncioTestCase):
+    async def test_rewrites_q_key(self):
+        agent = _RewriteAgent()
+        out = await _maybe_rewrite_search_query(
+            agent, _ToolInfo("search_patent_by_key_word"), {"q": "raw noise patent"})
+        self.assertIn('"compressed air dryer"', out["q"])
+
+    async def test_rewrites_query_key(self):
+        agent = _RewriteAgent()
+        out = await _maybe_rewrite_search_query(
+            agent, _ToolInfo("search_patent_by_key_word"), {"query": "raw"})
+        self.assertIn('"air dryer"', out["query"])
+
+    async def test_rewrites_params_json_string(self):
+        agent = _RewriteAgent()
+        out = await _maybe_rewrite_search_query(
+            agent, _ToolInfo("search_patent_by_key_word"),
+            {"params": '{"q": "raw", "pagination": {"offset": 0, "limit": 50}}'})
+        import json
+        parsed = json.loads(out["params"])
+        self.assertIn('"compressed air dryer"', parsed["q"])
+        self.assertEqual(parsed["pagination"]["limit"], 50)
+
+    async def test_cached_across_calls(self):
+        agent = _RewriteAgent()
+        await _maybe_rewrite_search_query(
+            agent, _ToolInfo("search_patent_by_key_word"), {"q": "a"})
+        await _maybe_rewrite_search_query(
+            agent, _ToolInfo("search_patent_by_key_word"), {"q": "b"})
+        self.assertEqual(agent.llm.calls, 1)
+
+    async def test_skips_non_keyword_tools(self):
+        agent = _RewriteAgent()
+        out = await _maybe_rewrite_search_query(
+            agent, _ToolInfo("get_patent_documents_application_number"), {"q": "raw"})
+        self.assertEqual(out, {"q": "raw"})
+
+    async def test_rewrite_failure_keeps_original_args(self):
+        class _FailingLLM:
+            async def complete_json(self, system, user):
+                raise RuntimeError("down")
+        agent = _RewriteAgent()
+        agent.llm = _FailingLLM()
+        out = await _maybe_rewrite_search_query(
+            agent, _ToolInfo("search_patent_by_key_word"), {"q": "raw"})
+        self.assertEqual(out, {"q": "raw"})
+
+    async def test_empty_queries_keep_original_args(self):
+        class _EmptyLLM:
+            async def complete_json(self, system, user):
+                return {"queries": []}
+        agent = _RewriteAgent()
+        agent.llm = _EmptyLLM()
+        out = await _maybe_rewrite_search_query(
+            agent, _ToolInfo("search_patent_by_key_word"), {"q": "raw"})
+        self.assertEqual(out, {"q": "raw"})
+
+    async def test_args_without_query_key_unchanged(self):
+        agent = _RewriteAgent()
+        out = await _maybe_rewrite_search_query(
+            agent, _ToolInfo("search_patent_by_key_word"), {"other": "x"})
+        self.assertEqual(out, {"other": "x"})

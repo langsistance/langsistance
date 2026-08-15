@@ -1472,6 +1472,7 @@ Begin your response now:
         self._pending_raw_items = None
         self._workflow_result = None
         self._react_loop_ran = False
+        self._search_rewrite = None   # deterministic q rewrite cache, per request
         self.knowledgeTool = (None, None)  # (knowledge_item, tool_info) — selected inside the loop
         self.tools = []
         lang = self._detect_lang(prompt)
