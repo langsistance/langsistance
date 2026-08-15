@@ -319,13 +319,14 @@ async def _run_search_knowledge(agent, registry, user_id, args, push_filter) -> 
 
 
 async def _maybe_rewrite_search_query(agent, tool_info, args) -> dict:
-    """Deterministically rewrite the q of keyword-search tool calls.
+    """Inject the tightest ladder query ONLY when the q slot is absent.
 
-    Uses the user's ORIGINAL question (agent._last_user_prompt) — not the
-    LLM's possibly garbled q — via the shared search_query_builder.  The
-    result is cached on the agent for the whole loop run.  Applies only to
-    backend (push=2) keyword search tools; every failure keeps the original
-    args untouched.
+    v4 semantics: the LLM owns q.  An explicit non-empty q the LLM passed
+    (its own adaptation — loosened, tightened, or a ladder variant) is
+    always respected.  The deterministic ladder (built in create_agent)
+    fills in only when the q slot is missing or empty.  Applies only to
+    backend (push=2) keyword search tools; every failure keeps the
+    original args untouched.
     """
     if getattr(tool_info, "push", None) != 2 or not is_keyword_search_tool(tool_info):
         return args
@@ -342,13 +343,19 @@ async def _maybe_rewrite_search_query(agent, tool_info, args) -> dict:
     queries = (cached or {}).get("queries") or []
     if not queries:
         return args
-    rewritten = queries[0]
+    tightest = queries[0]
     out = dict(args or {})
+
+    def _blank(value) -> bool:
+        return not str(value or "").strip()
+
     if "q" in out:
-        out["q"] = rewritten
+        if _blank(out.get("q")):
+            out["q"] = tightest
         return out
     if "query" in out:
-        out["query"] = rewritten
+        if _blank(out.get("query")):
+            out["query"] = tightest
         return out
     if "params" in out:
         try:
@@ -359,17 +366,23 @@ async def _maybe_rewrite_search_query(agent, tool_info, args) -> dict:
                 p = dict(out["params"])
             else:
                 return args
-            if "q" in p:
-                p["q"] = rewritten
-            elif "query" in p:
-                p["query"] = rewritten
-            else:
-                return args
-            out["params"] = json.dumps(p, ensure_ascii=False)
-            return out
         except (ValueError, TypeError):
             return args
-    return args
+        if "q" in p:
+            if _blank(p.get("q")):
+                p["q"] = tightest
+        elif "query" in p:
+            if _blank(p.get("query")):
+                p["query"] = tightest
+        else:
+            p["q"] = tightest
+        out["params"] = json.dumps(p, ensure_ascii=False)
+        return out
+
+    # Top-level args without any q/query/params slot: the LLM asked for a
+    # search without specifying a query — inject the tightest ladder query.
+    out["q"] = tightest
+    return out
 
 
 async def _run_patent_spec(agent, args, lang: str) -> dict:

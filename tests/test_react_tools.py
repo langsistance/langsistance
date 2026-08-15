@@ -334,35 +334,61 @@ class _RewriteAgent(_FakeAgent):
 
 
 class TestMaybeRewriteSearchQuery(unittest.IsolatedAsyncioTestCase):
-    async def test_rewrites_q_key(self):
-        agent = _RewriteAgent()
-        out = await _maybe_rewrite_search_query(
-            agent, _ToolInfo("search_patent_by_key_word"), {"q": "raw noise patent"})
-        self.assertIn('"compressed air dryer"', out["q"])
+    """v4 semantics: the LLM's explicit q wins; the tightest ladder query
+    is injected only when the q slot is absent or empty."""
 
-    async def test_rewrites_query_key(self):
+    async def test_explicit_q_preserved(self):
         agent = _RewriteAgent()
-        out = await _maybe_rewrite_search_query(
-            agent, _ToolInfo("search_patent_by_key_word"), {"query": "raw"})
-        self.assertIn('"air dryer"', out["query"])
-
-    async def test_rewrites_params_json_string(self):
-        agent = _RewriteAgent()
+        agent._search_rewrite = {"queries": ['("a" OR "b") AND ("c" OR "d")']}
         out = await _maybe_rewrite_search_query(
             agent, _ToolInfo("search_patent_by_key_word"),
-            {"params": '{"q": "raw", "pagination": {"offset": 0, "limit": 50}}'})
+            {"q": '("humidity control" OR "dew point") AND industrial'})
+        self.assertEqual(
+            out["q"], '("humidity control" OR "dew point") AND industrial')
+
+    async def test_empty_q_injected_tightest(self):
+        agent = _RewriteAgent()
+        agent._search_rewrite = {"queries": ['("a" OR "b") AND ("c" OR "d")']}
+        out = await _maybe_rewrite_search_query(
+            agent, _ToolInfo("search_patent_by_key_word"), {"q": ""})
+        self.assertEqual(out["q"], '("a" OR "b") AND ("c" OR "d")')
+
+    async def test_missing_q_injected_tightest(self):
+        agent = _RewriteAgent()
+        agent._search_rewrite = {"queries": ['("a" OR "b") AND ("c" OR "d")']}
+        out = await _maybe_rewrite_search_query(
+            agent, _ToolInfo("search_patent_by_key_word"), {"page": 1})
+        self.assertEqual(out["q"], '("a" OR "b") AND ("c" OR "d")')
+        self.assertEqual(out["page"], 1)
+
+    async def test_explicit_query_key_preserved(self):
+        agent = _RewriteAgent()
+        agent._search_rewrite = {"queries": ['("a" OR "b")']}
+        out = await _maybe_rewrite_search_query(
+            agent, _ToolInfo("search_patent_by_key_word"), {"query": "my own"})
+        self.assertEqual(out["query"], "my own")
+
+    async def test_params_json_with_explicit_q_preserved(self):
+        agent = _RewriteAgent()
+        agent._search_rewrite = {"queries": ['("a" OR "b")']}
+        out = await _maybe_rewrite_search_query(
+            agent, _ToolInfo("search_patent_by_key_word"),
+            {"params": '{"q": "mine", "pagination": {"offset": 0, "limit": 50}}'})
         import json
         parsed = json.loads(out["params"])
-        self.assertIn('"compressed air dryer"', parsed["q"])
+        self.assertEqual(parsed["q"], "mine")
         self.assertEqual(parsed["pagination"]["limit"], 50)
 
-    async def test_cached_across_calls(self):
+    async def test_params_json_without_q_injected(self):
         agent = _RewriteAgent()
-        await _maybe_rewrite_search_query(
-            agent, _ToolInfo("search_patent_by_key_word"), {"q": "a"})
-        await _maybe_rewrite_search_query(
-            agent, _ToolInfo("search_patent_by_key_word"), {"q": "b"})
-        self.assertEqual(agent.llm.calls, 1)
+        agent._search_rewrite = {"queries": ['("a" OR "b")']}
+        out = await _maybe_rewrite_search_query(
+            agent, _ToolInfo("search_patent_by_key_word"),
+            {"params": '{"pagination": {"offset": 0, "limit": 50}}'})
+        import json
+        parsed = json.loads(out["params"])
+        self.assertEqual(parsed["q"], '("a" OR "b")')
+        self.assertEqual(parsed["pagination"]["limit"], 50)
 
     async def test_skips_non_keyword_tools(self):
         agent = _RewriteAgent()
@@ -370,31 +396,35 @@ class TestMaybeRewriteSearchQuery(unittest.IsolatedAsyncioTestCase):
             agent, _ToolInfo("get_patent_documents_application_number"), {"q": "raw"})
         self.assertEqual(out, {"q": "raw"})
 
-    async def test_rewrite_failure_keeps_original_args(self):
-        class _FailingLLM:
-            async def complete_json(self, system, user):
-                raise RuntimeError("down")
+    async def test_no_cache_no_queries_keeps_original(self):
         agent = _RewriteAgent()
-        agent.llm = _FailingLLM()
+        agent._search_rewrite = {"queries": []}
         out = await _maybe_rewrite_search_query(
-            agent, _ToolInfo("search_patent_by_key_word"), {"q": "raw"})
-        self.assertEqual(out, {"q": "raw"})
+            agent, _ToolInfo("search_patent_by_key_word"), {"q": ""})
+        self.assertEqual(out, {"q": ""})
 
-    async def test_empty_queries_keep_original_args(self):
-        class _EmptyLLM:
-            async def complete_json(self, system, user):
-                return {"queries": []}
+    async def test_keyless_args_injected_tightest(self):
         agent = _RewriteAgent()
-        agent.llm = _EmptyLLM()
-        out = await _maybe_rewrite_search_query(
-            agent, _ToolInfo("search_patent_by_key_word"), {"q": "raw"})
-        self.assertEqual(out, {"q": "raw"})
-
-    async def test_args_without_query_key_unchanged(self):
-        agent = _RewriteAgent()
+        agent._search_rewrite = {"queries": ['("a" OR "b")']}
         out = await _maybe_rewrite_search_query(
             agent, _ToolInfo("search_patent_by_key_word"), {"other": "x"})
-        self.assertEqual(out, {"other": "x"})
+        self.assertEqual(out["q"], '("a" OR "b")')
+        self.assertEqual(out["other"], "x")
+
+    async def test_lazy_build_when_cache_missing(self):
+        """Executor fallback: cache absent (non-create_agent path) → builds
+        the rewrite once via the agent's provider."""
+        agent = _RewriteAgent()
+        agent._search_rewrite = None
+        out = await _maybe_rewrite_search_query(
+            agent, _ToolInfo("search_patent_by_key_word"), {"q": ""})
+        self.assertEqual(agent.llm.calls, 1)
+        self.assertIn('"compressed air dryer"', out["q"])
+        # second call reuses the cache
+        out2 = await _maybe_rewrite_search_query(
+            agent, _ToolInfo("search_patent_by_key_word"), {"q": ""})
+        self.assertEqual(agent.llm.calls, 1)
+        self.assertEqual(out2["q"], out["q"])
 
 
 # ── fetch_patent_spec built-in tool ──────────────────────────────────────────

@@ -683,10 +683,20 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
 - Work step by step: think about what is needed, call the right tool, observe
   the result, then decide the next step or write the final answer.
 - You may call several tools in sequence and combine their results.
-- If no tool matches the task, answer directly and suggest the user check the
-  community for shared knowledge that may help.
 - Never fabricate tool results. If a tool fails, try another approach or
   explain the failure honestly.
+
+## Adaptive Search Discipline
+
+- The same search tool may be called multiple times with adjusted parameters:
+  if a search returns 0 results, loosen the query (drop the weakest constraint
+  or use a looser variant); if it returns far too many noisy results, tighten it
+  (add a justified constraint). Keep adjusting until the result count and
+  relevance are reasonable (suggested: at most 4 attempts per tool).
+- Only after repeated adjustments on one tool still give poor results, consider
+  another tool — and judge whether that tool actually fits the user's problem.
+- If no available tool fits the problem, honestly report the search failure and
+  its reason to the user. Do not keep chaining unsuitable tools.
 """
 
 
