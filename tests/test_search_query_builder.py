@@ -125,10 +125,11 @@ class TestFormatLadderGuidance(unittest.TestCase):
         ]}
         text = format_ladder_guidance(rewrite, "zh")
         self.assertIn("由紧到松", text)
-        # Each query renders on its own numbered line; prefix the find so a
-        # looser query's substring inside a tighter line does not mask it.
-        pos_0 = text.find('1. ("a" OR "b")')
-        pos_1 = text.find('2. ("a" OR "b")')
+        # Each query renders on its own numbered line; anchor the find with
+        # BOTH the line number and the full per-line content so a looser
+        # query's substring inside a tighter line cannot mask ordering.
+        pos_0 = text.find('1. ("a" OR "b") AND ("c" OR "d") AND (x OR y)')
+        pos_1 = text.find('2. ("a" OR "b") AND ("c" OR "d")')
         pos_2 = text.find('3. ("a" OR "b")')
         self.assertLess(pos_0, pos_1)
         self.assertLess(pos_1, pos_2)
