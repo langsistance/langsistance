@@ -1485,6 +1485,16 @@ Begin your response now:
         self.tools = []
         lang = self._detect_lang(prompt)
         self._lang = lang
+        # Pre-build the tight-to-loose query ladder for this request so the
+        # loop system prompt can offer it to the LLM upfront.
+        from sources.long_task.search_query_builder import build_search_queries
+        try:
+            self._search_rewrite = await build_search_queries(prompt, self.llm)
+        except Exception:
+            self._search_rewrite = {"concepts": [], "queries": []}
+        self.logger.info(
+            f"search_rewrite — queries={self._search_rewrite.get('queries')}"
+        )
         if callback_handler:
             await _emit_status(callback_handler,
                 "正在分析您的问题..." if lang == 'zh' else "Analyzing your question...")
@@ -1502,10 +1512,12 @@ Begin your response now:
             clean_user = _STRIP_IDS_RE.sub('', turn['user']).strip()
             conversation_block += f"\n\n## Previous conversation\n\nUser: {clean_user}\n\nAssistant: {turn['assistant']}"
 
+        from sources.long_task.search_query_builder import format_ladder_guidance
         system_prompt = (
             self._get_fixed_system_prefix()
             + conversation_block
             + self._loop_system_guidance()
+            + format_ladder_guidance(self._search_rewrite, lang)
         )
         self.memory.reset([
             {'role': 'user', 'content': user_prompt},
