@@ -956,6 +956,21 @@ class TestBuildUsptoEnvelope(unittest.TestCase):
         self.assertEqual(envelope["query"], {})
         self.assertEqual(envelope["path"], "/api/v1/patent/applications/search")
 
+    def test_envelope_sort_overridden_to_relevance(self):
+        tool_info = _PagedToolInfo()
+        envelope = _build_uspto_envelope(tool_info, 'dry* AND humid*')
+        self.assertEqual(envelope["body"]["sort"],
+                         [{"field": "_score", "order": "desc"}])
+
+    def test_sort_field_env_override(self):
+        tool_info = _PagedToolInfo()
+        with patch("sources.agents.react_tools.REACT_USPTO_SORT_FIELD",
+                   "applicationMetaData.filingDate"):
+            envelope = _build_uspto_envelope(tool_info, 'dry* AND humid*')
+        self.assertEqual(envelope["body"]["sort"],
+                         [{"field": "applicationMetaData.filingDate",
+                           "order": "desc"}])
+
 
 class TestCollectSearchPages(unittest.IsolatedAsyncioTestCase):
     async def _agent_with_pages(self, pages_by_offset):

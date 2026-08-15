@@ -32,6 +32,7 @@ TOP_N = int(os.getenv("REACT_TOOL_TOP_N", "5"))
 MAX_PATENT_LIST_ITEMS = int(os.getenv("REACT_MAX_PATENT_LIST_ITEMS", "100"))
 RELEVANCE_RANK_ENABLED = os.getenv("REACT_RELEVANCE_RANK", "1") != "0"
 REACT_POOL_MAX_PAGES = int(os.getenv("REACT_POOL_MAX_PAGES", "2"))
+REACT_USPTO_SORT_FIELD = os.getenv("REACT_USPTO_SORT_FIELD", "_score")
 REACT_TIGHTEN_SUGGEST_THRESHOLD = int(os.getenv("REACT_TIGHTEN_SUGGEST_THRESHOLD", "5000"))
 
 
@@ -388,6 +389,11 @@ def _build_uspto_envelope(tool_info, q: str) -> dict:
         body = ensure_search_fields({"body": body})["body"]
     except Exception:
         pass
+    # The tool template sorts by assignment-recorded date (newest
+    # transactions first — mostly noise); USPTO's Elasticsearch accepts
+    # _score, which ranks by query relevance and surfaces matching
+    # patents regardless of age.  Env-overridable for safety.
+    body["sort"] = [{"field": REACT_USPTO_SORT_FIELD, "order": "desc"}]
     return {
         "method": template.get("method", "POST"),
         "body": body,
