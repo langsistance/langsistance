@@ -2,7 +2,7 @@
 import asyncio
 import re
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
@@ -395,3 +395,94 @@ class TestMaybeRewriteSearchQuery(unittest.IsolatedAsyncioTestCase):
         out = await _maybe_rewrite_search_query(
             agent, _ToolInfo("search_patent_by_key_word"), {"other": "x"})
         self.assertEqual(out, {"other": "x"})
+
+
+# ── fetch_patent_spec built-in tool ──────────────────────────────────────────
+
+from sources.agents.react_tools import (
+    FETCH_PATENT_SPEC_TOOL_NAME,
+    build_tool_set,
+)
+
+
+class _SpecAgent(_FakeAgent):
+    def __init__(self):
+        super().__init__()
+        self._last_user_prompt = "分析这篇专利的技术方案"
+        self.llm = _RewriteAgent().llm  # reuse complete_json stub
+
+
+class TestFetchPatentSpecRegistered(unittest.TestCase):
+    @patch("sources.agents.react_tools.get_knowledge_tool_candidates")
+    def test_tool_always_registered(self, mock_candidates):
+        mock_candidates.return_value = []
+        agent = _FakeAgent()
+        registry, tools = asyncio.run(
+            build_tool_set(agent, "u1", "任意问题", push_filter=None))
+        self.assertIn(FETCH_PATENT_SPEC_TOOL_NAME, registry)
+        self.assertEqual(
+            registry[FETCH_PATENT_SPEC_TOOL_NAME].kind, "patent_spec")
+        self.assertEqual(len(tools), len(registry))
+
+
+class TestFetchPatentSpecExecution(unittest.IsolatedAsyncioTestCase):
+    def _registry(self, agent):
+        entry = type("E", (), {
+            "name": FETCH_PATENT_SPEC_TOOL_NAME, "kind": "patent_spec",
+            "knowledge": None, "tool_info": None, "tool": None,
+        })()
+        return {FETCH_PATENT_SPEC_TOOL_NAME: entry}
+
+    async def test_downloads_distills_and_returns_observation(self):
+        agent = _SpecAgent()
+        executor = await make_action_executor(agent, self._registry(agent), None)
+        with patch("sources.long_task.uspto_download.download_uspto_patent_text",
+                   new=AsyncMock(return_value=("FULL SPEC TEXT", None))):
+            with patch("sources.long_task.patent_distill.distill_patent_spec",
+                       new=AsyncMock(return_value={
+                           "发明点": "a", "技术方案": "b",
+                           "权利要求要点": "c",
+                       })):
+                result = await executor(
+                    FETCH_PATENT_SPEC_TOOL_NAME,
+                    {"patent_id": "19511555"}, 2)
+        self.assertEqual(result["kind"], "observation")
+        self.assertIn("发明点", result["text"])
+        self.assertIn("c", result["text"])
+
+    async def test_download_failure_returns_error_observation(self):
+        agent = _SpecAgent()
+        executor = await make_action_executor(agent, self._registry(agent), None)
+        with patch("sources.long_task.uspto_download.download_uspto_patent_text",
+                   new=AsyncMock(return_value=(None, None))):
+            result = await executor(
+                FETCH_PATENT_SPEC_TOOL_NAME,
+                {"patent_id": "19511555"}, 2)
+        self.assertTrue(result["text"].startswith("Error:"))
+        self.assertIn("说明书", result["text"])
+
+    async def test_distill_failure_falls_back_to_truncated_text(self):
+        agent = _SpecAgent()
+        executor = await make_action_executor(agent, self._registry(agent), None)
+        with patch("sources.long_task.uspto_download.download_uspto_patent_text",
+                   new=AsyncMock(return_value=("x" * 50000, None))):
+            with patch("sources.long_task.patent_distill.distill_patent_spec",
+                       new=AsyncMock(return_value={})):
+                result = await executor(
+                    FETCH_PATENT_SPEC_TOOL_NAME,
+                    {"patent_id": "19511555"}, 2)
+        self.assertEqual(len(result["text"]), 16000)
+
+    async def test_binary_only_result_returns_error(self):
+        agent = _SpecAgent()
+        executor = await make_action_executor(agent, self._registry(agent), None)
+        with patch("sources.long_task.uspto_download.download_uspto_patent_text",
+                   new=AsyncMock(return_value=(None, b"PDF"))):
+            result = await executor(
+                FETCH_PATENT_SPEC_TOOL_NAME,
+                {"patent_id": "19511555"}, 2)
+        self.assertTrue(result["text"].startswith("Error:"))
+
+
+if __name__ == "__main__":
+    unittest.main()

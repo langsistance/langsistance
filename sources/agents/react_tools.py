@@ -36,6 +36,17 @@ class _QueryArgs(BaseModel):
     query: str = Field(description="Natural-language description of what you need")
 
 
+FETCH_PATENT_SPEC_TOOL_NAME = "fetch_patent_spec"
+
+
+class _PatentIdArgs(BaseModel):
+    patent_id: str = Field(description="USPTO application number (8 digits, e.g. 19511555)")
+
+
+async def _fetch_patent_spec_stub(patent_id: str) -> str:
+    raise NotImplementedError("executed via dispatch, not directly")
+
+
 @dataclass
 class ToolEntry:
     name: str
@@ -98,6 +109,20 @@ async def build_tool_set(
             return  # duplicate title — first registration wins
         registry[entry.name] = entry
         tools.append(_tool_to_bind_dict(entry.tool))
+
+    spec_tool = StructuredTool.from_function(
+        func=_fetch_patent_spec_stub,
+        name=FETCH_PATENT_SPEC_TOOL_NAME,
+        description=(
+            "Download and analyze the specification (说明书) of one USPTO "
+            "patent application by its application number. Use this when the "
+            "user asks for the technical solution, claims, or details of a "
+            "specific patent. Returns a structured analysis of the full text."
+        ),
+        args_schema=_PatentIdArgs,
+    )
+    add(ToolEntry(name=FETCH_PATENT_SPEC_TOOL_NAME, kind="patent_spec",
+                  knowledge=None, tool_info=None, tool=spec_tool))
 
     search_tool = StructuredTool.from_function(
         func=_search_knowledge_stub,
@@ -347,6 +372,34 @@ async def _maybe_rewrite_search_query(agent, tool_info, args) -> dict:
     return args
 
 
+async def _run_patent_spec(agent, args, lang: str) -> dict:
+    """Download one patent's specification and distill it into the loop."""
+    patent_id = str((args or {}).get("patent_id") or "").strip()
+    if not patent_id:
+        return {"kind": "observation", "text": "Error: missing patent_id"}
+    from sources.long_task.patent_distill import (
+        distill_patent_spec, format_distilled, truncated_fallback,
+    )
+    from sources.long_task.uspto_download import download_uspto_patent_text
+
+    text, binary = await download_uspto_patent_text(
+        patent_id,
+        spec_selector_provider=getattr(agent, "llm", None),
+        logger=getattr(agent, "logger", None),
+    )
+    if not text:
+        if binary is not None:
+            return {"kind": "observation",
+                    "text": "Error: 说明书为扫描件，暂无法自动提取文本分析"}
+        return {"kind": "observation",
+                "text": f"Error: 说明书下载失败（专利号 {patent_id}）"}
+    query = getattr(agent, "_last_user_prompt", "") or ""
+    distilled = await distill_patent_spec(text, query, agent.llm)
+    if distilled:
+        return {"kind": "observation", "text": format_distilled(distilled, lang)}
+    return {"kind": "observation", "text": truncated_fallback(text)}
+
+
 async def make_action_executor(agent, registry, push_filter=None):
     """Return the loop's execute_action closure."""
     user_id = getattr(agent, "_last_user_id", None)
@@ -356,6 +409,9 @@ async def make_action_executor(agent, registry, push_filter=None):
         entry = registry.get(name)
         if entry is None:
             return {"kind": "observation", "text": f"Error: unknown tool '{name}'"}
+
+        if entry.kind == "patent_spec":
+            return await _run_patent_spec(agent, args, lang)
 
         if entry.kind == "search":
             return await _run_search_knowledge(agent, registry, user_id, args, push_filter)
