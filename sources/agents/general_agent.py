@@ -692,9 +692,13 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
   if a search returns 0 results, loosen the query (drop the weakest constraint
   or use a looser variant); if it returns far too many noisy results, tighten it
   (add a justified constraint). Keep adjusting until the result count and
-  relevance are reasonable (suggested: at most 4 attempts per tool).
-- Only after repeated adjustments on one tool still give poor results, consider
-  another tool — and judge whether that tool actually fits the user's problem.
+  relevance are reasonable (suggested: up to 6 attempts per tool).
+- Before switching tools, exhaust the same tool's options first: try every
+  ladder variant down to the loosest single-concept query, and vary the
+  keywords themselves (different synonyms, spellings, inflections, or
+  wildcards) when zero results persist.
+- Only after those attempts still give poor results, consider another tool —
+  and judge whether that tool actually fits the user's problem.
 - If no available tool fits the problem, honestly report the search failure and
   its reason to the user. Do not keep chaining unsuitable tools.
 """

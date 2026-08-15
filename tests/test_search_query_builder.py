@@ -155,3 +155,9 @@ class TestRewritePromptWildcardRules(unittest.TestCase):
 
     def test_prompt_forbids_wildcard_inside_quoted_phrases(self):
         self.assertIn("引号", REWRITE_SYSTEM_PROMPT)
+
+
+class TestRewritePromptLadderDepth(unittest.TestCase):
+    def test_prompt_requires_loosest_level_single_concept(self):
+        self.assertIn("只含一个核心概念", REWRITE_SYSTEM_PROMPT)
+        self.assertIn("单组", REWRITE_SYSTEM_PROMPT)
