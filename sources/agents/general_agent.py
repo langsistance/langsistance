@@ -730,10 +730,10 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
 - If no available tool fits the problem, honestly report the search failure and
   its reason to the user. Do not keep chaining unsuitable tools.
 - If a search observation shows relevance-ranked results (each line ends
-  with a 相关度 score), your final answer must first list the most
-  relevant top patents (at most {RELEVANT_TOP_N}) — application number,
-  title, and one sentence on why each fits the user's question — before
-  the overall summary.
+  with a relevance score), your final answer must first list the most
+  relevant top items (at most {RELEVANT_TOP_N}) — identifier, title, and
+  one sentence on why each fits the user's question — before the overall
+  summary.
 """
 
 

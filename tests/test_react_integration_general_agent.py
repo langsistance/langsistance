@@ -125,6 +125,9 @@ class TestLoopGuidanceTopN(unittest.TestCase):
         text = agent._loop_system_guidance()
         self.assertIn("relevance-ranked", text)
         self.assertIn(str(RELEVANT_TOP_N), text)
+        self.assertIn("top items", text)
+        self.assertNotIn("patents", text)
+        self.assertNotIn("相关度", text)
 
     def test_top_n_default_is_10(self):
         self.assertEqual(RELEVANT_TOP_N, 10)
