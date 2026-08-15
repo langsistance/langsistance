@@ -49,11 +49,12 @@ class _FakeAgent:
         self.knowledgeTool = None
         self.tools_made = []
 
-    async def get_dynamic_tool_for(self, knowledge_item, tool_info):
+    def get_dynamic_tool_for(self, knowledge_item, tool_info):
+        # sync — mirrors the production GeneralAgent.get_dynamic_tool_for
         class _Args(BaseModel):
             params: str = Field(description="params")
 
-        async def _noop(**kwargs):
+        def _noop(**kwargs):
             return "tool result"
 
         # Mirror _clean_tool_name / the real agent: keep the underscore that
@@ -125,6 +126,35 @@ class TestBuildToolSet(unittest.TestCase):
         self.assertEqual(len(lt_names), 1)
         self.assertEqual(len(tools), len(registry))
 
+    @patch("sources.agents.react_tools.get_knowledge_tool_candidates")
+    def test_build_tool_set_supports_sync_get_dynamic_tool_for(self, mock_candidates):
+        """Production GeneralAgent.get_dynamic_tool_for is SYNC (returns a
+        StructuredTool directly) — build_tool_set must not await its result."""
+        mock_candidates.return_value = [
+            (_Knowledge(3, ktype=1), _ToolInfo("uspto search")),
+        ]
+
+        class _SyncAgent(_FakeAgent):
+            def get_dynamic_tool_for(self, knowledge_item, tool_info):
+                # sync — mirrors sources/agents/general_agent.py:1245
+                class _Args(BaseModel):
+                    params: str = Field(description="params")
+
+                def _noop(**kwargs):
+                    return "tool result"
+
+                name = (re.sub(r"[^a-zA-Z0-9_-]", "_", tool_info.title)
+                        .strip("_") or "tool")
+                return StructuredTool.from_function(
+                    _noop, name=name, description=tool_info.description,
+                    args_schema=_Args)
+
+        agent = _SyncAgent()
+        registry, tools = asyncio.run(
+            build_tool_set(agent, "u1", "专利检索", push_filter=None))
+        self.assertIn("uspto_search", registry)
+        self.assertEqual(len(tools), len(registry))
+
 
 class TestExecuteAction(unittest.TestCase):
     @patch("sources.agents.react_tools.get_knowledge_tool_candidates")
@@ -192,7 +222,7 @@ class TestExecuteAction(unittest.TestCase):
 
 
 def _make_tool_with_pending(agent):
-    async def get_dynamic_tool_for(knowledge_item, tool_info):
+    def get_dynamic_tool_for(knowledge_item, tool_info):
         class _Args(BaseModel):
             params: str = Field(description="params")
 
@@ -207,7 +237,7 @@ def _make_tool_with_pending(agent):
 async def _registry_with_one_knowledge(agent, knowledge):
     tool_info = _ToolInfo("uspto search")
     from sources.agents.react_tools import ToolEntry
-    dynamic_tool = await agent.get_dynamic_tool_for(knowledge, tool_info)
+    dynamic_tool = agent.get_dynamic_tool_for(knowledge, tool_info)
     entry = ToolEntry(name=dynamic_tool.name, kind="knowledge",
                       knowledge=knowledge, tool_info=tool_info, tool=dynamic_tool)
     return {entry.name: entry}, []

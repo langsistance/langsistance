@@ -142,7 +142,7 @@ async def build_tool_set(
         if normal_count >= TOP_N:
             continue
         normal_count += 1
-        dynamic_tool = await agent.get_dynamic_tool_for(knowledge, tool_info)
+        dynamic_tool = agent.get_dynamic_tool_for(knowledge, tool_info)
         if dynamic_tool is None:
             continue
         add(ToolEntry(name=dynamic_tool.name, kind="knowledge",
@@ -209,7 +209,7 @@ async def _run_search_knowledge(agent, registry, user_id, args, push_filter) -> 
         if kind == "long_task":
             title = _clean_tool_name(knowledge)
         else:
-            dynamic_tool = await agent.get_dynamic_tool_for(knowledge, tool_info)
+            dynamic_tool = agent.get_dynamic_tool_for(knowledge, tool_info)
             if dynamic_tool is None:
                 continue
             title = dynamic_tool.name
