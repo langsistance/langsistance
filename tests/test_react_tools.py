@@ -565,5 +565,175 @@ class TestSearchObservationTotalCount(unittest.TestCase):
         self.assertNotIn("总命中", result["text"])
 
 
+# ── Chat-path relevance ranking pool ─────────────────────────────────────────
+
+from sources.agents.react_tools import _ranked_digest
+
+
+class _PoolAgent(_FakeAgent):
+    def __init__(self):
+        super().__init__()
+        self._last_user_prompt = "工业干燥空气供应"
+        self._search_pool = None
+        self._search_ranked = False
+        self._last_search_total = None
+
+        class _LLM:
+            def __init__(self):
+                self.calls = 0
+                self._scores = {}
+                self.fail = False
+
+            def set_scores(self, scores):
+                self._scores = scores
+
+            async def complete_json(self, system, user):
+                self.calls += 1
+                if self.fail:
+                    raise RuntimeError("down")
+                ids = re.findall(r"id=(\d+)", user)
+                return {"scores": [
+                    {"id": i, "score": self._scores.get(i, 3)} for i in ids]}
+
+        self.llm = _LLM()
+
+
+async def _pool_executor(agent, registry):
+    return await make_action_executor(agent, registry, None)
+
+
+class TestRankedDigest(unittest.TestCase):
+    def test_lines_carry_scores(self):
+        from sources.long_task.candidate_metadata import build_candidates
+        items = [_usp_raw_item("19511555", "Air dryer humidity control"),
+                 _usp_raw_item("18184836", "Moisture control enclosure")]
+        candidates = build_candidates(items)
+        candidates[0]["relevance_score"] = 5
+        text = _ranked_digest(candidates)
+        self.assertIn("相关度5/5", text)
+        # second candidate is unscored — its line carries no score suffix
+        unscored_line = text.split("\n")[1]
+        self.assertNotIn("相关度", unscored_line)
+
+    def test_caps_at_20_with_total_note(self):
+        from sources.long_task.candidate_metadata import build_candidates
+        items = [_usp_raw_item(str(19500000 + i), f"Title {i}") for i in range(30)]
+        text = _ranked_digest(build_candidates(items))
+        self.assertNotIn("Title 20", text)
+        self.assertIn("共 30 条", text)
+
+
+class TestExecuteActionPoolPath(unittest.TestCase):
+    def test_pool_path_ranks_observation_by_score(self):
+        agent = _PoolAgent()
+        agent.llm.set_scores({"19511555": 1, "18184836": 5})
+        entry_k = _Knowledge(3, ktype=1)
+        agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
+        tool_info = _ToolInfo("search_patent_by_key_word")
+        from sources.agents.react_tools import ToolEntry
+        dynamic_tool = agent.get_dynamic_tool_for(entry_k, tool_info)
+        entry = ToolEntry(name=dynamic_tool.name, kind="knowledge",
+                          knowledge=entry_k, tool_info=tool_info,
+                          tool=dynamic_tool)
+        executor = asyncio.run(make_action_executor(agent, {entry.name: entry}, None))
+        agent._pending_raw_items = [
+            _usp_raw_item("19511555", "Air dryer humidity control"),
+            _usp_raw_item("18184836", "Moisture control enclosure"),
+        ]
+        result = asyncio.run(executor("uspto_search", {"params": "{}"}, 1))
+        self.assertEqual(result["kind"], "observation")
+        self.assertIn("已按相关度排序", result["text"])
+        self.assertIn("相关度5/5", result["text"])
+        pos_high = result["text"].find("18184836")
+        pos_low = result["text"].find("19511555")
+        self.assertLess(pos_high, pos_low)
+        self.assertTrue(agent._search_ranked)
+        # display list reordered to ranked order
+        ids = [str(i.get("applicationMetaData", {}).get("applicationNumberText"))
+               for i in agent._pending_raw_items]
+        self.assertEqual(ids, ["18184836", "19511555"])
+
+    def test_pool_merges_across_calls(self):
+        agent = _PoolAgent()
+        agent.llm.set_scores({})
+        entry_k = _Knowledge(3, ktype=1)
+        agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
+        tool_info = _ToolInfo("search_patent_by_key_word")
+        from sources.agents.react_tools import ToolEntry
+        dynamic_tool = agent.get_dynamic_tool_for(entry_k, tool_info)
+        entry = ToolEntry(name=dynamic_tool.name, kind="knowledge",
+                          knowledge=entry_k, tool_info=tool_info,
+                          tool=dynamic_tool)
+        executor = asyncio.run(make_action_executor(agent, {entry.name: entry}, None))
+        agent._pending_raw_items = [_usp_raw_item("19511555", "First call")]
+        asyncio.run(executor("uspto_search", {"params": "{}"}, 1))
+        agent._pending_raw_items = [_usp_raw_item("18184836", "Second call")]
+        result = asyncio.run(executor("uspto_search", {"params": "{}"}, 2))
+        self.assertIn("19511555", result["text"])  # first call still present
+        self.assertIn("18184836", result["text"])
+        self.assertIn("池共 2 条", result["text"])
+
+    def test_pool_skipped_for_non_keyword_title(self):
+        agent = _PoolAgent()
+        entry_k = _Knowledge(3, ktype=1)
+        agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
+        registry, tools = asyncio.run(_registry_with_one_knowledge(agent, entry_k))
+        executor = asyncio.run(make_action_executor(agent, registry, None))
+        agent._pending_raw_items = [_usp_raw_item("19511555", "A")]
+        result = asyncio.run(executor("uspto_search", {"params": "{}"}, 1))
+        self.assertNotIn("已按相关度排序", result["text"])
+        self.assertFalse(getattr(agent, "_search_ranked", False))
+
+    def test_pool_skipped_for_non_usp_shape(self):
+        agent = _PoolAgent()
+        entry_k = _Knowledge(3, ktype=1)
+        agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
+        tool_info = _ToolInfo("search_patent_by_key_word")
+        from sources.agents.react_tools import ToolEntry
+        dynamic_tool = agent.get_dynamic_tool_for(entry_k, tool_info)
+        entry = ToolEntry(name=dynamic_tool.name, kind="knowledge",
+                          knowledge=entry_k, tool_info=tool_info,
+                          tool=dynamic_tool)
+        executor = asyncio.run(make_action_executor(agent, {entry.name: entry}, None))
+        agent._pending_raw_items = [{"patentNumber": "US10150077B2"}]
+        result = asyncio.run(executor("uspto_search", {"params": "{}"}, 1))
+        self.assertNotIn("已按相关度排序", result["text"])
+
+    def test_flag_off_falls_back_to_legacy(self):
+        agent = _PoolAgent()
+        entry_k = _Knowledge(3, ktype=1)
+        agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
+        tool_info = _ToolInfo("search_patent_by_key_word")
+        from sources.agents.react_tools import ToolEntry
+        dynamic_tool = agent.get_dynamic_tool_for(entry_k, tool_info)
+        entry = ToolEntry(name=dynamic_tool.name, kind="knowledge",
+                          knowledge=entry_k, tool_info=tool_info,
+                          tool=dynamic_tool)
+        with patch("sources.agents.react_tools.RELEVANCE_RANK_ENABLED", False):
+            executor = asyncio.run(make_action_executor(agent, {entry.name: entry}, None))
+            agent._pending_raw_items = [_usp_raw_item("19511555", "A")]
+            result = asyncio.run(executor("uspto_search", {"params": "{}"}, 1))
+        self.assertNotIn("已按相关度排序", result["text"])
+        self.assertIn("完整列表已展示", result["text"])
+
+    def test_scoring_failure_keeps_rank_stable(self):
+        agent = _PoolAgent()
+        agent.llm.fail = True
+        entry_k = _Knowledge(3, ktype=1)
+        agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
+        tool_info = _ToolInfo("search_patent_by_key_word")
+        from sources.agents.react_tools import ToolEntry
+        dynamic_tool = agent.get_dynamic_tool_for(entry_k, tool_info)
+        entry = ToolEntry(name=dynamic_tool.name, kind="knowledge",
+                          knowledge=entry_k, tool_info=tool_info,
+                          tool=dynamic_tool)
+        executor = asyncio.run(make_action_executor(agent, {entry.name: entry}, None))
+        agent._pending_raw_items = [
+            _usp_raw_item("19511555", "A"), _usp_raw_item("18184836", "B")]
+        result = asyncio.run(executor("uspto_search", {"params": "{}"}, 1))
+        self.assertIn("已按相关度排序", result["text"])
+        self.assertIn("本次新评分 0 条", result["text"])
+
+
 if __name__ == "__main__":
     unittest.main()

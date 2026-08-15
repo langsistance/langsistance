@@ -24,9 +24,11 @@ from sources.long_task.candidate_metadata import (
     build_candidates,
     is_keyword_search_tool,
 )
+from sources.long_task.chat_relevance import SearchPool
 
 TOP_N = int(os.getenv("REACT_TOOL_TOP_N", "5"))
 MAX_PATENT_LIST_ITEMS = int(os.getenv("REACT_MAX_PATENT_LIST_ITEMS", "100"))
+RELEVANCE_RANK_ENABLED = os.getenv("REACT_RELEVANCE_RANK", "1") != "0"
 SEARCH_KNOWLEDGE_TOOL_NAME = "search_my_knowledge"
 MAX_SEARCH_RESULTS = 5
 MAX_OBSERVATION_CHARS = 300
@@ -242,6 +244,66 @@ def _cap_patent_list(tool_info, items: list, lang: str) -> Tuple[list, str]:
     return items, note
 
 
+def _relevance_pool_applies(agent, tool_info, raw_items) -> bool:
+    """Pool + ranking applies only to backend keyword search tools whose
+    results flatten via build_candidates (USPTO shape)."""
+    if not RELEVANCE_RANK_ENABLED:
+        return False
+    if getattr(tool_info, "push", None) != 2:
+        return False
+    if not is_keyword_search_tool(tool_info):
+        return False
+    return bool(build_candidates(raw_items or []))
+
+
+def _ranked_digest(candidates, limit: int = SEARCH_DIGEST_LIMIT,
+                   lang: str = "zh") -> str:
+    """Serialize ranked candidate dicts into a bounded digest with scores."""
+    lines = []
+    for c in candidates[:limit]:
+        score = c.get("relevance_score")
+        score_txt = ""
+        if isinstance(score, (int, float)):
+            score_txt = (f" 相关度{int(score)}/5" if lang == "zh"
+                         else f" relevance {int(score)}/5")
+        parts = [
+            c.get("patent_id") or "?",
+            c.get("title") or "(无标题)",
+            c.get("applicant") or "?",
+            c.get("filing_date") or "?",
+            c.get("status") or "?",
+        ]
+        lines.append(" | ".join(str(p) for p in parts) + score_txt)
+    text = "\n".join(lines)
+    if len(candidates) > limit:
+        note = (f"\n…共 {len(candidates)} 条" if lang == "zh"
+                else f"\n...{len(candidates)} items total")
+        text += note
+    return text[:SEARCH_DIGEST_CHARS]
+
+
+async def _rank_pending_pool(agent, raw_items, lang) -> Tuple[list, str]:
+    """Merge raw_items into the turn's SearchPool, score new arrivals
+    against the user's question, and return (ranked candidates, note).
+
+    The pool lives on the agent for the whole request (created lazily;
+    create_agent resets it per request).
+    """
+    pool = getattr(agent, "_search_pool", None)
+    if pool is None:
+        pool = SearchPool(getattr(agent, "_last_user_prompt", "") or "")
+        agent._search_pool = pool
+    pool.add(raw_items)
+    scored = await pool.score_new(getattr(agent, "llm", None))
+    pool.prune()
+    ranked = pool.ranked(MAX_PATENT_LIST_ITEMS)
+    if lang == "en":
+        note = f"relevance-ranked — pool {len(pool)}, scored {scored} new"
+    else:
+        note = f"已按相关度排序（池共 {len(pool)} 条、本次新评分 {scored} 条）"
+    return ranked, note
+
+
 def _summarize_observation(result, lang: str, limit: int = MAX_OBSERVATION_CHARS) -> str:
     """Turn a tool result into a bounded observation string for the LLM."""
     if result is None:
@@ -447,20 +509,27 @@ async def make_action_executor(agent, registry, push_filter=None):
 
         pending = getattr(agent, "_pending_raw_items", None)
         if pending:
-            capped, note = _cap_patent_list(entry.tool_info, pending, lang)
-            agent._pending_raw_items = capped
-            digest = _items_digest(capped, lang=lang)
+            if _relevance_pool_applies(agent, entry.tool_info, pending):
+                ranked, note = await _rank_pending_pool(agent, pending, lang)
+                shown = [c["_raw"] for c in ranked]
+                agent._pending_raw_items = shown
+                agent._search_ranked = True
+                digest = _ranked_digest(ranked, lang=lang)
+            else:
+                shown, note = _cap_patent_list(entry.tool_info, pending, lang)
+                agent._pending_raw_items = shown
+                digest = _items_digest(shown, lang=lang)
             total = getattr(agent, "_last_search_total", None)
             total_note = ""
             if isinstance(total, int):
                 total_note = (f", {total} total hits" if lang == "en"
                               else f"，总命中 {total}")
             if lang == "en":
-                text = (f"Search results ({len(capped)} records{total_note}, {note}):\n"
+                text = (f"Search results ({len(shown)} records{total_note}, {note}):\n"
                         f"{digest}\n\n"
                         "The full list is displayed to the user.")
             else:
-                text = (f"检索结果（{len(capped)} 条{total_note}，{note}）：\n"
+                text = (f"检索结果（{len(shown)} 条{total_note}，{note}）：\n"
                         f"{digest}\n\n"
                         "完整列表已展示给用户。")
             return {"kind": "observation", "text": text}
