@@ -279,5 +279,35 @@ class TestPhase0GatedSearch(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(out["candidates"]), 1)
 
 
+class TestBatchTextIncludesCpc(unittest.TestCase):
+    def test_cpc_codes_rendered_in_batch_lines(self):
+        from sources.long_task.relevance_gate import _batch_text
+        candidates = [{
+            "patent_id": "19511555",
+            "title": "Air dryer humidity control",
+            "applicant": "ACME",
+            "filing_date": "2024-01-15",
+            "cpc_codes": ["F26B 21/08", "B01D 53/26"],
+        }]
+        text = _batch_text(candidates, "干燥空气")
+        self.assertIn("F26B 21/08", text)
+        self.assertIn("B01D 53/26", text)
+
+    def test_missing_cpc_renders_empty(self):
+        from sources.long_task.relevance_gate import _batch_text
+        candidates = [{
+            "patent_id": "19511555", "title": "T", "applicant": "A",
+            "filing_date": "2024-01-15", "cpc_codes": [],
+        }]
+        text = _batch_text(candidates, "q")
+        self.assertIn("cpc=[]", text)
+
+
+class TestGatePromptAllowsCpc(unittest.TestCase):
+    def test_prompt_mentions_cpc(self):
+        from sources.long_task.relevance_gate import GATE_SYSTEM_PROMPT
+        self.assertIn("CPC", GATE_SYSTEM_PROMPT)
+
+
 if __name__ == "__main__":
     unittest.main()
