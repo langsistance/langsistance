@@ -53,6 +53,7 @@ MAX_ITEM_CHARS_FOR_LLM = int(os.getenv("GENERAL_AGENT_MAX_ITEM_CHARS", "15000"))
 MAX_VALUE_CHARS_THRESHOLD = int(os.getenv("GENERAL_AGENT_MAX_VALUE_CHARS", "10000"))
 SMALL_LIST_THRESHOLD = int(os.getenv("GENERAL_AGENT_SMALL_LIST_THRESHOLD", "3"))
 USE_LARGE_LIST_SUMMARY = True  # 设为 False 切回逐条批处理模式
+RELEVANT_TOP_N = int(os.getenv("REACT_RELEVANT_TOP_N", "10"))
 
 # Redis key prefix and TTL for storing patent IDs from conversation artifacts
 _CONV_PATENT_IDS_KEY_PREFIX = "lt:conv"
@@ -64,6 +65,33 @@ _STRIP_IDS_RE = re.compile(
     r',?\s*user id is \d+,\s*query id is \w+,?\s*',
     re.IGNORECASE,
 )
+
+
+def _summary_system_prompt(ranked: bool, lang: str) -> str:
+    """Build the large-list summary prompt; ranked lists get a
+    relevance-order note so the summary leads with the most relevant."""
+    ranked_note_zh = "列表已按相关度排序，开头优先呈现最相关项。"
+    ranked_note_en = ("The list is already relevance-ranked — lead with "
+                      "the most relevant items.")
+    if lang == "en":
+        base = (
+            "You are a professional data analyst. Create a concise, well-structured summary of the data items below. "
+            "Group similar items, highlight key patterns or trends, and present information clearly for non-technical readers. "
+            "Use Markdown formatting — including tables where appropriate. Keep it under 600 words. "
+            "Do NOT list every item individually; synthesize and summarize. "
+            "Focus on: what the data shows overall, key differences between items, any notable outliers. "
+            "IMPORTANT: The user asked in English — respond entirely in English."
+        )
+        return base + (" " + ranked_note_en if ranked else "")
+    base = (
+        "你是一名专业的数据分析师。请对以下数据项创建一个简洁、结构清晰的摘要。"
+        "将相似的项目分组，突出关键模式或趋势，并以非技术读者易于理解的方式呈现。"
+        "使用 Markdown 格式——包括适当的表格。保持在 600 字以内。"
+        "不要逐项列出；综合和总结。"
+        "重点关注：数据整体显示的内容、项目之间的关键差异、任何值得注意的异常值。"
+        "重要：用户使用中文提问——请用中文回答。"
+    )
+    return base + (" " + ranked_note_zh if ranked else "")
 
 
 def _store_conversation_patent_ids(agent, items_for_export: list) -> list | None:
@@ -674,7 +702,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
         """
     def _loop_system_guidance(self) -> str:
         """Tool-usage guidance appended to the ReAct loop system prompt."""
-        return """
+        return f"""
 
 ## Tool Usage
 
@@ -701,6 +729,11 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
   and judge whether that tool actually fits the user's problem.
 - If no available tool fits the problem, honestly report the search failure and
   its reason to the user. Do not keep chaining unsuitable tools.
+- If a search observation shows relevance-ranked results (each line ends
+  with a 相关度 score), your final answer must first list the most
+  relevant top patents (at most {RELEVANT_TOP_N}) — application number,
+  title, and one sentence on why each fits the user's question — before
+  the overall summary.
 """
 
 
@@ -1495,6 +1528,8 @@ Begin your response now:
         self._react_loop_ran = False
         self._search_rewrite = None   # deterministic q rewrite cache, per request
         self._last_search_total = None   # total-hit count captured per request
+        self._search_pool = None   # relevance-ranked candidate pool, per request
+        self._search_ranked = False  # True once a search list was relevance-ranked
         self.knowledgeTool = (None, None)  # (knowledge_item, tool_info) — selected inside the loop
         self.tools = []
         lang = self._detect_lang(prompt)
@@ -1930,24 +1965,8 @@ Begin your response now:
                 f"\n\n---\n\n{heading}\n\n"
             )
 
-            if lang == 'en':
-                summary_system_prompt = (
-                    "You are a professional data analyst. Create a concise, well-structured summary of the data items below. "
-                    "Group similar items, highlight key patterns or trends, and present information clearly for non-technical readers. "
-                    "Use Markdown formatting — including tables where appropriate. Keep it under 600 words. "
-                    "Do NOT list every item individually; synthesize and summarize. "
-                    "Focus on: what the data shows overall, key differences between items, any notable outliers. "
-                    "IMPORTANT: The user asked in English — respond entirely in English."
-                )
-            else:
-                summary_system_prompt = (
-                    "你是一名专业的数据分析师。请对以下数据项创建一个简洁、结构清晰的摘要。"
-                    "将相似的项目分组，突出关键模式或趋势，并以非技术读者易于理解的方式呈现。"
-                    "使用 Markdown 格式——包括适当的表格。保持在 600 字以内。"
-                    "不要逐项列出；综合和总结。"
-                    "重点关注：数据整体显示的内容、项目之间的关键差异、任何值得注意的异常值。"
-                    "重要：用户使用中文提问——请用中文回答。"
-                )
+            summary_system_prompt = _summary_system_prompt(
+                bool(getattr(self, "_search_ranked", False)), lang)
 
             try:
                 await self.llm.stream_simple(

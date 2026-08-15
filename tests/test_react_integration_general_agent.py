@@ -63,6 +63,8 @@ class TestCreateAgentWiring(unittest.TestCase):
         self.assertTrue(getattr(agent, "_react_loop_ran", False))
         # per-request state reset (pool reuse safety)
         self.assertIsNone(getattr(agent, "_pending_raw_items", "unset"))
+        self.assertIsNone(getattr(agent, "_search_pool", "unset"))
+        self.assertFalse(getattr(agent, "_search_ranked", "unset"))
         self.assertTrue(handler.statuses)  # "正在分析您的问题..."
 
     def test_long_task_kind_returns_intent_dict(self):
@@ -109,6 +111,38 @@ class TestCreateAgentWiring(unittest.TestCase):
             _run(agent.invoke_agent(None, MagicMock()))
         mock_stream.assert_not_called()
         mock_store.assert_called_once_with("answer text")
+
+
+from sources.agents.general_agent import (
+    RELEVANT_TOP_N,
+    _summary_system_prompt,
+)
+
+
+class TestLoopGuidanceTopN(unittest.TestCase):
+    def test_guidance_requires_top_n_relevant_listing(self):
+        agent = _make_agent()
+        text = agent._loop_system_guidance()
+        self.assertIn("relevance-ranked", text)
+        self.assertIn(str(RELEVANT_TOP_N), text)
+
+    def test_top_n_default_is_10(self):
+        self.assertEqual(RELEVANT_TOP_N, 10)
+
+
+class TestSummarySystemPrompt(unittest.TestCase):
+    def test_ranked_variant_mentions_relevance_order_zh(self):
+        text = _summary_system_prompt(True, "zh")
+        self.assertIn("相关度排序", text)
+        self.assertIn("摘要", text)
+
+    def test_ranked_variant_mentions_relevance_order_en(self):
+        text = _summary_system_prompt(True, "en")
+        self.assertIn("relevance-ranked", text)
+
+    def test_default_variant_has_no_ranking_note(self):
+        self.assertNotIn("相关度排序", _summary_system_prompt(False, "zh"))
+        self.assertNotIn("relevance-ranked", _summary_system_prompt(False, "en"))
 
 
 if __name__ == "__main__":
