@@ -536,7 +536,18 @@ async def make_action_executor(agent, registry, push_filter=None):
 
         pending = getattr(agent, "_pending_raw_items", None)
         if pending:
-            if _relevance_pool_applies(agent, entry.tool_info, pending):
+            applies = _relevance_pool_applies(agent, entry.tool_info, pending)
+            _glog = getattr(agent, "logger", None)
+            if _glog is not None:
+                _glog.info(
+                    "relevance_pool gate — "
+                    f"tool_title={getattr(entry.tool_info, 'title', None)!r} "
+                    f"push={getattr(entry.tool_info, 'push', None)!r} "
+                    f"flag={RELEVANCE_RANK_ENABLED!r} "
+                    f"parseable={len(build_candidates(pending))} "
+                    f"applies={applies}"
+                )
+            if applies:
                 ranked, note = await _rank_pending_pool(agent, pending, lang)
                 shown = [c["_raw"] for c in ranked]
                 agent._pending_raw_items = shown

@@ -790,5 +790,40 @@ class TestFlashProviderSelection(unittest.TestCase):
             self.assertIsNone(_get_flash_provider(agent))
 
 
+class _ListLogger:
+    def __init__(self):
+        self.lines = []
+
+    def info(self, msg):
+        self.lines.append(msg)
+
+
+class TestRelevancePoolGateLogging(unittest.TestCase):
+    def test_gate_decision_logged_for_legacy_tool(self):
+        agent = _PoolAgent()
+        agent.logger = _ListLogger()
+        entry_k = _Knowledge(3, ktype=1)
+        agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
+        registry, tools = asyncio.run(_registry_with_one_knowledge(agent, entry_k))
+        executor = asyncio.run(make_action_executor(agent, registry, None))
+        agent._pending_raw_items = [_usp_raw_item("19511555", "A")]
+        asyncio.run(executor("uspto_search", {"params": "{}"}, 1))
+        gate_lines = [ln for ln in agent.logger.lines
+                      if ln.startswith("relevance_pool gate")]
+        self.assertEqual(len(gate_lines), 1)
+        self.assertIn("applies=False", gate_lines[0])
+        self.assertIn("uspto search", gate_lines[0])
+
+    def test_no_logger_does_not_crash(self):
+        agent = _PoolAgent()  # _PoolAgent has no logger attribute
+        entry_k = _Knowledge(3, ktype=1)
+        agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
+        registry, tools = asyncio.run(_registry_with_one_knowledge(agent, entry_k))
+        executor = asyncio.run(make_action_executor(agent, registry, None))
+        agent._pending_raw_items = [_usp_raw_item("19511555", "A")]
+        result = asyncio.run(executor("uspto_search", {"params": "{}"}, 1))
+        self.assertEqual(result["kind"], "observation")
+
+
 if __name__ == "__main__":
     unittest.main()
