@@ -19,14 +19,6 @@ _extract_text_from_binary = extract_text_from_binary
 _DEFAULT_LOGGER = Logger("uspto_download.log")
 
 
-def _module_log(msg: str) -> None:
-    _DEFAULT_LOGGER.info(msg)
-
-
-def _module_warn(msg: str) -> None:
-    _DEFAULT_LOGGER.warning(msg)
-
-
 def normalize_app_number(patent_id: str) -> str:
     """Strip commas, slashes, non-digits; return '' when too short."""
     app_number = (patent_id or "").strip().replace(",", "").replace("/", "")
@@ -55,11 +47,13 @@ async def download_uspto_patent_text(
     Never raises — all failures degrade to (None, None).
     """
 
+    _resolved = logger or _DEFAULT_LOGGER
+
     def _log(msg: str) -> None:
-        (logger or _DEFAULT_LOGGER).info(msg)
+        _resolved.info(msg)
 
     def _warn(msg: str) -> None:
-        (logger or _DEFAULT_LOGGER).warning(msg)
+        _resolved.warning(msg)
 
     import asyncio
     import json as _json
@@ -196,7 +190,7 @@ async def download_uspto_patent_text(
             )
 
             text, binary = await _download_uspto_spec_with_redirect(
-                spec_doc, app_number, headers,
+                spec_doc, app_number, headers, logger=_resolved,
             )
             chars = len(text.strip()) if text else 0
             if chars > 200:
@@ -275,6 +269,7 @@ async def _download_uspto_spec_with_redirect(
     spec_doc: dict,
     app_number: str,
     headers: dict,
+    logger: Any = None,
 ) -> tuple[str | None, bytes | None]:
     """Download USPTO specification, following redirect URLs if needed.
 
@@ -292,9 +287,11 @@ async def _download_uspto_spec_with_redirect(
 
     from sources.http_outbound import outbound_http
 
+    _log = logger or _DEFAULT_LOGGER
+
     spec_url = _get_download_url_from_doc(spec_doc)
     if not spec_url:
-        _module_warn(
+        _log.warning(
             f"[download] uspto_spec_no_url — app={app_number}, "
             f"spec_doc_keys={list(spec_doc.keys()) if spec_doc else 'N/A'}"
         )
@@ -302,7 +299,7 @@ async def _download_uspto_spec_with_redirect(
     for hop in range(2):  # max 1 redirect
         resp = await _uspto_get_with_retry(spec_url, headers, timeout=30)
         if resp.status_code != 200:
-            _module_warn(
+            _log.warning(
                 f"[download] uspto_spec_hop{hop}_failed — status={resp.status_code}"
             )
             return (None, None)
@@ -316,7 +313,7 @@ async def _download_uspto_spec_with_redirect(
 
         # If response looks like a file (not text/JSON), extract text properly
         if force_binary or (content_type and not any(t in content_type for t in ('text/', 'json', 'xml', 'html'))):
-            _module_log(
+            _log.info(
                 f"[download] uspto_spec_binary — type={content_type}, "
                 f"len={len(resp.content)}"
             )
@@ -326,7 +323,7 @@ async def _download_uspto_spec_with_redirect(
             )
             if extracted and len(extracted) > 100:
                 return (extracted, None)
-            _module_warn(
+            _log.warning(
                 f"[download] uspto_spec_extract_empty — "
                 f"type={content_type}, len={len(resp.content)}"
             )
@@ -335,7 +332,7 @@ async def _download_uspto_spec_with_redirect(
         # Check if the text response contains a redirect URL
         stripped = content.strip()
         if not stripped:
-            _module_warn(
+            _log.warning(
                 f"[download] uspto_spec_empty — app={app_number}"
             )
             return (None, None)
@@ -344,14 +341,14 @@ async def _download_uspto_spec_with_redirect(
         from sources.dynamic_tool_params import _extract_first_url
         redirect_url = _extract_first_url(stripped)
         if redirect_url and redirect_url != spec_url:
-            _module_log(
+            _log.info(
                 f"[download] uspto_spec_redirect — to={redirect_url[:120]}"
             )
             spec_url = redirect_url
             continue
 
         # No redirect: this IS the content
-        _module_log(
+        _log.info(
             f"[download] uspto_spec_done — len={len(stripped)}"
         )
         return (stripped, None)
