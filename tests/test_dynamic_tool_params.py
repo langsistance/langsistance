@@ -365,3 +365,39 @@ class TestDynamicToolParams(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStringQueryKeyEnvelopeCollision(unittest.TestCase):
+    def test_string_query_key_flat_merges_into_body_q(self):
+        """params={"query": "<search term>"} — the LLM names the search-term
+        field 'query' per the tool schema description.  It must be treated as
+        a flat search term and grafted into the template body.q, NOT parsed
+        as a request envelope (which raises 'LLM tool params query must be
+        a JSON object')."""
+        from unittest.mock import MagicMock, patch
+        from sources.dynamic_tool_params import execute_backend_tool_request
+
+        tool = MagicMock()
+        tool.params = ('{"method":"POST",'
+                       '"body":{"q":"template","pagination":{"offset":0,"limit":50}}}')
+        tool.url = "https://api.uspto.gov/api/v1/patent/applications/search"
+        tool.timeout = 30
+
+        payload = {"count": 1, "patentFileWrapperDataBag": [
+            {"applicationMetaData": {"applicationNumberText": "19511555"}}]}
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.headers = {"Content-Type": "application/json"}
+        resp.content = b'{"count": 1}'
+        resp.text = '{"count": 1}'
+        resp.json = lambda: payload
+
+        with patch("sources.dynamic_tool_params.outbound_http.request",
+                   return_value=resp) as mock_req:
+            result = execute_backend_tool_request(
+                tool, {"query": '("dry air" OR desiccant) AND ("humidity control")'})
+        sent_body = mock_req.call_args[1]["json"]
+        self.assertEqual(
+            sent_body["q"],
+            '("dry air" OR desiccant) AND ("humidity control")')
+        self.assertEqual(result["raw_items"], payload["patentFileWrapperDataBag"])

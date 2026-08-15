@@ -91,7 +91,7 @@ class ReActLoop:
                 "tool_calls": tool_calls,
             })
 
-            for call in tool_calls:
+            for _ci, call in enumerate(tool_calls):
                 steps += 1
                 action_name = call.get("name", "")
                 args = call.get("args") or {}
@@ -123,6 +123,13 @@ class ReActLoop:
                 obs = str(result.get("text") or "")
                 await self._emit("observation", {"round": steps, "result_brief": obs})
 
+                tool_msg = {
+                    "role": "tool",
+                    "tool_call_id": call.get("id") or f"call_{steps}",
+                    "name": action_name,
+                    "content": obs,
+                }
+
                 is_error = obs.startswith("Error:")
                 if is_error and action_name == last_failed_action:
                     consecutive_failures += 1
@@ -132,14 +139,22 @@ class ReActLoop:
                     consecutive_failures = 0
                 last_failed_action = action_name if is_error else None
                 if consecutive_failures >= 2:
+                    # Every assistant tool_call must have a tool output
+                    # before the fallback LLM call, or OpenAI-compatible
+                    # APIs reject the history (400 "No tool output found
+                    # for function call ...").  Complete the current and
+                    # remaining calls of this round first.
+                    messages.append(tool_msg)
+                    for _c in tool_calls[_ci + 1:]:
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": _c.get("id") or "",
+                            "name": _c.get("name", ""),
+                            "content": "Error: skipped due to repeated failures",
+                        })
                     return await self._finish("fallback", messages, steps, start)
 
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": call.get("id") or f"call_{steps}",
-                    "name": action_name,
-                    "content": obs,
-                })
+                messages.append(tool_msg)
 
         return await self._finish("fallback", messages, steps, start)
 

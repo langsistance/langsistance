@@ -387,7 +387,26 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
     # not, treat the entire payload as the body.q value and graft it
     # into the server-side template.
     _ENVELOPE_KEYS = frozenset({'method', 'body', 'query', 'path', 'header'})
-    if isinstance(user_params, dict) and user_params and not _ENVELOPE_KEYS.intersection(user_params):
+    _envelope_keys_present = (
+        _ENVELOPE_KEYS.intersection(user_params)
+        if isinstance(user_params, dict) and user_params else set()
+    )
+    # A bare string under the "query" key is a flat search term (the LLM
+    # names the search-term field "query" per the tool schema description),
+    # NOT a request-envelope query-params dict.  Treat it as flat params so
+    # the term is grafted into the template body.q instead of raising
+    # "LLM tool params query must be a JSON object".
+    _flat_params = (
+        isinstance(user_params, dict) and user_params
+        and (
+            not _envelope_keys_present
+            or (
+                _envelope_keys_present == {'query'}
+                and isinstance(user_params.get('query'), str)
+            )
+        )
+    )
+    if _flat_params:
         template_body = params_data.get('body')
         if isinstance(template_body, dict):
             merged_body = dict(template_body)

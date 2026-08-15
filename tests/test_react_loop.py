@@ -154,6 +154,28 @@ class TestReActLoop(unittest.TestCase):
         self.assertEqual(result.kind, "answer")
         self.assertIn("Error: boom", messages[-1]["content"])
 
+    def test_fallback_completes_tool_outputs_for_all_calls(self):
+        """Same-round multiple failing calls → fallback LLM call must carry
+        a tool output for EVERY assistant tool_call (OpenAI-compatible APIs
+        reject histories with dangling tool_calls: 400 'No tool output
+        found for function call ...')."""
+        model = _FakeModel([
+            ("", [{"id": "c1", "name": "a", "args": {}},
+                  {"id": "c2", "name": "a", "args": {}}], ""),
+            ("抱歉，无法完成。", [], ""),
+        ])
+        executor = _FakeExecutor({"a": {"kind": "observation", "text": "Error: boom"}})
+        result, _ = _run(ReActLoop(model, executor, _Events()), model, executor)
+        self.assertEqual(result.kind, "fallback")
+        fallback_messages = model.calls[-1][0]
+        assistant = next(m for m in fallback_messages
+                         if m.get("role") == "assistant")
+        call_ids = [c["id"] for c in assistant["tool_calls"]]
+        tool_ids = [m.get("tool_call_id") for m in fallback_messages
+                    if m.get("role") == "tool"]
+        self.assertEqual(set(call_ids), set(tool_ids))
+        self.assertEqual(len(tool_ids), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
