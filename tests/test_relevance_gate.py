@@ -308,6 +308,13 @@ class TestGatePromptAllowsCpc(unittest.TestCase):
         from sources.long_task.relevance_gate import GATE_SYSTEM_PROMPT
         self.assertIn("CPC", GATE_SYSTEM_PROMPT)
 
+    def test_prompt_has_no_domain_examples(self):
+        from sources.long_task.relevance_gate import GATE_SYSTEM_PROMPT
+        self.assertNotIn("干燥/除湿", GATE_SYSTEM_PROMPT)
+        self.assertNotIn("电气柜", GATE_SYSTEM_PROMPT)
+        self.assertNotIn("半导体腔室", GATE_SYSTEM_PROMPT)
+        self.assertIn("CPC", GATE_SYSTEM_PROMPT)
+
 
 if __name__ == "__main__":
     unittest.main()
