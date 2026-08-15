@@ -243,5 +243,68 @@ async def _registry_with_one_knowledge(agent, knowledge):
     return {entry.name: entry}, []
 
 
+# ── Search observation digest ────────────────────────────────────────────────
+
+from sources.agents.react_tools import _items_digest
+
+
+def _usp_raw_item(app_number, title, applicant="ACME Corp", filing="2024-01-15"):
+    return {
+        "applicationMetaData": {
+            "applicationNumberText": app_number,
+            "inventionTitle": title,
+            "firstApplicantName": applicant,
+            "filingDate": filing,
+            "applicationStatusDescriptionText": "Patented Case",
+        },
+    }
+
+
+class TestItemsDigest(unittest.TestCase):
+    def test_formats_usp_items(self):
+        items = [_usp_raw_item("19511555", "Air dryer humidity control",
+                               applicant="New York Air Brake")]
+        text = _items_digest(items)
+        self.assertIn("19511555", text)
+        self.assertIn("Air dryer humidity control", text)
+        self.assertIn("New York Air Brake", text)
+
+    def test_caps_at_20_with_total_note(self):
+        items = [_usp_raw_item(str(19500000 + i), f"Title {i}") for i in range(30)]
+        text = _items_digest(items)
+        self.assertNotIn("Title 20", text)  # 21st item excluded
+        self.assertIn("共 30 条", text)
+
+    def test_non_usp_falls_back_to_truncated_json(self):
+        text = _items_digest([{"patentNumber": "US10150077B2",
+                               "inventionTitle": "Air dryer"}])
+        self.assertIn("US10150077B2", text)
+
+    def test_empty_returns_empty(self):
+        self.assertEqual(_items_digest([]), "")
+        self.assertEqual(_items_digest(None), "")
+
+
+class TestSearchObservationContent(unittest.TestCase):
+    """Search results observation carries real items, not just counts."""
+
+    def test_executor_returns_digest_for_raw_items(self):
+        agent = _FakeAgent()
+        entry_k = _Knowledge(3, ktype=1)
+        agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
+        registry, tools = asyncio.run(
+            _registry_with_one_knowledge(agent, entry_k))
+        executor = asyncio.run(make_action_executor(agent, registry, None))
+        agent._pending_raw_items = [
+            _usp_raw_item("19511555", "Air dryer humidity control"),
+            _usp_raw_item("18184836", "Moisture control enclosure"),
+        ]
+        result = asyncio.run(executor("uspto_search", {"params": "{}"}, 1))
+        self.assertEqual(result["kind"], "observation")
+        self.assertIn("19511555", result["text"])
+        self.assertIn("Air dryer humidity control", result["text"])
+        self.assertIn("完整列表已展示", result["text"])
+
+
 if __name__ == "__main__":
     unittest.main()

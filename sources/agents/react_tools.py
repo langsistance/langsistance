@@ -20,6 +20,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from sources.knowledge.knowledge import get_knowledge_tool_candidates
+from sources.long_task.candidate_metadata import build_candidates
 
 TOP_N = int(os.getenv("REACT_TOOL_TOP_N", "5"))
 MAX_PATENT_LIST_ITEMS = int(os.getenv("REACT_MAX_PATENT_LIST_ITEMS", "100"))
@@ -148,6 +149,47 @@ async def build_tool_set(
         add(ToolEntry(name=dynamic_tool.name, kind="knowledge",
                       knowledge=knowledge, tool_info=tool_info, tool=dynamic_tool))
     return registry, tools
+
+
+SEARCH_DIGEST_LIMIT = 20
+SEARCH_DIGEST_CHARS = 3000
+
+
+def _items_digest(raw_items, limit: int = SEARCH_DIGEST_LIMIT,
+                  lang: str = "zh") -> str:
+    """Serialize search raw_items into a bounded digest for the LLM.
+
+    USPTO-shaped items are flattened via build_candidates into
+    ``申请号 | 标题 | 申请人 | 申请日 | 状态`` lines.  Non-USPTO shapes
+    fall back to a truncated JSON dump.
+    """
+    items = raw_items or []
+    if not items:
+        return ""
+    candidates = build_candidates(items)
+    if candidates:
+        lines = []
+        for c in candidates[:limit]:
+            parts = [
+                c.get("patent_id") or "?",
+                c.get("title") or "(无标题)",
+                c.get("applicant") or "?",
+                c.get("filing_date") or "?",
+                c.get("status") or "?",
+            ]
+            lines.append(" | ".join(str(p) for p in parts))
+        text = "\n".join(lines)
+        if len(candidates) > limit:
+            note = (f"\n…共 {len(candidates)} 条" if lang == "zh"
+                    else f"\n...{len(candidates)} items total")
+            text += note
+        return text[:SEARCH_DIGEST_CHARS]
+    import json
+    try:
+        dumped = json.dumps(items, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        dumped = str(items)
+    return dumped[:SEARCH_DIGEST_CHARS]
 
 
 def _cap_patent_list(tool_info, items: list, lang: str) -> Tuple[list, str]:
@@ -280,10 +322,15 @@ async def make_action_executor(agent, registry, push_filter=None):
         if pending:
             capped, note = _cap_patent_list(entry.tool_info, pending, lang)
             agent._pending_raw_items = capped
+            digest = _items_digest(capped, lang=lang)
             if lang == "en":
-                text = f"Tool returned {len(capped)} record(s) ({note}); the full list is displayed afterwards."
+                text = (f"Search results ({len(capped)} records, {note}):\n"
+                        f"{digest}\n\n"
+                        "The full list is displayed to the user.")
             else:
-                text = f"工具返回 {len(capped)} 条记录（{note}），完整列表稍后展示。"
+                text = (f"检索结果（{len(capped)} 条，{note}）：\n"
+                        f"{digest}\n\n"
+                        "完整列表已展示给用户。")
             return {"kind": "observation", "text": text}
 
         return {"kind": "observation", "text": _summarize_observation(result, lang)}
