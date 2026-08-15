@@ -1045,3 +1045,28 @@ class TestTightenHint(unittest.TestCase):
     def test_no_hint_for_non_int(self):
         self.assertEqual(_tighten_hint(None, "zh"), "")
         self.assertEqual(_tighten_hint("99999", "zh"), "")
+
+
+class TestEnvelopeInvokeSchema(unittest.TestCase):
+    def test_payload_matches_real_schema(self):
+        from sources.agents.general_agent import DynamicBackendToolFunction
+        from sources.agents.react_tools import _tool_invoke_payload
+        from langchain_core.tools import StructuredTool
+
+        def _noop(**kwargs):
+            return "ok"
+
+        tool = StructuredTool.from_function(_noop, name="schema_probe",
+                                            description="d",
+                                            args_schema=DynamicBackendToolFunction)
+        envelope = {"method": "POST", "body": {"q": "x"}, "query": {},
+                    "path": None, "header": {}}
+        # bare envelope must FAIL the real schema (the production bug)
+        with self.assertRaises(Exception):
+            tool.invoke(envelope)
+        # the payload helper must PASS it
+        agent = _FakeAgent()
+        agent._last_user_id = "u1"
+        agent._last_query_id = "q1"
+        result = tool.invoke(_tool_invoke_payload(agent, envelope))
+        self.assertEqual(result, "ok")

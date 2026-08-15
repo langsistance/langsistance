@@ -397,6 +397,22 @@ def _build_uspto_envelope(tool_info, q: str) -> dict:
     }
 
 
+def _tool_invoke_payload(agent, params) -> dict:
+    """Invoke payload matching DynamicBackendToolFunction's required
+    fields (user_id / query_id / params).  The backend tool function
+    ignores provided IDs in favour of the agent's stored values — they
+    only exist to satisfy schema validation.
+
+    `params` may be a request envelope dict or a raw params value; it is
+    passed through to the backend tool's `params` field unchanged.
+    """
+    return {
+        "user_id": getattr(agent, "_last_user_id", "") or "",
+        "query_id": getattr(agent, "_last_query_id", "") or "",
+        "params": params,
+    }
+
+
 async def _collect_search_pages(agent, entry, args, first_raw: list) -> list:
     """Fetch extra result pages for a USPTO search call and merge them.
 
@@ -427,7 +443,8 @@ async def _collect_search_pages(agent, entry, args, first_raw: list) -> list:
         envelope = _build_uspto_envelope(entry.tool_info, q)
         envelope["body"]["pagination"] = {"offset": offset, "limit": page_size}
         try:
-            await asyncio.to_thread(entry.tool.invoke, {"params": envelope})
+            await asyncio.to_thread(entry.tool.invoke,
+                                    _tool_invoke_payload(agent, envelope))
         except Exception:
             break
         raw = getattr(agent, "_pending_raw_items", None) or []
@@ -668,7 +685,8 @@ async def make_action_executor(agent, registry, push_filter=None):
                     and not (_ENVELOPE_KEYS.intersection(args)):
                 q = _effective_query(args)
                 if q:
-                    invoke_args = _build_uspto_envelope(entry.tool_info, q)
+                    invoke_args = _tool_invoke_payload(
+                        agent, _build_uspto_envelope(entry.tool_info, q))
             result = await asyncio.to_thread(entry.tool.invoke, invoke_args)
         except Exception as exc:
             return {"kind": "observation", "text": f"Error: {exc}"}
