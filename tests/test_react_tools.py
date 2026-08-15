@@ -1,5 +1,6 @@
 """Tests for ReAct tool supply and action dispatch (react_tools)."""
 import asyncio
+import os
 import re
 import sys
 import types
@@ -870,6 +871,36 @@ class TestFlashProviderSelection(unittest.TestCase):
         with patch("sources.llm_provider.Provider",
                    side_effect=RuntimeError("no keys")):
             self.assertIsNone(_get_flash_provider(agent))
+
+    def test_env_model_override_wins(self):
+        agent = _FakeAgent()
+        fake_provider = object()
+        with patch.dict(os.environ, {
+                "REACT_SCORE_PROVIDER_FAMILY": "minimax",
+                "REACT_SCORE_MODEL": "MiniMax-M2.7-highspeed"}):
+            with patch("sources.llm_provider.Provider",
+                       return_value=fake_provider) as mock_provider, \
+                 patch("sources.long_task.config.get_long_task_config",
+                       return_value={"provider_family": "deepseek"}):
+                result = _get_flash_provider(agent)
+        self.assertIs(result, fake_provider)
+        mock_provider.assert_called_once_with(
+            provider_name="minimax", model="MiniMax-M2.7-highspeed",
+            server_address="", is_local=False)
+
+    def test_env_family_only_derives_model(self):
+        agent = _FakeAgent()
+        fake_provider = object()
+        with patch.dict(os.environ, {"REACT_SCORE_PROVIDER_FAMILY": "minimax"},
+                        clear=False):
+            with patch("sources.llm_provider.Provider",
+                       return_value=fake_provider) as mock_provider, \
+                 patch("sources.long_task.config.get_long_task_config",
+                       return_value={"provider_family": "deepseek"}):
+                _get_flash_provider(agent)
+        mock_provider.assert_called_once_with(
+            provider_name="minimax", model="MiniMax-M2.7-highspeed",
+            server_address="", is_local=False)
 
 
 class _ListLogger:

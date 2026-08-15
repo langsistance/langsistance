@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -327,10 +328,12 @@ def _get_flash_provider(agent):
     try:
         from sources.llm_provider import Provider
         from sources.long_task.config import get_long_task_config
-        family = ((get_long_task_config() or {}).get("provider_family")
-                  or "deepseek")
-        model = ("deepseek-v4-flash" if family == "deepseek"
-                 else "MiniMax-M2.7-highspeed")
+        family = (os.getenv("REACT_SCORE_PROVIDER_FAMILY")
+                  or ((get_long_task_config() or {}).get("provider_family")
+                      or "deepseek"))
+        model = (os.getenv("REACT_SCORE_MODEL")
+                 or ("deepseek-v4-flash" if family == "deepseek"
+                     else "MiniMax-M2.7-highspeed"))
         cached = Provider(provider_name=family, model=model,
                           server_address="", is_local=False)
     except Exception:
@@ -484,9 +487,16 @@ async def _rank_pending_pool(agent, candidates, lang) -> Tuple[list, str]:
         agent._search_pool = pool
     new_cands = pool.add_from_candidates(candidates)
     head = new_cands[:SCORE_PER_CALL]
+    _score_start = time.monotonic()
     scored = await score_candidates_concurrent(
         head, pool.query,
         _get_flash_provider(agent) or getattr(agent, "llm", None))
+    _glog = getattr(agent, "logger", None)
+    if _glog is not None:
+        _glog.info(
+            f"relevance scoring — candidates={len(head)} scored={scored} "
+            f"elapsed={round(time.monotonic() - _score_start, 1)}s"
+        )
     pool.prune()
     ranked = pool.ranked(MAX_PATENT_LIST_ITEMS)
     if lang == "en":
