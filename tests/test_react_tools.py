@@ -1020,3 +1020,24 @@ class TestCollectSearchPages(unittest.IsolatedAsyncioTestCase):
         agent, entry = await self._agent_with_pages({})
         collected = await _collect_search_pages(agent, entry, {"page": 1}, [])
         self.assertEqual(collected, [])
+
+
+from sources.agents.react_tools import (
+    REACT_TIGHTEN_SUGGEST_THRESHOLD,
+    _tighten_hint,
+)
+
+
+class TestTightenHint(unittest.TestCase):
+    def test_hint_above_threshold_zh(self):
+        self.assertIn("收紧", _tighten_hint(REACT_TIGHTEN_SUGGEST_THRESHOLD, "zh"))
+
+    def test_hint_above_threshold_en(self):
+        self.assertIn("tighten", _tighten_hint(REACT_TIGHTEN_SUGGEST_THRESHOLD, "en"))
+
+    def test_no_hint_below_threshold(self):
+        self.assertEqual(_tighten_hint(REACT_TIGHTEN_SUGGEST_THRESHOLD - 1, "zh"), "")
+
+    def test_no_hint_for_non_int(self):
+        self.assertEqual(_tighten_hint(None, "zh"), "")
+        self.assertEqual(_tighten_hint("99999", "zh"), "")

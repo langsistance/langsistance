@@ -32,6 +32,22 @@ TOP_N = int(os.getenv("REACT_TOOL_TOP_N", "5"))
 MAX_PATENT_LIST_ITEMS = int(os.getenv("REACT_MAX_PATENT_LIST_ITEMS", "100"))
 RELEVANCE_RANK_ENABLED = os.getenv("REACT_RELEVANCE_RANK", "1") != "0"
 REACT_POOL_MAX_PAGES = int(os.getenv("REACT_POOL_MAX_PAGES", "2"))
+REACT_TIGHTEN_SUGGEST_THRESHOLD = int(os.getenv("REACT_TIGHTEN_SUGGEST_THRESHOLD", "5000"))
+
+
+def _tighten_hint(total, lang: str = "zh") -> str:
+    """Deterministic advice appended to observations when a search hit
+    far too many results — the agent gets the suggestion from code
+    instead of relying on its own judgment."""
+    if not isinstance(total, int):
+        return ""
+    if total < REACT_TIGHTEN_SUGGEST_THRESHOLD:
+        return ""
+    if lang == "en":
+        return ("\nToo many hits: tighten the ladder query "
+                "(e.g. ladder #1) or add a scene-constraint term and retry.")
+    return ("\n命中过多：建议采用更收紧的阶梯检索式（如阶梯第 1 条）"
+            "或添加场景限定词后重试。")
 SEARCH_KNOWLEDGE_TOOL_NAME = "search_my_knowledge"
 MAX_SEARCH_RESULTS = 5
 MAX_OBSERVATION_CHARS = 300
@@ -699,6 +715,7 @@ async def make_action_executor(agent, registry, push_filter=None):
             if isinstance(total, int):
                 total_note = (f", {total} total hits" if lang == "en"
                               else f"，总命中 {total}")
+                total_note += _tighten_hint(total, lang)
             if lang == "en":
                 text = (f"Search results ({len(shown)} records{total_note}, {note}):\n"
                         f"{digest}\n\n"
