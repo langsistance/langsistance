@@ -161,3 +161,30 @@ class TestRewritePromptLadderDepth(unittest.TestCase):
     def test_prompt_requires_loosest_level_single_concept(self):
         self.assertIn("只含一个核心概念", REWRITE_SYSTEM_PROMPT)
         self.assertIn("单组", REWRITE_SYSTEM_PROMPT)
+
+
+class TestRewritePromptWildcardClarity(unittest.TestCase):
+    def test_prompt_requires_clarity_judgment(self):
+        self.assertIn("明确程度", REWRITE_SYSTEM_PROMPT)
+        self.assertIn("一般性技术概念", REWRITE_SYSTEM_PROMPT)
+        self.assertIn("判断不清", REWRITE_SYSTEM_PROMPT)
+
+    def test_prompt_wildcard_examples_are_cross_domain(self):
+        self.assertIn("filter*", REWRITE_SYSTEM_PROMPT)
+        self.assertIn("cataly*", REWRITE_SYSTEM_PROMPT)
+
+    def test_prompt_has_no_single_domain_anchor(self):
+        self.assertNotIn("air dry", REWRITE_SYSTEM_PROMPT)
+        self.assertNotIn("dehumidif", REWRITE_SYSTEM_PROMPT)
+
+
+class TestLadderGuidanceWildcardRetry(unittest.TestCase):
+    def test_guidance_suggests_wildcard_retry_on_false_zero_zh(self):
+        text = format_ladder_guidance({"queries": ['("a" OR "b") AND ("c" OR "d")']}, "zh")
+        self.assertIn("假性零命中", text)
+        self.assertIn("通配符", text)
+
+    def test_guidance_suggests_wildcard_retry_on_false_zero_en(self):
+        text = format_ladder_guidance({"queries": ['("a" OR "b") AND ("c" OR "d")']}, "en")
+        self.assertIn("false zero", text)
+        self.assertIn("wildcard", text)

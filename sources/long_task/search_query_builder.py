@@ -20,7 +20,11 @@ REWRITE_SYSTEM_PROMPT = (
     "步骤：\n"
     "1. 从用户问题中抽取 2-4 个核心技术概念（忽略语气词和通用词）\n"
     "2. 每个概念翻译成该领域专利文献常用的英文术语，并给出 2-5 个"
-    "同义/近义关键词（含行业缩写、上位/下位词、英美拼写变体）\n"
+    "同义/近义关键词（含行业缩写、上位/下位词、英美拼写变体），"
+    "并判断该概念的明确程度：\n"
+    "   - 明确专有名词/品牌名/具体化合物名 → 精确词即可\n"
+    "   - 一般性技术概念 → 关键词集中必须包含至少一个词尾通配符变体\n"
+    "   - 判断不清 → 精确词与词尾通配符变体都放入关键词集\n"
     "3. 可以为提高精度添加用户未提及的合理领域限定概念（如应用场景、"
     "设备载体），但每个限定必须有依据，且限定属于最弱概念层级\n"
     "4. 用检索式语法组装查询串：\n"
@@ -28,11 +32,10 @@ REWRITE_SYSTEM_PROMPT = (
     "   - 同一概念的同义词用 OR 连接并放在圆括号内："
     '("3d printing" OR "additive manufacturing" OR "rapid prototyping")\n'
     "   - 不同概念之间用 AND 连接\n"
-    "   - 支持词尾通配符：air dry* 匹配 air dryer/drying/dried，"
-    "dehumidif* 匹配 dehumidifier/dehumidification；通配符只在词尾生效，"
+    "   - 支持词尾通配符：filter* 匹配 filter/filtering/filtration，"
+    "cataly* 匹配 catalyst/catalysis/catalytic；通配符只在词尾生效，"
     "引号短语内不生效，词首通配符无效\n"
-    "   - 为每个概念补充常见词形变体（dryer/drying、dehumidifier/"
-    "dehumidification 等），或直接用通配符覆盖变体\n"
+    "   - 为每个概念补充常见词形变体，或直接用通配符覆盖变体\n"
     "   - 每个检索式最多 12 个关键词、250 字符，禁止出现中文\n"
     "5. 输出 2-4 个检索式，必须按松紧排序：\n"
     "   - 第一个为最紧的完整组合式（全部概念 + 领域限定）\n"
@@ -128,4 +131,15 @@ def format_ladder_guidance(rewrite: dict, lang: str = "zh") -> str:
     lines = [header]
     for i, q in enumerate(queries, start=1):
         lines.append(f"{i}. {q}")
+    if lang == "en":
+        lines.append(
+            "\nAlso: if a query returns 0 hits even though the technology "
+            "clearly exists (a false zero), add word-ending wildcard "
+            "variants to the concept terms and retry."
+        )
+    else:
+        lines.append(
+            "\n另外：当某级检索式在相关技术确实存在时仍返回 0 命中"
+            "（假性零命中），可给概念词补充词尾通配符变体后重试。"
+        )
     return "\n".join(lines)
