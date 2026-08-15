@@ -60,5 +60,29 @@ class TestPruneForSummary(unittest.TestCase):
         self.assertLess(total_chars, 50 * 15000)
 
 
+class TestBoundedSummaryItems(unittest.TestCase):
+    def test_total_payload_within_budget(self):
+        from sources.agents.general_agent import _bounded_summary_items
+        big = "x" * 20000  # oversized value gets truncated by the pruner
+        items = [{"title": f"T{i}", "bag": big} for i in range(30)]
+        kept = _bounded_summary_items(items)
+        import json
+        total = sum(len(json.dumps(i, ensure_ascii=False, default=str)) for i in kept)
+        self.assertLessEqual(total, 121000)
+        self.assertLess(len(kept), len(items))
+
+    def test_keeps_leading_items_in_order(self):
+        from sources.agents.general_agent import _bounded_summary_items
+        items = [{"title": f"T{i}", "pad": "y" * 6000} for i in range(10)]
+        kept = _bounded_summary_items(items)
+        self.assertEqual([i["title"] for i in kept],
+                         [f"T{i}" for i in range(len(kept))])
+        self.assertGreaterEqual(len(kept), 1)
+
+    def test_empty_returns_empty(self):
+        from sources.agents.general_agent import _bounded_summary_items
+        self.assertEqual(_bounded_summary_items([]), [])
+
+
 if __name__ == "__main__":
     unittest.main()

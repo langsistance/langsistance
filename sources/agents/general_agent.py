@@ -302,6 +302,7 @@ def _format_markdown_value(value) -> str:
 
 
 LARGE_LIST_SUMMARY_MAX_VALUE_CHARS = 5000
+SUMMARY_MAX_CHARS = int(os.getenv("GENERAL_AGENT_SUMMARY_MAX_CHARS", "120000"))
 
 
 def _prune_for_summary(items: list, max_value_chars: int = None) -> list:
@@ -323,6 +324,26 @@ def _prune_for_summary(items: list, max_value_chars: int = None) -> list:
             continue
         result.append(_prune_item_for_llm(item, MAX_ITEM_CHARS_FOR_LLM, max_value_chars))
     return result
+
+
+def _bounded_summary_items(items: list) -> list:
+    """Prune *items* and keep only the leading slice that fits the
+    summary character budget — the pool ranks by relevance, so the head
+    of the list is the most valuable part."""
+    pruned = _prune_for_summary(items)
+    kept: list = []
+    budget = 0
+    for item in pruned:
+        try:
+            size = len(json.dumps(item, ensure_ascii=False, default=str))
+        except (TypeError, ValueError):
+            size = LARGE_LIST_SUMMARY_MAX_VALUE_CHARS
+        if kept and budget + size > SUMMARY_MAX_CHARS:
+            break
+        kept.append(item)
+        budget += size
+    return kept
+
 
 # 瀹氫箟鍙傛暟妯″瀷
 class DynamicToolFunction(BaseModel):
@@ -1955,7 +1976,7 @@ Begin your response now:
 
         # ── 大列表摘要模式：剔除超长字段后做整体总结，跳过逐条批处理 ──
         if USE_LARGE_LIST_SUMMARY:
-            summary_items = _prune_for_summary(pending)
+            summary_items = _bounded_summary_items(pending)
             lang = getattr(self, '_lang', 'zh')
             if lang == 'en':
                 heading = f"## Results — Summary ({len(pending)} items)"
