@@ -51,6 +51,16 @@ class TestSanitizeUsptoQuery(unittest.TestCase):
             '"compressed air dryer" AND',
         )
 
+    def test_strips_fullwidth_punctuation_and_kana(self):
+        self.assertEqual(
+            sanitize_uspto_query('("air dryer" OR desiccant) AND 湿度，。'),
+            '("air dryer" OR desiccant) AND',
+        )
+        self.assertEqual(
+            sanitize_uspto_query('ドライヤー air dryer'),
+            'air dryer',
+        )
+
     def test_caps_length(self):
         long_q = " AND ".join([f'term{i}' for i in range(50)])
         result = sanitize_uspto_query(long_q)

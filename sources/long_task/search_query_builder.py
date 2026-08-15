@@ -11,7 +11,7 @@ from typing import Any
 
 DEFAULT_QUERY_MAX_LENGTH = 250
 
-_CJK_RE = re.compile(r'[一-鿿]')
+_CJK_RE = re.compile(r'[　-〿぀-ヿ㐀-䶿一-鿿＀-￯가-힯]')
 
 REWRITE_SYSTEM_PROMPT = (
     "你是一个专利检索式构造专家。把用户的自然语言技术问题改写为 "
