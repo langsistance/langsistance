@@ -13,7 +13,6 @@ from sources.long_task.candidate_metadata import (
 def _usp_item(app_number, title, applicant="ACME Corp", filing="2024-01-15",
               status="Patented Case", cpc=None, grant=None, continuity=None):
     meta = {
-        "applicationNumberText": app_number,
         "inventionTitle": title,
         "firstApplicantName": applicant,
         "filingDate": filing,
@@ -24,7 +23,10 @@ def _usp_item(app_number, title, applicant="ACME Corp", filing="2024-01-15",
     if grant:
         meta["grantDate"] = grant
         meta["patentNumber"] = grant.replace(",", "")
-    item = {"applicationMetaData": meta}
+    item = {
+        "applicationNumberText": app_number,
+        "applicationMetaData": meta,
+    }
     if continuity:
         item["parentContinuityBag"] = continuity
     return item
@@ -60,6 +62,17 @@ class TestBuildCandidates(unittest.TestCase):
     def test_handles_non_dict_items(self):
         candidates = build_candidates([None, "junk", 42])
         self.assertEqual(candidates, [])
+
+    def test_nested_application_number_fallback_still_parses(self):
+        item = {
+            "applicationMetaData": {
+                "applicationNumberText": "19511555",
+                "inventionTitle": "Legacy nested shape",
+            },
+        }
+        candidates = build_candidates([item])
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["patent_id"], "19511555")
 
 
 class TestEnsureSearchFields(unittest.TestCase):

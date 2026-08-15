@@ -252,8 +252,8 @@ from sources.agents.react_tools import _items_digest
 
 def _usp_raw_item(app_number, title, applicant="ACME Corp", filing="2024-01-15"):
     return {
+        "applicationNumberText": app_number,
         "applicationMetaData": {
-            "applicationNumberText": app_number,
             "inventionTitle": title,
             "firstApplicantName": applicant,
             "filingDate": filing,
@@ -654,7 +654,7 @@ class TestExecuteActionPoolPath(unittest.TestCase):
         self.assertLess(pos_high, pos_low)
         self.assertTrue(agent._search_ranked)
         # display list reordered to ranked order
-        ids = [str(i.get("applicationMetaData", {}).get("applicationNumberText"))
+        ids = [str(i.get("applicationNumberText"))
                for i in agent._pending_raw_items]
         self.assertEqual(ids, ["18184836", "19511555"])
 

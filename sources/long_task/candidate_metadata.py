@@ -89,7 +89,11 @@ def build_candidates(raw_items: list) -> list[dict]:
         if not isinstance(item, dict):
             continue
         m = _meta(item)
-        pid = str(m.get("applicationNumberText") or "").strip()
+        # Real USPTO responses carry applicationNumberText at the TOP
+        # level of each patentFileWrapperDataBag item; read that first
+        # and keep the nested read as a fallback for other source shapes.
+        pid = str(item.get("applicationNumberText")
+                  or m.get("applicationNumberText") or "").strip()
         if not pid:
             continue
         candidates.append({

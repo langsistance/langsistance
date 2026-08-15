@@ -28,8 +28,8 @@ class _FakeProvider:
 
 def _usp_item(app_number, title):
     return {
+        "applicationNumberText": app_number,
         "applicationMetaData": {
-            "applicationNumberText": app_number,
             "inventionTitle": title,
             "firstApplicantName": "ACME",
             "filingDate": "2024-01-15",

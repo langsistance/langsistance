@@ -9,8 +9,8 @@ from sources.long_task.chat_relevance import POOL_MAX_CANDIDATES, SearchPool
 def _usp_raw_item(app_number, title, applicant="ACME Corp",
                   filing="2024-01-15", continuity_ids=None):
     item = {
+        "applicationNumberText": app_number,
         "applicationMetaData": {
-            "applicationNumberText": app_number,
             "inventionTitle": title,
             "firstApplicantName": applicant,
             "filingDate": filing,
