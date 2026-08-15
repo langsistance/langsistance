@@ -23,6 +23,7 @@ from sources.knowledge.knowledge import get_knowledge_tool_candidates
 from sources.long_task.candidate_metadata import (
     build_candidates,
     is_keyword_search_tool,
+    is_uspto_tool,
 )
 from sources.long_task.chat_relevance import SearchPool
 
@@ -245,13 +246,14 @@ def _cap_patent_list(tool_info, items: list, lang: str) -> Tuple[list, str]:
 
 
 def _relevance_pool_applies(agent, tool_info, raw_items) -> bool:
-    """Pool + ranking applies only to backend keyword search tools whose
-    results flatten via build_candidates (USPTO shape)."""
+    """Pool + ranking applies to backend USPTO search tools whose results
+    flatten via build_candidates (any USPTO-shaped patent list — keyword,
+    assignee, or otherwise — merges into the turn's ranked pool)."""
     if not RELEVANCE_RANK_ENABLED:
         return False
     if getattr(tool_info, "push", None) != 2:
         return False
-    if not is_keyword_search_tool(tool_info):
+    if not is_uspto_tool(tool_info):
         return False
     return bool(build_candidates(raw_items or []))
 
@@ -555,7 +557,12 @@ async def make_action_executor(agent, registry, push_filter=None):
                 digest = _ranked_digest(ranked, lang=lang)
             else:
                 shown, note = _cap_patent_list(entry.tool_info, pending, lang)
-                agent._pending_raw_items = shown
+                # A ranked pool exists for this turn — keep its display
+                # list; this legacy result still feeds the observation
+                # digest but must not overwrite the ranked display.
+                pool_exists = bool(getattr(agent, "_search_pool", None))
+                if not pool_exists:
+                    agent._pending_raw_items = shown
                 digest = _items_digest(shown, lang=lang)
             total = getattr(agent, "_last_search_total", None)
             total_note = ""

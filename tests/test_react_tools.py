@@ -627,6 +627,9 @@ class TestRankedDigest(unittest.TestCase):
         self.assertIn("已按相关度排序", text)
 
 
+_USPTO_URL = "https://api.uspto.gov/api/v1/patent/applications/search"
+
+
 class TestExecuteActionPoolPath(unittest.TestCase):
     @patch("sources.agents.react_tools.RELEVANCE_RANK_ENABLED", True)
     def test_pool_path_ranks_observation_by_score(self):
@@ -634,7 +637,7 @@ class TestExecuteActionPoolPath(unittest.TestCase):
         agent.llm.set_scores({"19511555": 1, "18184836": 5})
         entry_k = _Knowledge(3, ktype=1)
         agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
-        tool_info = _ToolInfo("search_patent_by_key_word")
+        tool_info = _ToolInfo("search_patent_by_key_word", url=_USPTO_URL)
         from sources.agents.react_tools import ToolEntry
         dynamic_tool = agent.get_dynamic_tool_for(entry_k, tool_info)
         entry = ToolEntry(name=dynamic_tool.name, kind="knowledge",
@@ -664,7 +667,7 @@ class TestExecuteActionPoolPath(unittest.TestCase):
         agent.llm.set_scores({})
         entry_k = _Knowledge(3, ktype=1)
         agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
-        tool_info = _ToolInfo("search_patent_by_key_word")
+        tool_info = _ToolInfo("search_patent_by_key_word", url=_USPTO_URL)
         from sources.agents.react_tools import ToolEntry
         dynamic_tool = agent.get_dynamic_tool_for(entry_k, tool_info)
         entry = ToolEntry(name=dynamic_tool.name, kind="knowledge",
@@ -680,12 +683,17 @@ class TestExecuteActionPoolPath(unittest.TestCase):
         self.assertIn("池共 2 条", result["text"])
 
     @patch("sources.agents.react_tools.RELEVANCE_RANK_ENABLED", True)
-    def test_pool_skipped_for_non_keyword_title(self):
+    def test_pool_skipped_for_non_uspto_url(self):
         agent = _PoolAgent()
         entry_k = _Knowledge(3, ktype=1)
         agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
-        registry, tools = asyncio.run(_registry_with_one_knowledge(agent, entry_k))
-        executor = asyncio.run(make_action_executor(agent, registry, None))
+        tool_info = _ToolInfo("uspto search", url="https://api.example.com/search")
+        from sources.agents.react_tools import ToolEntry
+        dynamic_tool = agent.get_dynamic_tool_for(entry_k, tool_info)
+        entry = ToolEntry(name=dynamic_tool.name, kind="knowledge",
+                          knowledge=entry_k, tool_info=tool_info,
+                          tool=dynamic_tool)
+        executor = asyncio.run(make_action_executor(agent, {entry.name: entry}, None))
         agent._pending_raw_items = [_usp_raw_item("19511555", "A")]
         result = asyncio.run(executor("uspto_search", {"params": "{}"}, 1))
         self.assertNotIn("已按相关度排序", result["text"])
@@ -696,7 +704,7 @@ class TestExecuteActionPoolPath(unittest.TestCase):
         agent = _PoolAgent()
         entry_k = _Knowledge(3, ktype=1)
         agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
-        tool_info = _ToolInfo("search_patent_by_key_word")
+        tool_info = _ToolInfo("search_patent_by_key_word", url=_USPTO_URL)
         from sources.agents.react_tools import ToolEntry
         dynamic_tool = agent.get_dynamic_tool_for(entry_k, tool_info)
         entry = ToolEntry(name=dynamic_tool.name, kind="knowledge",
@@ -711,7 +719,7 @@ class TestExecuteActionPoolPath(unittest.TestCase):
         agent = _PoolAgent()
         entry_k = _Knowledge(3, ktype=1)
         agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
-        tool_info = _ToolInfo("search_patent_by_key_word")
+        tool_info = _ToolInfo("search_patent_by_key_word", url=_USPTO_URL)
         from sources.agents.react_tools import ToolEntry
         dynamic_tool = agent.get_dynamic_tool_for(entry_k, tool_info)
         entry = ToolEntry(name=dynamic_tool.name, kind="knowledge",
@@ -730,7 +738,7 @@ class TestExecuteActionPoolPath(unittest.TestCase):
         agent.llm.fail = True
         entry_k = _Knowledge(3, ktype=1)
         agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
-        tool_info = _ToolInfo("search_patent_by_key_word")
+        tool_info = _ToolInfo("search_patent_by_key_word", url=_USPTO_URL)
         from sources.agents.react_tools import ToolEntry
         dynamic_tool = agent.get_dynamic_tool_for(entry_k, tool_info)
         entry = ToolEntry(name=dynamic_tool.name, kind="knowledge",
@@ -742,6 +750,57 @@ class TestExecuteActionPoolPath(unittest.TestCase):
         result = asyncio.run(executor("uspto_search", {"params": "{}"}, 1))
         self.assertIn("已按相关度排序", result["text"])
         self.assertIn("本次新评分 0 条", result["text"])
+
+    @patch("sources.agents.react_tools.RELEVANCE_RANK_ENABLED", True)
+    def test_assignee_style_uspto_tool_pools(self):
+        agent = _PoolAgent()
+        agent.llm.set_scores({})
+        entry_k = _Knowledge(3, ktype=1)
+        agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
+        tool_info = _ToolInfo("search_patent_by_assignee", url=_USPTO_URL)
+        from sources.agents.react_tools import ToolEntry
+        dynamic_tool = agent.get_dynamic_tool_for(entry_k, tool_info)
+        entry = ToolEntry(name=dynamic_tool.name, kind="knowledge",
+                          knowledge=entry_k, tool_info=tool_info,
+                          tool=dynamic_tool)
+        executor = asyncio.run(make_action_executor(agent, {entry.name: entry}, None))
+        agent._pending_raw_items = [_usp_raw_item("19511555", "A")]
+        result = asyncio.run(executor(entry.name, {"params": "{}"}, 1))
+        self.assertIn("已按相关度排序", result["text"])
+
+    @patch("sources.agents.react_tools.RELEVANCE_RANK_ENABLED", True)
+    def test_legacy_call_keeps_pooled_display(self):
+        agent = _PoolAgent()
+        agent.llm.set_scores({"19511555": 5})
+        entry_k = _Knowledge(3, ktype=1)
+        agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
+        tool_info = _ToolInfo("search_patent_by_key_word", url=_USPTO_URL)
+        from sources.agents.react_tools import ToolEntry
+        dynamic_tool = agent.get_dynamic_tool_for(entry_k, tool_info)
+        entry = ToolEntry(name=dynamic_tool.name, kind="knowledge",
+                          knowledge=entry_k, tool_info=tool_info,
+                          tool=dynamic_tool)
+        executor = asyncio.run(make_action_executor(agent, {entry.name: entry}, None))
+        # First: pooled call populates the ranked display
+        agent._pending_raw_items = [_usp_raw_item("19511555", "A")]
+        asyncio.run(executor(entry.name, {"params": "{}"}, 1))
+        pooled_display = agent._pending_raw_items
+        self.assertEqual(len(pooled_display), 1)
+        self.assertIs(agent._search_ranked, True)
+        # Then: a legacy (non-USPTO-url) tool call must NOT overwrite the
+        # ranked display. The ranked pool exists, so the legacy else-branch
+        # skips its own `_pending_raw_items = shown` overwrite and the
+        # ranked display list is preserved across the dispatch.
+        legacy_info = _ToolInfo("uspto search", url="https://api.example.com/search")
+        legacy_tool = agent.get_dynamic_tool_for(entry_k, legacy_info)
+        legacy_entry = ToolEntry(name=legacy_tool.name, kind="knowledge",
+                                 knowledge=entry_k, tool_info=legacy_info,
+                                 tool=legacy_tool)
+        executor2 = asyncio.run(
+            make_action_executor(agent, {legacy_entry.name: legacy_entry}, None))
+        result = asyncio.run(executor2(legacy_entry.name, {"params": "{}"}, 2))
+        self.assertIs(agent._pending_raw_items, pooled_display)
+        self.assertNotIn("已按相关度排序", result["text"])
 
 
 # sources/llm_provider imports `ollama` (optional, not installed here); that
