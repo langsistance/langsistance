@@ -146,3 +146,12 @@ class TestFormatLadderGuidance(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRewritePromptWildcardRules(unittest.TestCase):
+    def test_prompt_documents_wildcard_usage(self):
+        self.assertIn("通配符", REWRITE_SYSTEM_PROMPT)
+        self.assertIn("词尾", REWRITE_SYSTEM_PROMPT)
+
+    def test_prompt_forbids_wildcard_inside_quoted_phrases(self):
+        self.assertIn("引号", REWRITE_SYSTEM_PROMPT)

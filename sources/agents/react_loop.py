@@ -102,6 +102,12 @@ class ReActLoop:
                     "params_brief": self._params_brief(args),
                     "reasoning_text": (reasoning or "")[:self.max_reasoning_chars],
                 })
+                # A transient status accompanies every tool call so frontends
+                # without the step timeline still show live progress during
+                # the silent tool rounds (no token stream in between).
+                await self._emit("status", {
+                    "message": self._thought_line(steps, action_name),
+                })
 
                 try:
                     result = await self.execute_action(action_name, args, steps)

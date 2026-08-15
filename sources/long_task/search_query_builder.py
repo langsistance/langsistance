@@ -28,6 +28,11 @@ REWRITE_SYSTEM_PROMPT = (
     "   - 同一概念的同义词用 OR 连接并放在圆括号内："
     '("3d printing" OR "additive manufacturing" OR "rapid prototyping")\n'
     "   - 不同概念之间用 AND 连接\n"
+    "   - 支持词尾通配符：air dry* 匹配 air dryer/drying/dried，"
+    "dehumidif* 匹配 dehumidifier/dehumidification；通配符只在词尾生效，"
+    "引号短语内不生效，词首通配符无效\n"
+    "   - 为每个概念补充常见词形变体（dryer/drying、dehumidifier/"
+    "dehumidification 等），或直接用通配符覆盖变体\n"
     "   - 每个检索式最多 12 个关键词、250 字符，禁止出现中文\n"
     "5. 输出 2-4 个检索式，必须按松紧排序：\n"
     "   - 第一个为最紧的完整组合式（全部概念 + 领域限定）\n"

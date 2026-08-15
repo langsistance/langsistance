@@ -77,7 +77,7 @@ class TestReActLoop(unittest.TestCase):
         self.assertEqual(messages[-1]["tool_call_id"], "c1")
         self.assertEqual(messages[-1]["content"], "返回 3 条")
         self.assertEqual([e[0] for e in events],
-                         ["step", "observation", "agent_elapsed"])
+                         ["step", "status", "observation", "agent_elapsed"])
         self.assertEqual(events[0][1]["action"], "search")
         self.assertEqual(events[0][1]["reasoning_text"], "需要检索")
 
@@ -175,6 +175,21 @@ class TestReActLoop(unittest.TestCase):
                     if m.get("role") == "tool"]
         self.assertEqual(set(call_ids), set(tool_ids))
         self.assertEqual(len(tool_ids), 2)
+
+    def test_status_emitted_for_each_tool_call(self):
+        """A transient status accompanies every tool call so old frontends
+        see live progress during silent tool rounds (no token stream)."""
+        model = _FakeModel([
+            ("", [{"id": "c1", "name": "search", "args": {"q": "x"}}], ""),
+            ("答案", [], ""),
+        ])
+        events = _Events()
+        executor = _FakeExecutor({"search": {"kind": "observation", "text": "3 条"}})
+        _run(ReActLoop(model, executor, events), model, executor)
+        statuses = [p for t, p in events if t == "status"]
+        self.assertEqual(len(statuses), 1)
+        self.assertIn("search", statuses[0]["message"])
+        self.assertIn("正在调用", statuses[0]["message"])
 
 
 if __name__ == "__main__":

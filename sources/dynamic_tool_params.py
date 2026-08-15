@@ -471,6 +471,18 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
         "headers": headers,
         "timeout": timeout,
     }
+    if method == "GET" and isinstance(request_body, dict) and request_body:
+        # GET requests cannot carry a body — serialize body fields into the
+        # query string, or tools whose search term lives in body.q (the
+        # flat-merge output) silently send no term to the API.  Explicit
+        # query params win over body keys.
+        for _k, _v in request_body.items():
+            if _k in request_params:
+                continue
+            if isinstance(_v, (dict, list)):
+                request_params[_k] = json.dumps(_v, ensure_ascii=False)
+            else:
+                request_params[_k] = _v
     if method in {"POST", "PUT", "PATCH"}:
         if not request_body:
             # Only reject if the TEMPLATE also expects a non-empty body.

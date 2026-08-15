@@ -1497,6 +1497,9 @@ Begin your response now:
         self._lang = lang
         # Pre-build the tight-to-loose query ladder for this request so the
         # loop system prompt can offer it to the LLM upfront.
+        if callback_handler:
+            await _emit_status(callback_handler,
+                "正在构造检索式..." if lang == 'zh' else "Building search queries...")
         from sources.long_task.search_query_builder import build_search_queries
         try:
             self._search_rewrite = await build_search_queries(prompt, self.llm)

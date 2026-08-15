@@ -401,3 +401,76 @@ class TestStringQueryKeyEnvelopeCollision(unittest.TestCase):
             sent_body["q"],
             '("dry air" OR desiccant) AND ("humidity control")')
         self.assertEqual(result["raw_items"], payload["patentFileWrapperDataBag"])
+
+
+class TestGetRequestBodyMergedIntoQuery(unittest.TestCase):
+    """GET requests cannot carry a body — body fields must be serialized
+    into the query string, or tools whose search term lives in body.q
+    (flat-merge output) silently send no term to the API."""
+
+    def _tool(self, params_str, url="https://example.com/api"):
+        from unittest.mock import MagicMock
+        tool = MagicMock()
+        tool.params = params_str
+        tool.url = url
+        tool.timeout = 30
+        return tool
+
+    def _resp(self, payload=None):
+        from unittest.mock import MagicMock
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.headers = {"Content-Type": "application/json"}
+        resp.content = b'{}'
+        resp.text = '{}'
+        resp.json = lambda: payload if payload is not None else {}
+        return resp
+
+    def test_flat_merge_term_reaches_query_params_on_get(self):
+        # Google Patents scenario: GET tool whose template carries body.q.
+        from unittest.mock import patch
+        from sources.dynamic_tool_params import execute_backend_tool_request
+        tool = self._tool('{"method":"GET","query":{},"body":{"q":"template"}}',
+                          "https://google-search-master-mega.p.rapidapi.com/patents")
+        with patch("sources.dynamic_tool_params.outbound_http.request",
+                   return_value=self._resp()) as mock_req:
+            execute_backend_tool_request(
+                tool, {"query": "dry air humidity control"})
+        sent = mock_req.call_args[1]
+        self.assertEqual(sent["params"]["q"], "dry air humidity control")
+        self.assertNotIn("json", sent)
+
+    def test_envelope_body_merged_into_query_on_get(self):
+        from unittest.mock import patch
+        from sources.dynamic_tool_params import execute_backend_tool_request
+        tool = self._tool('{"method":"GET","query":{},"body":{}}')
+        with patch("sources.dynamic_tool_params.outbound_http.request",
+                   return_value=self._resp()) as mock_req:
+            execute_backend_tool_request(
+                tool, {"body": {"q": "hello", "limit": 10}})
+        sent = mock_req.call_args[1]
+        self.assertEqual(sent["params"]["q"], "hello")
+        self.assertEqual(sent["params"]["limit"], 10)
+
+    def test_explicit_query_params_win_over_body_on_get(self):
+        from unittest.mock import patch
+        from sources.dynamic_tool_params import execute_backend_tool_request
+        tool = self._tool('{"method":"GET","query":{},"body":{}}')
+        with patch("sources.dynamic_tool_params.outbound_http.request",
+                   return_value=self._resp()) as mock_req:
+            execute_backend_tool_request(
+                tool, {"query": {"q": "explicit"}, "body": {"q": "shadow"}})
+        sent = mock_req.call_args[1]
+        self.assertEqual(sent["params"]["q"], "explicit")
+
+    def test_nested_body_values_json_encoded_on_get(self):
+        from unittest.mock import patch
+        from sources.dynamic_tool_params import execute_backend_tool_request
+        tool = self._tool('{"method":"GET","query":{},"body":{}}')
+        with patch("sources.dynamic_tool_params.outbound_http.request",
+                   return_value=self._resp()) as mock_req:
+            execute_backend_tool_request(
+                tool, {"body": {"pagination": {"offset": 0, "limit": 50}}})
+        sent = mock_req.call_args[1]
+        self.assertIn("offset", sent["params"]["pagination"])
+        self.assertIn("limit", sent["params"]["pagination"])
