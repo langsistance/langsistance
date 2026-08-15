@@ -29,7 +29,7 @@
 | `sources/agents/react_tools.py` | **修改**。`_items_digest`、`_maybe_rewrite_search_query`、`fetch_patent_spec` 注册与执行分支 |
 | `sources/agents/general_agent.py` | **修改**。`create_agent` 状态重置加一行 `self._search_rewrite = None` |
 | `celery_worker.py` | **修改**。删除被抽取函数，改为 import 共享模块（行为逐字节不变） |
-| `tests/test_uspto_download.py` | **新建** |
+| `tests/test_uspto_download_shared.py` | **新建** |
 | `tests/test_patent_distill.py` | **新建** |
 | `tests/test_react_tools.py` | **修改**（追加 3 组新测试） |
 
@@ -40,7 +40,7 @@
 **Files:**
 - Create: `sources/long_task/uspto_download.py`
 - Modify: `celery_worker.py`（删除被抽取函数 + 改 import）
-- Test: `tests/test_uspto_download.py`
+- Test: `tests/test_uspto_download_shared.py`
 
 **Interfaces:**
 - Produces（Task 5 依赖）:
@@ -48,7 +48,7 @@
 
 - [ ] **Step 1: 写失败测试**
 
-创建 `tests/test_uspto_download.py`：
+创建 `tests/test_uspto_download_shared.py`（注意：`tests/test_uspto_download.py` 已存在且测试既有模块 `sources/uspto_download.py`，勿混用）：
 
 ```python
 """Tests for uspto_download — shared USPTO spec download module."""
@@ -889,9 +889,9 @@ class TestFetchPatentSpecExecution(unittest.IsolatedAsyncioTestCase):
         agent = _SpecAgent()
         executor = asyncio.run(
             make_action_executor(agent, self._registry(agent), None))
-        with patch("sources.agents.react_tools.download_uspto_patent_text",
+        with patch("sources.long_task.uspto_download.download_uspto_patent_text",
                    new=AsyncMock(return_value=("FULL SPEC TEXT", None))):
-            with patch("sources.agents.react_tools.distill_patent_spec",
+            with patch("sources.long_task.patent_distill.distill_patent_spec",
                        new=AsyncMock(return_value={
                            "发明点": "a", "技术方案": "b",
                            "权利要求要点": "c",
@@ -907,7 +907,7 @@ class TestFetchPatentSpecExecution(unittest.IsolatedAsyncioTestCase):
         agent = _SpecAgent()
         executor = asyncio.run(
             make_action_executor(agent, self._registry(agent), None))
-        with patch("sources.agents.react_tools.download_uspto_patent_text",
+        with patch("sources.long_task.uspto_download.download_uspto_patent_text",
                    new=AsyncMock(return_value=(None, None))):
             result = asyncio.run(
                 executor(FETCH_PATENT_SPEC_TOOL_NAME,
@@ -919,9 +919,9 @@ class TestFetchPatentSpecExecution(unittest.IsolatedAsyncioTestCase):
         agent = _SpecAgent()
         executor = asyncio.run(
             make_action_executor(agent, self._registry(agent), None))
-        with patch("sources.agents.react_tools.download_uspto_patent_text",
+        with patch("sources.long_task.uspto_download.download_uspto_patent_text",
                    new=AsyncMock(return_value=("x" * 50000, None))):
-            with patch("sources.agents.react_tools.distill_patent_spec",
+            with patch("sources.long_task.patent_distill.distill_patent_spec",
                        new=AsyncMock(return_value={})):
                 result = asyncio.run(
                     executor(FETCH_PATENT_SPEC_TOOL_NAME,
@@ -932,7 +932,7 @@ class TestFetchPatentSpecExecution(unittest.IsolatedAsyncioTestCase):
         agent = _SpecAgent()
         executor = asyncio.run(
             make_action_executor(agent, self._registry(agent), None))
-        with patch("sources.agents.react_tools.download_uspto_patent_text",
+        with patch("sources.long_task.uspto_download.download_uspto_patent_text",
                    new=AsyncMock(return_value=(None, b"PDF"))):
             result = asyncio.run(
                 executor(FETCH_PATENT_SPEC_TOOL_NAME,
