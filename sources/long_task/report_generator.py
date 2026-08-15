@@ -58,6 +58,7 @@ async def generate_executive_summary(
             val = str(r.get(col, "")).strip()
             if val and val != "—":
                 parts.append(f"  - {col}: {val}")
+        parts.extend(_meta_lines(r))
         if r.get("_summary"):
             parts.append(
                 f"  - 摘要: {r['_summary']}" if lang == "zh"
@@ -269,6 +270,7 @@ async def generate_report_section(
             val = str(r.get(col, "")).strip()
             if val:
                 parts.append(f"  - {col}: {val}")
+        parts.extend(_meta_lines(r))
         patent_entries.append("\n".join(parts))
     data_summary = "\n\n".join(patent_entries[:20])
 
@@ -358,3 +360,79 @@ async def generate_report_section(
         f"（{heading} 生成失败）" if lang == "zh"
         else f"({heading} generation failed)"
     )
+
+
+# ── Metadata lines & methodology section ─────────────────────────────────────
+
+def _meta_lines(row: dict, lang: str = "zh") -> list[str]:
+    """Render ``row["_meta"]`` (candidate metadata) as bullet lines."""
+    meta = row.get("_meta")
+    if not isinstance(meta, dict):
+        return []
+    labels = {
+        "title": "标题",
+        "applicant": "申请人",
+        "status": "法律状态",
+        "filing_date": "申请日",
+        "grant_date": "授权日",
+        "patent_number": "专利号",
+        "cpc_codes": "CPC 分类号",
+    }
+    lines = []
+    for key, label in labels.items():
+        v = meta.get(key)
+        if isinstance(v, list):
+            v = ", ".join(str(x) for x in v)
+        if v:
+            lines.append(f"  - {label}: {v}")
+    return lines
+
+
+def append_methodology_section(
+    sections: list[dict], search_meta: dict, lang: str = "zh",
+) -> list[dict]:
+    """Append a fixed 'search methodology & limitations' section."""
+    if not search_meta:
+        return sections
+    if lang == "zh":
+        heading = "检索说明与局限"
+        parts = []
+        queries = search_meta.get("queries_used") or []
+        if queries:
+            parts.append(f"本次检索使用检索式：{'；'.join(str(q) for q in queries)}。")
+        parts.append(
+            f"共检索到 {search_meta.get('total_hits', 0)} 条记录，"
+            f"翻阅 {search_meta.get('pages_fetched', 0)} 页，"
+            f"对 {search_meta.get('candidates_scored', 0)} 个候选专利进行相关性评分，"
+            f"保留 {search_meta.get('gated_kept', 0)} 条"
+            f"（过滤 {search_meta.get('gated_dropped', 0)} 条，"
+            f"去重 {search_meta.get('deduped_dropped', 0)} 条），"
+            f"最终分析 {search_meta.get('final_count', 0)} 件。"
+        )
+        parts.append(
+            "本报告基于 USPTO 公开数据自动生成，检索结果与相关性评分为 AI 辅助判断，"
+            "不构成法律意见；如需查全率保障，建议补充人工复核。"
+        )
+    else:
+        heading = "Search Methodology & Limitations"
+        parts = []
+        queries = search_meta.get("queries_used") or []
+        if queries:
+            parts.append(
+                f"Searches used the following queries: {'; '.join(str(q) for q in queries)}."
+            )
+        parts.append(
+            f"Total hits: {search_meta.get('total_hits', 0)} across "
+            f"{search_meta.get('pages_fetched', 0)} pages; "
+            f"{search_meta.get('candidates_scored', 0)} candidates scored for relevance; "
+            f"{search_meta.get('gated_kept', 0)} kept "
+            f"({search_meta.get('gated_dropped', 0)} filtered, "
+            f"{search_meta.get('deduped_dropped', 0)} deduplicated); "
+            f"{search_meta.get('final_count', 0)} analyzed."
+        )
+        parts.append(
+            "This report is generated automatically from public USPTO data. "
+            "Search results and relevance scoring are AI-assisted and do not "
+            "constitute legal advice."
+        )
+    return sections + [{"heading": heading, "description": " ".join(parts)}]

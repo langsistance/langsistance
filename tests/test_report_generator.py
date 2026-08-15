@@ -328,3 +328,104 @@ class TestGenerateReportSection(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("Pre-reasoning", result)
         self.assertIn("Clean section content", result)
+
+
+# ── Metadata lines & methodology section ─────────────────────────────────────
+
+from sources.long_task.report_generator import (
+    _meta_lines,
+    append_methodology_section,
+)
+
+
+class TestMetaLines(unittest.TestCase):
+    def test_renders_available_meta_fields(self):
+        lines = _meta_lines({
+            "_meta": {
+                "title": "Air dryer control using humidity",
+                "applicant": "New York Air Brake",
+                "status": "Patented Case",
+                "filing_date": "2016-03-01",
+                "cpc_codes": ["B60T 17/00", "F26B 21/08"],
+                "patent_number": "10150077",
+            },
+        })
+        joined = "\n".join(lines)
+        self.assertIn("标题: Air dryer control using humidity", joined)
+        self.assertIn("申请人: New York Air Brake", joined)
+        self.assertIn("法律状态: Patented Case", joined)
+        self.assertIn("CPC 分类号: B60T 17/00, F26B 21/08", joined)
+
+    def test_empty_meta_renders_nothing(self):
+        self.assertEqual(_meta_lines({}), [])
+        self.assertEqual(_meta_lines({"foo": "bar"}), [])
+
+
+class TestAppendMethodologySection(unittest.TestCase):
+    def test_appends_section_with_meta(self):
+        sections = [{"heading": "核心发现", "description": "x"}]
+        out = append_methodology_section(sections, {
+            "queries_used": ['("air dryer" OR desiccant)'],
+            "total_hits": 598,
+            "pages_fetched": 2,
+            "candidates_scored": 100,
+            "gated_kept": 12,
+            "gated_dropped": 88,
+            "deduped_dropped": 1,
+            "final_count": 10,
+        }, lang="zh")
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[-1]["heading"], "检索说明与局限")
+        desc = out[-1]["description"]
+        self.assertIn("598", desc)
+        self.assertIn("相关性评分", desc)
+        self.assertIn("不构成法律意见", desc)
+
+    def test_skips_when_no_meta(self):
+        out = append_methodology_section([{"heading": "a", "description": "b"}], {})
+        self.assertEqual(len(out), 1)
+
+    def test_english_variant(self):
+        out = append_methodology_section([], {
+            "queries_used": ['"air dryer"'],
+            "total_hits": 10, "pages_fetched": 1,
+            "candidates_scored": 5, "gated_kept": 3,
+            "gated_dropped": 2, "deduped_dropped": 0,
+            "final_count": 3,
+        }, lang="en")
+        self.assertEqual(out[-1]["heading"], "Search Methodology & Limitations")
+        self.assertIn("10", out[-1]["description"])
+
+
+class TestSummaryIncludesMeta(unittest.IsolatedAsyncioTestCase):
+    async def test_exec_summary_prompt_includes_meta_fields(self):
+        captured = []
+
+        class RecordingProvider:
+            def __init__(self):
+                self.mock_llm = MagicMock()
+
+            def _get_langchain_llm(self, streaming=False):
+                async def _astream(*args, **kwargs):
+                    captured.append(args[0])
+                    class Chunk:
+                        content = "### 核心发现\n\n摘要内容 **[11111111]**"
+                    yield Chunk()
+                self.mock_llm.astream = _astream
+                return self.mock_llm
+
+        provider = RecordingProvider()
+        await generate_executive_summary(
+            table_rows=[{
+                "专利号": "11111111", "发明点": "x", "技术方案": "y",
+                "_meta": {"title": "Air dryer", "applicant": "ACME",
+                          "status": "Patented Case"},
+            }],
+            columns=["专利号", "发明点", "技术方案"],
+            query="技术趋势",
+            provider=provider,
+            lang="zh",
+        )
+        human_msg = captured[0][1][1]
+        self.assertIn("标题: Air dryer", human_msg)
+        self.assertIn("申请人: ACME", human_msg)

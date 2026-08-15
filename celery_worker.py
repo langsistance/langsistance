@@ -1091,6 +1091,8 @@ async def _run_pipeline(
                 f"summary_length={len(_row.get('_summary', '')) if _row.get('_summary') else 0}"
             )
 
+            _row["_meta"] = patent_meta_map.get(_patent_id, {})
+
             _table_rows[_i] = _row
             _analyzed += 1
 
@@ -1359,6 +1361,9 @@ async def _run_pipeline(
 
     report_parts = []
     sections = outline.get('sections', [{'heading': _t('default_section_heading', batch_lang), 'description': ''}])
+    if search_meta:
+        from sources.long_task.report_generator import append_methodology_section
+        sections = append_methodology_section(sections, search_meta, lang=batch_lang)
     for idx, section in enumerate(sections):
         sec_pct = 80 + int((idx + 1) / len(sections) * 10)
         step_msg = _t('writing_section', batch_lang, heading=section["heading"])
