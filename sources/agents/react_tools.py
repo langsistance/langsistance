@@ -437,12 +437,17 @@ async def make_action_executor(agent, registry, push_filter=None):
             capped, note = _cap_patent_list(entry.tool_info, pending, lang)
             agent._pending_raw_items = capped
             digest = _items_digest(capped, lang=lang)
+            total = getattr(agent, "_last_search_total", None)
+            total_note = ""
+            if isinstance(total, int):
+                total_note = (f", {total} total hits" if lang == "en"
+                              else f"，总命中 {total}")
             if lang == "en":
-                text = (f"Search results ({len(capped)} records, {note}):\n"
+                text = (f"Search results ({len(capped)} records{total_note}, {note}):\n"
                         f"{digest}\n\n"
                         "The full list is displayed to the user.")
             else:
-                text = (f"检索结果（{len(capped)} 条，{note}）：\n"
+                text = (f"检索结果（{len(capped)} 条{total_note}，{note}）：\n"
                         f"{digest}\n\n"
                         "完整列表已展示给用户。")
             return {"kind": "observation", "text": text}

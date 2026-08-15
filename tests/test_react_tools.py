@@ -484,5 +484,36 @@ class TestFetchPatentSpecExecution(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["text"].startswith("Error:"))
 
 
+# ── Total-hit count in search observations ───────────────────────────────────
+
+class TestSearchObservationTotalCount(unittest.TestCase):
+    def test_observation_includes_total_hits_when_present(self):
+        agent = _FakeAgent()
+        agent._last_search_total = 8750325
+        entry_k = _Knowledge(3, ktype=1)
+        agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
+        registry, tools = asyncio.run(
+            _registry_with_one_knowledge(agent, entry_k))
+        executor = asyncio.run(make_action_executor(agent, registry, None))
+        agent._pending_raw_items = [
+            _usp_raw_item("19511555", "Air dryer humidity control"),
+        ]
+        result = asyncio.run(executor("uspto_search", {"params": "{}"}, 1))
+        self.assertIn("总命中 8750325", result["text"])
+
+    def test_observation_omits_total_when_absent(self):
+        agent = _FakeAgent()
+        entry_k = _Knowledge(3, ktype=1)
+        agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
+        registry, tools = asyncio.run(
+            _registry_with_one_knowledge(agent, entry_k))
+        executor = asyncio.run(make_action_executor(agent, registry, None))
+        agent._pending_raw_items = [
+            _usp_raw_item("19511555", "Air dryer humidity control"),
+        ]
+        result = asyncio.run(executor("uspto_search", {"params": "{}"}, 1))
+        self.assertNotIn("总命中", result["text"])
+
+
 if __name__ == "__main__":
     unittest.main()

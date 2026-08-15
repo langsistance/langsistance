@@ -1285,6 +1285,13 @@ Begin your response now:
                 f"dynamic_backend_tool_function user_id={user_id} query_id={query_id}"
             )
             tool_result = execute_backend_tool_request(tool_info, params)
+            # Capture the total hit count for the loop's adaptive search
+            # (e.g. 0 hits → loosen the query, 8M hits → tighten it).
+            _result_data = tool_result.get("data")
+            if isinstance(_result_data, dict):
+                _count = _result_data.get("count")
+                if isinstance(_count, (int, float)):
+                    self._last_search_total = int(_count)
             raw_items = tool_result.get("raw_items")
             if raw_items:
                 list_count = len(raw_items)
@@ -1473,6 +1480,7 @@ Begin your response now:
         self._workflow_result = None
         self._react_loop_ran = False
         self._search_rewrite = None   # deterministic q rewrite cache, per request
+        self._last_search_total = None   # total-hit count captured per request
         self.knowledgeTool = (None, None)  # (knowledge_item, tool_info) — selected inside the loop
         self.tools = []
         lang = self._detect_lang(prompt)
