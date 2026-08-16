@@ -47,6 +47,51 @@ from sources.logger import Logger
 logger = Logger("cpc_semantic.log")
 
 
+def _embed_to_memmap(titles, target_path, batch, float16, get_embeddings):
+    """Embed *titles* in batches and stream them straight into a memmap
+    at *target_path* + ".tmp", atomically renamed to *target_path* at
+    the end.
+
+    Streaming matters: get_embeddings returns lists of Python floats
+    and the sub tier holds ~150k x 1024 titles — accumulating every
+    batch needs ~5GB of RAM and gets the process OOM-killed (observed
+    on the server at ~44k titles).  The memmap keeps peak heap at one
+    batch (~1MB).  On any failure the .tmp is removed and an existing
+    *target_path* is left untouched.
+    """
+    import numpy as np
+
+    tmp_path = target_path + ".tmp"
+    arr = None
+    try:
+        for start in range(0, len(titles), batch):
+            chunk = titles[start:start + batch]
+            vecs = np.asarray(get_embeddings(chunk), dtype=np.float32)
+            if arr is None:
+                if vecs.ndim != 2 or vecs.shape[0] != len(chunk):
+                    raise ValueError(
+                        f"embedding batch returned shape {vecs.shape}, "
+                        f"expected ({len(chunk)}, dim)")
+                dtype = np.float16 if float16 else np.float32
+                arr = np.lib.format.open_memmap(
+                    tmp_path, mode="w+", dtype=dtype,
+                    shape=(len(titles), vecs.shape[1]))
+            arr[start:start + len(vecs)] = vecs
+            if start % (batch * 20) == 0:
+                logger.info(f"embedded {start + len(chunk)}/{len(titles)}")
+        arr.flush()
+    except Exception:
+        del arr
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+    del arr  # close the mmap before renaming (Windows)
+    os.replace(tmp_path, target_path)
+    return len(titles), vecs.shape[1]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch", type=int, default=200)
@@ -67,21 +112,14 @@ def main() -> int:
 
     from sources.knowledge.knowledge import get_embeddings_batch
 
-    vectors = []
-    for start in range(0, len(titles), args.batch):
-        chunk = titles[start:start + args.batch]
-        try:
-            vectors.extend(get_embeddings_batch(chunk))
-        except Exception as exc:
-            logger.error(f"embedding batch failed at {start}: {exc}")
-            return 1
-        if start % (args.batch * 20) == 0:
-            logger.info(f"embedded {start + len(chunk)}/{len(titles)}")
-
-    import numpy as np
-    arr = np.asarray(vectors, dtype=np.float16 if args.float16 else np.float32)
-    np.save(vectors_path, arr)
-    logger.info(f"cpc vectors saved — shape={arr.shape} path={vectors_path}")
+    try:
+        rows, dim = _embed_to_memmap(
+            titles, vectors_path, args.batch, args.float16,
+            get_embeddings_batch)
+    except Exception as exc:
+        logger.error(f"vector build failed: {exc}")
+        return 1
+    logger.info(f"cpc vectors saved — shape=({rows}, {dim}) path={vectors_path}")
     return 0
 
 
