@@ -57,6 +57,14 @@ class TestParseMcfLine(unittest.TestCase):
         result = _parse_mcf_line(B_LINE_SUB)
         self.assertEqual(result, ("12650000", "H05B45/20"))
 
+    def test_parses_patent_after_nine_char_index(self):
+        # the real lines whose 9-char index ends in a non-zero digit —
+        # an off-by-one parse produced "912627121" here; the patent is
+        # the trailing 8 chars: 12,627,121 (a 2026 grant)
+        line = ("B21849611912627121H05B45/20    20130101FI  0 0\r\n")
+        self.assertEqual(_parse_mcf_line(line),
+                         ("12627121", "H05B45/20"))
+
     def test_skips_scheme_a_lines(self):
         self.assertIsNone(_parse_mcf_line(A_LINE))
 

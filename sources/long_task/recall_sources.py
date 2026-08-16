@@ -42,6 +42,7 @@ RECALL_SEARCH_FIELDS = [
 
 MAX_FAMILY_NUMBERS = int(os.getenv("REACT_RECALL_MAX_FAMILY_NUMBERS", "12"))
 RECALL_NUMBER_BATCH = int(os.getenv("REACT_RECALL_NUMBER_BATCH", "20"))
+RECALL_CPC_PER_CODE = int(os.getenv("REACT_RECALL_CPC_PER_CODE", "50"))
 
 
 def collect_family_refs(candidates: list, limit: int = MAX_FAMILY_NUMBERS) -> dict:
@@ -199,14 +200,14 @@ def fetch_by_cpc(codes: list, timeout: int = 30) -> list:
                     rows = conn.execute(
                         "SELECT DISTINCT patent FROM cpc_patents "
                         "WHERE cpc LIKE ? "
-                        "ORDER BY length(patent) DESC, patent DESC LIMIT 25",
-                        (base + "/%",))
+                        "ORDER BY length(patent) DESC, patent DESC LIMIT ?",
+                        (base + "/%", RECALL_CPC_PER_CODE))
                 else:
                     rows = conn.execute(
                         "SELECT DISTINCT patent FROM cpc_patents "
                         "WHERE cpc = ? "
-                        "ORDER BY length(patent) DESC, patent DESC LIMIT 25",
-                        (code,))
+                        "ORDER BY length(patent) DESC, patent DESC LIMIT ?",
+                        (code, RECALL_CPC_PER_CODE))
                 for (patent,) in rows:
                     if patent not in seen:
                         seen.add(patent)
