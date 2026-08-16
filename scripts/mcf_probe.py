@@ -67,7 +67,9 @@ def main() -> int:
     detail = json.loads(body)
     product = (detail.get("bulkDataProductBag") or [{}])[0]
     print("product keys:", sorted(product.keys()))
-    files = product.get("bulkDataFileBag") or product.get("fileBag") or []
+    files = (product.get("productFileBag")
+             or product.get("bulkDataFileBag")
+             or product.get("fileBag") or [])
     print(f"file entries: {len(files)}")
     if files:
         print("first file entry keys:", sorted(files[0].keys()))
@@ -76,14 +78,17 @@ def main() -> int:
             print(json.dumps(f, ensure_ascii=False)[:500])
     print()
     print("=== download newest file + inspect XML ===")
+    # find the URI key whatever it is named, preferring the newest file
     uri = ""
-    for f in files:
-        uri = (f.get("fileDownloadURI")
-               or f.get("downloadURI")
-               or f.get("fileDownloadUrl") or "")
+    for f in reversed(files):
+        for key in ("fileDownloadURI", "downloadURI", "fileDownloadUrl",
+                    "fileDownloadUri"):
+            v = f.get(key) or ""
+            if v:
+                uri = v if v.startswith("http") \
+                    else "https://api.uspto.gov" + v
+                break
         if uri:
-            uri = uri if uri.startswith("http") \
-                else "https://api.uspto.gov" + uri
             break
     if not uri:
         print("ABORT — no download URI found in file entries")
