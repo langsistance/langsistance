@@ -77,9 +77,9 @@ def main() -> int:
         print(json.dumps(f, ensure_ascii=False)[:400])
     print()
     print("=== download newest TEXT file + inspect head (streamed) ===")
-    # prefer the newest *_Text_* zip — half the size, line-oriented
+    # the bag is newest-first — take the FIRST *_Text_* zip
     entry = None
-    for f in reversed(files):
+    for f in files:
         if not isinstance(f, dict):
             continue
         name = f.get("fileName") or ""
@@ -102,8 +102,9 @@ def main() -> int:
     try:
         with zipfile.ZipFile(io.BytesIO(body)) as z:
             names = z.namelist()
-            print("zip entries:", names[:5])
-            first = names[0]
+            txts = [n for n in names if n.endswith(".txt")]
+            print(f"zip txt chunks: {len(txts)} (first 3: {txts[:3]})")
+            first = txts[0]
             with z.open(first) as fh:
                 head = fh.read(2048).decode("utf-8", errors="replace")
             print(f"--- head of {first}:")
