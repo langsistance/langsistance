@@ -614,6 +614,49 @@ class TestZeroHitLadderNudge(unittest.TestCase):
         self.assertIn("q2", result["text"])
 
 
+class TestSemanticRerankWiring(unittest.IsolatedAsyncioTestCase):
+    async def test_rerank_applied_when_enabled(self):
+        from unittest.mock import patch
+        from sources.agents.react_tools import _rank_pending_pool
+        from sources.long_task.candidate_metadata import build_candidates
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        agent._search_pool = None
+        agent._flash_llm = _ScoringProvider()
+        items = [_usp_raw_item("19511555", "A"),
+                 _usp_raw_item("18184836", "B")]
+        cands = build_candidates(items)
+
+        def _reverse(query, ranked, top_k, alpha):
+            return list(reversed(ranked))
+
+        with patch("sources.agents.react_tools.RERANK_ENABLED", True), \
+             patch("sources.long_task.semantic_rerank.rerank_candidates",
+                   side_effect=_reverse) as mock_rerank:
+            ranked, note = await _rank_pending_pool(agent, cands, "zh")
+        self.assertTrue(mock_rerank.called)
+        self.assertIn("语义重排", note)
+        self.assertEqual([c["patent_id"] for c in ranked],
+                         ["18184836", "19511555"])
+
+    async def test_no_rerank_when_disabled(self):
+        from unittest.mock import patch
+        from sources.agents.react_tools import _rank_pending_pool
+        from sources.long_task.candidate_metadata import build_candidates
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        agent._search_pool = None
+        agent._flash_llm = _ScoringProvider()
+        items = [_usp_raw_item("19511555", "A"),
+                 _usp_raw_item("18184836", "B")]
+        cands = build_candidates(items)
+        with patch("sources.agents.react_tools.RERANK_ENABLED", False), \
+             patch("sources.long_task.semantic_rerank.rerank_candidates") as mock_rerank:
+            ranked, note = await _rank_pending_pool(agent, cands, "zh")
+        mock_rerank.assert_not_called()
+        self.assertNotIn("语义重排", note)
+
+
 class TestAutoSecondRound(unittest.IsolatedAsyncioTestCase):
     """The missing-direction queries are executed by the system (not left
     to the agent's discretion): at most once per turn, bounded count,

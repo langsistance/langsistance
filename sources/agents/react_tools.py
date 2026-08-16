@@ -33,6 +33,7 @@ from sources.long_task.chat_relevance import (
     SearchPool,
     score_candidates_concurrent,
 )
+from sources.long_task.semantic_rerank import RERANK_ENABLED
 
 TOP_N = int(os.getenv("REACT_TOOL_TOP_N", "5"))
 LOW_HIT_FEEDBACK_THRESHOLD = int(os.getenv(
@@ -538,10 +539,19 @@ async def _rank_pending_pool(agent, candidates, lang) -> Tuple[list, str]:
         )
     pool.prune()
     ranked = pool.ranked(MAX_PATENT_LIST_ITEMS)
+    rerank_note = ""
+    if RERANK_ENABLED and len(ranked) > 1:
+        from sources.long_task.semantic_rerank import (
+            RERANK_TOP_K, RERANK_ALPHA, rerank_candidates,
+        )
+        ranked = rerank_candidates(
+            pool.query, ranked, RERANK_TOP_K, RERANK_ALPHA)
+        rerank_note = (", semantic rerank applied" if lang == "en"
+                       else "，语义重排已应用")
     if lang == "en":
-        note = f"relevance-ranked — pool {len(pool)}, scored {scored} new"
+        note = f"relevance-ranked — pool {len(pool)}, scored {scored} new{rerank_note}"
     else:
-        note = f"已按相关度排序（池共 {len(pool)} 条、本次新评分 {scored} 条）"
+        note = f"已按相关度排序（池共 {len(pool)} 条、本次新评分 {scored} 条{rerank_note}）"
     note = await _maybe_append_missing_directions(agent, ranked, note, lang)
     return ranked, note
 

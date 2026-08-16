@@ -491,3 +491,9 @@ class TestMissingDirectionPromptGeneric(unittest.TestCase):
         # three-concept ANDs routinely zero-hit — at least half the
         # suggested queries must stay at two concept groups
         self.assertIn("2 个概念组", MISSING_DIRECTION_SYSTEM_PROMPT)
+
+    def test_prompt_prefers_single_words_over_rare_phrases(self):
+        # rare full phrases (e.g. quoted long expressions) zero-hit far
+        # more often than single words / wildcards
+        self.assertIn("短语", MISSING_DIRECTION_SYSTEM_PROMPT)
+        self.assertIn("通配符", MISSING_DIRECTION_SYSTEM_PROMPT)

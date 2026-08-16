@@ -146,6 +146,22 @@ def get_embedding(text: str) -> List[float]:
         raise e
 
 
+def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
+    """批量获取文本的嵌入向量（一次 provider 调用）。
+
+    返回顺序与输入顺序一致；失败时抛出异常由调用方决定降级策略。
+    """
+    if not texts:
+        return []
+    embedding_client, embedding_model = _get_embedding_client()
+    response = embedding_client.embeddings.create(
+        model=embedding_model,
+        input=list(texts),
+    )
+    ordered = sorted(response.data, key=lambda item: item.index)
+    return [item.embedding for item in ordered]
+
+
 def clean_html_text(html_content: str) -> str:
     """
     清理HTML内容，提取纯文本并格式化
