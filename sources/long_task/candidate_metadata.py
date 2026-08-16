@@ -6,6 +6,7 @@ metadata (title, applicant, dates, status, CPC codes) into compact
 candidate dicts used by the relevance gate, dedupe, and report.
 """
 
+import json
 import re
 from copy import deepcopy
 from typing import Any
@@ -40,10 +41,20 @@ def ensure_search_fields(params: dict) -> dict:
     """Return a deep copy of tool params with required USPTO fields added.
 
     Only touches ``body.fields``. The input dict is never mutated.
+    Some knowledge-base templates store ``fields`` as a JSON string;
+    coerce it to a list so field completion cannot be silently skipped.
     """
     out = deepcopy(params)
     body = out.get("body") if isinstance(out.get("body"), dict) else {}
     fields = body.get("fields")
+    if isinstance(fields, str):
+        try:
+            parsed = json.loads(fields)
+        except (ValueError, TypeError):
+            parsed = None
+        if isinstance(parsed, list):
+            fields = parsed
+            body["fields"] = fields
     if not isinstance(fields, list):
         return out
     for f in SEARCH_FIELDS_TO_ENSURE:

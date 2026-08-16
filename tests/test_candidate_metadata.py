@@ -89,6 +89,26 @@ class TestEnsureSearchFields(unittest.TestCase):
         out = ensure_search_fields({"query": {}})
         self.assertEqual(out, {"query": {}})
 
+    def test_coerces_json_string_fields_then_appends(self):
+        # Production template variant: body.fields stored as a JSON
+        # string.  Previously this silently skipped field completion,
+        # so CPC data was never requested (proven by the 01:48 run).
+        params = {"body": {"q": "air dryer",
+                           "fields": '["applicationMetaData.inventionTitle",'
+                                     ' "applicationMetaData.assignmentBag"]'}}
+        out = ensure_search_fields(params)
+        fields = out["body"]["fields"]
+        self.assertIsInstance(fields, list)
+        self.assertIn("applicationMetaData.cpcClassificationBag", fields)
+        self.assertIn("parentContinuityBag", fields)
+        # the original entries survive the coercion
+        self.assertIn("applicationMetaData.inventionTitle", fields)
+
+    def test_malformed_fields_string_left_untouched(self):
+        params = {"body": {"q": "air dryer", "fields": "not-json["}}
+        out = ensure_search_fields(params)
+        self.assertEqual(out["body"]["fields"], "not-json[")
+
 
 class TestDedupeCandidates(unittest.TestCase):
     def test_same_title_deduped_keeps_higher_score(self):
