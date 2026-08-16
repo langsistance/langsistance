@@ -115,6 +115,7 @@ def build_candidates(raw_items: list) -> list[dict]:
             "filing_date": _first_str(m, "filingDate"),
             "grant_date": _first_str(m, "grantDate"),
             "patent_number": _first_str(m, "patentNumber"),
+            "type_code": _first_str(m, "applicationTypeCode"),
             "cpc_codes": _extract_cpc_codes(m),
             "_raw": item,
         })
@@ -160,13 +161,23 @@ def _continuity_ids(item: dict) -> set[str]:
     return ids
 
 
+def is_design_patent(c: dict) -> bool:
+    """True when the candidate is a design patent (D-numbered patent or
+    applicationTypeCode DES) — design rights protect appearance, not
+    the technical solution a user searches for."""
+    pn = str(c.get("patent_number") or "").strip().upper()
+    code = str(c.get("type_code") or "").strip().upper()
+    return pn.startswith("D") or code == "DES"
+
+
 def _sort_key(c: dict) -> tuple:
     alive = 0 if is_dead_status(c.get("status")) else 1
+    utility = 0 if is_design_patent(c) else 1
     granted = 1 if c.get("patent_number") else 0
     score = c.get("relevance_score")
     if not isinstance(score, (int, float)):
         score = -1
-    return (alive, granted, score, c.get("filing_date") or "")
+    return (alive, utility, granted, score, c.get("filing_date") or "")
 
 
 def dedupe_candidates(candidates: list[dict]) -> tuple[list[dict], int]:

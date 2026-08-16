@@ -345,6 +345,14 @@ def _bounded_summary_items(items: list) -> list:
     return kept
 
 
+def _large_list_summary_heading(lang: str, summarized: int, total: int) -> str:
+    """Heading that reports how many items the summary LLM actually saw
+    (the char budget may slice the pool head)."""
+    if lang == "en":
+        return f"## Results — Summary ({summarized} / {total} items)"
+    return f"## 结果摘要 ({summarized} / {total} 项)"
+
+
 # 瀹氫箟鍙傛暟妯″瀷
 class DynamicToolFunction(BaseModel):
     user_id: str = Field(description="user id (provided in the user prompt)")
@@ -1552,6 +1560,7 @@ Begin your response now:
         self._search_pool = None   # relevance-ranked candidate pool, per request
         self._search_ranked = False  # True once a search list was relevance-ranked
         self._feedback_done = False  # title-feedback fired flag, per request
+        self._ladder_capped = False  # hits exceeded LADDER_MAX_HITS, per request
         self.knowledgeTool = (None, None)  # (knowledge_item, tool_info) — selected inside the loop
         self.tools = []
         lang = self._detect_lang(prompt)
@@ -1979,10 +1988,8 @@ Begin your response now:
         if USE_LARGE_LIST_SUMMARY:
             summary_items = _bounded_summary_items(pending)
             lang = getattr(self, '_lang', 'zh')
-            if lang == 'en':
-                heading = f"## Results — Summary ({len(pending)} items)"
-            else:
-                heading = f"## 结果摘要 ({len(pending)} 项)"
+            heading = _large_list_summary_heading(
+                lang, len(summary_items), len(pending))
             await callback_handler.on_llm_new_token(
                 f"\n\n---\n\n{heading}\n\n"
             )

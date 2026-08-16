@@ -41,22 +41,34 @@ MAX_PATENT_LIST_ITEMS = int(os.getenv("REACT_MAX_PATENT_LIST_ITEMS", "100"))
 RELEVANCE_RANK_ENABLED = os.getenv("REACT_RELEVANCE_RANK", "1") != "0"
 REACT_POOL_MAX_PAGES = int(os.getenv("REACT_POOL_MAX_PAGES", "2"))
 REACT_USPTO_SORT_FIELD = os.getenv("REACT_USPTO_SORT_FIELD", "_score")
-REACT_TIGHTEN_SUGGEST_THRESHOLD = int(os.getenv("REACT_TIGHTEN_SUGGEST_THRESHOLD", "5000"))
+LADDER_MAX_HITS = int(os.getenv("REACT_LADDER_MAX_HITS")
+                      or os.getenv("REACT_TIGHTEN_SUGGEST_THRESHOLD", "300"))
 
 
-def _tighten_hint(total, lang: str = "zh") -> str:
-    """Deterministic advice appended to observations when a search hit
-    far too many results — the agent gets the suggestion from code
-    instead of relying on its own judgment."""
-    if not isinstance(total, int):
-        return ""
-    if total < REACT_TIGHTEN_SUGGEST_THRESHOLD:
-        return ""
+def _ladder_cap_note(lang: str = "zh") -> str:
+    """Deterministic constraint: once hits exceed the system's processing
+    capacity, wider ladder queries are off the table — only tightening
+    remains."""
     if lang == "en":
-        return ("\nToo many hits: tighten the ladder query "
-                "(e.g. ladder #1) or add a scene-constraint term and retry.")
-    return ("\n命中过多：建议采用更收紧的阶梯检索式（如阶梯第 1 条）"
-            "或添加场景限定词后重试。")
+        return (f"\nHit counts have exceeded the system's processing "
+                f"capacity ({LADDER_MAX_HITS}): the wider pre-built "
+                f"ladder queries no longer apply. If you keep searching, "
+                f"you must tighten the query with additional constraint "
+                f"terms.")
+    return (f"\n检索命中已超出系统处理容量（{LADDER_MAX_HITS} 条）："
+            f"预置阶梯中更宽的检索式不再适用；如继续检索，必须添加"
+            f"限定词显著收紧。")
+
+
+def _apply_ladder_cap(agent, text: str, total, lang: str) -> str:
+    """Persist the ladder cap once any search exceeds LADDER_MAX_HITS —
+    the constraint then rides along on every later search observation
+    so the agent cannot ignore it by switching queries."""
+    if isinstance(total, int) and total > LADDER_MAX_HITS:
+        agent._ladder_capped = True
+    if getattr(agent, "_ladder_capped", False):
+        return text + _ladder_cap_note(lang)
+    return text
 SEARCH_KNOWLEDGE_TOOL_NAME = "search_my_knowledge"
 MAX_SEARCH_RESULTS = 5
 MAX_OBSERVATION_CHARS = 300
@@ -542,6 +554,10 @@ async def _maybe_append_feedback(agent, text: str, total, lang: str) -> str:
     """
     if not isinstance(total, int) or total >= LOW_HIT_FEEDBACK_THRESHOLD:
         return text
+    if getattr(agent, "_ladder_capped", False):
+        # The cap note demands tightening — refined-query suggestions
+        # in the same observation would steer the agent two ways.
+        return text
     if getattr(agent, "_feedback_done", False):
         return text
     pool = getattr(agent, "_search_pool", None)
@@ -808,7 +824,6 @@ async def make_action_executor(agent, registry, push_filter=None):
             if isinstance(total, int):
                 total_note = (f", {total} total hits" if lang == "en"
                               else f"，总命中 {total}")
-                total_note += _tighten_hint(total, lang)
             if lang == "en":
                 text = (f"Search results ({len(shown)} records{total_note}, {note}):\n"
                         f"{digest}\n\n"
@@ -817,6 +832,7 @@ async def make_action_executor(agent, registry, push_filter=None):
                 text = (f"检索结果（{len(shown)} 条{total_note}，{note}）：\n"
                         f"{digest}\n\n"
                         "完整列表已展示给用户。")
+            text = _apply_ladder_cap(agent, text, total, lang)
             text = await _maybe_append_feedback(agent, text, total, lang)
             return {"kind": "observation", "text": text}
 

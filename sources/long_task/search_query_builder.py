@@ -15,39 +15,38 @@ DEFAULT_QUERY_MAX_LENGTH = 250
 _CJK_RE = re.compile(r'[　-〿぀-ヿ㐀-䶿一-鿿＀-￯가-힯]')
 
 REWRITE_SYSTEM_PROMPT = (
-    "你是一个专利检索式构造专家。把用户的自然语言技术问题改写为 "
-    "USPTO Patent Application Search API 的检索式（q 参数）。"
-    "本工具面向所有技术领域，不得为特定领域预设关键词。\n\n"
+    "你是一个专利检索概念提取专家。把用户的自然语言技术问题分解为 "
+    "核心技术概念及其英文检索关键词；检索式阶梯由代码按确定性规则"
+    "组装，你无需输出检索式。本工具面向所有技术领域，不得为特定领域"
+    "预设关键词。\n\n"
     "步骤：\n"
-    "1. 从用户问题中抽取 2-4 个核心技术概念（忽略语气词和通用词）\n"
+    "1. 从用户问题中抽取 2-4 个核心技术概念（忽略语气词和通用词），"
+    "概念按重要性排序（最重要的放最前）——代码将按此顺序组装由紧到松"
+    "的检索式阶梯\n"
     "2. 每个概念翻译成该领域专利文献常用的英文术语，并给出至少 5 个"
-    "同义/近义关键词（含行业缩写、上位/下位词、英美拼写变体）。"
-    "变体必须覆盖同一概念的不同词形/复合结构（如 cool ↔ cooler ↔ "
-    "cooling、heat generation ↔ heating——名词短语与动名词复合词都要"
-    "给出，不能只给单一词形的多个拼写），并判断该概念的明确程度：\n"
+    "同义/近义关键词（含行业缩写、上位/下位词、英美拼写变体），"
+    "关键词同样按重要性排序（最重要的放最前，代码只取前若干个进入"
+    "检索式）。变体必须覆盖同一概念的不同词形/复合结构（如 cool ↔ "
+    "cooler ↔ cooling、heat generation ↔ heating——名词短语与动名词"
+    "复合词都要给出，不能只给单一词形的多个拼写），并判断该概念的"
+    "明确程度：\n"
     "   - 明确专有名词/品牌名/具体化合物名 → 精确词即可\n"
     "   - 一般性技术概念 → 关键词集中必须包含至少一个词尾通配符变体\n"
     "   - 判断不清 → 精确词与词尾通配符变体都放入关键词集\n"
     "3. 可以为提高精度添加用户未提及的合理领域限定概念（如应用场景、"
-    "设备载体），但每个限定必须有依据，且限定属于最弱概念层级\n"
-    "4. 用检索式语法组装查询串：\n"
-    "   - 多词短语必须用双引号包裹，如 \"3d printing\"\n"
-    "   - 同一概念的同义词用 OR 连接并放在圆括号内："
-    '("3d printing" OR "additive manufacturing" OR "rapid prototyping")\n'
-    "   - 不同概念之间用 AND 连接\n"
-    "   - 支持词尾通配符：filter* 匹配 filter/filtering/filtration，"
-    "cataly* 匹配 catalyst/catalysis/catalytic；通配符只在词尾生效，"
-    "引号短语内不生效，词首通配符无效\n"
-    "   - 为每个概念补充常见词形变体，或直接用通配符覆盖变体\n"
-    "   - 每个检索式最多 12 个关键词、250 字符，禁止出现中文\n"
-    "5. 输出 2-4 个检索式，必须按松紧排序：\n"
-    "   - 第一个为最紧的完整组合式（全部概念 + 领域限定）\n"
-    "   - 后续逐级放宽（每级去掉最弱的限定/概念）\n"
-    "   - 最后一个为最松的核心概念式：只含一个核心概念的单组检索式\n\n"
+    "设备载体），但每个限定必须有依据，且限定概念放在概念列表最后"
+    "（最弱层级）\n"
+    "4. 关键词规则：词尾通配符只在关键词中生效——filter* 匹配 filter/"
+    "filtering/filtration，cataly* 匹配 catalyst/catalysis/catalytic；"
+    "词首通配符无效；词尾通配符只用于单词，多词短语不要附加通配符"
+    "（会丢失短语语义）；关键词禁止出现中文；多词短语无需加引号"
+    "（代码负责）\n"
     'Return JSON: {"concepts": [{"concept": "中文概念", '
-    '"keywords": ["english term", ...]}], '
-    '"queries": ["最紧", "较松", "最松"]}'
+    '"keywords": ["english term", ...]}, ...]}'
 )
+
+MAX_KEYWORDS_PER_GROUP = 5
+MAX_ASSEMBLED_QUERY_CHARS = 220
 
 
 def assemble_query(groups: list[list[str]]) -> str:
@@ -55,7 +54,8 @@ def assemble_query(groups: list[list[str]]) -> str:
 
     Each inner list is one concept: its keywords are OR-joined inside
     parentheses; concepts are AND-joined. Multi-word keywords are
-    double-quoted automatically.
+    double-quoted automatically — except wildcard terms, where quoting
+    would disable the trailing wildcard.
     """
     parts = []
     for group in groups:
@@ -63,7 +63,8 @@ def assemble_query(groups: list[list[str]]) -> str:
         if not group:
             continue
         joined = " OR ".join(
-            f'"{k}"' if (" " in k and not (k.startswith('"') and k.endswith('"')))
+            f'"{k}"' if (" " in k and "*" not in k
+                         and not (k.startswith('"') and k.endswith('"')))
             else k
             for k in group
         )
@@ -95,17 +96,68 @@ def _validated_rewrite(raw: Any) -> dict:
     return {"concepts": raw.get("concepts") or [], "queries": cleaned}
 
 
+def _assemble_ladder(groups: list[list[str]]) -> list[str]:
+    """Assemble the tight-to-loose query ladder from concept keyword
+    groups, deterministically.
+
+    Level 1 combines every concept; each next level drops the weakest
+    (last) concept; the final level is the core concept alone.  The
+    keyword cap shrinks until the tightest query fits the length limit,
+    so no variant beyond the cap is silently truncated mid-syntax.
+    """
+    cleaned: list[list[str]] = []
+    for group in groups:
+        seen: list[str] = []
+        for k in group:
+            k = sanitize_uspto_query(str(k))
+            if k and k not in seen:
+                seen.append(k)
+        if seen:
+            cleaned.append(seen)
+    if not cleaned:
+        return []
+    cap = MAX_KEYWORDS_PER_GROUP
+    while cap > 1:
+        if len(assemble_query([g[:cap] for g in cleaned])) \
+                <= MAX_ASSEMBLED_QUERY_CHARS:
+            break
+        cap -= 1
+    queries: list[str] = []
+    for i in range(len(cleaned), 0, -1):
+        q = sanitize_uspto_query(
+            assemble_query([g[:cap] for g in cleaned[:i]]))
+        if q and (not queries or q != queries[-1]):
+            queries.append(q)
+    return queries[:4]
+
+
 async def build_search_queries(query: str, provider: Any) -> dict:
     """Rewrite a user question into USPTO search queries via the Flash LLM.
 
-    Never raises: on any failure returns ``{"concepts": [], "queries": []}``,
+    The LLM produces concepts + keyword lists only; the query ladder is
+    assembled in code so no variant can be dropped by the model.  Never
+    raises: on any failure returns ``{"concepts": [], "queries": []}``,
     which signals callers to keep their existing query untouched.
     """
     try:
         result = await provider.complete_json(REWRITE_SYSTEM_PROMPT, query)
     except Exception:
         return {"concepts": [], "queries": []}
-    return _validated_rewrite(result)
+    if not isinstance(result, dict):
+        return {"concepts": [], "queries": []}
+    groups: list[list[str]] = []
+    for c in result.get("concepts") or []:
+        if not isinstance(c, dict):
+            groups.append([])
+            continue
+        kws = c.get("keywords")
+        groups.append([str(k) for k in kws] if isinstance(kws, list) else [])
+    queries = _assemble_ladder(groups)
+    if not queries:
+        # Legacy fallback: a provider that still returns hand-written
+        # queries keeps working.
+        queries = _validated_rewrite(result)["queries"]
+    return {"concepts": result.get("concepts") or [], "queries": queries}
 
 
 def format_ladder_guidance(rewrite: dict, lang: str = "zh") -> str:
@@ -140,6 +192,24 @@ def format_ladder_guidance(rewrite: dict, lang: str = "zh") -> str:
     lines = [header]
     for i, q in enumerate(queries, start=1):
         lines.append(f"{i}. {q}")
+    concepts = (rewrite or {}).get("concepts")
+    if isinstance(concepts, list):
+        bank_lines = []
+        for c in concepts:
+            if not isinstance(c, dict):
+                continue
+            kws = [str(k) for k in (c.get("keywords") or []) if str(k).strip()]
+            if not kws:
+                continue
+            label = c.get("concept") or ("concept" if lang == "en" else "概念")
+            bank_lines.append(f"- {label}: " + " / ".join(kws))
+        if bank_lines:
+            if lang == "en":
+                lines.append("\nConcept keyword bank (use for synonym "
+                              "substitution retries):")
+            else:
+                lines.append("\n概念词库（供低命中时换词重试）：")
+            lines.extend(bank_lines)
     if lang == "en":
         lines.append(
             "\nAlso: if a query returns 0 hits even though the technology "

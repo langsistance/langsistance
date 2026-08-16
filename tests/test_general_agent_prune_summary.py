@@ -86,3 +86,17 @@ class TestBoundedSummaryItems(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLargeListSummaryHeading(unittest.TestCase):
+    def test_heading_reports_summarized_over_total_zh(self):
+        from sources.agents.general_agent import _large_list_summary_heading
+        self.assertEqual(
+            _large_list_summary_heading("zh", 6, 100),
+            "## 结果摘要 (6 / 100 项)")
+
+    def test_heading_reports_summarized_over_total_en(self):
+        from sources.agents.general_agent import _large_list_summary_heading
+        self.assertEqual(
+            _large_list_summary_heading("en", 6, 100),
+            "## Results — Summary (6 / 100 items)")

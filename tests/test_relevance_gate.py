@@ -309,6 +309,36 @@ class TestGatePromptMentionsLegalStatus(unittest.TestCase):
         self.assertIn("法律状态", GATE_SYSTEM_PROMPT)
 
 
+class TestBatchTextIncludesPatentNumber(unittest.TestCase):
+    def test_pn_rendered_in_batch_lines(self):
+        from sources.long_task.relevance_gate import _batch_text
+        candidates = [{
+            "patent_id": "29501698",
+            "title": "Micro environment control",
+            "applicant": "Air Innovations",
+            "filing_date": "2015-01-15",
+            "cpc_codes": [],
+            "patent_number": "D753609",
+        }]
+        text = _batch_text(candidates, "q")
+        self.assertIn("D753609", text)
+
+    def test_missing_pn_renders_placeholder(self):
+        from sources.long_task.relevance_gate import _batch_text
+        candidates = [{
+            "patent_id": "19511555", "title": "T", "applicant": "A",
+            "filing_date": "2024-01-15", "cpc_codes": [],
+        }]
+        text = _batch_text(candidates, "q")
+        self.assertIn("pn=", text)
+
+
+class TestGatePromptMentionsDesign(unittest.TestCase):
+    def test_prompt_mentions_design_patents(self):
+        from sources.long_task.relevance_gate import GATE_SYSTEM_PROMPT
+        self.assertIn("外观设计", GATE_SYSTEM_PROMPT)
+
+
 class TestBatchTextIncludesCpc(unittest.TestCase):
     def test_cpc_codes_rendered_in_batch_lines(self):
         from sources.long_task.relevance_gate import _batch_text

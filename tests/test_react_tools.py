@@ -412,6 +412,24 @@ class TestLowHitFeedback(unittest.IsolatedAsyncioTestCase):
         out = await _maybe_append_feedback(agent, text, 3, "zh")
         self.assertEqual(out, text)
 
+    async def test_feedback_skipped_when_ladder_capped(self):
+        # After a >LADDER_MAX_HITS search the cap note demands
+        # tightening — appending "try these queries" in the same
+        # observation would steer the agent two ways at once.
+        from sources.agents.react_tools import _maybe_append_feedback
+        from sources.long_task.chat_relevance import SearchPool
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        agent._flash_llm = _FeedbackProvider()
+        agent._ladder_capped = True
+        pool = SearchPool("干燥空气")
+        pool.add([_usp_raw_item("19511555", "AIR DRYER CONTROL USING HUMIDITY")])
+        agent._search_pool = pool
+        text = "检索结果（1 条）"
+        out = await _maybe_append_feedback(agent, text, 3, "zh")
+        self.assertEqual(out, text)
+        self.assertEqual(agent._flash_llm.calls, 0)
+
 
 class TestRankPendingPoolHeadBudget(unittest.IsolatedAsyncioTestCase):
     async def test_dead_candidates_do_not_consume_head_slots(self):
@@ -1233,24 +1251,64 @@ class TestCollectSearchPages(unittest.IsolatedAsyncioTestCase):
 
 
 from sources.agents.react_tools import (
-    REACT_TIGHTEN_SUGGEST_THRESHOLD,
-    _tighten_hint,
+    LADDER_MAX_HITS,
+    _apply_ladder_cap,
+    _ladder_cap_note,
 )
 
 
-class TestTightenHint(unittest.TestCase):
-    def test_hint_above_threshold_zh(self):
-        self.assertIn("收紧", _tighten_hint(REACT_TIGHTEN_SUGGEST_THRESHOLD, "zh"))
+class TestLadderCapNote(unittest.TestCase):
+    def test_cap_note_zh_mentions_wider_queries_unavailable(self):
+        self.assertIn("更宽", _ladder_cap_note("zh"))
+        self.assertIn("收紧", _ladder_cap_note("zh"))
 
-    def test_hint_above_threshold_en(self):
-        self.assertIn("tighten", _tighten_hint(REACT_TIGHTEN_SUGGEST_THRESHOLD, "en"))
+    def test_cap_note_en(self):
+        self.assertIn("wider", _ladder_cap_note("en"))
+        self.assertIn("tighten", _ladder_cap_note("en"))
 
-    def test_no_hint_below_threshold(self):
-        self.assertEqual(_tighten_hint(REACT_TIGHTEN_SUGGEST_THRESHOLD - 1, "zh"), "")
 
-    def test_no_hint_for_non_int(self):
-        self.assertEqual(_tighten_hint(None, "zh"), "")
-        self.assertEqual(_tighten_hint("99999", "zh"), "")
+class TestApplyLadderCap(unittest.TestCase):
+    def test_over_threshold_sets_flag_and_appends_note(self):
+        agent = _FakeAgent()
+        text = "检索结果（431844 条）"
+        out = _apply_ladder_cap(agent, text, 431844, "zh")
+        self.assertIn("更宽", out)
+        self.assertTrue(agent._ladder_capped)
+
+    def test_flag_persists_on_later_lower_hit_searches(self):
+        agent = _FakeAgent()
+        agent._ladder_capped = True
+        out = _apply_ladder_cap(agent, "检索结果（50 条）", 50, "zh")
+        self.assertIn("更宽", out)
+
+    def test_under_threshold_untouched(self):
+        agent = _FakeAgent()
+        text = "检索结果（50 条）"
+        out = _apply_ladder_cap(agent, text, 50, "zh")
+        self.assertEqual(out, text)
+        self.assertFalse(getattr(agent, "_ladder_capped", False))
+
+    def test_non_int_total_untouched(self):
+        agent = _FakeAgent()
+        text = "检索结果"
+        out = _apply_ladder_cap(agent, text, None, "zh")
+        self.assertEqual(out, text)
+
+    def test_threshold_defaults_to_pool_capacity(self):
+        import importlib
+        import os
+        import sources.agents.react_tools as rt
+        saved = {k: os.environ.pop(k, None)
+                 for k in ("REACT_LADDER_MAX_HITS",
+                           "REACT_TIGHTEN_SUGGEST_THRESHOLD")}
+        try:
+            importlib.reload(rt)
+            self.assertEqual(rt.LADDER_MAX_HITS, 300)
+        finally:
+            for k, v in saved.items():
+                if v is not None:
+                    os.environ[k] = v
+            importlib.reload(rt)
 
 
 class TestEnvelopeInvokeSchema(unittest.TestCase):

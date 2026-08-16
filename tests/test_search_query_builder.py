@@ -71,22 +71,54 @@ class TestSanitizeUsptoQuery(unittest.TestCase):
 
 
 class TestBuildSearchQueries(unittest.IsolatedAsyncioTestCase):
-    async def test_returns_validated_queries(self):
+    async def test_assembles_ladder_from_concepts(self):
+        # LLM-written queries are ignored: the ladder is assembled
+        # deterministically from the concept keyword lists so no variant
+        # can be dropped by the model.
         provider = _FakeProvider({
             "concepts": [
-                {"concept": "干燥空气源", "keywords": ["air dryer", "desiccant dryer"]},
+                {"concept": "干燥空气源",
+                 "keywords": ["dry air supply", "air dryer", "dry* air"]},
+                {"concept": "湿度控制",
+                 "keywords": ["humidity control", "moisture control"]},
             ],
-            "queries": [
-                '("compressed air dryer" OR "air dryer") AND 湿度',
-                '"desiccant dryer"',
-            ],
+            "queries": ["ignored llm written query"],
         })
         result = await build_search_queries("工业在线干燥空气源", provider)
-        self.assertEqual(len(result["queries"]), 2)
-        self.assertEqual(
-            result["queries"][0],
-            '("compressed air dryer" OR "air dryer") AND',
-        )
+        self.assertEqual(result["queries"], [
+            '("dry air supply" OR "air dryer" OR dry* air)'
+            ' AND ("humidity control" OR "moisture control")',
+            '("dry air supply" OR "air dryer" OR dry* air)',
+        ])
+
+    async def test_keyword_cap_keeps_queries_under_length_limit(self):
+        provider = _FakeProvider({
+            "concepts": [
+                {"concept": f"c{i}",
+                 "keywords": [f"very long keyword phrase number {i}-{j}"
+                              for j in range(8)]}
+                for i in range(3)
+            ],
+        })
+        result = await build_search_queries("q", provider)
+        self.assertEqual(len(result["queries"]), 3)
+        for q in result["queries"]:
+            self.assertLessEqual(len(q), 250)
+
+    async def test_llm_queries_used_when_concepts_missing(self):
+        provider = _FakeProvider({
+            "concepts": [],
+            "queries": ['"fallback" AND query'],
+        })
+        result = await build_search_queries("q", provider)
+        self.assertEqual(result["queries"], ['"fallback" AND query'])
+
+    async def test_single_concept_gives_single_query(self):
+        provider = _FakeProvider({
+            "concepts": [{"concept": "c", "keywords": ["k1", "k2"]}],
+        })
+        result = await build_search_queries("q", provider)
+        self.assertEqual(result["queries"], ["(k1 OR k2)"])
 
     async def test_provider_failure_returns_empty(self):
         provider = _FakeProvider(RuntimeError("boom"))
@@ -108,9 +140,12 @@ from sources.long_task.search_query_builder import (
 
 
 class TestRewritePromptLadderRules(unittest.TestCase):
-    def test_prompt_requires_tight_to_loose_ordering(self):
-        self.assertIn("最紧", REWRITE_SYSTEM_PROMPT)
-        self.assertIn("放宽", REWRITE_SYSTEM_PROMPT)
+    def test_prompt_orders_concepts_and_keywords_by_importance(self):
+        self.assertIn("按重要性排序", REWRITE_SYSTEM_PROMPT)
+
+    def test_prompt_says_code_assembles_the_ladder(self):
+        self.assertIn("由紧到松", REWRITE_SYSTEM_PROMPT)
+        self.assertIn("代码", REWRITE_SYSTEM_PROMPT)
 
     def test_prompt_allows_justified_domain_constraints(self):
         self.assertIn("限定", REWRITE_SYSTEM_PROMPT)
@@ -156,11 +191,28 @@ class TestRewritePromptWildcardRules(unittest.TestCase):
     def test_prompt_forbids_wildcard_inside_quoted_phrases(self):
         self.assertIn("引号", REWRITE_SYSTEM_PROMPT)
 
+    def test_prompt_warns_wildcards_lose_phrase_semantics(self):
+        self.assertIn("单词", REWRITE_SYSTEM_PROMPT)
 
-class TestRewritePromptLadderDepth(unittest.TestCase):
-    def test_prompt_requires_loosest_level_single_concept(self):
-        self.assertIn("只含一个核心概念", REWRITE_SYSTEM_PROMPT)
-        self.assertIn("单组", REWRITE_SYSTEM_PROMPT)
+
+class TestLadderGuidanceConceptBank(unittest.TestCase):
+    def test_guidance_lists_concept_keywords_for_substitution(self):
+        rewrite = {
+            "concepts": [
+                {"concept": "干燥空气源",
+                 "keywords": ["dry air supply", "air dryer", "dry* air"]},
+                {"concept": "湿度控制",
+                 "keywords": ["humidity control"]},
+            ],
+            "queries": ['("dry air supply" OR "air dryer" OR dry* air)'
+                        ' AND ("humidity control")'],
+        }
+        text = format_ladder_guidance(rewrite, "zh")
+        # the full keyword bank is rendered for synonym substitution
+        self.assertIn("干燥空气源", text)
+        self.assertIn("air dryer", text)
+        self.assertIn("dry* air", text)
+        self.assertIn("湿度控制", text)
 
 
 class TestRewritePromptWildcardClarity(unittest.TestCase):

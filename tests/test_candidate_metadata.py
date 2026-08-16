@@ -6,6 +6,7 @@ from sources.long_task.candidate_metadata import (
     dedupe_candidates,
     ensure_search_fields,
     is_dead_status,
+    is_design_patent,
     is_keyword_search_tool,
     is_uspto_tool,
 )
@@ -148,6 +149,43 @@ class TestDedupeCandidates(unittest.TestCase):
         ]
         kept, dropped = dedupe_candidates(candidates)
         self.assertEqual(len(kept), 2)
+        self.assertEqual(dropped, 0)
+
+
+class TestIsDesignPatent(unittest.TestCase):
+    def test_d_number_detected(self):
+        c = {"patent_id": "29501698", "patent_number": "D753609",
+             "type_code": "DES"}
+        self.assertTrue(is_design_patent(c))
+
+    def test_des_type_code_detected(self):
+        c = {"patent_id": "29501698", "patent_number": "", "type_code": "DES"}
+        self.assertTrue(is_design_patent(c))
+
+    def test_utility_not_design(self):
+        c = {"patent_id": "15823700", "patent_number": "10767875",
+             "type_code": "UTL"}
+        self.assertFalse(is_design_patent(c))
+
+    def test_missing_fields_not_design(self):
+        self.assertFalse(is_design_patent({"patent_id": "1"}))
+
+
+class TestDesignRanking(unittest.TestCase):
+    def test_design_sinks_below_utility_even_with_higher_score(self):
+        candidates = [
+            {"patent_id": "29501698", "title": "Design micro env",
+             "relevance_score": 5, "filing_date": "2015-01-01",
+             "patent_number": "D753609", "type_code": "DES",
+             "status": "Patented Case", "_raw": {}},
+            {"patent_id": "15823700", "title": "Utility humidity control",
+             "relevance_score": 3, "filing_date": "2020-01-01",
+             "patent_number": "10767875", "type_code": "UTL",
+             "status": "Patented Case", "_raw": {}},
+        ]
+        kept, dropped = dedupe_candidates(candidates)
+        self.assertEqual([c["patent_id"] for c in kept],
+                         ["15823700", "29501698"])
         self.assertEqual(dropped, 0)
 
 
