@@ -45,6 +45,11 @@ REACT_POOL_MAX_PAGES = int(os.getenv("REACT_POOL_MAX_PAGES", "2"))
 # huge noisy pool waste API calls and scoring time (observed: a 153k-hit
 # query whose page 2 added 44 noise candidates and 57s of scoring).
 REACT_POOL_MAX_TOTAL_PAGES = int(os.getenv("REACT_POOL_MAX_TOTAL_PAGES", "1000"))
+# Missing-direction feedback fires once per turn after a scoring round,
+# but only when the pool demonstrably holds relevant hits — a noise pool
+# (low best score) must not seed the suggested queries.
+MISSING_DIR_MIN_CANDIDATES = int(os.getenv("REACT_MISSING_DIR_MIN_CANDIDATES", "3"))
+MISSING_DIR_MIN_SCORE = float(os.getenv("REACT_MISSING_DIR_MIN_SCORE", "4"))
 REACT_USPTO_SORT_FIELD = os.getenv("REACT_USPTO_SORT_FIELD", "_score")
 LADDER_MAX_HITS = int(os.getenv("REACT_LADDER_MAX_HITS")
                       or os.getenv("REACT_TIGHTEN_SUGGEST_THRESHOLD", "300"))
@@ -529,22 +534,70 @@ async def _rank_pending_pool(agent, candidates, lang) -> Tuple[list, str]:
         note = f"relevance-ranked — pool {len(pool)}, scored {scored} new"
     else:
         note = f"已按相关度排序（池共 {len(pool)} 条、本次新评分 {scored} 条）"
+    note = await _maybe_append_missing_directions(agent, ranked, note, lang)
     return ranked, note
 
 
-def _format_feedback_note(queries: list, lang: str) -> str:
-    """Render refined-query suggestions for the observation text."""
+async def _maybe_append_missing_directions(agent, ranked: list, note: str,
+                                           lang: str) -> str:
+    """Append missing-direction query suggestions after a scoring round.
+
+    Fires at most once per turn and only when the ranked pool holds at
+    least MISSING_DIR_MIN_CANDIDATES candidates with a best relevance
+    score >= MISSING_DIR_MIN_SCORE — a noise pool must not seed the
+    suggestions.  Never raises and never mutates *note* on failure.
+    """
+    if getattr(agent, "_missing_dir_done", False):
+        return note
+    if len(ranked) < MISSING_DIR_MIN_CANDIDATES:
+        return note
+    best = max((c.get("relevance_score") or -1) for c in ranked)
+    if best < MISSING_DIR_MIN_SCORE:
+        return note
+    titles = [c.get("title") for c in ranked[:8] if c.get("title")]
+    if not titles:
+        return note
+    agent._missing_dir_done = True
+    from sources.long_task.search_query_builder import (
+        build_missing_direction_queries,
+    )
+    provider = _get_flash_provider(agent) or getattr(agent, "llm", None)
+    queries = await build_missing_direction_queries(
+        getattr(agent, "_last_user_prompt", "") or "", titles, provider)
+    if not queries:
+        return note
+    return note + _format_feedback_note(queries, lang, kind="missing")
+
+
+def _format_feedback_note(queries: list, lang: str, kind: str = "refined") -> str:
+    """Render query suggestions for the observation text.
+
+    kind="refined" — title-extracted refinements (low-hit feedback);
+    kind="missing" — inferred missing technical directions (post-scoring).
+    """
     if not queries:
         return ""
-    if lang == "en":
-        header = ("\n\nSuggested refined queries (extracted from hit "
-                  "titles — try these before loosening; use them only "
-                  "for your search calls and do not reproduce raw query "
-                  "syntax in the final answer):\n")
+    if kind == "missing":
+        if lang == "en":
+            header = ("\n\nSupplementary queries (inferred missing "
+                      "technical directions for the current pool — try "
+                      "these first; use them only for your search calls "
+                      "and do not reproduce raw query syntax in the "
+                      "final answer):\n")
+        else:
+            header = ("\n\n补充检索式（基于当前池推断的缺失技术方向，"
+                      "可优先尝试；这些仅供你调整检索用，"
+                      "回答中不要原样复述检索式语法）：\n")
     else:
-        header = ("\n\n建议检索式（基于已命中专利标题提炼，"
-                  "可优先尝试后再放宽；这些仅供你调整检索用，"
-                  "回答中不要原样复述检索式语法）：\n")
+        if lang == "en":
+            header = ("\n\nSuggested refined queries (extracted from hit "
+                      "titles — try these before loosening; use them only "
+                      "for your search calls and do not reproduce raw query "
+                      "syntax in the final answer):\n")
+        else:
+            header = ("\n\n建议检索式（基于已命中专利标题提炼，"
+                      "可优先尝试后再放宽；这些仅供你调整检索用，"
+                      "回答中不要原样复述检索式语法）：\n")
     lines = [header]
     for i, q in enumerate(queries, start=1):
         lines.append(f"{i}. {q}")

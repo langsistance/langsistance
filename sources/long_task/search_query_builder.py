@@ -331,3 +331,45 @@ async def build_feedback_queries(question: str, titles: list,
     except Exception:
         return []
     return _validated_rewrite(result)["queries"]
+
+
+# ── Missing-direction feedback ───────────────────────────────────────────────
+
+MISSING_DIRECTION_SYSTEM_PROMPT = (
+    "你是专利检索方向推断专家。给出用户问题与当前已命中的若干专利标题，"
+    "推断当前候选池缺失的技术方向，生成补充检索式供下一轮检索使用。\n"
+    "规则：\n"
+    "1. 先判断已命中标题与用户问题是否相关；若明显是噪声（标题相关性弱），"
+    "不要提炼噪声标题的措辞，直接根据用户问题推断该技术主题在专利文献中"
+    "可能的实际写法\n"
+    "2. 优先输出「缺失方向」：与用户问题相关、但当前标题中未出现的器件/"
+    "电路/系统/应用场景写法（上位/下位/相邻表述），而不是复述已有标题的"
+    "用词\n"
+    "3. 每条检索式由 2-3 个概念组组成，多词短语加双引号，同组同义词用 OR "
+    "连接，概念组之间用 AND 连接\n"
+    "4. 输出 2-4 条检索式，按松紧排序（最紧的在前）；每条最多 12 个关键词、"
+    "250 字符，禁止出现中文\n"
+    'Return JSON: {"queries": ["最紧", "较松", ...]}'
+)
+
+
+async def build_missing_direction_queries(question: str, titles: list,
+                                          provider: Any) -> list:
+    """Infer technical directions missing from the current candidate pool.
+
+    Unlike title refinement (build_feedback_queries), this asks the Flash
+    LLM which related phrasings are NOT yet covered by the pool's titles,
+    and to derive its own vocabulary from the question when the pool is
+    noise.  Never raises; returns a sanitized query list (possibly empty).
+    """
+    if not titles or provider is None:
+        return []
+    user_content = json.dumps(
+        {"question": question, "hit_titles": [str(t) for t in titles][:10]},
+        ensure_ascii=False)
+    try:
+        result = await provider.complete_json(MISSING_DIRECTION_SYSTEM_PROMPT,
+                                              user_content)
+    except Exception:
+        return []
+    return _validated_rewrite(result)["queries"]

@@ -469,6 +469,60 @@ class TestRankPendingPoolHeadBudget(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(i.startswith("2") for i in top_ids))
 
 
+class TestMissingDirectionFeedback(unittest.IsolatedAsyncioTestCase):
+    """After a relevance-scoring round, the pool's missing technical
+    directions are inferred once per turn — but only when the pool
+    actually holds relevant hits (a noise pool must not seed them)."""
+
+    def _setup(self, score):
+        from sources.agents.react_tools import _rank_pending_pool
+        from sources.long_task.candidate_metadata import build_candidates
+        from sources.long_task.chat_relevance import SearchPool
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        agent._flash_llm = _FeedbackProvider()
+        pool = SearchPool("干燥空气")
+        pool.add([_usp_raw_item("19511555", "AIR DRYER CONTROL USING HUMIDITY"),
+                  _usp_raw_item("18184836", "MOISTURE REGULATION ENCLOSURE"),
+                  _usp_raw_item("17222222", "DEW POINT SENSOR")])
+        for pid in pool._by_id:
+            pool._by_id[pid]["relevance_score"] = score
+        agent._search_pool = pool
+        items = [_usp_raw_item("19511555", "AIR DRYER CONTROL USING HUMIDITY"),
+                 _usp_raw_item("18184836", "MOISTURE REGULATION ENCLOSURE"),
+                 _usp_raw_item("17222222", "DEW POINT SENSOR")]
+        return agent, _rank_pending_pool, build_candidates(items)
+
+    async def test_relevant_pool_gets_missing_direction_suggestions(self):
+        agent, rank_fn, cands = self._setup(5)
+        _, note = await rank_fn(agent, cands, "zh")
+        self.assertIn("缺失", note)
+        self.assertIn('"air dryer" AND humidity', note)
+        self.assertTrue(agent._missing_dir_done)
+
+    async def test_noise_pool_does_not_fire(self):
+        agent, rank_fn, cands = self._setup(2)
+        _, note = await rank_fn(agent, cands, "zh")
+        self.assertNotIn("缺失", note)
+        self.assertEqual(agent._flash_llm.calls, 0)
+        self.assertFalse(getattr(agent, "_missing_dir_done", False))
+
+    async def test_fires_once_per_turn(self):
+        agent, rank_fn, cands = self._setup(5)
+        _, note1 = await rank_fn(agent, cands, "zh")
+        calls_after_first = agent._flash_llm.calls
+        self.assertIn("缺失", note1)
+        _, note2 = await rank_fn(agent, cands, "zh")
+        self.assertNotIn("缺失", note2)
+        self.assertEqual(agent._flash_llm.calls, calls_after_first)
+
+    async def test_failure_keeps_note_unchanged(self):
+        agent, rank_fn, cands = self._setup(5)
+        agent._flash_llm = _FeedbackProvider(fail=True)
+        _, note = await rank_fn(agent, cands, "zh")
+        self.assertNotIn("缺失", note)
+
+
 if __name__ == "__main__":
     unittest.main()
 

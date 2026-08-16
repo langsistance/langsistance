@@ -446,3 +446,43 @@ class TestFeedbackPromptDomainNeutral(unittest.TestCase):
 
     def test_feedback_prompt_mentions_word_forms(self):
         self.assertIn("词形", FEEDBACK_SYSTEM_PROMPT)
+
+
+# ── Missing-direction feedback ───────────────────────────────────────────────
+
+from sources.long_task.search_query_builder import (
+    MISSING_DIRECTION_SYSTEM_PROMPT,
+    build_missing_direction_queries,
+)
+
+
+class TestBuildMissingDirectionQueries(unittest.IsolatedAsyncioTestCase):
+    async def test_returns_sanitized_queries(self):
+        provider = _FakeProvider({
+            "queries": ['"x" AND y', 42, "   ", None],
+        })
+        out = await build_missing_direction_queries("q", ["t1"], provider)
+        self.assertEqual(out, ['"x" AND y'])
+
+    async def test_empty_titles_returns_empty_without_calling(self):
+        provider = _FakeProvider({"queries": ["q"]})
+        out = await build_missing_direction_queries("q", [], provider)
+        self.assertEqual(out, [])
+        self.assertEqual(provider.calls, [])
+
+    async def test_provider_failure_returns_empty(self):
+        provider = _FakeProvider(RuntimeError("boom"))
+        out = await build_missing_direction_queries("q", ["t1"], provider)
+        self.assertEqual(out, [])
+
+
+class TestMissingDirectionPromptGeneric(unittest.TestCase):
+    def test_prompt_targets_missing_directions(self):
+        self.assertIn("缺失方向", MISSING_DIRECTION_SYSTEM_PROMPT)
+
+    def test_prompt_handles_noise_pool(self):
+        self.assertIn("噪声", MISSING_DIRECTION_SYSTEM_PROMPT)
+
+    def test_prompt_stays_domain_neutral(self):
+        self.assertNotIn("air dry", MISSING_DIRECTION_SYSTEM_PROMPT)
+        self.assertNotIn("dehumidif", MISSING_DIRECTION_SYSTEM_PROMPT)
