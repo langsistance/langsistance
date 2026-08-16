@@ -1450,6 +1450,17 @@ class TestEffectiveQuery(unittest.TestCase):
         self.assertEqual(_effective_query({"page": 1}), "")
         self.assertEqual(_effective_query(None), "")
 
+    def test_explicit_query_keys_beat_scan_order(self):
+        # A non-query string field must not shadow an explicit query key
+        # (observed in production: the LLM echoes the user_id into args
+        # and the first-string scan picked it over the real query).
+        self.assertEqual(
+            _effective_query({"user_id": "9400", "query": "real query"}),
+            "real query")
+        self.assertEqual(
+            _effective_query({"user_id": "9400", "q": "real q"}),
+            "real q")
+
 
 class TestBuildUsptoEnvelope(unittest.TestCase):
     def test_envelope_carries_template_and_ensures_fields(self):

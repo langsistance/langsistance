@@ -374,9 +374,12 @@ _ENVELOPE_KEYS = frozenset({"method", "body", "query", "path", "header"})
 def _effective_query(args: dict) -> str:
     """Extract the query string that actually reaches the search API.
 
-    Mirrors the flat-merge rule (first non-empty string value wins) and
-    also understands body.q and params-JSON shapes.  Returns "" when no
-    query can be recovered — callers then skip envelope building.
+    Understands body.q, params-JSON, and top-level q/query shapes.  The
+    generic first-string scan is the last resort and runs AFTER the
+    explicit query slots — a non-query string field (the LLM sometimes
+    echoes the user_id into args) must not shadow a real query.  Returns
+    "" when no query can be recovered — callers then skip envelope
+    building.
     """
     if not isinstance(args, dict):
         return ""
@@ -396,6 +399,10 @@ def _effective_query(args: dict) -> str:
                 return ""  # params dict carries no q — nothing to recover
         except (ValueError, TypeError):
             pass  # malformed params string — fall through to flat scan
+    for key in ("q", "query"):
+        value = args.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
     for value in args.values():
         if isinstance(value, str) and value.strip():
             return value.strip()

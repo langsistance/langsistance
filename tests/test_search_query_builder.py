@@ -486,3 +486,8 @@ class TestMissingDirectionPromptGeneric(unittest.TestCase):
     def test_prompt_stays_domain_neutral(self):
         self.assertNotIn("air dry", MISSING_DIRECTION_SYSTEM_PROMPT)
         self.assertNotIn("dehumidif", MISSING_DIRECTION_SYSTEM_PROMPT)
+
+    def test_prompt_requires_looser_two_concept_queries(self):
+        # three-concept ANDs routinely zero-hit — at least half the
+        # suggested queries must stay at two concept groups
+        self.assertIn("2 个概念组", MISSING_DIRECTION_SYSTEM_PROMPT)
