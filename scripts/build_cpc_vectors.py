@@ -15,6 +15,25 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+
+def _load_env(path: str) -> None:
+    """Load KEY=VALUE lines from an env file into os.environ (no
+    overrides) — the embedding provider credentials usually live in the
+    service .env and are not exported in an interactive shell."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                os.environ.setdefault(key.strip(), value.strip())
+    except OSError:
+        pass
+
+
+_load_env(os.path.join(os.path.dirname(__file__), "..", ".env"))
+
 from sources.long_task.cpc_semantic import (
     CPC_TITLES_JSON,
     CPC_VECTORS_NPY,

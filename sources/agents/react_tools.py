@@ -602,6 +602,14 @@ async def _maybe_append_missing_directions(agent, ranked: list, note: str,
             from sources.long_task.cpc_semantic import match_query_to_cpc
             cpc_hints = match_query_to_cpc(
                 getattr(agent, "_last_user_prompt", "") or "")
+            _glog = getattr(agent, "logger", None)
+            if _glog is not None and not cpc_hints:
+                # Enabled but no matches — usually missing data files or
+                # unbuilt vector cache; surface it in the standard log.
+                _glog.warning(
+                    "cpc expansion enabled but no CPC matches — "
+                    "check data/cpc titles json and vector cache "
+                    "(scripts/build_cpc_vectors.py)")
         except Exception:
             cpc_hints = None
     queries = await build_missing_direction_queries(

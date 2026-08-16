@@ -77,6 +77,10 @@ class FakeLogger:
 
 
 logger_module.Logger = lambda *args, **kwargs: FakeLogger()
+# Prefer the real module when it is already loaded; when THIS file
+# installs the stub, remove it right after the knowledge imports so the
+# rest of the test session can import the real sources.logger.
+_installed_logger_stub = "sources.logger" not in sys.modules
 sys.modules.setdefault("sources.logger", logger_module)
 
 utility_module = types.ModuleType("sources.utility")
@@ -85,6 +89,9 @@ sys.modules.setdefault("sources.utility", utility_module)
 
 from sources.knowledge import knowledge as knowledge_module
 from sources.knowledge.knowledge import KnowledgeItem, ToolItem
+
+if _installed_logger_stub and sys.modules.get("sources.logger") is logger_module:
+    del sys.modules["sources.logger"]
 
 
 class FakeRedis:

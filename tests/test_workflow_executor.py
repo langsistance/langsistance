@@ -59,6 +59,7 @@ class FakeLogger:
         pass
 
 logger_module.Logger = FakeLogger
+_original_sources_logger = sys.modules.get("sources.logger")
 sys.modules["sources.logger"] = logger_module
 
 utility_module = types.ModuleType("sources.utility")
@@ -66,6 +67,11 @@ utility_module.pretty_print = lambda *args, **kwargs: None
 sys.modules["sources.utility"] = utility_module
 
 from sources.knowledge.knowledge import KnowledgeItem, ToolItem
+
+if _original_sources_logger is not None:
+    sys.modules["sources.logger"] = _original_sources_logger
+else:
+    sys.modules.pop("sources.logger", None)
 
 
 class FakeLlm:

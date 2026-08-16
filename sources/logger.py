@@ -19,10 +19,17 @@ class Logger:
         self.logger.setLevel(logging.DEBUG)
         self.logger.handlers.clear()
         self.logger.propagate = False
-        file_handler = logging.FileHandler(self.log_path, encoding='utf-8')
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        file_handler.setFormatter(formatter)
-        self.logger.addHandler(file_handler)
+        try:
+            file_handler = logging.FileHandler(self.log_path, encoding='utf-8')
+            file_handler.setFormatter(formatter)
+            self.logger.addHandler(file_handler)
+        except OSError:
+            # Unwritable log directory (read-only container, wrong owner):
+            # keep logging alive via stderr instead of crashing the caller.
+            stream_handler = logging.StreamHandler()
+            stream_handler.setFormatter(formatter)
+            self.logger.addHandler(stream_handler)
 
     
     def create_folder(self, path):
