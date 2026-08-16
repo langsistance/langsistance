@@ -98,10 +98,14 @@ def run_one(model: str, provider_name: str) -> str:
     reachable; locally it fails with connection errors."""
     user = USER.format(query=QUERY, cpc="\n".join(cpc_lines))
     try:
+        import asyncio
         from sources.llm_provider import Provider
         provider = Provider(provider_name=provider_name, model=model,
                             server_address="", is_local=False)
-        return str(provider.complete_json(SYSTEM, user, max_retries=1))
+        content = asyncio.run(
+            provider.complete_json(SYSTEM, user, max_retries=1))
+        return content if isinstance(content, str) else json.dumps(
+            content, ensure_ascii=False)
     except Exception as exc:
         print(f"   (Provider 失败，回退 SDK: {type(exc).__name__}: "
               f"{str(exc)[:100]})")
