@@ -72,15 +72,20 @@ def main() -> int:
              or product.get("fileBag") or [])
     print(f"file entries: {len(files)}")
     if files:
-        print("first file entry keys:", sorted(files[0].keys()))
-        print("newest 3 entries:")
+        print("first entry type:", type(files[0]).__name__)
+        print("newest 3 entries (raw):")
         for f in files[-3:]:
-            print(json.dumps(f, ensure_ascii=False)[:500])
+            print(json.dumps(f, ensure_ascii=False)[:800])
     print()
     print("=== download newest file + inspect XML ===")
     # find the URI key whatever it is named, preferring the newest file
     uri = ""
     for f in reversed(files):
+        if not isinstance(f, dict):
+            # maybe a plain string URL
+            if isinstance(f, str) and f.startswith("http"):
+                uri = f
+            break
         for key in ("fileDownloadURI", "downloadURI", "fileDownloadUrl",
                     "fileDownloadUri"):
             v = f.get(key) or ""
