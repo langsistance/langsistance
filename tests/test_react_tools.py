@@ -589,6 +589,81 @@ class TestMaybeRewriteSearchQuery(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(agent.llm.calls, 1)
         self.assertEqual(out2["q"], out["q"])
 
+    async def test_user_id_filled_as_q_replaced_by_tightest(self):
+        """The LLM sometimes pastes the session's user_id into the query
+        slot (observed in production logs) — treat it as blank."""
+        agent = _RewriteAgent()
+        agent._search_rewrite = {"queries": ['("a" OR "b")']}
+        out = await _maybe_rewrite_search_query(
+            agent, _ToolInfo("search_patent_by_key_word"),
+            {"q": "u1"})
+        self.assertEqual(out["q"], '("a" OR "b")')
+
+    async def test_query_id_filled_as_query_replaced_by_tightest(self):
+        agent = _RewriteAgent()
+        agent._last_query_id = "p4huoahzdj"
+        agent._search_rewrite = {"queries": ['("a" OR "b")']}
+        out = await _maybe_rewrite_search_query(
+            agent, _ToolInfo("search_patent_by_key_word"),
+            {"query": "p4huoahzdj"})
+        self.assertEqual(out["query"], '("a" OR "b")')
+
+    async def test_numeric_non_session_query_preserved(self):
+        """A legitimate numeric query (e.g. an application number) must
+        not be confused with a session ID."""
+        agent = _RewriteAgent()
+        agent._last_query_id = "p4huoahzdj"
+        agent._search_rewrite = {"queries": ['("a" OR "b")']}
+        out = await _maybe_rewrite_search_query(
+            agent, _ToolInfo("search_patent_by_key_word"), {"q": "12523395"})
+        self.assertEqual(out["q"], "12523395")
+
+
+class TestCollectSearchPagesCap(unittest.IsolatedAsyncioTestCase):
+    """Huge-hit queries must not page through the noise pool."""
+
+    class _Entry:
+        def __init__(self):
+            self.invoke_calls = 0
+            from types import SimpleNamespace
+            self.tool_info = SimpleNamespace(params={
+                "body": {"pagination": {"limit": 50}}})
+            entry_self = self
+
+            class _Tool:
+                def invoke(self2, payload):
+                    entry_self.invoke_calls += 1
+                    return "ok"
+            self.tool = _Tool()
+
+    async def test_skips_extra_pages_when_total_huge(self):
+        from unittest.mock import patch
+        from sources.agents.react_tools import _collect_search_pages
+        agent = _FakeAgent()
+        agent._last_search_total = 153959
+        entry = self._Entry()
+        items = await _collect_search_pages(
+            agent, entry, {"query": "x"},
+            [{"applicationNumberText": "19511555"}])
+        self.assertEqual(entry.invoke_calls, 0)
+        self.assertEqual([c["patent_id"] for c in items], ["19511555"])
+
+    async def test_pages_when_total_small(self):
+        from sources.agents.react_tools import _collect_search_pages
+        agent = _FakeAgent()
+        agent._last_search_total = 60
+        entry = self._Entry()
+        agent._pending_raw_items = [
+            {"applicationNumberText": "18184836"}]
+        items = await _collect_search_pages(
+            agent, entry, {"query": "x"},
+            [{"applicationNumberText": "19511555"}])
+        # first extra page returns a fresh item; second returns nothing new
+        self.assertEqual(entry.invoke_calls, 1)
+        self.assertEqual(
+            [c["patent_id"] for c in items],
+            ["19511555", "18184836"])
+
     async def test_lazy_build_failure_keeps_original_args(self):
         class _FailingLLM:
             async def complete_json(self, system, user):

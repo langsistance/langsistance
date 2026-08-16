@@ -348,6 +348,17 @@ class TestRewritePromptCarrierRules(unittest.TestCase):
         self.assertNotIn("air dry", REWRITE_SYSTEM_PROMPT)
         self.assertNotIn("dehumidif", REWRITE_SYSTEM_PROMPT)
 
+    def test_prompt_forbids_suffix_rephrasings_as_carriers(self):
+        # carrier words must be implementation carriers, not
+        # "concept + controller/control circuit" style rephrasings
+        self.assertIn("复述", REWRITE_SYSTEM_PROMPT)
+        self.assertIn("后缀", REWRITE_SYSTEM_PROMPT)
+
+    def test_prompt_carrier_quality_test(self):
+        # the prompt gives a checkable standard for what counts as a carrier
+        self.assertIn("器件", REWRITE_SYSTEM_PROMPT)
+        self.assertIn("实现该概念", REWRITE_SYSTEM_PROMPT)
+
 
 class TestRewritePromptWildcardClarity(unittest.TestCase):
     def test_prompt_requires_clarity_judgment(self):

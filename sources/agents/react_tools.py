@@ -40,6 +40,11 @@ LOW_HIT_FEEDBACK_THRESHOLD = int(os.getenv(
 MAX_PATENT_LIST_ITEMS = int(os.getenv("REACT_MAX_PATENT_LIST_ITEMS", "100"))
 RELEVANCE_RANK_ENABLED = os.getenv("REACT_RELEVANCE_RANK", "1") != "0"
 REACT_POOL_MAX_PAGES = int(os.getenv("REACT_POOL_MAX_PAGES", "2"))
+# Queries whose total hits exceed this threshold are never paged through:
+# the first page already feeds scoring/feedback, and extra pages of a
+# huge noisy pool waste API calls and scoring time (observed: a 153k-hit
+# query whose page 2 added 44 noise candidates and 57s of scoring).
+REACT_POOL_MAX_TOTAL_PAGES = int(os.getenv("REACT_POOL_MAX_TOTAL_PAGES", "1000"))
 REACT_USPTO_SORT_FIELD = os.getenv("REACT_USPTO_SORT_FIELD", "_score")
 LADDER_MAX_HITS = int(os.getenv("REACT_LADDER_MAX_HITS")
                       or os.getenv("REACT_TIGHTEN_SUGGEST_THRESHOLD", "300"))
@@ -464,6 +469,8 @@ async def _collect_search_pages(agent, entry, args, first_raw: list) -> list:
         page_size = int((body.get("pagination") or {}).get("limit", 50))
     except Exception:
         pass
+    if isinstance(total, int) and total > REACT_POOL_MAX_TOTAL_PAGES:
+        return items  # huge noisy pool — first page suffices, do not page
     offset = page_size
     for _page in range(REACT_POOL_MAX_PAGES - 1):
         if isinstance(total, int) and offset >= total:
@@ -679,8 +686,19 @@ async def _maybe_rewrite_search_query(agent, tool_info, args) -> dict:
     tightest = queries[0]
     out = dict(args or {})
 
+    def _is_session_sentinel(value) -> bool:
+        """True when the LLM pasted a session ID (user_id / query_id) into
+        the query slot instead of a search expression — observed in
+        production logs (q filled with the user_id)."""
+        text = str(value or "").strip()
+        if not text:
+            return False
+        uid = str(getattr(agent, "_last_user_id", "") or "")
+        qid = str(getattr(agent, "_last_query_id", "") or "")
+        return text == uid or text == qid
+
     def _blank(value) -> bool:
-        return not str(value or "").strip()
+        return not str(value or "").strip() or _is_session_sentinel(value)
 
     if "q" in out:
         if _blank(out.get("q")):
