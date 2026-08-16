@@ -58,36 +58,26 @@ def _head(url, headers=None, timeout=30, with_body=False):
 def main() -> int:
     print(f"USPTO_API_KEY set: {bool(KEY)}")
     print()
-    print("=== A: legacy bulkdata direct file (weekly zips) ===")
+    print("=== C: ODP datasets products/search (correct endpoint) ===")
     print(_head(
-        "https://bulkdata.uspto.gov/data/patent/classification/cpc_mcf/"
-        "CPC_MCF_20260609.zip"))
+        "https://api.uspto.gov/api/v1/datasets/products/search"
+        "?q=CPCMCPT",
+        headers={"X-API-KEY": KEY}, with_body=True))
     print()
-    print("=== B: legacy bulkdata directory listing ===")
+    print("=== D: ODP datasets products/search (cpc keyword) ===")
     print(_head(
-        "https://bulkdata.uspto.gov/data/patent/classification/cpc_mcf/",
-        with_body=True))
+        "https://api.uspto.gov/api/v1/datasets/products/search?q=CPC",
+        headers={"X-API-KEY": KEY}, with_body=True))
     print()
-    print("=== C: ODP datasets API (catalog search) ===")
+    print("=== E: ODP product detail (CPCMCPT) ===")
     print(_head(
-        "https://api.uspto.gov/api/v1/datasets?q=cpcmcpt&limit=5",
-        headers={"X-API-Key": KEY}, with_body=True))
+        "https://api.uspto.gov/api/v1/datasets/products/CPCMCPT",
+        headers={"X-API-KEY": KEY}, with_body=True))
     print()
-    print("=== D: ODP datasets API (bare listing) ===")
+    print("=== F: ODP product files (CPCMCPT) ===")
     print(_head(
-        "https://api.uspto.gov/api/v1/datasets?limit=5",
-        headers={"X-API-Key": KEY}, with_body=True))
-    print()
-    print("=== E: ODP datasets products API ===")
-    print(_head(
-        "https://api.uspto.gov/api/v1/datasets/products?q=cpc&limit=5",
-        headers={"X-API-Key": KEY}, with_body=True))
-    print()
-    print("=== F: ODP product files API (cpcmcpt guess) ===")
-    print(_head(
-        "https://api.uspto.gov/api/v1/datasets/products/files/"
-        "CPCMCPT?limit=5",
-        headers={"X-API-Key": KEY}, with_body=True))
+        "https://api.uspto.gov/api/v1/datasets/products/files/CPCMCPT",
+        headers={"X-API-KEY": KEY}, with_body=True))
     return 0
 
 
