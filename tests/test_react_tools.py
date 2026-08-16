@@ -538,16 +538,18 @@ class _CapturingFeedbackProvider(_FeedbackProvider):
 
 
 class TestCpcExpansionWiring(unittest.IsolatedAsyncioTestCase):
-    """CPC hints (plan B, route C) seed the missing-direction inference
-    only when REACT_CPC_EXPANSION is on; failures degrade silently."""
+    """CPC hints (plan B, route C) seed the missing-direction inference;
+    they are matched once per request in create_agent and carried on
+    agent._cpc_hints.  Missing hints degrade silently."""
 
-    async def _run(self, switch):
+    async def _run(self, hints):
         from unittest.mock import patch
         from sources.agents.react_tools import _rank_pending_pool
         from sources.long_task.candidate_metadata import build_candidates
         from sources.long_task.chat_relevance import SearchPool
         agent = _FakeAgent()
         agent._last_user_prompt = "干燥空气"
+        agent._cpc_hints = hints
         agent._flash_llm = _CapturingFeedbackProvider()
         pool = SearchPool("干燥空气")
         pool.add([_usp_raw_item("19511555", "AIR DRYER CONTROL USING HUMIDITY"),
@@ -560,22 +562,18 @@ class TestCpcExpansionWiring(unittest.IsolatedAsyncioTestCase):
                  _usp_raw_item("18184836", "MOISTURE REGULATION ENCLOSURE"),
                  _usp_raw_item("17222222", "DEW POINT SENSOR")]
         cands = build_candidates(items)
-        hints = [{"code": "H05B45/00", "title": "LED circuits"}]
-        with patch("sources.agents.react_tools.CPC_EXPANSION_ENABLED", switch), \
-             patch("sources.long_task.cpc_semantic.match_query_to_cpc",
-                   return_value=hints) as mock_cpc:
-            await _rank_pending_pool(agent, cands, "zh")
-        return agent, mock_cpc
+        await _rank_pending_pool(agent, cands, "zh")
+        return agent
 
-    async def test_cpc_hints_reach_inference_when_enabled(self):
-        agent, mock_cpc = await self._run(True)
-        mock_cpc.assert_called_once()
+    async def test_cpc_hints_reach_inference(self):
+        agent = await self._run(
+            [{"code": "H05B45/00", "title": "LED circuits"}])
         self.assertIn("H05B45/00", agent._flash_llm.payloads[0])
         self.assertIn("LED circuits", agent._flash_llm.payloads[0])
 
-    async def test_cpc_skipped_when_disabled(self):
-        _, mock_cpc = await self._run(False)
-        mock_cpc.assert_not_called()
+    async def test_no_cpc_hints_keeps_payload_clean(self):
+        agent = await self._run(None)
+        self.assertNotIn("cpc", agent._flash_llm.payloads[0])
 
 
 class _AutoRoundEntry:

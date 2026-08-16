@@ -28,7 +28,11 @@ from sources.tool_result_filter import (
 )
 from sources.result_export import build_result_artifacts
 from sources.agents.react_loop import ReActLoop, make_event_emitter, make_llm_call
-from sources.agents.react_tools import build_tool_set, make_action_executor
+from sources.agents.react_tools import (
+    CPC_EXPANSION_ENABLED,
+    build_tool_set,
+    make_action_executor,
+)
 from sources.http_outbound import outbound_http
 
 from langchain_core.tools import StructuredTool
@@ -1573,6 +1577,7 @@ Begin your response now:
         self._missing_dir_queries = None  # inferred supplementary queries, per request
         self._auto_round_done = False  # system-driven second round fired, per request
         self._tried_queries = []  # queries already sent to the search tool, per request
+        self._cpc_hints = None  # matched CPC codes for the question, per request
         self.knowledgeTool = (None, None)  # (knowledge_item, tool_info) — selected inside the loop
         self.tools = []
         lang = self._detect_lang(prompt)
@@ -1590,6 +1595,15 @@ Begin your response now:
         self.logger.info(
             f"search_rewrite — queries={self._search_rewrite.get('queries')}"
         )
+        # CPC semantic match runs once per request right after the
+        # rewrite, so cpc_semantic.log records every round regardless of
+        # whether the missing-direction stage later fires.
+        if CPC_EXPANSION_ENABLED:
+            try:
+                from sources.long_task.cpc_semantic import match_query_to_cpc
+                self._cpc_hints = match_query_to_cpc(prompt)
+            except Exception:
+                self._cpc_hints = None
         if callback_handler:
             await _emit_status(callback_handler,
                 "正在分析您的问题..." if lang == 'zh' else "Analyzing your question...")

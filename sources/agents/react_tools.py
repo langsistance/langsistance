@@ -596,22 +596,16 @@ async def _maybe_append_missing_directions(agent, ranked: list, note: str,
         build_missing_direction_queries,
     )
     provider = _get_flash_provider(agent) or getattr(agent, "llm", None)
-    cpc_hints = None
-    if CPC_EXPANSION_ENABLED:
-        try:
-            from sources.long_task.cpc_semantic import match_query_to_cpc
-            cpc_hints = match_query_to_cpc(
-                getattr(agent, "_last_user_prompt", "") or "")
-            _glog = getattr(agent, "logger", None)
-            if _glog is not None and not cpc_hints:
-                # Enabled but no matches — usually missing data files or
-                # unbuilt vector cache; surface it in the standard log.
-                _glog.warning(
-                    "cpc expansion enabled but no CPC matches — "
-                    "check data/cpc titles json and vector cache "
-                    "(scripts/build_cpc_vectors.py)")
-        except Exception:
-            cpc_hints = None
+    # CPC hints were matched once in create_agent (cpc_semantic.log
+    # records every round); reuse them here.
+    cpc_hints = getattr(agent, "_cpc_hints", None) or None
+    if CPC_EXPANSION_ENABLED and not cpc_hints:
+        _glog = getattr(agent, "logger", None)
+        if _glog is not None:
+            _glog.warning(
+                "cpc expansion enabled but no CPC matches — "
+                "check data/cpc titles json and vector cache "
+                "(scripts/build_cpc_vectors.py)")
     queries = await build_missing_direction_queries(
         getattr(agent, "_last_user_prompt", "") or "", titles, provider,
         cpc_hints=cpc_hints)

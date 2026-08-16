@@ -76,6 +76,7 @@ class TestCreateAgentWiring(unittest.TestCase):
         agent._missing_dir_queries = ["stale query"]
         agent._auto_round_done = True
         agent._tried_queries = ["stale tried query"]
+        agent._cpc_hints = [{"code": "STALE", "title": "stale hint"}]
         agent._feedback_done = True
         agent._ladder_capped = True
         agent._search_ranked = True
@@ -90,9 +91,27 @@ class TestCreateAgentWiring(unittest.TestCase):
         self.assertIsNone(getattr(agent, "_missing_dir_queries", "unset"))
         self.assertFalse(getattr(agent, "_auto_round_done", True))
         self.assertEqual(getattr(agent, "_tried_queries", "unset"), [])
+        self.assertIsNone(getattr(agent, "_cpc_hints", "unset"))
         self.assertFalse(getattr(agent, "_feedback_done", True))
         self.assertFalse(getattr(agent, "_ladder_capped", True))
         self.assertFalse(getattr(agent, "_search_ranked", True))
+
+    def test_create_agent_matches_cpc_once_per_request(self):
+        agent = _make_agent()
+        handler = _FakeHandler()
+        hints = [{"code": "H05B45/00", "title": "LED circuits", "score": 0.9}]
+        with patch("sources.agents.general_agent.CPC_EXPANSION_ENABLED", True), \
+             patch("sources.long_task.cpc_semantic.match_query_to_cpc",
+                   return_value=hints) as mock_cpc, \
+             patch("sources.agents.general_agent.build_tool_set",
+                   new=AsyncMock(return_value=({}, []))), \
+             patch("sources.agents.general_agent.ReActLoop") as MockLoop:
+            MockLoop.return_value.run = AsyncMock(
+                return_value=RoundResult(kind="answer", answer_text="hi", steps=1))
+            _run(agent.create_agent(
+                "u1", "hello", "q1", "", handler, push_filter=None))
+        mock_cpc.assert_called_once_with("hello")
+        self.assertEqual(getattr(agent, "_cpc_hints", None), hints)
 
     def test_long_task_kind_returns_intent_dict(self):
         agent = _make_agent()
