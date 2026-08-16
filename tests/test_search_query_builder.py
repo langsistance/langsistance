@@ -227,6 +227,12 @@ class TestRewritePromptWildcardRules(unittest.TestCase):
         # late in the keyword list so the tightest level stays tight
         self.assertIn("靠后", REWRITE_SYSTEM_PROMPT)
 
+    def test_prompt_bare_root_must_be_single_word(self):
+        # a phrase+* only matches that exact word order — the bare root
+        # must come from a single word so other compounds are covered
+        self.assertIn("单个词", REWRITE_SYSTEM_PROMPT)
+        self.assertIn('"air cool*"', REWRITE_SYSTEM_PROMPT)
+
 
 class TestLadderGuidanceConceptBank(unittest.TestCase):
     def test_guidance_lists_concept_keywords_for_substitution(self):
