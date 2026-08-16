@@ -188,3 +188,64 @@ class TestLadderGuidanceWildcardRetry(unittest.TestCase):
         text = format_ladder_guidance({"queries": ['("a" OR "b") AND ("c" OR "d")']}, "en")
         self.assertIn("false zero", text)
         self.assertIn("wildcard", text)
+
+
+class TestRewritePromptVariantCoverage(unittest.TestCase):
+    def test_prompt_requires_at_least_five_variants_per_concept(self):
+        self.assertIn("至少 5 个", REWRITE_SYSTEM_PROMPT)
+
+    def test_prompt_requires_word_form_coverage(self):
+        self.assertIn("词形", REWRITE_SYSTEM_PROMPT)
+        self.assertIn("cool", REWRITE_SYSTEM_PROMPT)
+
+
+class TestLadderGuidanceLowHitSubstitution(unittest.TestCase):
+    def test_guidance_substitutes_before_loosening_zh(self):
+        text = format_ladder_guidance({"queries": ['("a" OR "b")']}, "zh")
+        self.assertIn("少于 10", text)
+        self.assertIn("同义表述", text)
+        self.assertIn("10-300", text)
+
+    def test_guidance_substitutes_before_loosening_en(self):
+        text = format_ladder_guidance({"queries": ['("a" OR "b")']}, "en")
+        self.assertIn("fewer than 10", text)
+        self.assertIn("synonym", text)
+        self.assertIn("10-300", text)
+
+
+# ── Title feedback ───────────────────────────────────────────────────────────
+
+from sources.long_task.search_query_builder import (
+    FEEDBACK_SYSTEM_PROMPT,
+    build_feedback_queries,
+)
+
+
+class TestBuildFeedbackQueries(unittest.IsolatedAsyncioTestCase):
+    async def test_returns_sanitized_queries(self):
+        provider = _FakeProvider({
+            "queries": ['"air dryer" AND humidity', 42, "   ", None],
+        })
+        out = await build_feedback_queries(
+            "干燥空气", ["AIR DRYER CONTROL USING HUMIDITY"], provider)
+        self.assertEqual(out, ['"air dryer" AND humidity'])
+
+    async def test_empty_titles_returns_empty_without_calling(self):
+        provider = _FakeProvider({"queries": ["q"]})
+        out = await build_feedback_queries("干燥空气", [], provider)
+        self.assertEqual(out, [])
+        self.assertEqual(provider.calls, [])
+
+    async def test_provider_failure_returns_empty(self):
+        provider = _FakeProvider(RuntimeError("boom"))
+        out = await build_feedback_queries("干燥空气", ["t1"], provider)
+        self.assertEqual(out, [])
+
+
+class TestFeedbackPromptDomainNeutral(unittest.TestCase):
+    def test_feedback_prompt_has_no_domain_anchor(self):
+        self.assertNotIn("air dry", FEEDBACK_SYSTEM_PROMPT)
+        self.assertNotIn("dehumidif", FEEDBACK_SYSTEM_PROMPT)
+
+    def test_feedback_prompt_mentions_word_forms(self):
+        self.assertIn("词形", FEEDBACK_SYSTEM_PROMPT)

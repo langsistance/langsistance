@@ -6,6 +6,7 @@ free-form query strings. Pure assembly helpers are separated from the
 LLM call so they can be unit-tested without a provider.
 """
 
+import json
 import re
 from typing import Any
 
@@ -19,9 +20,11 @@ REWRITE_SYSTEM_PROMPT = (
     "本工具面向所有技术领域，不得为特定领域预设关键词。\n\n"
     "步骤：\n"
     "1. 从用户问题中抽取 2-4 个核心技术概念（忽略语气词和通用词）\n"
-    "2. 每个概念翻译成该领域专利文献常用的英文术语，并给出 2-5 个"
-    "同义/近义关键词（含行业缩写、上位/下位词、英美拼写变体），"
-    "并判断该概念的明确程度：\n"
+    "2. 每个概念翻译成该领域专利文献常用的英文术语，并给出至少 5 个"
+    "同义/近义关键词（含行业缩写、上位/下位词、英美拼写变体）。"
+    "变体必须覆盖同一概念的不同词形/复合结构（如 cool ↔ cooler ↔ "
+    "cooling、heat generation ↔ heating——名词短语与动名词复合词都要"
+    "给出，不能只给单一词形的多个拼写），并判断该概念的明确程度：\n"
     "   - 明确专有名词/品牌名/具体化合物名 → 精确词即可\n"
     "   - 一般性技术概念 → 关键词集中必须包含至少一个词尾通配符变体\n"
     "   - 判断不清 → 精确词与词尾通配符变体都放入关键词集\n"
@@ -118,15 +121,21 @@ def format_ladder_guidance(rewrite: dict, lang: str = "zh") -> str:
         header = (
             "Available search queries for the user's question, ordered "
             "tightest to loosest. You may call a search tool with one of "
-            "these queries directly, or adjust them (drop a constraint to "
-            "loosen, add a constraint to tighten) based on the result "
-            "counts you observe:\n"
+            "these queries directly, or adjust them based on the result "
+            "counts you observe. When hits are fewer than 10, first keep "
+            "the current level and retry with synonym / word-form "
+            "substitutions of the concept terms, and only loosen by "
+            "dropping a constraint if that still fails; aim for hits in "
+            "the 10-300 range and tighten by adding constraints when "
+            "hits are too many:\n"
         )
     else:
         header = (
             "针对用户问题可用的检索式（由紧到松排列）。你可以直接用其中"
             "任一条调用搜索工具，也可以根据观察到的命中数自行调整"
-            "（命中为 0 则去掉某组限定放宽，命中过多则添加限定收紧）：\n"
+            "（命中少于 10 条时，先保持当前层级、把概念词换成同义表述"
+            "或词形变体重试，仍不足再去掉某组限定放宽；目标命中区间 "
+            "10-300，命中过多则添加限定收紧）：\n"
         )
     lines = [header]
     for i, q in enumerate(queries, start=1):
@@ -143,3 +152,43 @@ def format_ladder_guidance(rewrite: dict, lang: str = "zh") -> str:
             "（假性零命中），可给概念词补充词尾通配符变体后重试。"
         )
     return "\n".join(lines)
+
+
+# ── Title feedback ───────────────────────────────────────────────────────────
+
+FEEDBACK_SYSTEM_PROMPT = (
+    "你是专利检索式构造专家。根据用户问题与已命中的专利标题，提炼"
+    "该领域专利文献中实际使用的措辞，生成新的紧凑检索式。\n"
+    "规则：\n"
+    "1. 从标题中提取与用户问题相关的核心措辞与同义表达，这些标题"
+    "代表了该领域真实语料中的命名习惯\n"
+    "2. 每条检索式由 2-3 个概念组组成，多词短语加双引号，同组同义词"
+    "用 OR 连接，概念组之间用 AND 连接\n"
+    "3. 覆盖同一概念的不同词形（如 cool ↔ cooler ↔ cooling——名词、"
+    "动词、动名词形态互相补充），或用词尾通配符覆盖变体\n"
+    "4. 输出 2-4 条检索式，按松紧排序（最紧的在前）；每条最多 12 个"
+    "关键词、250 字符，禁止出现中文\n"
+    'Return JSON: {"queries": ["最紧", "较松", ...]}'
+)
+
+
+async def build_feedback_queries(question: str, titles: list,
+                                 provider: Any) -> list:
+    """Refine search queries from already-hit patent titles.
+
+    Textual pseudo-relevance feedback: the hit titles are the domain's
+    own vocabulary, so the Flash LLM rewrites the question's concepts
+    into the phrasings patents actually use.  Never raises; returns a
+    sanitized query list (possibly empty).
+    """
+    if not titles or provider is None:
+        return []
+    user_content = json.dumps(
+        {"question": question, "hit_titles": [str(t) for t in titles][:10]},
+        ensure_ascii=False)
+    try:
+        result = await provider.complete_json(FEEDBACK_SYSTEM_PROMPT,
+                                              user_content)
+    except Exception:
+        return []
+    return _validated_rewrite(result)["queries"]

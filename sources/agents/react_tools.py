@@ -35,6 +35,8 @@ from sources.long_task.chat_relevance import (
 )
 
 TOP_N = int(os.getenv("REACT_TOOL_TOP_N", "5"))
+LOW_HIT_FEEDBACK_THRESHOLD = int(os.getenv(
+    "REACT_LOW_HIT_FEEDBACK_THRESHOLD", "10"))
 MAX_PATENT_LIST_ITEMS = int(os.getenv("REACT_MAX_PATENT_LIST_ITEMS", "100"))
 RELEVANCE_RANK_ENABLED = os.getenv("REACT_RELEVANCE_RANK", "1") != "0"
 REACT_POOL_MAX_PAGES = int(os.getenv("REACT_POOL_MAX_PAGES", "2"))
@@ -511,6 +513,52 @@ async def _rank_pending_pool(agent, candidates, lang) -> Tuple[list, str]:
     return ranked, note
 
 
+def _format_feedback_note(queries: list, lang: str) -> str:
+    """Render refined-query suggestions for the observation text."""
+    if not queries:
+        return ""
+    if lang == "en":
+        header = ("\n\nSuggested refined queries (extracted from hit "
+                  "titles — try these before loosening; use them only "
+                  "for your search calls and do not reproduce raw query "
+                  "syntax in the final answer):\n")
+    else:
+        header = ("\n\n建议检索式（基于已命中专利标题提炼，"
+                  "可优先尝试后再放宽；这些仅供你调整检索用，"
+                  "回答中不要原样复述检索式语法）：\n")
+    lines = [header]
+    for i, q in enumerate(queries, start=1):
+        lines.append(f"{i}. {q}")
+    return "\n".join(lines)
+
+
+async def _maybe_append_feedback(agent, text: str, total, lang: str) -> str:
+    """Append title-based query suggestions to a low-hit observation.
+
+    Fires at most once per turn: the first search with fewer than
+    LOW_HIT_FEEDBACK_THRESHOLD hits triggers one Flash call that
+    distills the pool's hit titles into refined queries.  Never raises
+    and never mutates *text* on failure.
+    """
+    if not isinstance(total, int) or total >= LOW_HIT_FEEDBACK_THRESHOLD:
+        return text
+    if getattr(agent, "_feedback_done", False):
+        return text
+    pool = getattr(agent, "_search_pool", None)
+    ranked = pool.ranked(20) if pool is not None else []
+    titles = [c.get("title") for c in ranked if c.get("title")][:10]
+    if not titles:
+        return text
+    # Mark attempted only once a real feedback call is about to happen —
+    # an empty-titles skip must not burn the one shot for a later search.
+    agent._feedback_done = True
+    from sources.long_task.search_query_builder import build_feedback_queries
+    provider = _get_flash_provider(agent) or getattr(agent, "llm", None)
+    queries = await build_feedback_queries(
+        getattr(agent, "_last_user_prompt", "") or "", titles, provider)
+    return text + _format_feedback_note(queries, lang)
+
+
 def _summarize_observation(result, lang: str, limit: int = MAX_OBSERVATION_CHARS) -> str:
     """Turn a tool result into a bounded observation string for the LLM."""
     if result is None:
@@ -769,6 +817,7 @@ async def make_action_executor(agent, registry, push_filter=None):
                 text = (f"检索结果（{len(shown)} 条{total_note}，{note}）：\n"
                         f"{digest}\n\n"
                         "完整列表已展示给用户。")
+            text = await _maybe_append_feedback(agent, text, total, lang)
             return {"kind": "observation", "text": text}
 
         return {"kind": "observation", "text": _summarize_observation(result, lang)}

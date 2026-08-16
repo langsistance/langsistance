@@ -1551,6 +1551,7 @@ Begin your response now:
         self._last_search_total = None   # total-hit count captured per request
         self._search_pool = None   # relevance-ranked candidate pool, per request
         self._search_ranked = False  # True once a search list was relevance-ranked
+        self._feedback_done = False  # title-feedback fired flag, per request
         self.knowledgeTool = (None, None)  # (knowledge_item, tool_info) — selected inside the loop
         self.tools = []
         lang = self._detect_lang(prompt)

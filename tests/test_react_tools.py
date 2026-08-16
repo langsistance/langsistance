@@ -319,6 +319,100 @@ class _ScoringProvider:
         return {"scores": [{"id": i, "score": 3} for i in ids]}
 
 
+class _FeedbackProvider:
+    def __init__(self, response=None, fail=False):
+        self._response = response or {
+            "queries": ['"air dryer" AND humidity',
+                        'desiccant* AND "humidity control"']}
+        self.fail = fail
+        self.calls = 0
+
+    async def complete_json(self, system, user):
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("down")
+        return self._response
+
+
+class TestLowHitFeedback(unittest.IsolatedAsyncioTestCase):
+    async def test_low_hits_append_suggestions_once(self):
+        from sources.agents.react_tools import _maybe_append_feedback
+        from sources.long_task.chat_relevance import SearchPool
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        agent._flash_llm = _FeedbackProvider()
+        pool = SearchPool("干燥空气")
+        pool.add([_usp_raw_item("19511555", "AIR DRYER CONTROL USING HUMIDITY")])
+        agent._search_pool = pool
+        text = "检索结果（1 条）"
+        out = await _maybe_append_feedback(agent, text, 3, "zh")
+        self.assertIn("建议检索式", out)
+        self.assertIn('"air dryer" AND humidity', out)
+        # fires once per turn — a second low-hit search reuses the note
+        out2 = await _maybe_append_feedback(agent, text, 3, "zh")
+        self.assertEqual(out2, text)
+
+    async def test_high_hits_skip_feedback(self):
+        from sources.agents.react_tools import _maybe_append_feedback
+        from sources.long_task.chat_relevance import SearchPool
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        agent._flash_llm = _FeedbackProvider()
+        pool = SearchPool("干燥空气")
+        pool.add([_usp_raw_item("19511555", "AIR DRYER CONTROL USING HUMIDITY")])
+        agent._search_pool = pool
+        text = "检索结果（100 条）"
+        out = await _maybe_append_feedback(agent, text, 500, "zh")
+        self.assertEqual(out, text)
+        self.assertEqual(agent._flash_llm.calls, 0)
+
+    async def test_no_titles_skips_feedback(self):
+        from sources.agents.react_tools import _maybe_append_feedback
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        agent._flash_llm = _FeedbackProvider()
+        text = "检索结果（1 条）"
+        out = await _maybe_append_feedback(agent, text, 3, "zh")
+        self.assertEqual(out, text)
+        self.assertEqual(agent._flash_llm.calls, 0)
+
+    async def test_empty_titles_do_not_burn_the_one_shot(self):
+        # A low-hit search without a pool yet must not consume the
+        # fire-once flag — a later search may populate the pool and
+        # should still get its feedback.
+        from sources.agents.react_tools import _maybe_append_feedback
+        from sources.long_task.chat_relevance import SearchPool
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        agent._flash_llm = _FeedbackProvider()
+        text = "检索结果（1 条）"
+        out = await _maybe_append_feedback(agent, text, 3, "zh")
+        self.assertEqual(out, text)
+        pool = SearchPool("干燥空气")
+        pool.add([_usp_raw_item("19511555", "AIR DRYER CONTROL USING HUMIDITY")])
+        agent._search_pool = pool
+        out2 = await _maybe_append_feedback(agent, text, 3, "zh")
+        self.assertIn("建议检索式", out2)
+
+    async def test_feedback_note_warns_against_echoing_query_syntax(self):
+        from sources.agents.react_tools import _format_feedback_note
+        note = _format_feedback_note(['"air dryer" AND humidity'], "zh")
+        self.assertIn("复述", note)
+
+    async def test_failure_keeps_text_unchanged(self):
+        from sources.agents.react_tools import _maybe_append_feedback
+        from sources.long_task.chat_relevance import SearchPool
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        agent._flash_llm = _FeedbackProvider(fail=True)
+        pool = SearchPool("干燥空气")
+        pool.add([_usp_raw_item("19511555", "AIR DRYER CONTROL USING HUMIDITY")])
+        agent._search_pool = pool
+        text = "检索结果（1 条）"
+        out = await _maybe_append_feedback(agent, text, 3, "zh")
+        self.assertEqual(out, text)
+
+
 class TestRankPendingPoolHeadBudget(unittest.IsolatedAsyncioTestCase):
     async def test_dead_candidates_do_not_consume_head_slots(self):
         from sources.agents.react_tools import _rank_pending_pool
