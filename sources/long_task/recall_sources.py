@@ -41,6 +41,7 @@ RECALL_SEARCH_FIELDS = [
 ]
 
 MAX_FAMILY_NUMBERS = int(os.getenv("REACT_RECALL_MAX_FAMILY_NUMBERS", "12"))
+RECALL_NUMBER_BATCH = int(os.getenv("REACT_RECALL_NUMBER_BATCH", "20"))
 
 
 def collect_family_refs(candidates: list, limit: int = MAX_FAMILY_NUMBERS) -> dict:
@@ -128,38 +129,45 @@ def records_to_candidates(records: list) -> list[dict]:
 
 
 def fetch_by_numbers(numbers: list, timeout: int = 30) -> list:
-    """Fetch USPTO records for the given patent/application numbers via a
-    free-text OR query.  [] on any failure."""
+    """Fetch USPTO records for the given patent/application numbers via
+    free-text OR queries, chunked in batches of
+    RECALL_NUMBER_BATCH — the query string must stay comfortably short
+    for the API.  [] on any failure; one failed chunk never hides the
+    others."""
     numbers = [str(n).strip() for n in (numbers or []) if str(n).strip()]
     if not numbers:
         return []
-    q = " OR ".join(f'"{n}"' for n in numbers)
     headers = {"Content-Type": "application/json"}
     uspto_key = os.getenv("USPTO_API_KEY")
     if uspto_key:
         headers["X-API-Key"] = uspto_key
-    body: dict[str, Any] = {
-        "q": q,
-        "pagination": {"offset": 0, "limit": len(numbers) + 2},
-        "fields": RECALL_SEARCH_FIELDS,
-        "sort": [{"field": "_score", "order": "desc"}],
-    }
-    try:
-        response = outbound_http.request(
-            "POST", USPTO_SEARCH_URL, purpose="recall_family",
-            headers=headers, json=body, timeout=timeout)
-        if getattr(response, "status_code", 0) != 200:
-            logger.warning(
-                f"recall family fetch failed — "
-                f"status={getattr(response, 'status_code', None)}")
-            return []
-        data = response.json()
-        items = data.get("patentFileWrapperDataBag") or []
-        logger.info(f"recall family fetch — q={q[:80]!r} hits={len(items)}")
-        return items
-    except Exception as exc:
-        logger.warning(f"recall family fetch failed: {exc}")
-        return []
+    items: list = []
+    for start in range(0, len(numbers), RECALL_NUMBER_BATCH):
+        chunk = numbers[start:start + RECALL_NUMBER_BATCH]
+        q = " OR ".join(f'"{n}"' for n in chunk)
+        body: dict[str, Any] = {
+            "q": q,
+            "pagination": {"offset": 0, "limit": len(chunk) + 2},
+            "fields": RECALL_SEARCH_FIELDS,
+            "sort": [{"field": "_score", "order": "desc"}],
+        }
+        try:
+            response = outbound_http.request(
+                "POST", USPTO_SEARCH_URL, purpose="recall_family",
+                headers=headers, json=body, timeout=timeout)
+            if getattr(response, "status_code", 0) != 200:
+                logger.warning(
+                    f"recall family fetch failed — "
+                    f"status={getattr(response, 'status_code', None)}")
+                continue
+            data = response.json()
+            batch_items = data.get("patentFileWrapperDataBag") or []
+            items.extend(batch_items)
+            logger.info(f"recall family fetch — q={q[:60]!r} "
+                        f"hits={len(batch_items)}")
+        except Exception as exc:
+            logger.warning(f"recall family fetch failed: {exc}")
+    return items
 
 
 def fetch_by_cpc(codes: list, timeout: int = 30) -> list:

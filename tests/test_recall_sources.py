@@ -157,6 +157,31 @@ class TestFetchByNumbers(unittest.TestCase):
             self.assertEqual(fetch_by_numbers([]), [])
         mock.request.assert_not_called()
 
+    def test_chunks_long_number_lists(self):
+        numbers = [str(7000000 + i) for i in range(25)]
+        with patch("sources.long_task.recall_sources.outbound_http") as mock:
+            mock.request.side_effect = [
+                _FakeResponse(200, {"count": 1,
+                                    "patentFileWrapperDataBag": [
+                                        {"applicationNumberText": "a",
+                                         "applicationMetaData":
+                                             {"inventionTitle": "T"}}]}),
+                _FakeResponse(200, {"count": 1,
+                                    "patentFileWrapperDataBag": [
+                                        {"applicationNumberText": "b",
+                                         "applicationMetaData":
+                                             {"inventionTitle": "T"}}]}),
+            ]
+            items = fetch_by_numbers(numbers)
+        self.assertEqual(len(items), 2)
+        # two requests: 20 numbers then 5
+        self.assertEqual(mock.request.call_count, 2)
+        first_q = mock.request.call_args_list[0].kwargs["json"]["q"]
+        second_q = mock.request.call_args_list[1].kwargs["json"]["q"]
+        self.assertNotIn("7000020", first_q)   # 21st number is not in chunk 1
+        self.assertIn("7000020", second_q)     # but starts chunk 2
+        self.assertIn("7000024", second_q)
+
 
 class TestFetchByCpc(unittest.TestCase):
     """CPC recall reads the local MCF index (built by
