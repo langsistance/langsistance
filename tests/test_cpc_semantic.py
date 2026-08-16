@@ -185,9 +185,11 @@ class TestMatchQueryToCpc(unittest.TestCase):
                    return_value=[[0.707, 0.707], [1.0, 0.0]]):
             matches = match_query_to_cpc(
                 "某技术问题", top_k=2, extra_terms="led driver color")
+        # round-robin guarantee: query text contributes H05B45 first,
+        # the extra-terms text contributes its best unseen (A01B1)
         self.assertEqual([m["code"] for m in matches],
                          ["H05B45/00", "A01B1/00"])
-        self.assertAlmostEqual(matches[0]["score"], 1.0)
+        self.assertAlmostEqual(matches[0]["score"], 0.707, places=3)
 
     def test_extra_terms_as_per_concept_groups(self):
         from unittest.mock import patch
@@ -206,7 +208,7 @@ class TestMatchQueryToCpc(unittest.TestCase):
         # three texts embedded: query + both groups
         self.assertEqual(len(mock_embed.call_args[0][0]), 3)
         self.assertEqual(matches[0]["code"], "H05B45/00")
-        self.assertAlmostEqual(matches[0]["score"], 1.0)
+        self.assertAlmostEqual(matches[0]["score"], 0.707, places=3)
 
     def test_empty_extra_terms_behave_like_absent(self):
         from unittest.mock import patch

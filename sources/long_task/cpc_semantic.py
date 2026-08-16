@@ -164,15 +164,26 @@ def match_query_to_cpc(query_text: str, top_k: int = 8,
         return []
     if not embedded or not embedded[0]:
         return []
-    best_by_code = {}
-    for vec in embedded:
-        for m in match_cpc_codes(vec, vectors, entries, top_k=top_k * 2):
-            code = m["code"]
-            if code not in best_by_code or m["score"] > best_by_code[code]["score"]:
-                best_by_code[code] = m
-    matches = sorted(best_by_code.values(),
-                     key=lambda m: m["score"], reverse=True)[:top_k]
+    per_text = [match_cpc_codes(vec, vectors, entries, top_k=top_k)
+                for vec in embedded]
+    merged: list = []
+    seen: set = set()
+    # Round 1 — guarantee representation: every text contributes its
+    # best unseen match, so no concept group can be crowded out by a
+    # higher-scoring group (one dominant word must not hide the others).
+    for matches in per_text:
+        for m in matches:
+            if m["code"] not in seen:
+                merged.append(m)
+                seen.add(m["code"])
+                break
+    # Round 2 — fill the remainder by best score across all texts.
+    rest = sorted(
+        (m for matches in per_text for m in matches
+         if m["code"] not in seen),
+        key=lambda m: m["score"], reverse=True)
+    merged.extend(rest[:top_k - len(merged)])
     logger.info(
         f"cpc match — query={query_text[:60]!r} "
-        f"top={[m['code'] for m in matches[:5]]}")
-    return matches
+        f"top={[m['code'] for m in merged[:5]]}")
+    return merged
