@@ -68,6 +68,64 @@ class TestParseInterpretation(unittest.TestCase):
         self.assertEqual(parsed["queries"], ["q1", "q2"])
 
 
+class TestAndChainExpansion(unittest.TestCase):
+    def test_split_and_groups_top_level(self):
+        self.assertEqual(
+            ti._split_and_groups('("a" OR "b") AND ("c") AND ("d")'),
+            ['("a" OR "b")', '("c")', '("d")'])
+
+    def test_split_ignores_and_inside_quotes(self):
+        self.assertEqual(
+            ti._split_and_groups('"RGB AND LED" AND ("c")'),
+            ['"RGB AND LED"', '("c")'])
+
+    def test_split_no_top_level_and(self):
+        self.assertEqual(
+            ti._split_and_groups('("a" OR "b")'), ['("a" OR "b")'])
+
+    def test_expand_drops_groups_tight_to_loose(self):
+        self.assertEqual(
+            ti.expand_query_ladder('("a") AND ("b") AND ("c")'),
+            ['("a") AND ("b") AND ("c")', '("a") AND ("b")', '("a")'])
+
+    def test_expand_single_group_unchanged(self):
+        self.assertEqual(
+            ti.expand_query_ladder('("a" OR "b")'), ['("a" OR "b")'])
+
+    def test_expand_empty(self):
+        self.assertEqual(ti.expand_query_ladder(""), [])
+
+    def test_merge_expands_interp_chains(self):
+        merged = ti.merge_interpretation_queries(
+            {"queries": []},
+            {"queries": ['("a") AND ("b") AND ("c")']})
+        self.assertEqual(
+            merged["queries"],
+            ['("a") AND ("b") AND ("c")', '("a") AND ("b")', '("a")'])
+
+    def test_merge_chain_dedupes_against_existing(self):
+        merged = ti.merge_interpretation_queries(
+            {"queries": ['("a")']},
+            {"queries": ['("a") AND ("b")']})
+        self.assertEqual(merged["queries"],
+                         ['("a") AND ("b")', '("a")'])
+
+    def test_merge_chain_capped_to_slots_and_rewrite_kept(self):
+        interp = {"queries": [f'("a{i}") AND ("b{i}") AND ("c{i}")'
+                              for i in range(5)]}
+        rewrite = {"queries": ["tail1", "tail2", "tail3", "tail4"]}
+        merged = ti.merge_interpretation_queries(rewrite, interp)
+        # chain capped at MAX_INTERP_LADDER_SLOTS=3, rewrite tail follows
+        self.assertEqual(merged["queries"][:3],
+                         ['("a0") AND ("b0") AND ("c0")',
+                          '("a0") AND ("b0")',
+                          '("a0")'])
+        self.assertIn("tail1", merged["queries"])
+        self.assertIn("tail3", merged["queries"])  # rewrite tail kept
+        self.assertNotIn("tail4", merged["queries"])  # beyond cap=6
+        self.assertEqual(len(merged["queries"]), ti.MAX_LADDER_QUERIES)
+
+
 class TestMergeInterpretationQueries(unittest.TestCase):
     def test_prepends_and_keeps_original(self):
         rewrite = {"concepts": [], "queries": ["old1", "old2"]}

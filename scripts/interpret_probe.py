@@ -36,8 +36,10 @@ def _load_env(path: str) -> None:
 
 _load_env(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
-QUERY = (sys.argv[1] if len(sys.argv) > 1
-         else "控制放大器，独立控制 RGB 颜色输出")
+if len(sys.argv) < 2:
+    print("usage: python scripts/interpret_probe.py \"<question>\" [all]")
+    sys.exit(1)
+QUERY = sys.argv[1]
 # Real cpc match for this query (production log 2026-08-16):
 CPC_MATCH = ["H05B45/20", "Y10S388/91", "B60Y2400/92",
              "H03F2200/264", "G09G3/16"]

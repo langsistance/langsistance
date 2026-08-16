@@ -4,11 +4,12 @@ The Flash rewrite (``search_query_builder``) produces word-surface
 ladders: synonym and carrier variants of the question's literal terms.
 Patents often describe the same technology with entirely different
 vocabulary, though — the scheme-level wording.  Observed in production:
-"控制放大器，独立控制 RGB 颜色输出" maps in patent literature to
-per-channel constant-current loops (error amplifier + current-sense
-feedback + per-channel reference), and the ERP Power family that
-implements it titles its patents "human centric black body dimming" —
-no shared surface terms at all.
+a Chinese question about controlling an amplifier with independent RGB
+channel outputs maps in patent literature to per-channel
+constant-current loops (error amplifier + current-sense feedback +
+per-channel reference), while the family that implements it titles its
+patents "human centric black body dimming" — no shared surface terms
+at all.
 
 This module runs the question through a stronger model (default
 openai/gpt-5.6-terra via openrouter) with a generic interpretation
@@ -51,6 +52,11 @@ def _env_int(name: str, default: int) -> int:
 INTERPRET_TIMEOUT = _env_int("REACT_INTERPRET_TIMEOUT", 45)
 MAX_INTERP_QUERIES = 5
 MAX_LADDER_QUERIES = 6
+# The interpretation chain and the flash rewrite split the ladder head:
+# the chain's tightest forms go first, but the rewrite's tail (its
+# single-concept OR groups — the form USPTO actually matches) must stay
+# reachable within the budget.
+MAX_INTERP_LADDER_SLOTS = 3
 
 INTERPRET_SYSTEM_PROMPT = (
     "你是资深专利检索专家，熟悉 US 授权专利的撰写风格。用户会给出一句"
@@ -132,19 +138,90 @@ def parse_interpretation(raw: Any) -> Optional[dict]:
     }
 
 
+def _split_and_groups(q: str) -> list:
+    """Split a boolean query on top-level AND into its concept groups.
+
+    Parenthesized OR groups are kept whole: ``("a" OR "b") AND ("c")``
+    -> ``['("a" OR "b")', '("c")']``.  Top-level AND is detected outside
+    any parentheses AND outside double-quoted phrases (``"a AND b"`` is
+    one phrase, never a split point).  A query without top-level AND
+    returns [q].
+    """
+    if not q:
+        return []
+    groups: list = []
+    depth = 0
+    in_quote = False
+    start = 0
+    i = 0
+    while i < len(q):
+        ch = q[i]
+        if ch == '"':
+            in_quote = not in_quote
+        elif ch == "(" and not in_quote:
+            depth += 1
+        elif ch == ")" and not in_quote:
+            depth = max(0, depth - 1)
+        elif (depth == 0 and not in_quote and q.startswith("AND", i)
+              and i > 0 and i + 3 < len(q)
+              and q[i - 1] == " " and q[i + 3] == " "):
+            groups.append(q[start:i].strip())
+            start = i + 3
+            i += 3
+            continue
+        i += 1
+    tail = q[start:].strip()
+    if tail:
+        groups.append(tail)
+    return [g for g in groups if g]
+
+
+def expand_query_ladder(q: str) -> list:
+    """Expand one boolean query into a tight-to-loose chain.
+
+    USPTO's applications/search returns 404 for most multi-concept AND
+    combinations but matches single-concept OR groups reliably (observed
+    repeatedly in production).  Each concept group dropped at a time so
+    the chain always ends in a single-concept OR group — the ladder
+    budget can then fall through to a form that actually returns hits.
+    A query without top-level AND is returned unchanged.
+    """
+    groups = _split_and_groups(q)
+    if len(groups) <= 1:
+        return [q] if q else []
+    chain: list = []
+    for i in range(len(groups), 0, -1):
+        sub = " AND ".join(groups[:i])
+        if sub not in chain:
+            chain.append(sub)
+    return chain
+
+
 def merge_interpretation_queries(rewrite: dict, interp: Optional[dict],
                                  cap: int = MAX_LADDER_QUERIES) -> dict:
     """Prepend the interpretation's queries to the rewrite ladder.
 
     The interpretation queries are architecture-level, so they go at the
     TOP (tightest) of the ladder — the auto-ladder and the blank-q
-    injection both pick from the head.  Returns a new rewrite dict; the
-    input is never mutated.  Dedupes against existing ladder entries.
+    injection both pick from the head.  Each query is expanded into its
+    AND-drop chain (see ``expand_query_ladder``) so the ladder falls
+    through to single-concept OR groups instead of burning its budget on
+    404-form combinations.  Returns a new rewrite dict; the input is
+    never mutated.  Dedupes against existing ladder entries.
     """
     out = dict(rewrite or {})
     existing = [q for q in (rewrite or {}).get("queries") or [] if q]
-    interp_queries = [q for q in (interp or {}).get("queries") or [] if q]
-    merged = [q for q in interp_queries if q not in existing] + existing
+    chain: list = []
+    seen: set = set()
+    for q in (interp or {}).get("queries") or []:
+        for sub in expand_query_ladder(str(q)):
+            if sub and sub not in seen and sub not in existing:
+                seen.add(sub)
+                chain.append(sub)
+    chain = chain[:MAX_INTERP_LADDER_SLOTS]
+    # The flash rewrite's tail (its single-concept fallbacks) must stay
+    # reachable, so the chain never starves it out of the ladder.
+    merged = chain + existing
     out["queries"] = merged[:cap]
     return out
 
