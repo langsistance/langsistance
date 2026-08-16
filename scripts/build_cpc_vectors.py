@@ -19,7 +19,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 def _load_env(path: str) -> None:
     """Load KEY=VALUE lines from an env file into os.environ (no
     overrides) — the embedding provider credentials usually live in the
-    service .env and are not exported in an interactive shell."""
+    service .env and are not exported in an interactive shell.  Values
+    may carry surrounding single/double quotes (common in .env files,
+    parsed by python-dotenv for the service); those are stripped."""
     try:
         with open(path, encoding="utf-8") as f:
             for line in f:
@@ -27,7 +29,11 @@ def _load_env(path: str) -> None:
                 if not line or line.startswith("#") or "=" not in line:
                     continue
                 key, value = line.split("=", 1)
-                os.environ.setdefault(key.strip(), value.strip())
+                value = value.strip()
+                if (len(value) >= 2 and value[0] == value[-1]
+                        and value[0] in ("'", '"')):
+                    value = value[1:-1]
+                os.environ.setdefault(key.strip(), value)
     except OSError:
         pass
 
