@@ -28,15 +28,17 @@ SCORE_BATCH_SIZE = int(os.getenv("REACT_SCORE_BATCH_SIZE", "25"))
 
 
 async def score_candidates_concurrent(candidates: list, query: str,
-                                      provider: Any) -> int:
+                                      provider: Any,
+                                      rubric: str = "") -> int:
     """Score unscored candidates in concurrent small batches.
 
     The Flash provider is slow on 100-entry batches (~50s); 25-entry
     batches gathered concurrently cut wall-clock substantially.  Dead
     candidates (expired/abandoned/PCT storage) are skipped — they rank
     below every live candidate regardless of score, so scoring them is
-    pure waste.  Never raises.  Returns how many candidates gained a
-    score.
+    pure waste.  *rubric* (optional) is the architecture-level
+    interpretation supplement passed through to the gate prompt.  Never
+    raises.  Returns how many candidates gained a score.
     """
     if provider is None:
         return 0
@@ -50,7 +52,8 @@ async def score_candidates_concurrent(candidates: list, query: str,
         for i in range(0, len(pending), SCORE_BATCH_SIZE)
     ]
     await asyncio.gather(
-        *(score_candidates(batch, query, provider) for batch in batches)
+        *(score_candidates(batch, query, provider, rubric)
+          for batch in batches)
     )
     return len(pending) - len([c for c in pending
                                if "relevance_score" not in c])

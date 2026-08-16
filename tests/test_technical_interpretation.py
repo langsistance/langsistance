@@ -1,0 +1,198 @@
+"""Tests for the architecture-level technical interpretation module."""
+import unittest
+from unittest import mock
+
+from sources.long_task import technical_interpretation as ti
+from sources.long_task.chat_relevance import score_candidates_concurrent
+from sources.long_task.relevance_gate import GATE_SYSTEM_PROMPT, score_candidates
+
+
+class _FakeProvider:
+    def __init__(self, result=None, fail=False):
+        self.result = result
+        self.fail = fail
+        self.calls = 0
+        self.system_prompts = []
+
+    async def complete_json(self, system, user, max_retries=0):
+        self.calls += 1
+        self.system_prompts.append(system)
+        if self.fail:
+            raise RuntimeError("down")
+        return self.result
+
+
+def _valid_raw():
+    return {
+        "scheme": "Per-channel constant-current control loops",
+        "structure_terms": ["error amplifier", "constant current",
+                            "reference signal"],
+        "independence_terms": ["per-channel", "independently"],
+        "scenarios": ["LED backlighting"],
+        "queries": [
+            '("error amplifier" AND "RGB")',
+            '中文垃圾查询 AND stuff',
+        ],
+    }
+
+
+class TestParseInterpretation(unittest.TestCase):
+    def test_valid_raw_parses_to_canonical(self):
+        parsed = ti.parse_interpretation(_valid_raw())
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["scheme"], "Per-channel constant-current "
+                                           "control loops")
+        self.assertEqual(parsed["structure_terms"][0], "error amplifier")
+        self.assertEqual(parsed["queries"][0],
+                         '("error amplifier" AND "RGB")')
+
+    def test_cjk_and_junk_queries_sanitized(self):
+        parsed = ti.parse_interpretation(_valid_raw())
+        self.assertTrue(parsed)
+        self.assertNotIn("中文", parsed["queries"][1])
+
+    def test_non_dict_returns_none(self):
+        self.assertIsNone(ti.parse_interpretation("nope"))
+        self.assertIsNone(ti.parse_interpretation(None))
+        self.assertIsNone(ti.parse_interpretation([]))
+
+    def test_no_scheme_and_no_terms_returns_none(self):
+        self.assertIsNone(ti.parse_interpretation(
+            {"queries": ['("a" AND "b")']}))
+        self.assertIsNone(ti.parse_interpretation({}))
+
+    def test_queries_deduped_and_capped(self):
+        raw = _valid_raw()
+        raw["queries"] = ["q1", "q1", "q2"] * 10
+        parsed = ti.parse_interpretation(raw)
+        self.assertEqual(parsed["queries"], ["q1", "q2"])
+
+
+class TestMergeInterpretationQueries(unittest.TestCase):
+    def test_prepends_and_keeps_original(self):
+        rewrite = {"concepts": [], "queries": ["old1", "old2"]}
+        interp = {"queries": ["new1", "new2"]}
+        merged = ti.merge_interpretation_queries(rewrite, interp)
+        self.assertEqual(merged["queries"],
+                         ["new1", "new2", "old1", "old2"])
+        # input untouched
+        self.assertEqual(rewrite["queries"], ["old1", "old2"])
+
+    def test_dedupes_against_existing(self):
+        rewrite = {"queries": ["dup", "old"]}
+        merged = ti.merge_interpretation_queries(rewrite, {"queries": ["dup"]})
+        self.assertEqual(merged["queries"], ["dup", "old"])
+
+    def test_caps_ladder_length(self):
+        rewrite = {"queries": [f"old{i}" for i in range(6)]}
+        interp = {"queries": [f"new{i}" for i in range(6)]}
+        merged = ti.merge_interpretation_queries(rewrite, interp, cap=6)
+        self.assertEqual(len(merged["queries"]), 6)
+        self.assertEqual(merged["queries"][0], "new0")
+
+    def test_none_interp_returns_copy(self):
+        rewrite = {"queries": ["a", "b"]}
+        merged = ti.merge_interpretation_queries(rewrite, None)
+        self.assertEqual(merged["queries"], ["a", "b"])
+        self.assertIsNot(merged, rewrite)
+
+
+class TestFormatRubric(unittest.TestCase):
+    def test_none_returns_empty(self):
+        self.assertEqual(ti.format_interpretation_rubric(None), "")
+        self.assertEqual(ti.format_interpretation_rubric({}), "")
+
+    def test_contains_scheme_and_terms(self):
+        rubric = ti.format_interpretation_rubric(_valid_raw())
+        self.assertIn("Per-channel constant-current", rubric)
+        self.assertIn("error amplifier", rubric)
+        self.assertIn("per-channel", rubric)
+
+
+class TestInterpretQuery(unittest.IsolatedAsyncioTestCase):
+    async def test_returns_parsed_interpretation(self):
+        provider = _FakeProvider(result=_valid_raw())
+        with mock.patch.object(ti, "_interpret_provider",
+                               return_value=provider):
+            parsed = await ti.interpret_query("问题")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["queries"][0],
+                         '("error amplifier" AND "RGB")')
+
+    async def test_failure_returns_none(self):
+        provider = _FakeProvider(result=_valid_raw(), fail=True)
+        with mock.patch.object(ti, "_interpret_provider",
+                               return_value=provider):
+            self.assertIsNone(await ti.interpret_query("问题"))
+
+    async def test_disabled_returns_none_without_calling(self):
+        provider = _FakeProvider(result=_valid_raw())
+        with mock.patch.object(ti, "INTERPRET_ENABLED", False):
+            with mock.patch.object(ti, "_interpret_provider",
+                                   return_value=provider):
+                self.assertIsNone(await ti.interpret_query("问题"))
+        self.assertEqual(provider.calls, 0)
+
+    async def test_cpc_hints_forwarded_in_payload(self):
+        provider = _FakeProvider(result=_valid_raw())
+        with mock.patch.object(ti, "_interpret_provider",
+                               return_value=provider):
+            await ti.interpret_query(
+                "问题", cpc_hints=[{"code": "H05B45/20", "title": "Colour"}])
+        self.assertEqual(provider.calls, 1)
+
+    async def test_hanging_provider_times_out_to_none(self):
+        import asyncio
+
+        class _SlowProvider:
+            async def complete_json(self, system, user, max_retries=0):
+                await asyncio.sleep(30)  # far beyond the patched timeout
+                return _valid_raw()
+
+        with mock.patch.object(ti, "INTERPRET_TIMEOUT", 0.1):
+            with mock.patch.object(ti, "_interpret_provider",
+                                   return_value=_SlowProvider()):
+                self.assertIsNone(await ti.interpret_query("问题"))
+
+    def test_env_int_falls_back_on_garbage(self):
+        with mock.patch.dict(
+                "os.environ", {"REACT_INTERPRET_TIMEOUT": "junk"}):
+            self.assertEqual(ti._env_int("REACT_INTERPRET_TIMEOUT", 45), 45)
+        with mock.patch.dict(
+                "os.environ", {"REACT_INTERPRET_TIMEOUT": "12"}):
+            self.assertEqual(ti._env_int("REACT_INTERPRET_TIMEOUT", 45), 12)
+
+
+class TestRubricInScoring(unittest.IsolatedAsyncioTestCase):
+    def _candidate(self, pid, title):
+        return {"patent_id": pid, "title": title, "applicant": "ACME",
+                "status": "Patented Case", "patent_number": "12" + pid}
+
+    async def test_score_candidates_appends_rubric(self):
+        provider = _FakeProvider(result={"scores": []})
+        await score_candidates([self._candidate("345", "LED driver")],
+                               "问题", provider,
+                               rubric=ti.format_interpretation_rubric(
+                                   _valid_raw()))
+        self.assertEqual(provider.calls, 1)
+        self.assertIn("评分补充", provider.system_prompts[0])
+        self.assertIn("error amplifier", provider.system_prompts[0])
+        self.assertTrue(provider.system_prompts[0].startswith(
+            GATE_SYSTEM_PROMPT))
+
+    async def test_score_candidates_without_rubric_keeps_plain_prompt(self):
+        provider = _FakeProvider(result={"scores": []})
+        await score_candidates([self._candidate("345", "LED driver")],
+                               "问题", provider)
+        self.assertEqual(provider.system_prompts[0], GATE_SYSTEM_PROMPT)
+
+    async def test_concurrent_passthrough_rubric(self):
+        provider = _FakeProvider(result={"scores": []})
+        await score_candidates_concurrent(
+            [self._candidate("345", "LED driver")],
+            "问题", provider, rubric="评分补充：测试")
+        self.assertIn("评分补充：测试", provider.system_prompts[0])
+
+
+if __name__ == "__main__":
+    unittest.main()

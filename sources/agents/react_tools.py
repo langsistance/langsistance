@@ -575,9 +575,18 @@ async def _rank_pending_pool(agent, candidates, lang,
                 key=lambda c: -(c.get("semantic_score") or 0.0)
             )[:SCORE_PER_CALL]
     _score_start = time.monotonic()
+    try:
+        from sources.long_task.technical_interpretation import (
+            format_interpretation_rubric,
+        )
+        _rubric = format_interpretation_rubric(
+            getattr(agent, "_search_interpretation", None))
+    except Exception:
+        _rubric = ""
     scored = await score_candidates_concurrent(
         head, pool.query,
-        _get_flash_provider(agent) or getattr(agent, "llm", None))
+        _get_flash_provider(agent) or getattr(agent, "llm", None),
+        rubric=_rubric)
     _glog = getattr(agent, "logger", None)
     if _glog is not None:
         _glog.info(

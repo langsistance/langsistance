@@ -1568,6 +1568,7 @@ Begin your response now:
         self._workflow_result = None
         self._react_loop_ran = False
         self._search_rewrite = None   # deterministic q rewrite cache, per request
+        self._search_interpretation = None  # architecture-level interpretation, per request
         self._last_search_total = None   # total-hit count captured per request
         self._search_pool = None   # relevance-ranked candidate pool, per request
         self._search_ranked = False  # True once a search list was relevance-ranked
@@ -1620,6 +1621,33 @@ Begin your response now:
                     prompt, extra_terms=extra_term_groups)
             except Exception:
                 self._cpc_hints = None
+        # Architecture-level interpretation (strong model): maps the
+        # question to the circuit/system patterns patent literature
+        # actually uses.  Its queries seed the ladder top so the
+        # auto-ladder and the blank-q injection try the architecture
+        # wording first; its scheme/terms feed the scoring rubric.
+        # Runs after the CPC match so the matched classifications can
+        # guide the interpretation.  Never raises — any failure keeps
+        # the flash rewrite untouched.
+        try:
+            from sources.long_task.technical_interpretation import (
+                INTERPRET_ENABLED, interpret_query,
+                merge_interpretation_queries,
+            )
+            if INTERPRET_ENABLED:
+                self._search_interpretation = await interpret_query(
+                    prompt, cpc_hints=self._cpc_hints)
+                if self._search_interpretation:
+                    self._search_rewrite = merge_interpretation_queries(
+                        self._search_rewrite, self._search_interpretation)
+                    scheme = str(
+                        self._search_interpretation.get("scheme") or ""
+                    )[:120]
+                    self.logger.info(
+                        f"search_interpretation — scheme={scheme}"
+                    )
+        except Exception:
+            self._search_interpretation = None
         if callback_handler:
             await _emit_status(callback_handler,
                 "正在分析您的问题..." if lang == 'zh' else "Analyzing your question...")

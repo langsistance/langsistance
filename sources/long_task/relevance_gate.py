@@ -84,16 +84,24 @@ def apply_scores(candidates: list[dict], result: Any) -> list[dict]:
 
 async def score_candidates(
     candidates: list[dict], query: str, provider: Any,
+    rubric: str = "",
 ) -> list[dict]:
-    """Score candidates in batches via the Flash LLM. Never raises."""
+    """Score candidates in batches via the Flash LLM. Never raises.
+
+    *rubric* (optional, from the architecture-level interpretation)
+    appends a scheme/structure-terms supplement to the gate prompt so
+    candidates matching the technical architecture score correctly even
+    when their titles share no literal words with the question.
+    """
     if not candidates:
         return candidates
+    prompt = GATE_SYSTEM_PROMPT + (("\n" + rubric) if rubric else "")
     out = []
     for i in range(0, len(candidates), GATE_MAX_CANDIDATES_PER_CALL):
         batch = candidates[i:i + GATE_MAX_CANDIDATES_PER_CALL]
         try:
             result = await provider.complete_json(
-                GATE_SYSTEM_PROMPT, _batch_text(batch, query),
+                prompt, _batch_text(batch, query),
             )
         except Exception:
             result = None

@@ -4523,7 +4523,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
     # ── Streaming provider (report summary + section writing) ──
     # When configured in [PROSECUTION], overrides pro_provider for the
     # streaming output phases so users can use their chat model (e.g.
-    # openrouter/openai/gpt-5.4-mini) for the visible streaming text.
+    # openrouter/openai/gpt-5.6-terra) for the visible streaming text.
     streaming_provider = None
     _stream_cfg_provider = ptc.get('streaming_provider')
     _stream_cfg_model = ptc.get('streaming_model')
