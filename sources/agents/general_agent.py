@@ -1569,6 +1569,9 @@ Begin your response now:
         self._search_ranked = False  # True once a search list was relevance-ranked
         self._feedback_done = False  # title-feedback fired flag, per request
         self._ladder_capped = False  # hits exceeded LADDER_MAX_HITS, per request
+        self._missing_dir_done = False  # missing-direction feedback fired flag, per request
+        self._missing_dir_queries = None  # inferred supplementary queries, per request
+        self._auto_round_done = False  # system-driven second round fired, per request
         self.knowledgeTool = (None, None)  # (knowledge_item, tool_info) — selected inside the loop
         self.tools = []
         lang = self._detect_lang(prompt)

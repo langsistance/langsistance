@@ -67,6 +67,31 @@ class TestCreateAgentWiring(unittest.TestCase):
         self.assertFalse(getattr(agent, "_search_ranked", "unset"))
         self.assertTrue(handler.statuses)  # "正在分析您的问题..."
 
+    def test_pooled_agent_resets_turn_flags_between_requests(self):
+        # Agents are reused from the pool; every per-turn flag must be
+        # cleared in create_agent or one request leaks into the next.
+        agent = _make_agent()
+        handler = _FakeHandler()
+        agent._missing_dir_done = True
+        agent._missing_dir_queries = ["stale query"]
+        agent._auto_round_done = True
+        agent._feedback_done = True
+        agent._ladder_capped = True
+        agent._search_ranked = True
+        with patch("sources.agents.general_agent.build_tool_set",
+                   new=AsyncMock(return_value=({}, []))), \
+             patch("sources.agents.general_agent.ReActLoop") as MockLoop:
+            MockLoop.return_value.run = AsyncMock(
+                return_value=RoundResult(kind="answer", answer_text="hi", steps=1))
+            _run(agent.create_agent(
+                "u1", "hello", "q1", "", handler, push_filter=None))
+        self.assertFalse(getattr(agent, "_missing_dir_done", True))
+        self.assertIsNone(getattr(agent, "_missing_dir_queries", "unset"))
+        self.assertFalse(getattr(agent, "_auto_round_done", True))
+        self.assertFalse(getattr(agent, "_feedback_done", True))
+        self.assertFalse(getattr(agent, "_ladder_capped", True))
+        self.assertFalse(getattr(agent, "_search_ranked", True))
+
     def test_long_task_kind_returns_intent_dict(self):
         agent = _make_agent()
         handler = _FakeHandler()

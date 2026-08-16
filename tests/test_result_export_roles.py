@@ -91,9 +91,20 @@ class TestBuildResultArtifactsJson(unittest.TestCase):
         self.assertIn("label", payload["columns"][0])
         self.assertEqual(payload["rows"][0]["patentTitle"], "一种图像处理方法")
 
-    def test_respects_min_rows_threshold(self):
-        # Default threshold is 6 — 1 item produces no artifacts at all
+    def test_single_item_produces_artifacts(self):
+        # Small curated result lists (dead/design filtered, relevance
+        # ranked) are legitimate exports — the user must still get the
+        # download buttons and the results window.
         artifacts = build_result_artifacts(self._items(), source="uspto")
+        formats = {a["format"] for a in artifacts}
+        self.assertEqual(formats, {"json", "csv", "xlsx"})
+        json_artifact = next(a for a in artifacts if a["format"] == "json")
+        self.assertEqual(json_artifact["row_count"], 1)
+
+    def test_min_rows_env_override_still_gates(self):
+        from unittest.mock import patch
+        with patch.dict("os.environ", {"RESULT_EXPORT_MIN_ROWS": "6"}):
+            artifacts = build_result_artifacts(self._items(), source="uspto")
         self.assertEqual(artifacts, [])
 
     def test_source_defaults_to_uspto(self):

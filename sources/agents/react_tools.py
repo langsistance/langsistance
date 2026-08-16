@@ -50,6 +50,7 @@ REACT_POOL_MAX_TOTAL_PAGES = int(os.getenv("REACT_POOL_MAX_TOTAL_PAGES", "1000")
 # (low best score) must not seed the suggested queries.
 MISSING_DIR_MIN_CANDIDATES = int(os.getenv("REACT_MISSING_DIR_MIN_CANDIDATES", "3"))
 MISSING_DIR_MIN_SCORE = float(os.getenv("REACT_MISSING_DIR_MIN_SCORE", "4"))
+REACT_AUTO_ROUND_MAX_QUERIES = int(os.getenv("REACT_AUTO_ROUND_MAX_QUERIES", "2"))
 REACT_USPTO_SORT_FIELD = os.getenv("REACT_USPTO_SORT_FIELD", "_score")
 LADDER_MAX_HITS = int(os.getenv("REACT_LADDER_MAX_HITS")
                       or os.getenv("REACT_TIGHTEN_SUGGEST_THRESHOLD", "300"))
@@ -540,12 +541,15 @@ async def _rank_pending_pool(agent, candidates, lang) -> Tuple[list, str]:
 
 async def _maybe_append_missing_directions(agent, ranked: list, note: str,
                                            lang: str) -> str:
-    """Append missing-direction query suggestions after a scoring round.
+    """Infer missing technical directions after a scoring round and store
+    them on the agent for the auto second round.
 
     Fires at most once per turn and only when the ranked pool holds at
     least MISSING_DIR_MIN_CANDIDATES candidates with a best relevance
     score >= MISSING_DIR_MIN_SCORE — a noise pool must not seed the
-    suggestions.  Never raises and never mutates *note* on failure.
+    queries.  The note itself is never mutated here: the caller's
+    auto-round decides whether to execute the queries or present them as
+    suggestions.  Never raises.
     """
     if getattr(agent, "_missing_dir_done", False):
         return note
@@ -564,9 +568,63 @@ async def _maybe_append_missing_directions(agent, ranked: list, note: str,
     provider = _get_flash_provider(agent) or getattr(agent, "llm", None)
     queries = await build_missing_direction_queries(
         getattr(agent, "_last_user_prompt", "") or "", titles, provider)
-    if not queries:
-        return note
-    return note + _format_feedback_note(queries, lang, kind="missing")
+    if queries:
+        agent._missing_dir_queries = queries
+    return note
+
+
+async def _auto_second_round(agent, entry, args, ranked: list, note: str,
+                             lang: str) -> Tuple[list, str]:
+    """Execute the missing-direction queries as a system-driven second
+    round instead of leaving them to the agent's discretion.
+
+    At most once per turn, at most REACT_AUTO_ROUND_MAX_QUERIES queries,
+    each capped at the first page (the huge-total guard still applies).
+    New candidates merge into the pool and get scored.  Never raises —
+    on any failure the queries are presented as suggestions instead.
+    """
+    queries = getattr(agent, "_missing_dir_queries", None) or []
+    if not queries or getattr(agent, "_auto_round_done", False):
+        return ranked, note
+    agent._auto_round_done = True
+    new_total = 0
+    for q in queries[:REACT_AUTO_ROUND_MAX_QUERIES]:
+        try:
+            envelope = _build_uspto_envelope(entry.tool_info, q)
+            await asyncio.to_thread(
+                entry.tool.invoke, _tool_invoke_payload(agent, envelope))
+        except Exception:
+            break
+        raw = getattr(agent, "_pending_raw_items", None) or []
+        if not raw:
+            continue
+        try:
+            collected = await _collect_search_pages(agent, entry, args, raw)
+        except Exception:
+            collected = []
+        before = len(getattr(agent, "_search_pool", None) or [])
+        ranked, note = await _rank_pending_pool(agent, collected, lang)
+        after = len(getattr(agent, "_search_pool", None) or [])
+        new_total += after - before
+    if new_total > 0:
+        if lang == "en":
+            executed = (
+                f"\n\nAuto-executed supplementary queries (merged "
+                f"{new_total} new candidates into the pool):\n"
+            )
+        else:
+            executed = (
+                f"\n\n已自动执行补充检索式（并入 {new_total} 条新候选）：\n"
+            )
+        return ranked, note + executed + _query_lines(queries)
+    # Nothing was gained by executing — fall back to suggestion mode so
+    # the agent can decide whether the queries are worth another round.
+    return ranked, note + _format_feedback_note(queries, lang, kind="missing")
+
+
+def _query_lines(queries: list) -> str:
+    """Render a bare numbered query list (no guidance header)."""
+    return "\n".join(f"{i}. {q}" for i, q in enumerate(queries, start=1))
 
 
 def _format_feedback_note(queries: list, lang: str, kind: str = "refined") -> str:
@@ -873,6 +931,8 @@ async def make_action_executor(agent, registry, push_filter=None):
             if applies:
                 collected = await _collect_search_pages(agent, entry, args, pending)
                 ranked, note = await _rank_pending_pool(agent, collected, lang)
+                ranked, note = await _auto_second_round(
+                    agent, entry, args, ranked, note, lang)
                 shown = [c["_raw"] for c in ranked]
                 agent._pending_raw_items = shown
                 agent._search_ranked = True

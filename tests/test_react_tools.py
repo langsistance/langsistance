@@ -472,7 +472,9 @@ class TestRankPendingPoolHeadBudget(unittest.IsolatedAsyncioTestCase):
 class TestMissingDirectionFeedback(unittest.IsolatedAsyncioTestCase):
     """After a relevance-scoring round, the pool's missing technical
     directions are inferred once per turn — but only when the pool
-    actually holds relevant hits (a noise pool must not seed them)."""
+    actually holds relevant hits (a noise pool must not seed them).
+    The inferred queries are stored on the agent for the auto second
+    round (see TestAutoSecondRound)."""
 
     def _setup(self, score):
         from sources.agents.react_tools import _rank_pending_pool
@@ -493,34 +495,144 @@ class TestMissingDirectionFeedback(unittest.IsolatedAsyncioTestCase):
                  _usp_raw_item("17222222", "DEW POINT SENSOR")]
         return agent, _rank_pending_pool, build_candidates(items)
 
-    async def test_relevant_pool_gets_missing_direction_suggestions(self):
+    async def test_relevant_pool_stores_missing_direction_queries(self):
         agent, rank_fn, cands = self._setup(5)
         _, note = await rank_fn(agent, cands, "zh")
-        self.assertIn("缺失", note)
-        self.assertIn('"air dryer" AND humidity', note)
+        self.assertIn('"air dryer" AND humidity',
+                      agent._missing_dir_queries)
         self.assertTrue(agent._missing_dir_done)
+        # the note itself stays suggestion-free — the auto second round
+        # decides whether to execute or suggest
+        self.assertNotIn("缺失", note)
 
     async def test_noise_pool_does_not_fire(self):
         agent, rank_fn, cands = self._setup(2)
         _, note = await rank_fn(agent, cands, "zh")
-        self.assertNotIn("缺失", note)
         self.assertEqual(agent._flash_llm.calls, 0)
         self.assertFalse(getattr(agent, "_missing_dir_done", False))
+        self.assertIsNone(getattr(agent, "_missing_dir_queries", None))
 
     async def test_fires_once_per_turn(self):
         agent, rank_fn, cands = self._setup(5)
-        _, note1 = await rank_fn(agent, cands, "zh")
+        await rank_fn(agent, cands, "zh")
         calls_after_first = agent._flash_llm.calls
-        self.assertIn("缺失", note1)
-        _, note2 = await rank_fn(agent, cands, "zh")
-        self.assertNotIn("缺失", note2)
+        await rank_fn(agent, cands, "zh")
         self.assertEqual(agent._flash_llm.calls, calls_after_first)
 
-    async def test_failure_keeps_note_unchanged(self):
+    async def test_failure_stores_no_queries(self):
         agent, rank_fn, cands = self._setup(5)
         agent._flash_llm = _FeedbackProvider(fail=True)
         _, note = await rank_fn(agent, cands, "zh")
-        self.assertNotIn("缺失", note)
+        self.assertIsNone(getattr(agent, "_missing_dir_queries", None))
+        self.assertEqual(note, note)
+
+
+class _AutoRoundEntry:
+    """Fake tool entry whose invoke fills _pending_raw_items first."""
+
+    def __init__(self, agent):
+        self.invoke_calls = 0
+        self._agent = agent
+        from types import SimpleNamespace
+        self.tool_info = SimpleNamespace(params={
+            "body": {"pagination": {"limit": 50}}})
+
+        class _Tool:
+            def __init__(self2, outer):
+                self2.outer = outer
+
+            def invoke(self2, payload):
+                outer = self2.outer
+                outer.invoke_calls += 1
+                # mirror dynamic_backend_tool_function: write the raw
+                # items AND the total count so page collection stops
+                outer._agent._pending_raw_items = [
+                    {"applicationNumberText": f"2{outer.invoke_calls}0000001",
+                     "applicationMetaData": {
+                         "inventionTitle": f"Fresh direction {outer.invoke_calls}",
+                         "applicationStatusDescriptionText": "Patented Case",
+                     }}]
+                outer._agent._last_search_total = 1
+                return "ok"
+        self.tool = _Tool(self)
+
+
+class TestAutoSecondRound(unittest.IsolatedAsyncioTestCase):
+    """The missing-direction queries are executed by the system (not left
+    to the agent's discretion): at most once per turn, bounded count,
+    results merged into the pool."""
+
+    def _ranked(self, pool):
+        return pool.ranked(100)
+
+    async def test_executes_queries_and_merges_pool(self):
+        from sources.agents.react_tools import _auto_second_round
+        from sources.long_task.chat_relevance import SearchPool
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        pool = SearchPool("干燥空气")
+        pool.add([_usp_raw_item("19511555", "AIR DRYER CONTROL USING HUMIDITY")])
+        pool._by_id["19511555"]["relevance_score"] = 5
+        agent._search_pool = pool
+        agent._missing_dir_queries = ['"fresh" AND direction', '"second" AND query']
+        entry = _AutoRoundEntry(agent)
+        ranked, note = await _auto_second_round(
+            agent, entry, {"query": "x"}, self._ranked(pool),
+            "已按相关度排序（池共 1 条、本次新评分 0 条）", "zh")
+        self.assertEqual(entry.invoke_calls, 2)
+        self.assertIn("已自动执行", note)
+        self.assertIn('"fresh" AND direction', note)
+        ids = [c["patent_id"] for c in ranked]
+        self.assertIn("210000001", ids)
+        self.assertIn("220000001", ids)
+
+    async def test_no_queries_returns_unchanged(self):
+        from sources.agents.react_tools import _auto_second_round
+        agent = _FakeAgent()
+        agent._missing_dir_queries = None
+        entry = _AutoRoundEntry(agent)
+        ranked, note = await _auto_second_round(
+            agent, entry, {"query": "x"}, [], "base note", "zh")
+        self.assertEqual(entry.invoke_calls, 0)
+        self.assertEqual(note, "base note")
+
+    async def test_fires_once_per_turn(self):
+        from sources.agents.react_tools import _auto_second_round
+        from sources.long_task.chat_relevance import SearchPool
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        pool = SearchPool("干燥空气")
+        pool.add([_usp_raw_item("19511555", "AIR DRYER CONTROL USING HUMIDITY")])
+        pool._by_id["19511555"]["relevance_score"] = 5
+        agent._search_pool = pool
+        agent._missing_dir_queries = ['"fresh" AND direction']
+        entry = _AutoRoundEntry(agent)
+        await _auto_second_round(agent, entry, {"query": "x"},
+                                 self._ranked(pool), "n", "zh")
+        await _auto_second_round(agent, entry, {"query": "x"},
+                                 self._ranked(pool), "n2", "zh")
+        self.assertEqual(entry.invoke_calls, 1)
+
+    async def test_invoke_failure_falls_back_to_suggestion_note(self):
+        from sources.agents.react_tools import _auto_second_round
+        from sources.long_task.chat_relevance import SearchPool
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        pool = SearchPool("干燥空气")
+        pool.add([_usp_raw_item("19511555", "AIR DRYER CONTROL USING HUMIDITY")])
+        pool._by_id["19511555"]["relevance_score"] = 5
+        agent._search_pool = pool
+        agent._missing_dir_queries = ['"fresh" AND direction']
+        entry = _AutoRoundEntry(agent)
+
+        class _Boom:
+            def invoke(self, payload):
+                raise RuntimeError("down")
+        entry.tool = _Boom()
+        ranked, note = await _auto_second_round(
+            agent, entry, {"query": "x"}, self._ranked(pool), "n", "zh")
+        self.assertIn("补充检索式", note)
+        self.assertIn('"fresh" AND direction', note)
 
 
 if __name__ == "__main__":

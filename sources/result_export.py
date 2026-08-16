@@ -10,7 +10,11 @@ from typing import Any
 
 from sources.export_labels import uspto_field_label
 
-DEFAULT_EXPORT_MIN_ROWS = 6
+# Export for any non-empty result list: the pipeline already curates
+# (dead/design filtered, relevance ranked), so even a 1-item list is a
+# legitimate download for the user.  Raise via RESULT_EXPORT_MIN_ROWS
+# when trivial exports must be suppressed.
+DEFAULT_EXPORT_MIN_ROWS = 1
 MAX_XLSX_CELL_CHARS = 32767
 
 CSV_MIME_TYPE = "text/csv;charset=utf-8"
