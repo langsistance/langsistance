@@ -34,9 +34,11 @@ GATE_SYSTEM_PROMPT = (
     "2 — 仅表面相关（共享个别词语但技术方向不同）\n"
     "1 — 基本不相关\n"
     "0 — 完全不相关\n"
-    "≥3 分视为相关。依据标题、申请人、CPC 分类码、日期判断，"
+    "≥3 分视为相关。依据标题、申请人、CPC 分类码、日期、法律状态判断，"
     "不要猜测未知内容。CPC 分类码是强信号：与用户问题所属技术"
-    "领域同族的分类码应显著加分。\n"
+    "领域同族的分类码应显著加分。法律状态也是强信号：已失效"
+    "（Expired）、已放弃（Abandoned）、已入库存档（Placed in "
+    "storage）的案件没有可实施的权利，最高评 2 分（仅供技术参考）。\n"
     'Return JSON: {"scores": [{"id": "<patent_id>", "score": <0-5>}]} '
     "（每个候选一条，id 必须与输入完全一致）"
 )
@@ -49,6 +51,7 @@ def _batch_text(candidates: list[dict], query: str) -> str:
         f"- id={c['patent_id']} | title={c.get('title') or '(no title)'}"
         f" | applicant={c.get('applicant') or '?'}"
         f" | filing={c.get('filing_date') or '?'}"
+        f" | status={c.get('status') or '?'}"
         f" | cpc={c.get('cpc_codes') or []}"
         for c in candidates
     ]

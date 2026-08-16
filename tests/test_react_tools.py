@@ -309,6 +309,54 @@ class TestSearchObservationContent(unittest.TestCase):
         self.assertIn("完整列表已展示", result["text"])
 
 
+class _ScoringProvider:
+    def __init__(self):
+        self.calls = 0
+
+    async def complete_json(self, system, user):
+        self.calls += 1
+        ids = re.findall(r"id=(\d+)", user)
+        return {"scores": [{"id": i, "score": 3} for i in ids]}
+
+
+class TestRankPendingPoolHeadBudget(unittest.IsolatedAsyncioTestCase):
+    async def test_dead_candidates_do_not_consume_head_slots(self):
+        from sources.agents.react_tools import _rank_pending_pool
+        from sources.long_task.candidate_metadata import build_candidates
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        agent._search_pool = None
+        agent._flash_llm = _ScoringProvider()
+        items = []
+        for i in range(40):
+            items.append({
+                "applicationNumberText": str(10000000 + i),
+                "applicationMetaData": {
+                    "inventionTitle": f"Dead dryer {i}",
+                    "firstApplicantName": "ACME",
+                    "filingDate": "2008-01-15",
+                    "applicationStatusDescriptionText": "Provisional Application Expired",
+                },
+            })
+        for i in range(40):
+            items.append({
+                "applicationNumberText": str(20000000 + i),
+                "applicationMetaData": {
+                    "inventionTitle": f"Live dryer {i}",
+                    "firstApplicantName": "ACME",
+                    "filingDate": "2024-01-15",
+                    "applicationStatusDescriptionText": "Patented Case",
+                },
+            })
+        cands = build_candidates(items)
+        ranked, note = await _rank_pending_pool(agent, cands, "zh")
+        # 40 dead are skipped; the 50-slot head budget covers all 40 live
+        self.assertIn("40", note)
+        self.assertEqual(agent._flash_llm.calls, 2)  # 40 live → 25 + 15
+        top_ids = [c["patent_id"] for c in ranked[:10]]
+        self.assertTrue(all(i.startswith("2") for i in top_ids))
+
+
 if __name__ == "__main__":
     unittest.main()
 

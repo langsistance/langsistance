@@ -279,6 +279,36 @@ class TestPhase0GatedSearch(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(out["candidates"]), 1)
 
 
+class TestBatchTextIncludesStatus(unittest.TestCase):
+    def test_status_rendered_in_batch_lines(self):
+        from sources.long_task.relevance_gate import _batch_text
+        candidates = [{
+            "patent_id": "19511555",
+            "title": "Air dryer humidity control",
+            "applicant": "ACME",
+            "filing_date": "2024-01-15",
+            "cpc_codes": ["F26B 21/08"],
+            "status": "Abandoned  --  Failure to Respond to an Office Action",
+        }]
+        text = _batch_text(candidates, "干燥空气")
+        self.assertIn("Abandoned", text)
+
+    def test_missing_status_renders_placeholder(self):
+        from sources.long_task.relevance_gate import _batch_text
+        candidates = [{
+            "patent_id": "19511555", "title": "T", "applicant": "A",
+            "filing_date": "2024-01-15", "cpc_codes": [],
+        }]
+        text = _batch_text(candidates, "q")
+        self.assertIn("status=", text)
+
+
+class TestGatePromptMentionsLegalStatus(unittest.TestCase):
+    def test_prompt_mentions_legal_status(self):
+        from sources.long_task.relevance_gate import GATE_SYSTEM_PROMPT
+        self.assertIn("法律状态", GATE_SYSTEM_PROMPT)
+
+
 class TestBatchTextIncludesCpc(unittest.TestCase):
     def test_cpc_codes_rendered_in_batch_lines(self):
         from sources.long_task.relevance_gate import _batch_text

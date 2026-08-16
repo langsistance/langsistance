@@ -17,6 +17,7 @@ from typing import Any, List
 from sources.long_task.candidate_metadata import (
     build_candidates,
     dedupe_candidates,
+    is_dead_status,
 )
 from sources.long_task.relevance_gate import score_candidates
 
@@ -30,13 +31,17 @@ async def score_candidates_concurrent(candidates: list, query: str,
     """Score unscored candidates in concurrent small batches.
 
     The Flash provider is slow on 100-entry batches (~50s); 25-entry
-    batches gathered concurrently cut wall-clock substantially.  Never
-    raises.  Returns how many candidates gained a score.
+    batches gathered concurrently cut wall-clock substantially.  Dead
+    candidates (expired/abandoned/PCT storage) are skipped — they rank
+    below every live candidate regardless of score, so scoring them is
+    pure waste.  Never raises.  Returns how many candidates gained a
+    score.
     """
     if provider is None:
         return 0
     pending = [c for c in candidates
-               if "relevance_score" not in c]
+               if "relevance_score" not in c
+               and not is_dead_status(c.get("status"))]
     if not pending:
         return 0
     batches = [
@@ -100,9 +105,9 @@ class SearchPool:
             self.unscored(), self.query, provider)
 
     def ranked(self, limit: int) -> list:
-        """Family-deduped candidates ordered granted-first, then
-        relevance_score desc, then filing date; unscored sink last.
-        Sliced to *limit*."""
+        """Family-deduped candidates ordered live-first (dead statuses
+        sink), then granted, relevance_score desc, then filing date;
+        unscored sink last. Sliced to *limit*."""
         kept, _ = dedupe_candidates(list(self._by_id.values()))
         return kept[:limit]
 

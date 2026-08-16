@@ -160,7 +160,61 @@ class TestHeadScoringAndConcurrency(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([c["patent_id"] for c in again], ["17222222"])
 
 
+class TestDeadCandidatesNotScored(unittest.IsolatedAsyncioTestCase):
+    async def test_dead_candidates_skipped_by_scoring(self):
+        from sources.long_task.chat_relevance import score_candidates_concurrent
+        from sources.long_task.candidate_metadata import build_candidates
+        dead = _usp_raw_item("19511555", "Dead dryer")
+        dead["applicationMetaData"]["applicationStatusDescriptionText"] = \
+            "Provisional Application Expired"
+        cands = build_candidates([dead])
+        provider = _ConcurrentProvider()
+        scored = await score_candidates_concurrent(cands, "q", provider)
+        self.assertEqual(scored, 0)
+        self.assertEqual(provider.calls, 0)
+        self.assertNotIn("relevance_score", cands[0])
+
+    async def test_live_candidates_still_scored_alongside_dead(self):
+        from sources.long_task.chat_relevance import score_candidates_concurrent
+        from sources.long_task.candidate_metadata import build_candidates
+        dead = _usp_raw_item("19511555", "Dead dryer")
+        dead["applicationMetaData"]["applicationStatusDescriptionText"] = \
+            "Abandoned  --  Failure to Respond to an Office Action"
+        cands = build_candidates([dead, _usp_raw_item("18184836", "Live dryer")])
+        provider = _ConcurrentProvider()
+        scored = await score_candidates_concurrent(cands, "q", provider)
+        self.assertEqual(scored, 1)
+        self.assertEqual(provider.calls, 1)
+        self.assertNotIn("relevance_score", cands[0])
+        self.assertEqual(cands[1]["relevance_score"], 3)
+
+
 class TestSearchPoolRanking(unittest.TestCase):
+    def test_ranked_sinks_dead_below_live(self):
+        pool = SearchPool("测试问题")
+        dead = _usp_raw_item("19511555", "Expired granted dryer")
+        dead["applicationMetaData"]["applicationStatusDescriptionText"] = \
+            "Patent Expired Due to NonPayment of Maintenance Fees Under 37 CFR 1.362"
+        dead["applicationMetaData"]["patentNumber"] = "9123456"
+        pool.add([dead, _usp_raw_item("18184836", "Pending dry air control")])
+        pool._by_id["19511555"]["relevance_score"] = 5
+        pool._by_id["18184836"]["relevance_score"] = 1
+        ranked = pool.ranked(10)
+        self.assertEqual([c["patent_id"] for c in ranked],
+                         ["18184836", "19511555"])
+
+    def test_ranked_puts_unscored_live_above_scored_dead(self):
+        pool = SearchPool("测试问题")
+        dead = _usp_raw_item("19511555", "Expired scored")
+        dead["applicationMetaData"]["applicationStatusDescriptionText"] = \
+            "Provisional Application Expired"
+        pool.add([dead, _usp_raw_item("18184836", "Live unscored")])
+        pool._by_id["19511555"]["relevance_score"] = 5
+        # live candidate stays unscored
+        ranked = pool.ranked(10)
+        self.assertEqual([c["patent_id"] for c in ranked],
+                         ["18184836", "19511555"])
+
     def test_ranked_sorts_by_score_desc_unscored_sink(self):
         pool = SearchPool("测试问题")
         pool.add([_usp_raw_item("19511555", "A"),

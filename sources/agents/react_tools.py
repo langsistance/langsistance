@@ -24,6 +24,7 @@ from sources.knowledge.knowledge import get_knowledge_tool_candidates
 from sources.long_task.candidate_metadata import (
     build_candidates,
     ensure_search_fields,
+    is_dead_status,
     is_keyword_search_tool,
     is_uspto_tool,
 )
@@ -486,7 +487,11 @@ async def _rank_pending_pool(agent, candidates, lang) -> Tuple[list, str]:
         pool = SearchPool(getattr(agent, "_last_user_prompt", "") or "")
         agent._search_pool = pool
     new_cands = pool.add_from_candidates(candidates)
-    head = new_cands[:SCORE_PER_CALL]
+    # Dead candidates are never scored and sink in ranking — filter them
+    # out before slicing so they cannot crowd live candidates out of the
+    # per-call scoring head.
+    head = [c for c in new_cands if not is_dead_status(c.get("status"))][
+        :SCORE_PER_CALL]
     _score_start = time.monotonic()
     scored = await score_candidates_concurrent(
         head, pool.query,

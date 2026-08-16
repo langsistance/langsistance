@@ -110,6 +110,24 @@ def build_candidates(raw_items: list) -> list[dict]:
     return candidates
 
 
+# ── Legal status ────────────────────────────────────────────────────────────
+
+DEAD_STATUS_MARKERS = ("expired", "abandon", "placed in storage")
+
+
+def is_dead_status(status: Any) -> bool:
+    """True when a USPTO status string means no enforceable rights.
+
+    Covers expired/abandoned cases and PCT applications parked in
+    storage (never entered the US national stage).  Unknown or empty
+    statuses are treated as alive — never hide what we cannot verify.
+    """
+    if not isinstance(status, str) or not status.strip():
+        return False
+    lowered = status.lower()
+    return any(m in lowered for m in DEAD_STATUS_MARKERS)
+
+
 # ── Dedupe ──────────────────────────────────────────────────────────────────
 
 def _norm_title(title: str) -> str:
@@ -132,11 +150,12 @@ def _continuity_ids(item: dict) -> set[str]:
 
 
 def _sort_key(c: dict) -> tuple:
+    alive = 0 if is_dead_status(c.get("status")) else 1
     granted = 1 if c.get("patent_number") else 0
     score = c.get("relevance_score")
     if not isinstance(score, (int, float)):
         score = -1
-    return (granted, score, c.get("filing_date") or "")
+    return (alive, granted, score, c.get("filing_date") or "")
 
 
 def dedupe_candidates(candidates: list[dict]) -> tuple[list[dict], int]:
@@ -144,8 +163,9 @@ def dedupe_candidates(candidates: list[dict]) -> tuple[list[dict], int]:
 
     Two candidates are duplicates when one's patent_id appears in the
     other's ``parentContinuityBag``, or their normalized titles are
-    identical. Preference: granted > higher relevance_score > newer
-    filing date (ordering by ``_sort_key`` descending).
+    identical. Preference: live status > granted > higher
+    relevance_score > newer filing date (ordering by ``_sort_key``
+    descending).
     """
     ordered = sorted(candidates, key=_sort_key, reverse=True)
     title_groups: dict[str, str] = {}
