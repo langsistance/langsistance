@@ -172,7 +172,12 @@ def fetch_by_cpc(codes: list, timeout: int = 30) -> list:
     absent or nothing matches — recall expansion must never hard-fail.
     """
     codes = [str(c).strip() for c in (codes or []) if str(c).strip()]
-    if not codes or not os.path.exists(CPC_INDEX_DB):
+    if not codes:
+        return []
+    if not os.path.exists(CPC_INDEX_DB):
+        logger.warning(
+            "recall cpc index absent — run scripts/build_cpc_index.py "
+            f"(expected at {CPC_INDEX_DB})")
         return []
     patents: list = []
     seen = set()
