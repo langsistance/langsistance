@@ -97,6 +97,8 @@ def run_one(model: str, provider_name: str) -> str:
     Meant to run on the deployment server where the gateway is
     reachable; locally it fails with connection errors."""
     user = USER.format(query=QUERY, cpc="\n".join(cpc_lines))
+    if provider_name == "gateway":
+        return _sdk_call(model, user)  # OpenAI-compatible gateway
     try:
         import asyncio
         from sources.llm_provider import Provider
@@ -109,28 +111,33 @@ def run_one(model: str, provider_name: str) -> str:
     except Exception as exc:
         print(f"   (Provider 失败，回退 SDK: {type(exc).__name__}: "
               f"{str(exc)[:100]})")
-        from openai import OpenAI
-        base = os.environ.get("OPENAI_BASE_URL", "")
-        key = (os.environ.get("OPENAI_API_KEY", "") or
-               os.environ.get("DEEPSEEK_API_KEY", ""))
-        if not base or not key:
-            raise RuntimeError("OPENAI_BASE_URL/API key 缺失")
-        client = OpenAI(api_key=key, base_url=base)
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": SYSTEM},
-                {"role": "user", "content": user},
-            ],
-            temperature=0.3,
-            max_tokens=2500,
-        )
-        return resp.choices[0].message.content or ""
+        return _sdk_call(model, user)
+
+
+def _sdk_call(model: str, user: str) -> str:
+    from openai import OpenAI
+    base = os.environ.get("OPENAI_BASE_URL", "")
+    key = (os.environ.get("OPENAI_API_KEY", "") or
+           os.environ.get("DEEPSEEK_API_KEY", ""))
+    if not base or not key:
+        raise RuntimeError("OPENAI_BASE_URL/API key 缺失")
+    client = OpenAI(api_key=key, base_url=base)
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": user},
+        ],
+        temperature=0.3,
+        max_tokens=2500,
+    )
+    return resp.choices[0].message.content or ""
 
 
 def main() -> int:
     attempts = [
         ("deepseek-v4-pro", "deepseek"),
+        ("openai/gpt-5.4-mini", "openrouter"),
         ("deepseek-v4-flash", "deepseek"),
     ]
     for model, provider_name in attempts:
@@ -143,7 +150,7 @@ def main() -> int:
         print(content[:2500])
         hits = [t for t, ok in check_architecture(content).items() if ok]
         print(f"\n-- 方案级词汇命中({len(hits)}/17): {', '.join(hits)}")
-        if len(hits) >= 6:
+        if len(hits) >= 6 and "all" not in sys.argv:
             print(">> 判定：达到方案级解读门槛")
             break
     return 0
