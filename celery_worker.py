@@ -166,7 +166,7 @@ def execute_patent_analysis(self, task_id: str, params: dict):
     else:
         flash_provider = Provider(provider_name='deepseek', model='deepseek-v4-flash',
                                   server_address='', is_local=False)
-        pro_provider = Provider(provider_name='deepseek', model='deepseek-v4-pro',
+        pro_provider = Provider(provider_name='deepseek', model='deepseek-v4-flash',
                                 server_address='', is_local=False)
 
     # Vision provider — configured via config.ini [LONG_TASK]
@@ -1709,7 +1709,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
             server_address='', is_local=False,
         )
         pro_provider = Provider(
-            provider_name='deepseek', model='deepseek-v4-pro',
+            provider_name='deepseek', model='deepseek-v4-flash',
             server_address='', is_local=False,
         )
 
@@ -3154,7 +3154,7 @@ def execute_china_examination_analysis(self, task_id: str, params: dict):
             server_address='', is_local=False,
         )
         pro_provider = Provider(
-            provider_name='deepseek', model='deepseek-v4-pro',
+            provider_name='deepseek', model='deepseek-v4-flash',
             server_address='', is_local=False,
         )
 
@@ -3749,7 +3749,7 @@ def execute_epo_examination_analysis(self, task_id: str, params: dict):
             server_address='', is_local=False,
         )
         pro_provider = Provider(
-            provider_name='deepseek', model='deepseek-v4-pro',
+            provider_name='deepseek', model='deepseek-v4-flash',
             server_address='', is_local=False,
         )
 
@@ -4121,7 +4121,7 @@ def execute_japan_examination_analysis(self, task_id: str, params: dict):
             server_address='', is_local=False,
         )
         pro_provider = Provider(
-            provider_name='deepseek', model='deepseek-v4-pro',
+            provider_name='deepseek', model='deepseek-v4-flash',
             server_address='', is_local=False,
         )
 
@@ -4513,7 +4513,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             server_address='', is_local=False,
         )
         pro_provider = Provider(
-            provider_name='deepseek', model='deepseek-v4-pro',
+            provider_name='deepseek', model='deepseek-v4-flash',
             server_address='', is_local=False,
         )
 

@@ -4,8 +4,13 @@ The embedding call itself is provider-dependent and exercised through
 mocked embed_texts in the wiring tests; everything here is pure.
 """
 import unittest
+from unittest.mock import patch
 
-from sources.long_task.semantic_rerank import cosine_similarity, fuse_ranking
+from sources.long_task.semantic_rerank import (
+    cosine_similarity,
+    fuse_ranking,
+    semantic_scores_batch,
+)
 
 
 class TestCosineSimilarity(unittest.TestCase):
@@ -73,6 +78,35 @@ class TestFuseRanking(unittest.TestCase):
         cands = [_cand("a", 5), _cand("b", 1)]
         fused = fuse_ranking(cands, [0.9], alpha=0.5)
         self.assertEqual([c["patent_id"] for c in fused], ["a", "b"])
+
+
+class TestSemanticScoresBatch(unittest.TestCase):
+    def test_returns_cosines_keyed_by_patent_id(self):
+        with patch("sources.long_task.semantic_rerank.embed_texts",
+                   return_value=[[1.0, 0.0], [1.0, 0.0], [0.0, 1.0]]):
+            scores = semantic_scores_batch("q", [
+                {"patent_id": "a", "title": "A"},
+                {"patent_id": "b", "title": "B"},
+                {"patent_id": "c", "title": "   "},  # untitled — skipped
+            ])
+        self.assertAlmostEqual(scores["a"], 1.0)
+        self.assertAlmostEqual(scores["b"], 0.0)
+        self.assertNotIn("c", scores)
+
+    def test_embedding_failure_returns_empty(self):
+        with patch("sources.long_task.semantic_rerank.embed_texts",
+                   return_value=None):
+            scores = semantic_scores_batch(
+                "q", [{"patent_id": "a", "title": "A"},
+                      {"patent_id": "b", "title": "B"}])
+        self.assertEqual(scores, {})
+
+    def test_fewer_than_two_titled_returns_empty(self):
+        with patch("sources.long_task.semantic_rerank.embed_texts") as mock:
+            scores = semantic_scores_batch(
+                "q", [{"patent_id": "a", "title": "A"}])
+        self.assertEqual(scores, {})
+        mock.assert_not_called()
 
 
 if __name__ == "__main__":

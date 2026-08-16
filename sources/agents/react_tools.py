@@ -39,7 +39,11 @@ from sources.long_task.recall_sources import (
     fetch_by_numbers,
     records_to_candidates,
 )
-from sources.long_task.semantic_rerank import RERANK_ENABLED
+from sources.long_task.semantic_rerank import (
+    PRESCORE_ENABLED,
+    RERANK_ENABLED,
+    semantic_scores_batch,
+)
 
 TOP_N = int(os.getenv("REACT_TOOL_TOP_N", "5"))
 LOW_HIT_FEEDBACK_THRESHOLD = int(os.getenv(
@@ -554,8 +558,22 @@ async def _rank_pending_pool(agent, candidates, lang,
     # Dead candidates are never scored and sink in ranking — filter them
     # out before slicing so they cannot crowd live candidates out of the
     # per-call scoring head.
-    head = [c for c in new_cands if not is_dead_status(c.get("status"))][
-        :SCORE_PER_CALL]
+    live = [c for c in new_cands if not is_dead_status(c.get("status"))]
+    head = live[:SCORE_PER_CALL]
+    if PRESCORE_ENABLED and len(live) > SCORE_PER_CALL:
+        # Two-stage scoring: bge-m3 prescores the whole batch in one
+        # embedding call, then flash scores only the semantic head —
+        # the LLM budget lands on the semantically closest candidates
+        # instead of the newest slice.
+        sem_map = semantic_scores_batch(pool.query, live)
+        if sem_map:
+            for c in live:
+                if c["patent_id"] in sem_map:
+                    c["semantic_score"] = sem_map[c["patent_id"]]
+            head = sorted(
+                live,
+                key=lambda c: -(c.get("semantic_score") or 0.0)
+            )[:SCORE_PER_CALL]
     _score_start = time.monotonic()
     scored = await score_candidates_concurrent(
         head, pool.query,
@@ -849,8 +867,18 @@ async def _recall_expansion_round(agent, entry, lang) -> Optional[Tuple[list, st
     live = [c for c in fresh if not is_dead_status(c.get("status"))]
     if not live:
         return None
+    # The pool scores only the first SCORE_PER_CALL of each merge and
+    # prunes the rest — pass a spread-ordered batch so the scored head
+    # represents the whole recall window instead of just the newest
+    # slice (the deep end of the CPC sampling is where established
+    # multi-year-old grants sit).
+    stride = max(1, len(fresh) // max(1, SCORE_PER_CALL))
+    spread_head = fresh[::stride][:SCORE_PER_CALL]
+    spread_ids = {c["patent_id"] for c in spread_head}
+    ordered = spread_head + [c for c in fresh
+                             if c["patent_id"] not in spread_ids]
     ranked, ranking_note = await _rank_pending_pool(
-        agent, fresh, lang, apply_rerank=False)
+        agent, ordered, lang, apply_rerank=False)
     ranked, ranking_note = await _auto_second_round(
         agent, entry, {"q": ""}, ranked, ranking_note, lang)
     if lang == "en":

@@ -294,5 +294,35 @@ class TestSearchPoolPrune(unittest.TestCase):
         self.assertIn("18184836", pool._by_id)  # prune only caps, never gates
 
 
+class TestSemanticScoreOrdering(unittest.TestCase):
+    """Unscored candidates with a semantic_score (two-stage prescore)
+    rank by semantic desc instead of sinking in insertion order — the
+    deep end of the recall window becomes visible instead of pruned."""
+
+    def test_unscored_semantic_orders_before_unscored_plain(self):
+        from sources.long_task.candidate_metadata import _sort_key
+        sem = {"patent_id": "a", "semantic_score": 0.8}
+        plain = {"patent_id": "b"}
+        self.assertGreater(_sort_key(sem), _sort_key(plain))
+
+    def test_scored_rank_above_unscored_semantic(self):
+        from sources.long_task.candidate_metadata import _sort_key
+        scored_zero = {"patent_id": "a", "relevance_score": 0}
+        sem_high = {"patent_id": "b", "semantic_score": 0.9}
+        self.assertGreater(_sort_key(scored_zero), _sort_key(sem_high))
+
+    def test_pool_ranks_unscored_by_semantic_desc(self):
+        pool = SearchPool("干燥空气")
+        pool.add([_usp_raw_item("19511555", "A"),
+                  _usp_raw_item("18184836", "B"),
+                  _usp_raw_item("10123456", "C")])
+        pool._by_id["18184836"]["semantic_score"] = 0.9
+        pool._by_id["10123456"]["semantic_score"] = 0.5
+        ranked = pool.ranked(10)
+        # no LLM scores at all — order by semantic desc, then insertion
+        self.assertEqual([c["patent_id"] for c in ranked],
+                         ["18184836", "10123456", "19511555"])
+
+
 if __name__ == "__main__":
     unittest.main()

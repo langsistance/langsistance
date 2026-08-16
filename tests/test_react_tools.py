@@ -1105,6 +1105,158 @@ class TestRecallExpansionRound(unittest.IsolatedAsyncioTestCase):
             result = await _recall_expansion_round(agent, entry, "zh")
         self.assertIsNone(result)
 
+    async def test_scoring_head_spread_across_recall_batch(self):
+        # The pool scores only the first SCORE_PER_CALL of each merge and
+        # prunes the rest — the recall batch must be spread-ordered so
+        # the scored head represents the whole sampling window, not just
+        # the newest slice (the deep end is where established anchors
+        # like multi-year-old grants sit).
+        import re
+        from sources.agents.react_tools import _recall_expansion_round
+        agent = self._agent_with_pool()
+        entry = _LadderEntry(agent)
+
+        class _RecordingScoring(_ScoringProvider):
+            def __init__(self):
+                super().__init__()
+                self.payloads = []
+
+            async def complete_json(self, system, user):
+                self.payloads.append(user)
+                self.calls += 1
+                ids = re.findall(r"id=(\d+)", user)
+                return {"scores": [{"id": i, "score": 2} for i in ids]}
+
+        provider = _RecordingScoring()
+        agent._flash_llm = provider
+        records = [{
+            "applicationNumberText": f"3000000{i}",
+            "applicationMetaData": {
+                "inventionTitle": f"LED CONTROL {i}",
+                "applicationStatusDescriptionText": "Patented Case",
+            }} for i in range(6)]
+        with patch("sources.agents.react_tools.fetch_by_numbers",
+                   return_value=records), \
+             patch("sources.agents.react_tools.fetch_by_cpc",
+                   return_value=[]), \
+             patch("sources.agents.react_tools.SCORE_PER_CALL", 2):
+            result = await _recall_expansion_round(agent, entry, "zh")
+        self.assertIsNotNone(result)
+        scored_ids = [i for payload in provider.payloads
+                      for i in re.findall(r"id=(\d+)", payload)]
+        self.assertIn("30000000", scored_ids)  # newest end
+        self.assertIn("30000003", scored_ids)  # spread reaches the tail
+
+
+class TestPrescoreRanking(unittest.IsolatedAsyncioTestCase):
+    """Two-stage scoring: bge-m3 semantically prescores the whole batch
+    (one embedding call), flash scores only the semantic head — the LLM
+    budget goes to the semantically closest candidates instead of the
+    newest slice."""
+
+    async def test_flash_head_follows_semantic_order(self):
+        import re
+        from sources.agents.react_tools import _rank_pending_pool
+        from sources.long_task.candidate_metadata import build_candidates
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+
+        class _RecordingScoring(_ScoringProvider):
+            def __init__(self):
+                super().__init__()
+                self.payloads = []
+
+            async def complete_json(self, system, user):
+                self.payloads.append(user)
+                self.calls += 1
+                ids = re.findall(r"id=(\d+)", user)
+                return {"scores": [{"id": i, "score": 2} for i in ids]}
+
+        provider = _RecordingScoring()
+        agent._flash_llm = provider
+        records = [_usp_raw_item(f"3000000{i}", f"TITLE {i}")
+                   for i in range(6)]
+        sem = {f"3000000{i}": 0.1 + 0.1 * i for i in range(6)}
+        with patch("sources.agents.react_tools.PRESCORE_ENABLED", True), \
+             patch("sources.agents.react_tools.semantic_scores_batch",
+                   return_value=sem) as mock_sem, \
+             patch("sources.agents.react_tools.SCORE_PER_CALL", 2):
+            ranked, note = await _rank_pending_pool(
+                agent, build_candidates(records), "zh")
+        mock_sem.assert_called_once()
+        scored_ids = [i for payload in provider.payloads
+                      for i in re.findall(r"id=(\d+)", payload)]
+        # flash only saw the semantic top-2 (0.6, 0.5)
+        self.assertEqual(scored_ids, ["30000005", "30000004"])
+        # semantic scores are stored on the pool candidates
+        pool = agent._search_pool
+        self.assertAlmostEqual(
+            pool._by_id["30000000"]["semantic_score"], 0.1)
+
+    async def test_prescore_failure_falls_back_to_first_n(self):
+        import re
+        from sources.agents.react_tools import _rank_pending_pool
+        from sources.long_task.candidate_metadata import build_candidates
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+
+        class _RecordingScoring(_ScoringProvider):
+            def __init__(self):
+                super().__init__()
+                self.payloads = []
+
+            async def complete_json(self, system, user):
+                self.payloads.append(user)
+                self.calls += 1
+                ids = re.findall(r"id=(\d+)", user)
+                return {"scores": [{"id": i, "score": 2} for i in ids]}
+
+        provider = _RecordingScoring()
+        agent._flash_llm = provider
+        records = [_usp_raw_item(f"3000000{i}", f"TITLE {i}")
+                   for i in range(6)]
+        with patch("sources.agents.react_tools.PRESCORE_ENABLED", True), \
+             patch("sources.agents.react_tools.semantic_scores_batch",
+                   return_value={}), \
+             patch("sources.agents.react_tools.SCORE_PER_CALL", 2):
+            await _rank_pending_pool(agent, build_candidates(records), "zh")
+        scored_ids = [i for payload in provider.payloads
+                      for i in re.findall(r"id=(\d+)", payload)]
+        # fallback: the first two of the batch, unchanged behavior
+        self.assertEqual(scored_ids, ["30000000", "30000001"])
+
+    async def test_disabled_gate_keeps_first_n_head(self):
+        import re
+        from sources.agents.react_tools import _rank_pending_pool
+        from sources.long_task.candidate_metadata import build_candidates
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+
+        class _RecordingScoring(_ScoringProvider):
+            def __init__(self):
+                super().__init__()
+                self.payloads = []
+
+            async def complete_json(self, system, user):
+                self.payloads.append(user)
+                self.calls += 1
+                ids = re.findall(r"id=(\d+)", user)
+                return {"scores": [{"id": i, "score": 2} for i in ids]}
+
+        provider = _RecordingScoring()
+        agent._flash_llm = provider
+        records = [_usp_raw_item(f"3000000{i}", f"TITLE {i}")
+                   for i in range(6)]
+        with patch("sources.agents.react_tools.PRESCORE_ENABLED", False), \
+             patch("sources.agents.react_tools.semantic_scores_batch") \
+                as mock_sem, \
+             patch("sources.agents.react_tools.SCORE_PER_CALL", 2):
+            await _rank_pending_pool(agent, build_candidates(records), "zh")
+        mock_sem.assert_not_called()
+        scored_ids = [i for payload in provider.payloads
+                      for i in re.findall(r"id=(\d+)", payload)]
+        self.assertEqual(scored_ids, ["30000000", "30000001"])
+
 
 class TestAutoLadderIntegration(unittest.IsolatedAsyncioTestCase):
     """Zero-hit observations run the untried ladder inside execute_action

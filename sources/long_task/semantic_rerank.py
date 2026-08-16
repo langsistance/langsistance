@@ -26,13 +26,20 @@ logger = Logger("semantic_rerank.log")
 RERANK_ENABLED = os.getenv("REACT_SEMANTIC_RERANK", "0") == "1"
 RERANK_TOP_K = int(os.getenv("REACT_SEMANTIC_RERANK_TOPK", "30"))
 RERANK_ALPHA = float(os.getenv("REACT_SEMANTIC_RERANK_ALPHA", "0.5"))
+# Two-stage scoring: bge-m3 semantically prescores the whole incoming
+# batch (one embedding call), and the flash LLM scores only the semantic
+# head — the LLM budget lands on the semantically closest candidates
+# instead of the newest slice, and deep-window candidates stop being
+# pruned unscored.
+PRESCORE_ENABLED = os.getenv("REACT_SEMANTIC_PRESCORE", "0") == "1"
 
 # Startup observability: the first log file line states whether rerank
 # is active, so an enabled-but-not-restarted server is immediately
 # visible in semantic_rerank.log.
 logger.info(
     f"semantic rerank config — enabled={RERANK_ENABLED} "
-    f"top_k={RERANK_TOP_K} alpha={RERANK_ALPHA}"
+    f"top_k={RERANK_TOP_K} alpha={RERANK_ALPHA} "
+    f"prescore={PRESCORE_ENABLED}"
 )
 
 
@@ -109,6 +116,37 @@ def embed_texts(texts: list) -> Optional[list]:
     except Exception:
         logger.warning("semantic rerank embedding failed, skipping")
         return None
+
+
+def semantic_scores_batch(query: str, candidates: list) -> dict:
+    """Semantic cosine scores for every titled candidate, one batch.
+
+    Embeds the question and all titles in a single provider call and
+    returns {patent_id: cosine}.  Untitled candidates get no entry; any
+    failure returns {} — prescoring is an enhancement, never a hard
+    dependency.
+    """
+    if not query or not str(query).strip():
+        return {}
+    titled = [(c, str(c.get("title") or "").strip())
+              for c in (candidates or []) if isinstance(c, dict)]
+    titled = [(c, t) for c, t in titled if t]
+    if len(titled) < 2:
+        return {}
+    start = time.monotonic()
+    vectors = embed_texts([query] + [t for _, t in titled])
+    if vectors is None or len(vectors) != len(titled) + 1:
+        return {}
+    query_vec = vectors[0]
+    scores: dict = {}
+    for (c, _), vec in zip(titled, vectors[1:]):
+        pid = c.get("patent_id")
+        if pid:
+            scores[str(pid)] = cosine_similarity(query_vec, vec)
+    logger.info(
+        f"semantic prescore — candidates={len(titled)} "
+        f"elapsed={round(time.monotonic() - start, 1)}s")
+    return scores
 
 
 def rerank_candidates(query: str, candidates: list, top_k: int = RERANK_TOP_K,

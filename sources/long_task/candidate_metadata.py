@@ -177,7 +177,14 @@ def _sort_key(c: dict) -> tuple:
     score = c.get("relevance_score")
     if not isinstance(score, (int, float)):
         score = -1
-    return (alive, utility, granted, score, c.get("filing_date") or "")
+    # Two-stage prescore: unscored candidates with a semantic_score
+    # order by it instead of sinking in insertion order — the deep end
+    # of the recall window stays visible instead of being pruned.
+    sem = c.get("semantic_score")
+    if not isinstance(sem, (int, float)):
+        sem = -2.0
+    return (alive, utility, granted, score, sem,
+            c.get("filing_date") or "")
 
 
 def dedupe_candidates(candidates: list[dict]) -> tuple[list[dict], int]:
