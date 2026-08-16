@@ -31,7 +31,10 @@ REWRITE_SYSTEM_PROMPT = (
     "复合词都要给出，不能只给单一词形的多个拼写），并判断该概念的"
     "明确程度：\n"
     "   - 明确专有名词/品牌名/具体化合物名 → 精确词即可\n"
-    "   - 一般性技术概念 → 关键词集中必须包含至少一个词尾通配符变体\n"
+    "   - 一般性技术概念 → 关键词集中必须包含至少一个词尾通配符变体，"
+    "且必须有一个裸词根通配符（仅词根+*，如 cool*，可同时覆盖 "
+    "cool/cooler/cooling 各词形，不依赖拼写对错）；裸词根是低精度"
+    "覆盖面保底项，必须排在关键词列表靠后位置（精确词在前）\n"
     "   - 判断不清 → 精确词与词尾通配符变体都放入关键词集\n"
     "3. 可以为提高精度添加用户未提及的合理领域限定概念（如应用场景、"
     "设备载体），但每个限定必须有依据，且限定概念放在概念列表最后"
@@ -116,14 +119,17 @@ def _assemble_ladder(groups: list[list[str]]) -> list[str]:
             cleaned.append(seen)
     if not cleaned:
         return []
-    cap = MAX_KEYWORDS_PER_GROUP
-    while cap > 1:
-        if len(assemble_query([g[:cap] for g in cleaned])) \
-                <= MAX_ASSEMBLED_QUERY_CHARS:
-            break
-        cap -= 1
     queries: list[str] = []
     for i in range(len(cleaned), 0, -1):
+        # Each level gets its own keyword budget: looser levels have
+        # fewer groups and can afford more keywords per group — the
+        # tightest level's cap must not starve the fallback query.
+        cap = MAX_KEYWORDS_PER_GROUP
+        while cap > 1:
+            if len(assemble_query([g[:cap] for g in cleaned[:i]])) \
+                    <= MAX_ASSEMBLED_QUERY_CHARS:
+                break
+            cap -= 1
         q = sanitize_uspto_query(
             assemble_query([g[:cap] for g in cleaned[:i]]))
         if q and (not queries or q != queries[-1]):

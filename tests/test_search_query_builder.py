@@ -113,6 +113,30 @@ class TestBuildSearchQueries(unittest.IsolatedAsyncioTestCase):
         result = await build_search_queries("q", provider)
         self.assertEqual(result["queries"], ['"fallback" AND query'])
 
+    async def test_loosest_level_uses_full_keyword_budget(self):
+        # The tightest level must shrink to fit the length limit, but
+        # the loosest single-concept level is short by construction and
+        # must keep its full keyword budget — a global cap would starve
+        # the fallback query of coverage (proven by the 03:15 round,
+        # where q3 carried 2 of 8 keywords).
+        provider = _FakeProvider({
+            "concepts": [
+                {"concept": "c1",
+                 "keywords": [f"very long keyword phrase number {i}"
+                              for i in range(8)]},
+                {"concept": "c2", "keywords": ["short1", "short2"]},
+                {"concept": "c3", "keywords": ["tiny1", "tiny2"]},
+            ],
+        })
+        result = await build_search_queries("q", provider)
+        self.assertEqual(len(result["queries"]), 3)
+        q1, q3 = result["queries"][0], result["queries"][-1]
+        self.assertLessEqual(len(q1), 250)
+        # q3 keeps the full 5-keyword budget for the core concept
+        for i in range(5):
+            self.assertIn(f"very long keyword phrase number {i}", q3)
+        self.assertLessEqual(len(q3), 250)
+
     async def test_single_concept_gives_single_query(self):
         provider = _FakeProvider({
             "concepts": [{"concept": "c", "keywords": ["k1", "k2"]}],
@@ -193,6 +217,15 @@ class TestRewritePromptWildcardRules(unittest.TestCase):
 
     def test_prompt_warns_wildcards_lose_phrase_semantics(self):
         self.assertIn("单词", REWRITE_SYSTEM_PROMPT)
+
+    def test_prompt_requires_bare_root_wildcard_per_concept(self):
+        self.assertIn("裸词根", REWRITE_SYSTEM_PROMPT)
+        self.assertIn("cool*", REWRITE_SYSTEM_PROMPT)
+
+    def test_prompt_puts_bare_root_wildcard_after_precise_terms(self):
+        # the bare root is a low-precision coverage term — it must sit
+        # late in the keyword list so the tightest level stays tight
+        self.assertIn("靠后", REWRITE_SYSTEM_PROMPT)
 
 
 class TestLadderGuidanceConceptBank(unittest.TestCase):
