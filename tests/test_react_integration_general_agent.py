@@ -79,6 +79,8 @@ class TestCreateAgentWiring(unittest.TestCase):
         agent._tried_queries = ["stale tried query"]
         agent._cpc_hints = [{"code": "STALE", "title": "stale hint"}]
         agent._feedback_done = True
+        agent._feedback_queries = ["stale feedback query"]
+        agent._auto_feedback_done = True
         agent._ladder_capped = True
         agent._search_ranked = True
         with patch("sources.agents.general_agent.build_tool_set",
@@ -95,6 +97,8 @@ class TestCreateAgentWiring(unittest.TestCase):
         self.assertEqual(getattr(agent, "_tried_queries", "unset"), [])
         self.assertIsNone(getattr(agent, "_cpc_hints", "unset"))
         self.assertFalse(getattr(agent, "_feedback_done", True))
+        self.assertIsNone(getattr(agent, "_feedback_queries", "unset"))
+        self.assertFalse(getattr(agent, "_auto_feedback_done", True))
         self.assertFalse(getattr(agent, "_ladder_capped", True))
         self.assertFalse(getattr(agent, "_search_ranked", True))
 

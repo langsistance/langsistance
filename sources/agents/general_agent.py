@@ -1572,6 +1572,8 @@ Begin your response now:
         self._search_pool = None   # relevance-ranked candidate pool, per request
         self._search_ranked = False  # True once a search list was relevance-ranked
         self._feedback_done = False  # title-feedback fired flag, per request
+        self._feedback_queries = None  # refined queries from low-hit feedback, per request
+        self._auto_feedback_done = False  # feedback queries auto-executed, per request
         self._ladder_capped = False  # hits exceeded LADDER_MAX_HITS, per request
         self._missing_dir_done = False  # missing-direction feedback fired flag, per request
         self._missing_dir_queries = None  # inferred supplementary queries, per request

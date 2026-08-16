@@ -58,6 +58,9 @@ REACT_AUTO_ROUND_MAX_QUERIES = int(os.getenv("REACT_AUTO_ROUND_MAX_QUERIES", "2"
 # results" with half the ladder untried despite the zero-hit nudge).
 AUTO_LADDER_BATCH = 2  # untried ladder queries auto-executed per observation
 AUTO_LADDER_MAX = int(os.getenv("REACT_AUTO_LADDER_MAX_QUERIES", "6"))
+# Refined-query feedback (low-hit title feedback) is executed by the
+# system too — observed agents answering with the suggestions ignored.
+AUTO_FEEDBACK_MAX = int(os.getenv("REACT_AUTO_FEEDBACK_MAX_QUERIES", "2"))
 # CPC semantic expansion (plan B, route C): matched CPC code/title pairs
 # seed the missing-direction prompt with the domain's classification
 # language.  Off by default — requires the data files and vector cache
@@ -620,6 +623,35 @@ async def _maybe_append_missing_directions(agent, ranked: list, note: str,
     return note
 
 
+async def _invoke_and_merge(agent, entry, q: str, lang) -> Optional[Tuple[list, str, int]]:
+    """Invoke one query through the search tool and merge+score its
+    results into the pool.
+
+    Returns (ranked, ranking_note, live_gained) — with ranked=[] and
+    live=0 when the response carried nothing parseable.  Returns None
+    when the invoke itself failed.  Never raises.  No rerank here: the
+    outermost merge call reranks the final pool exactly once.
+    """
+    try:
+        envelope = _build_uspto_envelope(entry.tool_info, q)
+        await asyncio.to_thread(
+            entry.tool.invoke, _tool_invoke_payload(agent, envelope))
+    except Exception:
+        return None
+    raw = getattr(agent, "_pending_raw_items", None) or []
+    if not raw:
+        return [], "", 0
+    try:
+        collected = await _collect_search_pages(agent, entry, {"q": q}, raw)
+    except Exception:
+        collected = []
+    live = len([c for c in collected
+                if not is_dead_status(c.get("status"))])
+    ranked, ranking_note = await _rank_pending_pool(
+        agent, collected, lang, apply_rerank=False)
+    return ranked, ranking_note, live
+
+
 async def _auto_second_round(agent, entry, args, ranked: list, note: str,
                              lang: str) -> Tuple[list, str]:
     """Execute the missing-direction queries as a system-driven second
@@ -636,26 +668,13 @@ async def _auto_second_round(agent, entry, args, ranked: list, note: str,
     agent._auto_round_done = True
     new_total = 0
     for q in queries[:REACT_AUTO_ROUND_MAX_QUERIES]:
-        try:
-            envelope = _build_uspto_envelope(entry.tool_info, q)
-            await asyncio.to_thread(
-                entry.tool.invoke, _tool_invoke_payload(agent, envelope))
-        except Exception:
+        merged = await _invoke_and_merge(agent, entry, q, lang)
+        if merged is None:
             break
-        raw = getattr(agent, "_pending_raw_items", None) or []
-        if not raw:
+        ranked, note, live = merged
+        if not ranked and live <= 0:
             continue
-        try:
-            collected = await _collect_search_pages(agent, entry, args, raw)
-        except Exception:
-            collected = []
-        before = len(getattr(agent, "_search_pool", None) or [])
-        # no rerank on intermediate merges — the outermost call reranks
-        # the final merged pool exactly once
-        ranked, note = await _rank_pending_pool(
-            agent, collected, lang, apply_rerank=False)
-        after = len(getattr(agent, "_search_pool", None) or [])
-        new_total += after - before
+        new_total += live
     if new_total > 0:
         if lang == "en":
             executed = (
@@ -703,24 +722,14 @@ async def _auto_ladder_round(agent, entry, lang) -> Optional[Tuple[list, str, st
     for q in take:
         agent._auto_ladder_used = used + 1
         used += 1
-        try:
-            envelope = _build_uspto_envelope(entry.tool_info, q)
-            await asyncio.to_thread(
-                entry.tool.invoke, _tool_invoke_payload(agent, envelope))
-        except Exception:
+        merged = await _invoke_and_merge(agent, entry, q, lang)
+        if merged is None:
             break
         executed.append(q)
         if q not in tried:
             tried.append(q)
-        raw = getattr(agent, "_pending_raw_items", None) or []
-        try:
-            collected = await _collect_search_pages(agent, entry, {"q": q}, raw)
-        except Exception:
-            collected = []
-        gained += len([c for c in collected
-                       if not is_dead_status(c.get("status"))])
-        ranked, ranking_note = await _rank_pending_pool(
-            agent, collected, lang, apply_rerank=False)
+        ranked, ranking_note, live = merged
+        gained += live
     if not executed:
         return None
     # The internal ranking may have inferred missing-direction queries
@@ -740,6 +749,48 @@ async def _auto_ladder_round(agent, entry, lang) -> Optional[Tuple[list, str, st
         ladder_note = (f"\n\n已自动执行未尝试的阶梯检索式{merged}：\n"
                        + _query_lines(executed))
     return ranked, ranking_note, ladder_note
+
+
+async def _auto_feedback_round(agent, entry, lang) -> Optional[Tuple[list, str, str]]:
+    """Execute the low-hit feedback's refined queries system-side.
+
+    The feedback queries are distilled from the pool's hit titles (the
+    domain's own vocabulary) — executing them is the only guarantee they
+    run at all: the agent has been observed answering with the
+    suggestions ignored.  Once per request, at most AUTO_FEEDBACK_MAX
+    queries.  Returns (ranked, ranking_note, feedback_note) when at
+    least one query executed; None otherwise.  Never raises.
+    """
+    if getattr(agent, "_auto_feedback_done", False):
+        return None
+    queries = getattr(agent, "_feedback_queries", None) or []
+    if not queries:
+        return None
+    agent._auto_feedback_done = True
+    gained = 0
+    executed: list = []
+    ranked: list = []
+    ranking_note = ""
+    for q in queries[:AUTO_FEEDBACK_MAX]:
+        merged = await _invoke_and_merge(agent, entry, q, lang)
+        if merged is None:
+            break
+        executed.append(q)
+        ranked, ranking_note, live = merged
+        gained += live
+    if not executed:
+        return None
+    if lang == "en":
+        merged = (f"(merged {gained} new candidates into the pool)"
+                  if gained > 0 else "(no live hits)")
+        fb_note = (f"\n\nAuto-executed refined-query feedback "
+                   f"{merged}:\n" + _query_lines(executed))
+    else:
+        merged = (f"（并入 {gained} 条新候选）" if gained > 0
+                  else "（均无有效命中）")
+        fb_note = (f"\n\n已自动执行建议检索式{merged}：\n"
+                   + _query_lines(executed))
+    return ranked, ranking_note, fb_note
 
 
 def _query_lines(queries: list) -> str:
@@ -832,7 +883,12 @@ async def _maybe_append_feedback(agent, text: str, total, lang: str) -> str:
     from sources.long_task.search_query_builder import build_feedback_queries
     provider = _get_flash_provider(agent) or getattr(agent, "llm", None)
     queries = await build_feedback_queries(
-        getattr(agent, "_last_user_prompt", "") or "", titles, provider)
+        getattr(agent, "_last_user_prompt", "") or "", titles, provider,
+        cpc_hints=getattr(agent, "_cpc_hints", None) or None)
+    if queries:
+        # Store them so _auto_feedback_round can execute them — the
+        # suggestion text alone has been observed to be ignored.
+        agent._feedback_queries = queries
     return text + _format_feedback_note(queries, lang)
 
 
@@ -1154,6 +1210,27 @@ async def make_action_executor(agent, registry, push_filter=None):
                         text = text.rstrip() + "\n" + ladder_note
                 text = _append_untried_ladder_note(agent, text, lang)
             text = await _maybe_append_feedback(agent, text, total, lang)
+            feedback = await _auto_feedback_round(agent, entry, lang)
+            if feedback is not None:
+                ranked, ranking_note, fb_note = feedback
+                if ranked:
+                    shown = [c["_raw"] for c in ranked]
+                    agent._pending_raw_items = shown
+                    agent._search_ranked = True
+                    digest = _ranked_digest(ranked, lang=lang)
+                    note = ranking_note + fb_note
+                    if lang == "en":
+                        text = (f"Search results ({len(shown)} records, "
+                                f"{note}):\n{digest}\n\n"
+                                "The full list is displayed to the user.")
+                    else:
+                        text = (f"检索结果（{len(shown)} 条，{note}）：\n"
+                                f"{digest}\n\n"
+                                "完整列表已展示给用户。")
+                else:
+                    # Nothing displayable either — keep the existing text
+                    # and append only the feedback outcome.
+                    text = text.rstrip() + "\n" + fb_note
             return {"kind": "observation", "text": text}
 
         return {"kind": "observation", "text": _summarize_observation(result, lang)}

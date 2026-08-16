@@ -445,6 +445,22 @@ class TestBuildFeedbackQueries(unittest.IsolatedAsyncioTestCase):
         out = await build_feedback_queries("干燥空气", ["t1"], provider)
         self.assertEqual(out, [])
 
+    async def test_cpc_hints_passed_into_user_content(self):
+        provider = _FakeProvider({"queries": ['"x" AND y']})
+        hints = [{"code": "H05B45/00", "title": "LED circuits"}]
+        out = await build_feedback_queries(
+            "干燥空气", ["t1"], provider, cpc_hints=hints)
+        self.assertEqual(out, ['"x" AND y'])
+        _, user_content = provider.calls[0]
+        self.assertIn("H05B45/00", user_content)
+        self.assertIn("LED circuits", user_content)
+
+    async def test_no_cpc_hints_keeps_old_payload(self):
+        provider = _FakeProvider({"queries": ["q"]})
+        await build_feedback_queries("干燥空气", ["t1"], provider)
+        _, user_content = provider.calls[0]
+        self.assertNotIn("cpc", user_content)
+
 
 class TestFeedbackPromptDomainNeutral(unittest.TestCase):
     def test_feedback_prompt_has_no_domain_anchor(self):

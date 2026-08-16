@@ -309,24 +309,36 @@ FEEDBACK_SYSTEM_PROMPT = (
     "动词、动名词形态互相补充），或用词尾通配符覆盖变体\n"
     "4. 输出 2-4 条检索式，按松紧排序（最紧的在前）；每条最多 12 个"
     "关键词、250 字符，禁止出现中文\n"
+    "5. 若提供 cpc_hints（该技术领域的专利分类标题），吸收其中与用户"
+    "问题相关的分类措辞——分类标题代表专利文献对这类技术的官方命名，"
+    "是标题之外的另一路词表来源\n"
     'Return JSON: {"queries": ["最紧", "较松", ...]}'
 )
 
 
 async def build_feedback_queries(question: str, titles: list,
-                                 provider: Any) -> list:
+                                 provider: Any,
+                                 cpc_hints: Optional[list] = None) -> list:
     """Refine search queries from already-hit patent titles.
 
     Textual pseudo-relevance feedback: the hit titles are the domain's
     own vocabulary, so the Flash LLM rewrites the question's concepts
-    into the phrasings patents actually use.  Never raises; returns a
-    sanitized query list (possibly empty).
+    into the phrasings patents actually use.  *cpc_hints* (matched CPC
+    code/title pairs, plan B route C) add the classification language
+    as a second vocabulary source.  Never raises; returns a sanitized
+    query list (possibly empty).
     """
     if not titles or provider is None:
         return []
-    user_content = json.dumps(
-        {"question": question, "hit_titles": [str(t) for t in titles][:10]},
-        ensure_ascii=False)
+    payload = {"question": question,
+               "hit_titles": [str(t) for t in titles][:10]}
+    if cpc_hints:
+        payload["cpc_hints"] = [
+            {"code": str(h.get("code", "")),
+             "title": str(h.get("title", ""))}
+            for h in cpc_hints[:8] if h.get("code")
+        ]
+    user_content = json.dumps(payload, ensure_ascii=False)
     try:
         result = await provider.complete_json(FEEDBACK_SYSTEM_PROMPT,
                                               user_content)

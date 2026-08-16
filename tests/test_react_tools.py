@@ -348,6 +348,10 @@ class TestLowHitFeedback(unittest.IsolatedAsyncioTestCase):
         out = await _maybe_append_feedback(agent, text, 3, "zh")
         self.assertIn("建议检索式", out)
         self.assertIn('"air dryer" AND humidity', out)
+        # the queries are stored so the system can execute them
+        self.assertEqual(agent._feedback_queries,
+                         ['"air dryer" AND humidity',
+                          'desiccant* AND "humidity control"'])
         # fires once per turn — a second low-hit search reuses the note
         out2 = await _maybe_append_feedback(agent, text, 3, "zh")
         self.assertEqual(out2, text)
@@ -961,6 +965,62 @@ class TestAutoLadderRound(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("q1", agent._tried_queries)
 
 
+class TestAutoFeedbackRound(unittest.IsolatedAsyncioTestCase):
+    """Low-hit title feedback produces refined queries — the system
+    executes them instead of leaving the suggestions to the agent's
+    discretion (observed: the agent answered with the suggestions
+    ignored)."""
+
+    def _agent_with_feedback(self):
+        from sources.long_task.chat_relevance import SearchPool
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        agent._flash_llm = _ScoringProvider()
+        agent._search_pool = SearchPool("干燥空气")
+        agent._feedback_queries = ['"refined" AND one', '"refined" AND two']
+        return agent
+
+    async def test_executes_feedback_queries_and_merges(self):
+        from sources.agents.react_tools import _auto_feedback_round
+        agent = self._agent_with_feedback()
+        entry = _LadderEntry(agent)
+        result = await _auto_feedback_round(agent, entry, "zh")
+        self.assertIsNotNone(result)
+        ranked, ranking_note, fb_note = result
+        self.assertEqual(entry.invoke_calls, 2)
+        self.assertIn("已自动执行建议检索式", fb_note)
+        ids = [c["patent_id"] for c in ranked]
+        self.assertIn("210000001", ids)
+        self.assertIn("220000001", ids)
+
+    async def test_fires_once_per_request(self):
+        from sources.agents.react_tools import _auto_feedback_round
+        agent = self._agent_with_feedback()
+        entry = _LadderEntry(agent)
+        await _auto_feedback_round(agent, entry, "zh")
+        self.assertIsNone(await _auto_feedback_round(agent, entry, "zh"))
+        self.assertEqual(entry.invoke_calls, 2)
+
+    async def test_no_queries_returns_none(self):
+        from sources.agents.react_tools import _auto_feedback_round
+        agent = self._agent_with_feedback()
+        agent._feedback_queries = None
+        entry = _LadderEntry(agent)
+        self.assertIsNone(await _auto_feedback_round(agent, entry, "zh"))
+        self.assertEqual(entry.invoke_calls, 0)
+
+    async def test_invoke_failure_returns_none(self):
+        from sources.agents.react_tools import _auto_feedback_round
+        agent = self._agent_with_feedback()
+        entry = _LadderEntry(agent)
+
+        class _Boom:
+            def invoke(self, payload):
+                raise RuntimeError("down")
+        entry.tool = _Boom()
+        self.assertIsNone(await _auto_feedback_round(agent, entry, "zh"))
+
+
 class TestAutoLadderIntegration(unittest.IsolatedAsyncioTestCase):
     """Zero-hit observations run the untried ladder inside execute_action
     so the agent sees real results instead of a dead end."""
@@ -1014,6 +1074,61 @@ class TestAutoLadderIntegration(unittest.IsolatedAsyncioTestCase):
         pending = agent._pending_raw_items or []
         self.assertEqual(len(pending), 1)
         self.assertEqual(pending[0]["applicationNumberText"], "19511555")
+
+
+class TestAutoFeedbackIntegration(unittest.IsolatedAsyncioTestCase):
+    """Low-hit observations execute the refined-query feedback instead of
+    only suggesting it to the agent."""
+
+    async def test_low_hit_observation_auto_executes_feedback_queries(self):
+        from sources.agents.react_tools import ToolEntry, make_action_executor
+        from sources.long_task.chat_relevance import SearchPool
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        agent._flash_llm = _ScoringProvider()
+        pool = SearchPool("干燥空气")
+        pool.add([_usp_raw_item("19511555", "AIR DRYER CONTROL USING HUMIDITY")])
+        agent._search_pool = pool
+
+        class _SeqTool:
+            def __init__(self, agent2):
+                self._agent = agent2
+                self.calls = 0
+
+            def invoke(self, payload):
+                self.calls += 1
+                if self.calls == 1:
+                    self._agent._pending_raw_items = [
+                        _usp_raw_item("19511555",
+                                      "AIR DRYER CONTROL USING HUMIDITY")]
+                    self._agent._last_search_total = 1
+                else:
+                    self._agent._pending_raw_items = [
+                        _usp_raw_item("18184836",
+                                      "MOISTURE CONTROL ENCLOSURE")]
+                    self._agent._last_search_total = 1
+                return "ok"
+
+        tool_info = _ToolInfo(
+            "uspto search",
+            url="https://api.uspto.gov/api/v1/patent/applications/search")
+        entry = ToolEntry(name="uspto_search", kind="knowledge",
+                          knowledge=_Knowledge(3, ktype=1),
+                          tool_info=tool_info,
+                          tool=_SeqTool(agent))
+        registry = {entry.name: entry}
+        executor = await make_action_executor(agent, registry, None)
+        with patch("sources.long_task.search_query_builder"
+                   ".build_feedback_queries",
+                   return_value=['"refined" AND one']):
+            result = await executor(
+                "uspto_search", {"q": "agent query"}, 1)
+        self.assertEqual(result["kind"], "observation")
+        self.assertIn("已自动执行建议检索式", result["text"])
+        self.assertIn("18184836", result["text"])
+        pending = agent._pending_raw_items or []
+        ids = {p["applicationNumberText"] for p in pending}
+        self.assertIn("18184836", ids)
 
 
 if __name__ == "__main__":
