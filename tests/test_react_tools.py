@@ -613,6 +613,54 @@ class TestZeroHitLadderNudge(unittest.TestCase):
         self.assertIn("尚未尝试", result["text"])
         self.assertIn("q2", result["text"])
 
+    def test_all_dead_hits_noted_and_nudged(self):
+        # total > 0 but every hit is a dead patent: the dead filter
+        # empties the list — the observation must say so and offer the
+        # untried ladder variants instead of going silent.
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        agent._search_rewrite = {"queries": ["q1", "q2"]}
+
+        def _dict_params_tool_factory(knowledge_item, tool_info):
+            # mirrors the production dynamic tool: params may be a dict
+            # (the envelope payload) or a JSON string
+            class _Args(BaseModel):
+                params: dict = Field(description="params")
+
+            def _noop(**kwargs):
+                return "ok"
+            return StructuredTool.from_function(
+                _noop, name="uspto_search", description="d",
+                args_schema=_Args)
+        agent.get_dynamic_tool_for = _dict_params_tool_factory
+        from sources.agents.react_tools import ToolEntry
+        tool_info = _ToolInfo(
+            "search_patent_by_key_word",
+            url="https://api.uspto.gov/api/v1/patent/applications/search")
+        knowledge = _Knowledge(3, ktype=1)
+        dynamic_tool = agent.get_dynamic_tool_for(knowledge, tool_info)
+        entry = ToolEntry(name=dynamic_tool.name, kind="knowledge",
+                          knowledge=knowledge, tool_info=tool_info,
+                          tool=dynamic_tool)
+        registry = {entry.name: entry}
+        executor = asyncio.run(make_action_executor(agent, registry, None))
+        dead = {
+            "applicationNumberText": "19511555",
+            "applicationMetaData": {
+                "inventionTitle": "Expired dryer control",
+                "applicationStatusDescriptionText": "Patent Expired Due to "
+                    "NonPayment of Maintenance Fees Under 37 CFR 1.362",
+                "filingDate": "2010-01-15",
+            },
+        }
+        agent._pending_raw_items = [dead, dead, dead]
+        agent._last_search_total = 3
+        result = asyncio.run(
+            executor("uspto_search", {"params": '{"q": "q1"}'}, 1))
+        self.assertIn("失效", result["text"])
+        self.assertIn("尚未尝试", result["text"])
+        self.assertIn("q2", result["text"])
+
 
 class TestSemanticRerankWiring(unittest.IsolatedAsyncioTestCase):
     async def test_rerank_applied_when_enabled(self):

@@ -661,11 +661,13 @@ def _append_untried_ladder_note(agent, text: str, lang: str) -> str:
     if not untried:
         return text
     if lang == "en":
-        header = ("0 hits — untried ladder queries (substitute vocabulary "
-                  "before loosening; adjacent carrier-term variants first):")
+        header = ("No displayable results — untried ladder queries "
+                  "(substitute vocabulary before loosening; adjacent "
+                  "carrier-term variants first):")
     else:
-        header = ("本次检索 0 命中——以下阶梯检索式尚未尝试（请先替换用词"
-                  "再放宽；优先取用相邻的载体词版）：")
+        header = ("本次检索无可展示的有效结果（0 命中或均为失效专利）——"
+                  "以下阶梯检索式尚未尝试（请先替换用词再放宽；优先取用"
+                  "相邻的载体词版）：")
     return text + f"\n\n{header}\n" + _query_lines(untried)
 
 
@@ -1005,8 +1007,15 @@ async def make_action_executor(agent, registry, push_filter=None):
             total = getattr(agent, "_last_search_total", None)
             total_note = ""
             if isinstance(total, int):
-                total_note = (f", {total} total hits" if lang == "en"
-                              else f"，总命中 {total}")
+                if not shown and total > 0:
+                    # Every hit was filtered out as a dead patent — say
+                    # so explicitly instead of showing a silent empty list.
+                    total_note = (f", {total} total hits (all dead patents, filtered)"
+                                  if lang == "en"
+                                  else f"，总命中 {total} 条（均为失效专利，已过滤）")
+                else:
+                    total_note = (f", {total} total hits" if lang == "en"
+                                  else f"，总命中 {total}")
             if lang == "en":
                 text = (f"Search results ({len(shown)} records{total_note}, {note}):\n"
                         f"{digest}\n\n"
@@ -1016,7 +1025,10 @@ async def make_action_executor(agent, registry, push_filter=None):
                         f"{digest}\n\n"
                         "完整列表已展示给用户。")
             text = _apply_ladder_cap(agent, text, total, lang)
-            if isinstance(total, int) and total == 0:
+            if not shown or (isinstance(total, int) and total == 0):
+                # No displayable results — zero hits, or every hit was
+                # dead-filtered.  Point the agent at the untried ladder
+                # variants instead of letting the turn die here.
                 text = _append_untried_ladder_note(agent, text, lang)
             text = await _maybe_append_feedback(agent, text, total, lang)
             return {"kind": "observation", "text": text}
