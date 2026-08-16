@@ -137,6 +137,7 @@ def _sdk_call(model: str, user: str) -> str:
 def main() -> int:
     attempts = [
         ("deepseek-v4-pro", "deepseek"),
+        ("openai/gpt-5.6-terra", "openrouter"),
         ("openai/gpt-5.4-mini", "openrouter"),
         ("deepseek-v4-flash", "deepseek"),
     ]
