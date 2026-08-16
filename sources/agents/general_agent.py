@@ -1643,8 +1643,12 @@ Begin your response now:
                     scheme = str(
                         self._search_interpretation.get("scheme") or ""
                     )[:120]
+                    players = ", ".join(
+                        (self._search_interpretation.get("key_players")
+                         or [])[:5])
                     self.logger.info(
                         f"search_interpretation — scheme={scheme}"
+                        + (f" | players={players}" if players else "")
                     )
         except Exception:
             self._search_interpretation = None

@@ -82,8 +82,15 @@ INTERPRET_SYSTEM_PROMPT = (
     "6. 若提供 cpc_hints（该技术领域命中的专利分类号及分类标题），吸收"
     "其中与该需求相关的分类措辞——分类标题代表专利文献对这类技术的"
     "官方命名\n"
+    "7. main_lines：该领域的主要技术路线划分（2-3 条，每条一句话，包含"
+    "典型电路结构/实现方式——如某一领域可划分为模拟恒流环路与数字 PWM "
+    "驱动两条路线，这类划分帮助检索覆盖不同实现流派；只写该领域真实"
+    "存在的路线，禁止编造）\n"
+    "8. key_players：该领域的主要申请人（3-5 个，英文公司名，必须是该"
+    "领域真实活跃的专利申请人；不确定时宁可少给，禁止编造）\n"
     'Return JSON: {"scheme": "...", "structure_terms": [...], '
-    '"independence_terms": [...], "scenarios": [...], "queries": [...]}'
+    '"independence_terms": [...], "scenarios": [...], "queries": [...], '
+    '"main_lines": [...], "key_players": [...]}'
 )
 
 # Provider construction is expensive and must stay lazy (llm_provider
@@ -134,6 +141,8 @@ def parse_interpretation(raw: Any) -> Optional[dict]:
         "structure_terms": structure_terms[:15],
         "independence_terms": _str_list("independence_terms")[:10],
         "scenarios": _str_list("scenarios")[:6],
+        "main_lines": _str_list("main_lines")[:3],
+        "key_players": _str_list("key_players")[:5],
         "queries": queries[:MAX_INTERP_QUERIES],
     }
 
@@ -245,6 +254,20 @@ def format_interpretation_rubric(interp: Optional[dict]) -> str:
     indep = interp.get("independence_terms") or []
     if indep:
         parts.append(f"独立控制表述：{' / '.join(indep[:6])}")
+    main_lines = interp.get("main_lines") or []
+    if main_lines:
+        parts.append("该领域主要技术路线：" + "；".join(main_lines[:3]))
+    players = interp.get("key_players") or []
+    if players:
+        # Weak signal only: applicant identity alone is never relevance
+        # evidence (hallucination guard) — it only supports a candidate
+        # whose technical direction already matches.
+        parts.append(
+            "主要申请人（领域内活跃玩家，仅作背景参考）："
+            + " / ".join(players[:5])
+            + "。申请人命中该名单本身不构成相关性依据；仅当候选的"
+            "技术方向与用户问题一致时，可作为补充证据。"
+        )
     if not parts:
         return ""
     return (

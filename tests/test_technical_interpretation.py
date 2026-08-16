@@ -29,6 +29,8 @@ def _valid_raw():
                             "reference signal"],
         "independence_terms": ["per-channel", "independently"],
         "scenarios": ["LED backlighting"],
+        "main_lines": ["模拟恒流环路", "数字 PWM 驱动"],
+        "key_players": ["ERP Power", "Infineon", "TI"],
         "queries": [
             '("error amplifier" AND "RGB")',
             '中文垃圾查询 AND stuff',
@@ -165,6 +167,28 @@ class TestFormatRubric(unittest.TestCase):
         self.assertIn("Per-channel constant-current", rubric)
         self.assertIn("error amplifier", rubric)
         self.assertIn("per-channel", rubric)
+
+    def test_contains_main_lines_and_players(self):
+        rubric = ti.format_interpretation_rubric(_valid_raw())
+        self.assertIn("模拟恒流环路", rubric)
+        self.assertIn("ERP Power", rubric)
+
+    def test_players_are_weak_signal_only(self):
+        rubric = ti.format_interpretation_rubric(_valid_raw())
+        self.assertIn("本身不构成相关性依据", rubric)
+
+    def test_main_lines_and_players_parsed(self):
+        parsed = ti.parse_interpretation(_valid_raw())
+        self.assertEqual(parsed["main_lines"], ["模拟恒流环路", "数字 PWM 驱动"])
+        self.assertEqual(parsed["key_players"], ["ERP Power", "Infineon", "TI"])
+
+    def test_missing_main_lines_and_players_ok(self):
+        raw = _valid_raw()
+        raw.pop("main_lines")
+        raw.pop("key_players")
+        parsed = ti.parse_interpretation(raw)
+        self.assertEqual(parsed["main_lines"], [])
+        self.assertEqual(parsed["key_players"], [])
 
 
 class TestInterpretQuery(unittest.IsolatedAsyncioTestCase):
