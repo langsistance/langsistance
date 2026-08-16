@@ -272,6 +272,36 @@ class TestFetchByCpc(unittest.TestCase):
         self.assertEqual(numbers[1], "11882632")
         self.assertEqual(numbers[-1], "9999999")
 
+    def test_top_code_sampled_deeply(self):
+        # recency-only sampling crowds the top code out with current-year
+        # grants (observed: a 2025 anchor patent at rank 281 of its code
+        # never reached a newest-50 window) — the first, semantically
+        # closest code gets a much deeper window than the rest.
+        import sqlite3
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = os.path.join(tmp, "cpc_index.db")
+            conn = sqlite3.connect(db_path)
+            conn.execute("CREATE TABLE cpc_patents (cpc TEXT, patent TEXT)")
+            conn.execute("CREATE INDEX idx_cpc ON cpc_patents(cpc)")
+            conn.executemany(
+                "INSERT INTO cpc_patents VALUES (?, ?)",
+                [("H05B45/20", str(12600000 - i)) for i in range(320)]
+                + [("A01B1/00", str(7000000 - i)) for i in range(5)])
+            conn.commit()
+            conn.close()
+            with patch("sources.long_task.recall_sources.CPC_INDEX_DB",
+                       db_path), \
+                 patch("sources.long_task.recall_sources.fetch_by_numbers",
+                       return_value=[]) as mock_fetch:
+                self.assertEqual(
+                    fetch_by_cpc(["H05B45/20", "A01B1/00"]), [])
+        numbers = mock_fetch.call_args[0][0]
+        # 300 from the top code + 5 from the second
+        self.assertEqual(len(numbers), 305)
+        self.assertIn("12599701", numbers)   # 300th newest of the top code
+        self.assertNotIn("12599700", numbers)  # 301st — beyond the window
+        self.assertIn("7000000", numbers)
+
     def test_no_patents_in_index_returns_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = self._make_index_db(tmp)

@@ -43,6 +43,12 @@ RECALL_SEARCH_FIELDS = [
 MAX_FAMILY_NUMBERS = int(os.getenv("REACT_RECALL_MAX_FAMILY_NUMBERS", "12"))
 RECALL_NUMBER_BATCH = int(os.getenv("REACT_RECALL_NUMBER_BATCH", "20"))
 RECALL_CPC_PER_CODE = int(os.getenv("REACT_RECALL_CPC_PER_CODE", "50"))
+# The top-matched code carries the strongest domain signal — sample it
+# deeply: recency-only sampling crowds it out with current-year grants
+# (observed: a 2025 anchor patent sat at rank 281 of its code and never
+# reached a newest-50 window).
+RECALL_CPC_TOP_PER_CODE = int(os.getenv(
+    "REACT_RECALL_CPC_TOP_PER_CODE", "300"))
 
 
 def collect_family_refs(candidates: list, limit: int = MAX_FAMILY_NUMBERS) -> dict:
@@ -194,20 +200,22 @@ def fetch_by_cpc(codes: list, timeout: int = 30) -> list:
         import sqlite3
         conn = sqlite3.connect(CPC_INDEX_DB)
         try:
-            for code in codes:
+            for i, code in enumerate(codes):
                 base = code.split("/")[0]
+                limit = (RECALL_CPC_TOP_PER_CODE if i == 0
+                         else RECALL_CPC_PER_CODE)
                 if code.endswith("/00") and len(base) >= 4:
                     rows = conn.execute(
                         "SELECT DISTINCT patent FROM cpc_patents "
                         "WHERE cpc LIKE ? "
                         "ORDER BY length(patent) DESC, patent DESC LIMIT ?",
-                        (base + "/%", RECALL_CPC_PER_CODE))
+                        (base + "/%", limit))
                 else:
                     rows = conn.execute(
                         "SELECT DISTINCT patent FROM cpc_patents "
                         "WHERE cpc = ? "
                         "ORDER BY length(patent) DESC, patent DESC LIMIT ?",
-                        (code, RECALL_CPC_PER_CODE))
+                        (code, limit))
                 for (patent,) in rows:
                     if patent not in seen:
                         seen.add(patent)
