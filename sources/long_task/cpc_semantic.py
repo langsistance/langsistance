@@ -134,11 +134,14 @@ def match_cpc_codes(query_vector: Any, vectors: Any, entries: list,
     ]
 
 
-def match_query_to_cpc(query_text: str, top_k: int = 8) -> list:
+def match_query_to_cpc(query_text: str, top_k: int = 8,
+                       extra_terms: str = "") -> list:
     """Match a user question to CPC main groups end to end.
 
-    Embeds the question (configured provider), loads the cached titles
-    and vectors, and returns up to *top_k* dicts {code, title, score}.
+    Embeds the question AND, when given, *extra_terms* (carrier
+    vocabulary from the rewrite stage) with the configured provider,
+    loads the cached titles/vectors, and returns up to *top_k* dicts
+    {code, title, score} — per-text matches merged by best score.
     Degrades to [] on any failure — expansion is an enhancement, never
     a hard dependency.
     """
@@ -148,14 +151,24 @@ def match_query_to_cpc(query_text: str, top_k: int = 8) -> list:
     vectors = load_cpc_vectors()
     if not entries or vectors is None:
         return []
+    texts = [query_text]
+    if extra_terms and extra_terms.strip():
+        texts.append(extra_terms.strip())
     try:
         from sources.long_task.semantic_rerank import embed_texts
-        embedded = embed_texts([query_text])
+        embedded = embed_texts(texts)
     except Exception:
         return []
     if not embedded or not embedded[0]:
         return []
-    matches = match_cpc_codes(embedded[0], vectors, entries, top_k=top_k)
+    best_by_code = {}
+    for vec in embedded:
+        for m in match_cpc_codes(vec, vectors, entries, top_k=top_k * 2):
+            code = m["code"]
+            if code not in best_by_code or m["score"] > best_by_code[code]["score"]:
+                best_by_code[code] = m
+    matches = sorted(best_by_code.values(),
+                     key=lambda m: m["score"], reverse=True)[:top_k]
     logger.info(
         f"cpc match — query={query_text[:60]!r} "
         f"top={[m['code'] for m in matches[:5]]}")

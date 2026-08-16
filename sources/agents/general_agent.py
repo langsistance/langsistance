@@ -1597,11 +1597,22 @@ Begin your response now:
         )
         # CPC semantic match runs once per request right after the
         # rewrite, so cpc_semantic.log records every round regardless of
-        # whether the missing-direction stage later fires.
+        # whether the missing-direction stage later fires.  The rewrite's
+        # carrier vocabulary joins the match text: a raw question where
+        # one word dominates (e.g. "control") would otherwise match
+        # control-themed classes instead of the technical domain.
         if CPC_EXPANSION_ENABLED:
             try:
                 from sources.long_task.cpc_semantic import match_query_to_cpc
-                self._cpc_hints = match_query_to_cpc(prompt)
+                extra_terms = " ".join(
+                    str(kw)
+                    for concept in (self._search_rewrite.get("concepts") or [])
+                    if isinstance(concept, dict)
+                    for key in ("carriers", "keywords")
+                    for kw in (concept.get(key) or [])[:4]
+                )
+                self._cpc_hints = match_query_to_cpc(
+                    prompt, extra_terms=extra_terms)
             except Exception:
                 self._cpc_hints = None
         if callback_handler:
