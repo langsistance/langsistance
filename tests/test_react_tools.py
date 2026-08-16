@@ -898,6 +898,26 @@ class TestAutoLadderRound(unittest.IsolatedAsyncioTestCase):
         self.assertIn("q4", agent._tried_queries)
         self.assertIn("q5", agent._tried_queries)
 
+    async def test_executes_missing_direction_queries_inferred_during_rank(self):
+        # The internal ranking may infer missing-direction queries (CPC
+        # language included) — they must be executed here, otherwise they
+        # sit unused when execute_action's applies branch never runs.
+        from sources.agents.react_tools import _auto_ladder_round
+        agent = self._agent_with_ladder(tried=["q1", "q2", "q3"])
+        agent._missing_dir_queries = ['"fresh" AND direction',
+                                      '"second" AND query']
+        entry = _LadderEntry(agent)
+        result = await _auto_ladder_round(agent, entry, "zh")
+        self.assertIsNotNone(result)
+        ranked, ranking_note, ladder_note = result
+        # 2 ladder queries + 2 missing-direction queries executed
+        self.assertEqual(entry.invoke_calls, 4)
+        self.assertIn("已自动执行补充检索式", ranking_note)
+        ids = [c["patent_id"] for c in ranked]
+        self.assertIn("210000001", ids)  # ladder q4
+        self.assertIn("230000001", ids)  # missing-direction query 1
+        self.assertIn("240000001", ids)  # missing-direction query 2
+
     async def test_no_untried_returns_none(self):
         from sources.agents.react_tools import _auto_ladder_round
         agent = self._agent_with_ladder(

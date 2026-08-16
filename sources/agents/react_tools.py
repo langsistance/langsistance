@@ -723,6 +723,12 @@ async def _auto_ladder_round(agent, entry, lang) -> Optional[Tuple[list, str, st
             agent, collected, lang, apply_rerank=False)
     if not executed:
         return None
+    # The internal ranking may have inferred missing-direction queries
+    # (CPC language included) — execute them here too; execute_action's
+    # applies branch never runs for the zero-hit observations that
+    # trigger this path, so they would otherwise sit unused.
+    ranked, ranking_note = await _auto_second_round(
+        agent, entry, {"q": executed[-1]}, ranked, ranking_note, lang)
     if lang == "en":
         merged = (f"(merged {gained} new candidates into the pool)"
                   if gained > 0 else "(no live hits)")
