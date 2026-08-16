@@ -453,6 +453,7 @@ class TestFamilyScoring(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(agent.llm.calls, 2)
         self.assertIn("1002", agent.llm.ids_scored)
         self.assertIn("family scoring", " ".join(agent.logger.lines))
+        self.assertIn("family scoring probe", " ".join(agent.logger.lines))
         self.assertIn("relevance_score",
                       agent._search_pool._by_id["1002"])
 
@@ -474,8 +475,10 @@ class TestFamilyScoring(unittest.IsolatedAsyncioTestCase):
                      _cand("1002", parents=["P1"])],
                     "zh")
         self.assertEqual(agent.llm.calls, 1)  # no family round
-        self.assertNotIn("family scoring",
-                         " ".join(agent.logger.lines))
+        joined = " ".join(agent.logger.lines)
+        # probe line visible even with no seeds; real round never ran
+        self.assertIn("family scoring probe — seeds=0 members=0", joined)
+        self.assertNotIn("family scoring — seeds=", joined)
 
 
 class TestLowHitFeedback(unittest.IsolatedAsyncioTestCase):

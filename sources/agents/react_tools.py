@@ -657,6 +657,8 @@ async def _rank_pending_pool(agent, candidates, lang,
     # Family scoring: a high-scoring seed lifts its direct-family members
     # into the Flash scoring budget even when their own titles scored
     # low in the prescore — same invention, different wording.
+    # The probe line logs every round (even seeds=0/members=0) so a
+    # silently-disabled mechanism is visible in general_agent.log.
     _family_scored = 0
     if FAMILY_SCORE_ENABLED:
         try:
@@ -667,6 +669,11 @@ async def _rank_pending_pool(agent, candidates, lang,
             ]
             members = _unscored_family_members(pool, seeds,
                                                FAMILY_SCORE_BUDGET)
+            if _glog is not None:
+                _glog.info(
+                    f"family scoring probe — seeds={len(seeds)} "
+                    f"members={len(members)} enabled={FAMILY_SCORE_ENABLED}"
+                )
             if members:
                 _family_scored = await score_candidates_concurrent(
                     members, pool.query,
@@ -677,8 +684,11 @@ async def _rank_pending_pool(agent, candidates, lang,
                         f"family scoring — seeds={len(seeds)} "
                         f"members={len(members)} scored={_family_scored}"
                     )
-        except Exception:
-            pass
+        except Exception as exc:
+            if _glog is not None:
+                _glog.info(
+                    f"family scoring error — {type(exc).__name__}: {exc}"
+                )
     pool.prune()
     ranked = pool.ranked(MAX_PATENT_LIST_ITEMS)
     rerank_note = ""
