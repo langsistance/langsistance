@@ -1021,6 +1021,91 @@ class TestAutoFeedbackRound(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await _auto_feedback_round(agent, entry, "zh"))
 
 
+class TestRecallExpansionRound(unittest.IsolatedAsyncioTestCase):
+    """Recall expansion (plan: citation/family + CPC): once per request,
+    the system pulls records by the pool candidates' family numbers and
+    by the matched CPC codes, merges them into the pool."""
+
+    def _agent_with_pool(self):
+        from sources.long_task.chat_relevance import SearchPool
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        agent._flash_llm = _ScoringProvider()
+        pool = SearchPool("干燥空气")
+        raw = {
+            "applicationNumberText": "19511555",
+            "applicationMetaData": {
+                "inventionTitle": "AIR DRYER CONTROL USING HUMIDITY",
+                "firstApplicantName": "ACME Corp",
+                "filingDate": "2024-01-15",
+                "applicationStatusDescriptionText": "Patented Case",
+            },
+            "childContinuityBag": [
+                {"childPatentNumber": "7061668",
+                 "childApplicationNumberText": "10393563"},
+            ],
+        }
+        pool.add([raw])
+        agent._search_pool = pool
+        agent._cpc_hints = [{"code": "H05B45/20", "title": "Colour control"}]
+        return agent
+
+    async def test_merges_family_records_into_pool(self):
+        from sources.agents.react_tools import _recall_expansion_round
+        agent = self._agent_with_pool()
+        entry = _LadderEntry(agent)
+        family_records = [{
+            "applicationNumberText": "10393563",
+            "applicationMetaData": {
+                "inventionTitle": "FAMILY MEMBER LED DRIVER",
+                "applicationStatusDescriptionText": "Patented Case",
+            },
+        }]
+        with patch("sources.agents.react_tools.fetch_by_numbers",
+                   return_value=family_records), \
+             patch("sources.agents.react_tools.fetch_by_cpc",
+                   return_value=[]):
+            result = await _recall_expansion_round(agent, entry, "zh")
+        self.assertIsNotNone(result)
+        ranked, ranking_note, recall_note = result
+        self.assertIn("已自动执行分类/引文扩展检索", recall_note)
+        ids = [c["patent_id"] for c in ranked]
+        self.assertIn("10393563", ids)
+
+    async def test_fires_once_per_request(self):
+        from sources.agents.react_tools import _recall_expansion_round
+        agent = self._agent_with_pool()
+        entry = _LadderEntry(agent)
+        with patch("sources.agents.react_tools.fetch_by_numbers",
+                   return_value=[]), \
+             patch("sources.agents.react_tools.fetch_by_cpc",
+                   return_value=[]):
+            first = await _recall_expansion_round(agent, entry, "zh")
+            second = await _recall_expansion_round(agent, entry, "zh")
+        self.assertIsNone(first)
+        self.assertIsNone(second)
+        self.assertTrue(getattr(agent, "_recall_done", False))
+
+    async def test_no_pool_returns_none_without_burning(self):
+        from sources.agents.react_tools import _recall_expansion_round
+        agent = _FakeAgent()
+        entry = _LadderEntry(agent)
+        result = await _recall_expansion_round(agent, entry, "zh")
+        self.assertIsNone(result)
+        self.assertFalse(getattr(agent, "_recall_done", False))
+
+    async def test_fetch_failure_degrades_to_none(self):
+        from sources.agents.react_tools import _recall_expansion_round
+        agent = self._agent_with_pool()
+        entry = _LadderEntry(agent)
+        with patch("sources.agents.react_tools.fetch_by_numbers",
+                   side_effect=RuntimeError("down")), \
+             patch("sources.agents.react_tools.fetch_by_cpc",
+                   return_value=[]):
+            result = await _recall_expansion_round(agent, entry, "zh")
+        self.assertIsNone(result)
+
+
 class TestAutoLadderIntegration(unittest.IsolatedAsyncioTestCase):
     """Zero-hit observations run the untried ladder inside execute_action
     so the agent sees real results instead of a dead end."""

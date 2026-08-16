@@ -33,6 +33,12 @@ from sources.long_task.chat_relevance import (
     SearchPool,
     score_candidates_concurrent,
 )
+from sources.long_task.recall_sources import (
+    collect_family_refs,
+    fetch_by_cpc,
+    fetch_by_numbers,
+    records_to_candidates,
+)
 from sources.long_task.semantic_rerank import RERANK_ENABLED
 
 TOP_N = int(os.getenv("REACT_TOOL_TOP_N", "5"))
@@ -61,6 +67,11 @@ AUTO_LADDER_MAX = int(os.getenv("REACT_AUTO_LADDER_MAX_QUERIES", "6"))
 # Refined-query feedback (low-hit title feedback) is executed by the
 # system too — observed agents answering with the suggestions ignored.
 AUTO_FEEDBACK_MAX = int(os.getenv("REACT_AUTO_FEEDBACK_MAX_QUERIES", "2"))
+# Recall expansion (citation/family + CPC routes): once per request, the
+# pool's family numbers and the matched CPC codes pull records beyond
+# the keyword ladder.
+RECALL_MAX_CPC = int(os.getenv("REACT_RECALL_MAX_CPC", "3"))
+RECALL_POOL_HEAD = 20
 # CPC semantic expansion (plan B, route C): matched CPC code/title pairs
 # seed the missing-direction prompt with the domain's classification
 # language.  Off by default — requires the data files and vector cache
@@ -793,6 +804,64 @@ async def _auto_feedback_round(agent, entry, lang) -> Optional[Tuple[list, str, 
     return ranked, ranking_note, fb_note
 
 
+async def _recall_expansion_round(agent, entry, lang) -> Optional[Tuple[list, str, str]]:
+    """System-driven recall expansion (citation/family + CPC routes).
+
+    Once per request: collect family numbers from the pool candidates'
+    continuity bags and the matched CPC codes, fetch their records via
+    the recall transports, merge the new candidates into the pool and
+    score them.  Missing-direction queries inferred during the internal
+    ranking are executed too (mirrors _auto_ladder_round).  Returns
+    (ranked, ranking_note, recall_note) when new live candidates
+    landed; None otherwise.  Never raises.
+    """
+    if getattr(agent, "_recall_done", False):
+        return None
+    pool = getattr(agent, "_search_pool", None)
+    if pool is None:
+        return None
+    candidates = pool.ranked(RECALL_POOL_HEAD)
+    if not candidates:
+        return None
+    refs = collect_family_refs(candidates)
+    codes = [str(h.get("code", "")).strip() for h in
+             (getattr(agent, "_cpc_hints", None) or [])
+             if isinstance(h, dict) and h.get("code")][:RECALL_MAX_CPC]
+    if not (refs["patents"] or refs["applications"] or codes):
+        return None
+    agent._recall_done = True
+    records: list = []
+    if refs["patents"] or refs["applications"]:
+        try:
+            records = await asyncio.to_thread(
+                fetch_by_numbers,
+                refs["patents"] + refs["applications"])
+        except Exception:
+            records = []
+    if codes:
+        try:
+            records = records + await asyncio.to_thread(fetch_by_cpc, codes)
+        except Exception:
+            pass
+    known = {c["patent_id"] for c in candidates}
+    fresh = [c for c in records_to_candidates(records)
+             if c["patent_id"] not in known]
+    live = [c for c in fresh if not is_dead_status(c.get("status"))]
+    if not live:
+        return None
+    ranked, ranking_note = await _rank_pending_pool(
+        agent, fresh, lang, apply_rerank=False)
+    ranked, ranking_note = await _auto_second_round(
+        agent, entry, {"q": ""}, ranked, ranking_note, lang)
+    if lang == "en":
+        recall_note = (f"\n\nRecall expansion (family/CPC) merged "
+                       f"{len(live)} new candidates into the pool.")
+    else:
+        recall_note = (f"\n\n已自动执行分类/引文扩展检索"
+                       f"（并入 {len(live)} 条新候选）。")
+    return ranked, ranking_note, recall_note
+
+
 def _query_lines(queries: list) -> str:
     """Render a bare numbered query list (no guidance header)."""
     return "\n".join(f"{i}. {q}" for i, q in enumerate(queries, start=1))
@@ -1231,6 +1300,25 @@ async def make_action_executor(agent, registry, push_filter=None):
                     # Nothing displayable either — keep the existing text
                     # and append only the feedback outcome.
                     text = text.rstrip() + "\n" + fb_note
+            recall = await _recall_expansion_round(agent, entry, lang)
+            if recall is not None:
+                ranked, ranking_note, recall_note = recall
+                if ranked:
+                    shown = [c["_raw"] for c in ranked]
+                    agent._pending_raw_items = shown
+                    agent._search_ranked = True
+                    digest = _ranked_digest(ranked, lang=lang)
+                    note = ranking_note + recall_note
+                    if lang == "en":
+                        text = (f"Search results ({len(shown)} records, "
+                                f"{note}):\n{digest}\n\n"
+                                "The full list is displayed to the user.")
+                    else:
+                        text = (f"检索结果（{len(shown)} 条，{note}）：\n"
+                                f"{digest}\n\n"
+                                "完整列表已展示给用户。")
+                else:
+                    text = text.rstrip() + "\n" + recall_note
             return {"kind": "observation", "text": text}
 
         return {"kind": "observation", "text": _summarize_observation(result, lang)}
