@@ -110,7 +110,7 @@ class TestCreateAgentWiring(unittest.TestCase):
                 return_value=RoundResult(kind="answer", answer_text="hi", steps=1))
             _run(agent.create_agent(
                 "u1", "hello", "q1", "", handler, push_filter=None))
-        mock_cpc.assert_called_once_with("hello", extra_terms="")
+        mock_cpc.assert_called_once_with("hello", extra_terms=[])
         self.assertEqual(getattr(agent, "_cpc_hints", None), hints)
 
     def test_long_task_kind_returns_intent_dict(self):

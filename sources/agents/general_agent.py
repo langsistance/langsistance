@@ -1604,15 +1604,16 @@ Begin your response now:
         if CPC_EXPANSION_ENABLED:
             try:
                 from sources.long_task.cpc_semantic import match_query_to_cpc
-                extra_terms = " ".join(
-                    str(kw)
+                # Each concept's carrier vocabulary forms its own match
+                # text — one dominant concept must not dilute the others.
+                extra_term_groups = [
+                    " ".join(str(kw) for kw in (
+                        concept.get("carriers") or [])[:4])
                     for concept in (self._search_rewrite.get("concepts") or [])
-                    if isinstance(concept, dict)
-                    for key in ("carriers", "keywords")
-                    for kw in (concept.get(key) or [])[:4]
-                )
+                    if isinstance(concept, dict) and concept.get("carriers")
+                ]
                 self._cpc_hints = match_query_to_cpc(
-                    prompt, extra_terms=extra_terms)
+                    prompt, extra_terms=extra_term_groups)
             except Exception:
                 self._cpc_hints = None
         if callback_handler:

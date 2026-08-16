@@ -135,15 +135,16 @@ def match_cpc_codes(query_vector: Any, vectors: Any, entries: list,
 
 
 def match_query_to_cpc(query_text: str, top_k: int = 8,
-                       extra_terms: str = "") -> list:
+                       extra_terms: Any = "") -> list:
     """Match a user question to CPC main groups end to end.
 
     Embeds the question AND, when given, *extra_terms* (carrier
-    vocabulary from the rewrite stage) with the configured provider,
-    loads the cached titles/vectors, and returns up to *top_k* dicts
-    {code, title, score} — per-text matches merged by best score.
-    Degrades to [] on any failure — expansion is an enhancement, never
-    a hard dependency.
+    vocabulary from the rewrite stage — a string or a list of
+    per-concept term groups, each embedded as its OWN text so no group
+    dilutes another) with the configured provider, loads the cached
+    titles/vectors, and returns up to *top_k* dicts {code, title,
+    score} — per-text matches merged by best score.  Degrades to [] on
+    any failure — expansion is an enhancement, never a hard dependency.
     """
     if not query_text or not query_text.strip():
         return []
@@ -152,8 +153,10 @@ def match_query_to_cpc(query_text: str, top_k: int = 8,
     if not entries or vectors is None:
         return []
     texts = [query_text]
-    if extra_terms and extra_terms.strip():
-        texts.append(extra_terms.strip())
+    if isinstance(extra_terms, (list, tuple)):
+        texts.extend(str(t).strip() for t in extra_terms if str(t).strip())
+    elif extra_terms and str(extra_terms).strip():
+        texts.append(str(extra_terms).strip())
     try:
         from sources.long_task.semantic_rerank import embed_texts
         embedded = embed_texts(texts)

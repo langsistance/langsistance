@@ -189,6 +189,25 @@ class TestMatchQueryToCpc(unittest.TestCase):
                          ["H05B45/00", "A01B1/00"])
         self.assertAlmostEqual(matches[0]["score"], 1.0)
 
+    def test_extra_terms_as_per_concept_groups(self):
+        from unittest.mock import patch
+        entries = [{"code": "H05B45/00", "title": "LED circuits"},
+                   {"code": "A01B1/00", "title": "Hand tools"}]
+        # query vector weak, group-1 vector weak, group-2 vector strong
+        with patch("sources.long_task.cpc_semantic.load_cpc_titles",
+                   return_value=entries), \
+             patch("sources.long_task.cpc_semantic.load_cpc_vectors",
+                   return_value=[[1.0, 0.0], [0.0, 1.0]]), \
+             patch("sources.long_task.semantic_rerank.embed_texts",
+                   return_value=[[0.707, 0.707], [0.707, 0.707],
+                                 [1.0, 0.0]]) as mock_embed:
+            matches = match_query_to_cpc(
+                "q", top_k=2, extra_terms=["amp group", "led color group"])
+        # three texts embedded: query + both groups
+        self.assertEqual(len(mock_embed.call_args[0][0]), 3)
+        self.assertEqual(matches[0]["code"], "H05B45/00")
+        self.assertAlmostEqual(matches[0]["score"], 1.0)
+
     def test_empty_extra_terms_behave_like_absent(self):
         from unittest.mock import patch
         entries = [{"code": "H05B45/00", "title": "LED circuits"}]
