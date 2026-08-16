@@ -103,12 +103,14 @@ def main() -> int:
         with zipfile.ZipFile(io.BytesIO(body)) as z:
             names = z.namelist()
             txts = [n for n in names if n.endswith(".txt")]
-            print(f"zip txt chunks: {len(txts)} (first 3: {txts[:3]})")
-            first = txts[0]
-            with z.open(first) as fh:
-                head = fh.read(2048).decode("utf-8", errors="replace")
-            print(f"--- head of {first}:")
-            print(head)
+            print(f"zip txt chunks: {len(txts)}")
+            for name in (txts[0], txts[1], txts[2], txts[-1]):
+                with z.open(name) as fh:
+                    lines = [fh.readline().decode("utf-8", errors="replace")
+                             for _ in range(4)]
+                print(f"--- head of {name.rsplit('/', 1)[-1]}:")
+                for line in lines:
+                    print(repr(line))
     except Exception as e:
         print(f"zip parse failed: {type(e).__name__}: {e}")
     return 0
