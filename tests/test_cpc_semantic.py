@@ -9,10 +9,14 @@ import os
 import tempfile
 import unittest
 import zipfile
+from unittest.mock import patch
 
 from sources.long_task.cpc_semantic import (
+    CPC_TITLES_JSON,
+    CPC_VECTORS_NPY,
     MAIN_GROUP_RE,
     load_cpc_titles,
+    load_cpc_vectors,
     match_cpc_codes,
     match_query_to_cpc,
     parse_cpc_zip,
@@ -223,6 +227,112 @@ class TestMatchQueryToCpc(unittest.TestCase):
         self.assertEqual(len(matches), 1)
         # only the query text was embedded
         self.assertEqual(len(mock_embed.call_args[0][0]), 1)
+
+
+class TestCpcPathsForLevel(unittest.TestCase):
+    """Tier selection: main groups vs full subgroup data files."""
+
+    def test_explicit_levels(self):
+        from sources.long_task.cpc_semantic import (
+            CPC_TITLES_SUB_JSON, CPC_VECTORS_SUB_NPY, cpc_paths_for_level)
+        self.assertEqual(
+            cpc_paths_for_level("main"), (CPC_TITLES_JSON, CPC_VECTORS_NPY))
+        self.assertEqual(
+            cpc_paths_for_level("sub"),
+            (CPC_TITLES_SUB_JSON, CPC_VECTORS_SUB_NPY))
+
+    def test_default_resolves_env(self):
+        from sources.long_task.cpc_semantic import (
+            CPC_TITLES_SUB_JSON, CPC_VECTORS_SUB_NPY, cpc_paths_for_level)
+        with patch.dict(os.environ, {"CPC_VECTOR_LEVEL": ""}):
+            self.assertEqual(
+                cpc_paths_for_level(), (CPC_TITLES_JSON, CPC_VECTORS_NPY))
+            os.environ["CPC_VECTOR_LEVEL"] = "sub"
+            self.assertEqual(
+                cpc_paths_for_level(),
+                (CPC_TITLES_SUB_JSON, CPC_VECTORS_SUB_NPY))
+
+    def test_unknown_level_falls_back_to_main(self):
+        from sources.long_task.cpc_semantic import cpc_paths_for_level
+        self.assertEqual(
+            cpc_paths_for_level("bogus"), (CPC_TITLES_JSON, CPC_VECTORS_NPY))
+
+
+class TestLoadCpcTitlesLevel(unittest.TestCase):
+    def test_no_arg_respects_level_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sub_json = os.path.join(tmp, "cpc_titles_subgroups.json")
+            with open(sub_json, "w", encoding="utf-8") as f:
+                json.dump([{"code": "H05B45/20",
+                            "title": "Controlling the colour of the light"}], f)
+            with patch("sources.long_task.cpc_semantic.CPC_TITLES_SUB_JSON",
+                       sub_json), \
+                 patch.dict(os.environ, {"CPC_VECTOR_LEVEL": "sub"}):
+                entries = load_cpc_titles()
+        self.assertEqual(entries[0]["code"], "H05B45/20")
+
+
+class TestLoadCpcVectorsCache(unittest.TestCase):
+    """The .npy cache is load-once per path: the sub tier is ~300MB and
+    the matcher runs once per agent round — re-reading it every round
+    would dominate request latency."""
+
+    def test_caches_loaded_vectors_by_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            npy_path = os.path.join(tmp, "v.npy")
+            with open(npy_path, "wb") as f:
+                f.write(b"x")
+            with patch("numpy.load", return_value="ARRAY") as mock_load:
+                first = load_cpc_vectors(npy_path)
+                second = load_cpc_vectors(npy_path)
+        self.assertEqual(first, "ARRAY")
+        self.assertIs(first, second)
+        self.assertEqual(mock_load.call_count, 1)
+
+    def test_no_arg_respects_level_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            npy_path = os.path.join(tmp, "v_sub.npy")
+            with open(npy_path, "wb") as f:
+                f.write(b"x")
+            with patch("sources.long_task.cpc_semantic.CPC_VECTORS_SUB_NPY",
+                       npy_path), \
+                 patch.dict(os.environ, {"CPC_VECTOR_LEVEL": "sub"}), \
+                 patch("numpy.load", return_value="ARRAY"):
+                arr = load_cpc_vectors()
+        self.assertEqual(arr, "ARRAY")
+
+
+class TestMatchCpcCodesNumpyPath(unittest.TestCase):
+    """The sub tier has ~150k entries — pure-Python cosine would take
+    minutes per round, so the matcher takes a numpy fast path when
+    available and keeps the pure loop as a no-numpy fallback."""
+
+    def test_numpy_path_ranks_like_pure_python(self):
+        import numpy as np
+        entries = [{"code": "A", "title": "a"}, {"code": "B", "title": "b"},
+                   {"code": "C", "title": "c"}]
+        vectors = np.asarray([[1.0, 0.0], [0.9, 0.1], [0.0, 1.0]])
+        matches = match_cpc_codes(
+            np.asarray([1.0, 0.0]), vectors, entries, top_k=2)
+        self.assertEqual([m["code"] for m in matches], ["A", "B"])
+        self.assertAlmostEqual(matches[0]["score"], 1.0)
+
+    def test_zero_norm_vectors_score_zero(self):
+        import numpy as np
+        entries = [{"code": "A", "title": "a"}, {"code": "B", "title": "b"}]
+        matches = match_cpc_codes(
+            [1.0, 0.0], np.asarray([[0.0, 0.0], [1.0, 0.0]]), entries)
+        self.assertEqual(matches[0]["code"], "B")
+        self.assertEqual(matches[1]["code"], "A")
+        self.assertEqual(matches[1]["score"], 0.0)
+
+    def test_falls_back_to_pure_python_without_numpy(self):
+        import sys
+        entries = [{"code": "A", "title": "a"}, {"code": "B", "title": "b"}]
+        with patch.dict(sys.modules, {"numpy": None}):
+            matches = match_cpc_codes(
+                [1.0, 0.0], [[1.0, 0.0], [0.0, 1.0]], entries, top_k=1)
+        self.assertEqual(matches[0]["code"], "A")
 
 
 if __name__ == "__main__":

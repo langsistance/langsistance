@@ -35,6 +35,20 @@ logger = Logger("cpc_semantic.log")
 CPC_DATA_DIR = os.getenv("CPC_DATA_DIR", "data/cpc")
 CPC_TITLES_JSON = os.path.join(CPC_DATA_DIR, "cpc_titles_main_groups.json")
 CPC_VECTORS_NPY = os.path.join(CPC_DATA_DIR, "cpc_title_vectors.npy")
+CPC_TITLES_SUB_JSON = os.path.join(CPC_DATA_DIR, "cpc_titles_subgroups.json")
+CPC_VECTORS_SUB_NPY = os.path.join(CPC_DATA_DIR, "cpc_title_vectors_sub.npy")
+
+
+def cpc_paths_for_level(level: str = "") -> tuple:
+    """Return (titles_json, vectors_npy) for *level* ("main" or "sub").
+
+    An empty *level* resolves from the CPC_VECTOR_LEVEL env var
+    (default "main"); unknown values fall back to the main-group tier.
+    """
+    resolved = (level or os.getenv("CPC_VECTOR_LEVEL", "")).strip().lower()
+    if resolved == "sub":
+        return CPC_TITLES_SUB_JSON, CPC_VECTORS_SUB_NPY
+    return CPC_TITLES_JSON, CPC_VECTORS_NPY
 
 # Main groups only (e.g. H05B45/00) — the coarse domain level.
 MAIN_GROUP_RE = re.compile(r"^[A-HY]\d{2}[A-Z]\d{1,4}/00$")
@@ -82,8 +96,12 @@ def parse_cpc_zip(zip_path: str, main_groups_only: bool = True) -> list:
     return entries
 
 
-def load_cpc_titles(json_path: str = CPC_TITLES_JSON) -> list:
-    """Load parsed CPC titles; [] when the data file is absent."""
+def load_cpc_titles(json_path: Optional[str] = None) -> list:
+    """Load parsed CPC titles for the active tier; [] when the data
+    file is absent.  No *json_path* resolves the tier via
+    cpc_paths_for_level()."""
+    if json_path is None:
+        json_path, _ = cpc_paths_for_level()
     try:
         with open(json_path, encoding="utf-8") as f:
             data = json.load(f)
@@ -94,17 +112,34 @@ def load_cpc_titles(json_path: str = CPC_TITLES_JSON) -> list:
     return []
 
 
-def load_cpc_vectors(npy_path: str = CPC_VECTORS_NPY) -> Optional[Any]:
-    """Load the cached title vectors (.npy); None when absent or numpy
-    is not installed."""
-    if not os.path.exists(npy_path):
+_VECTOR_CACHE: dict = {}  # npy_path -> (mtime, array)
+
+
+def load_cpc_vectors(npy_path: Optional[str] = None) -> Optional[Any]:
+    """Load the cached title vectors (.npy) for the active tier; None
+    when absent or numpy is not installed.
+
+    Loaded arrays are cached by path+mtime — the sub tier is ~300MB and
+    the matcher runs once per agent round, so re-reading every round
+    would dominate request latency.
+    """
+    if npy_path is None:
+        _, npy_path = cpc_paths_for_level()
+    try:
+        mtime = os.path.getmtime(npy_path)
+    except OSError:
         return None
+    cached = _VECTOR_CACHE.get(npy_path)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
     try:
         import numpy as np
-        return np.load(npy_path)
+        arr = np.load(npy_path)
     except (ImportError, ValueError, OSError):
         logger.warning(f"CPC vector cache unavailable: {npy_path}")
         return None
+    _VECTOR_CACHE[npy_path] = (mtime, arr)
+    return arr
 
 
 def match_cpc_codes(query_vector: Any, vectors: Any, entries: list,
@@ -112,7 +147,10 @@ def match_cpc_codes(query_vector: Any, vectors: Any, entries: list,
     """Cosine-rank *entries* against *query_vector* using *vectors*.
 
     Returns up to *top_k* dicts {code, title, score}; [] on any
-    degenerate input (missing vectors, length mismatch).
+    degenerate input (missing vectors, length mismatch).  Uses a numpy
+    fast path when available (the sub tier holds ~150k entries — the
+    pure loop would take minutes per round); falls back to pure Python
+    without numpy or on ragged inputs.
     """
     if query_vector is None or vectors is None or not entries:
         return []
@@ -120,6 +158,26 @@ def match_cpc_codes(query_vector: Any, vectors: Any, entries: list,
         return []
     if len(query_vector) != len(vectors[0]):
         return []
+    try:
+        import numpy as np
+        # float32 keeps the dot product BLAS-fast while staying exact
+        # enough for ranking (float16 accumulation over 1024 dims can
+        # misrank near-ties); callers that already pass float32 arrays
+        # hit a no-copy asarray.
+        vecs = np.asarray(vectors, dtype=np.float32)
+        query = np.asarray(query_vector, dtype=np.float32)
+        norms = np.linalg.norm(vecs, axis=1)
+        query_norm = np.linalg.norm(query)
+        valid = norms > 0
+        scores = np.zeros(len(entries), dtype=np.float32)
+        if query_norm > 0:
+            scores[valid] = (vecs[valid] @ query) / (norms[valid] * query_norm)
+        order = np.argsort(-scores)[:top_k]
+        return [{"code": entries[int(i)]["code"],
+                 "title": entries[int(i)]["title"],
+                 "score": float(scores[int(i)])} for i in order]
+    except (ImportError, ValueError):
+        pass
     scores = []
     for vec, entry in zip(vectors, entries):
         dot = sum(float(a) * float(b) for a, b in zip(query_vector, vec))
@@ -148,10 +206,18 @@ def match_query_to_cpc(query_text: str, top_k: int = 8,
     """
     if not query_text or not query_text.strip():
         return []
-    entries = load_cpc_titles()
-    vectors = load_cpc_vectors()
+    titles_path, vectors_path = cpc_paths_for_level()
+    entries = load_cpc_titles(titles_path)
+    vectors = load_cpc_vectors(vectors_path)
     if not entries or vectors is None:
         return []
+    # One float16->float32 upcast per call instead of per matched text:
+    # the sub tier holds ~150k x 1024 entries (~0.4s per conversion).
+    try:
+        import numpy as np
+        vectors = np.asarray(vectors, dtype=np.float32)
+    except ImportError:
+        pass
     texts = [query_text]
     if isinstance(extra_terms, (list, tuple)):
         texts.extend(str(t).strip() for t in extra_terms if str(t).strip())
@@ -183,7 +249,8 @@ def match_query_to_cpc(query_text: str, top_k: int = 8,
          if m["code"] not in seen),
         key=lambda m: m["score"], reverse=True)
     merged.extend(rest[:top_k - len(merged)])
+    level = "sub" if vectors_path == CPC_VECTORS_SUB_NPY else "main"
     logger.info(
-        f"cpc match — query={query_text[:60]!r} "
+        f"cpc match — level={level} query={query_text[:60]!r} "
         f"top={[m['code'] for m in merged[:5]]}")
     return merged
