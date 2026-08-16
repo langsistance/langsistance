@@ -552,7 +552,30 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
         )
 
     if response.status_code != 200:
+        message = ""
+        try:
+            payload = response.json() if response.content else None
+            if isinstance(payload, dict):
+                message = str(
+                    payload.get("detailedMessage")
+                    or payload.get("message")
+                    or payload.get("error")
+                    or "").strip()
+            elif isinstance(payload, str) and payload.strip():
+                message = payload.strip()[:300]
+        except Exception:
+            message = ""
+        if message and "no matching records" in message.lower():
+            # USPTO search reports zero hits as HTTP 404 — surface it as
+            # a zero-hit result (not an API failure) so the search ladder
+            # discipline (substitute vocabulary before loosening) kicks in.
+            return {
+                "data": {"count": 0, "message": message},
+                "raw_items": [],
+            }
         result = f"Request failed, status code: {response.status_code}"
+        if message:
+            result += f" — {message[:300]}"
         return {"data": result, "raw_items": None}
 
     response_content_type = response.headers.get("Content-Type", "").lower()

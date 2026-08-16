@@ -557,6 +557,63 @@ class _AutoRoundEntry:
         self.tool = _Tool(self)
 
 
+class TestZeroHitLadderNudge(unittest.TestCase):
+    """On zero hits, the observation must list the ladder queries that
+    have not been tried yet — the agent substitutes vocabulary instead
+    of concluding the API is broken."""
+
+    def test_untried_ladder_queries_appended(self):
+        from sources.agents.react_tools import _append_untried_ladder_note
+        agent = _FakeAgent()
+        agent._search_rewrite = {"queries": ['("a" OR "b")', '"c" AND "d"', "(e OR f)"]}
+        agent._tried_queries = ['("a" OR "b")']
+        out = _append_untried_ladder_note(agent, "检索结果（1 条）", "zh")
+        self.assertIn("尚未尝试", out)
+        self.assertIn('"c" AND "d"', out)
+        self.assertIn("(e OR f)", out)
+        self.assertNotIn('("a" OR "b")', out)
+
+    def test_no_rewrite_keeps_text(self):
+        from sources.agents.react_tools import _append_untried_ladder_note
+        agent = _FakeAgent()
+        out = _append_untried_ladder_note(agent, "text", "zh")
+        self.assertEqual(out, "text")
+
+    def test_all_tried_keeps_text(self):
+        from sources.agents.react_tools import _append_untried_ladder_note
+        agent = _FakeAgent()
+        agent._search_rewrite = {"queries": ["q1"]}
+        agent._tried_queries = ["q1"]
+        out = _append_untried_ladder_note(agent, "text", "zh")
+        self.assertEqual(out, "text")
+
+    def test_english_variant(self):
+        from sources.agents.react_tools import _append_untried_ladder_note
+        agent = _FakeAgent()
+        agent._search_rewrite = {"queries": ["q1", "q2"]}
+        agent._tried_queries = ["q1"]
+        out = _append_untried_ladder_note(agent, "text", "en")
+        self.assertIn("untried", out)
+
+    def test_zero_hit_executor_records_query_and_nudges(self):
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        agent._search_rewrite = {"queries": ["q1", "q2"]}
+        entry_k = _Knowledge(3, ktype=1)
+        agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
+        registry, tools = asyncio.run(
+            _registry_with_one_knowledge(agent, entry_k))
+        executor = asyncio.run(make_action_executor(agent, registry, None))
+        agent._pending_raw_items = [
+            {"count": 0, "message": "No matching records found"}]
+        agent._last_search_total = 0
+        result = asyncio.run(
+            executor("uspto_search", {"params": '{"q": "q1"}'}, 1))
+        self.assertEqual(getattr(agent, "_tried_queries", None), ["q1"])
+        self.assertIn("尚未尝试", result["text"])
+        self.assertIn("q2", result["text"])
+
+
 class TestAutoSecondRound(unittest.IsolatedAsyncioTestCase):
     """The missing-direction queries are executed by the system (not left
     to the agent's discretion): at most once per turn, bounded count,

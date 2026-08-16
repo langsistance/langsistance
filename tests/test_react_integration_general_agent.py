@@ -75,6 +75,7 @@ class TestCreateAgentWiring(unittest.TestCase):
         agent._missing_dir_done = True
         agent._missing_dir_queries = ["stale query"]
         agent._auto_round_done = True
+        agent._tried_queries = ["stale tried query"]
         agent._feedback_done = True
         agent._ladder_capped = True
         agent._search_ranked = True
@@ -88,6 +89,7 @@ class TestCreateAgentWiring(unittest.TestCase):
         self.assertFalse(getattr(agent, "_missing_dir_done", True))
         self.assertIsNone(getattr(agent, "_missing_dir_queries", "unset"))
         self.assertFalse(getattr(agent, "_auto_round_done", True))
+        self.assertEqual(getattr(agent, "_tried_queries", "unset"), [])
         self.assertFalse(getattr(agent, "_feedback_done", True))
         self.assertFalse(getattr(agent, "_ladder_capped", True))
         self.assertFalse(getattr(agent, "_search_ranked", True))

@@ -627,6 +627,27 @@ def _query_lines(queries: list) -> str:
     return "\n".join(f"{i}. {q}" for i, q in enumerate(queries, start=1))
 
 
+def _append_untried_ladder_note(agent, text: str, lang: str) -> str:
+    """On zero hits, list the ladder queries that have not been tried yet
+    so the agent substitutes vocabulary instead of concluding the API is
+    broken.  Pure: never mutates *agent*, only reads the rewrite cache
+    and the tried-query log."""
+    queries = (getattr(agent, "_search_rewrite", None) or {}).get("queries") or []
+    if not queries:
+        return text
+    tried = getattr(agent, "_tried_queries", None) or []
+    untried = [q for q in queries if q not in tried][:3]
+    if not untried:
+        return text
+    if lang == "en":
+        header = ("0 hits — untried ladder queries (substitute vocabulary "
+                  "before loosening; adjacent carrier-term variants first):")
+    else:
+        header = ("本次检索 0 命中——以下阶梯检索式尚未尝试（请先替换用词"
+                  "再放宽；优先取用相邻的载体词版）：")
+    return text + f"\n\n{header}\n" + _query_lines(untried)
+
+
 def _format_feedback_note(queries: list, lang: str, kind: str = "refined") -> str:
     """Render query suggestions for the observation text.
 
@@ -911,6 +932,16 @@ async def make_action_executor(agent, registry, push_filter=None):
         except Exception as exc:
             return {"kind": "observation", "text": f"Error: {exc}"}
 
+        # Record the query that actually reached the tool so zero-hit
+        # observations can list the ladder variants still untried.
+        q_used = _effective_query(args) if isinstance(args, dict) else ""
+        if q_used:
+            tried = getattr(agent, "_tried_queries", None)
+            if tried is None:
+                tried = agent._tried_queries = []
+            if q_used not in tried:
+                tried.append(q_used)
+
         # Keep the exact pairing used later by _stream_raw_items for
         # source inference and artifact building.
         agent.knowledgeTool = (entry.knowledge, entry.tool_info)
@@ -964,6 +995,8 @@ async def make_action_executor(agent, registry, push_filter=None):
                         f"{digest}\n\n"
                         "完整列表已展示给用户。")
             text = _apply_ladder_cap(agent, text, total, lang)
+            if isinstance(total, int) and total == 0:
+                text = _append_untried_ladder_note(agent, text, lang)
             text = await _maybe_append_feedback(agent, text, total, lang)
             return {"kind": "observation", "text": text}
 

@@ -474,3 +474,60 @@ class TestGetRequestBodyMergedIntoQuery(unittest.TestCase):
         sent = mock_req.call_args[1]
         self.assertIn("offset", sent["params"]["pagination"])
         self.assertIn("limit", sent["params"]["pagination"])
+
+
+class TestUsptoZeroHitSemantics(unittest.TestCase):
+    """USPTO search reports zero hits as HTTP 404 — the backend tool must
+    surface it as a zero-hit result, not an opaque API failure, so the
+    search ladder discipline (substitute vocabulary) kicks in."""
+
+    def _tool(self):
+        from unittest.mock import MagicMock
+        tool = MagicMock()
+        tool.params = ('{"method":"POST",'
+                       '"body":{"q":"template","pagination":{"offset":0,"limit":50}}}')
+        tool.url = "https://api.uspto.gov/api/v1/patent/applications/search"
+        tool.timeout = 30
+        return tool
+
+    def _run(self, status_code, body):
+        import json
+        from unittest.mock import MagicMock, patch
+        resp = MagicMock()
+        resp.status_code = status_code
+        resp.headers = {"Content-Type": "application/json"}
+        resp.content = body.encode("utf-8")
+        resp.text = body
+        resp.json = lambda: json.loads(body)
+        with patch("sources.dynamic_tool_params.outbound_http.request",
+                   return_value=resp) as mock_req:
+            from sources.dynamic_tool_params import execute_backend_tool_request
+            result = execute_backend_tool_request(
+                self._tool(), {"query": '"x" AND "y"'})
+        return result
+
+    def test_404_no_match_becomes_zero_hit_result(self):
+        result = self._run(404, '{"code":"404","message":"Not Found",'
+                                '"detailedMessage":"No matching records found, '
+                                'refine your search criteria and try again"}')
+        self.assertEqual(result["raw_items"], [])
+        self.assertIsInstance(result["data"], dict)
+        self.assertEqual(result["data"].get("count"), 0)
+        self.assertIn("No matching records",
+                      str(result["data"].get("message", "")))
+
+    def test_other_404_message_stays_an_error(self):
+        result = self._run(404, '{"code":"404","message":"Not Found",'
+                                '"detailedMessage":"Invalid q field"}')
+        data = result["data"]
+        self.assertIsInstance(data, str)
+        self.assertIn("404", data)
+        self.assertIn("Invalid q field", data)
+
+    def test_401_error_includes_body_message(self):
+        result = self._run(401, '{"error":"invalid_token",'
+                                '"error_description":"Invalid access token: abc"}')
+        data = result["data"]
+        self.assertIsInstance(data, str)
+        self.assertIn("401", data)
+        self.assertIn("invalid_token", data)
