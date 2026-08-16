@@ -132,7 +132,7 @@ def main() -> int:
     for model, provider_name in attempts:
         print(f"\n{'='*70}\n== {provider_name} / {model}")
         try:
-            content = run_one(model, provider_name, provider_name)
+            content = run_one(model, provider_name)
         except Exception as exc:
             print(f"   FAILED: {type(exc).__name__}: {str(exc)[:160]}")
             continue
