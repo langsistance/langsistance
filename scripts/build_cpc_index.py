@@ -10,7 +10,8 @@ matching patents' metadata through the number search.
 
 MCF text layout (fixed-width, one record per line):
   A ... — scheme-version records (skipped)
-  B <patent 5-9 digits><8-digit record index><CPC symbol> <version> 0 0
+  B <8-char prefix><patent zero-padded to 9 digits><CPC symbol>
+    <version> 0 0
 
 Usage (server, venv):
     python scripts/build_cpc_index.py            # download + build
@@ -54,8 +55,11 @@ CPC_DATA_DIR = os.getenv("CPC_DATA_DIR", "data/cpc")
 INDEX_DB = os.path.join(CPC_DATA_DIR, "cpc_index.db")
 
 _SYMBOL_RE = re.compile(r"^([A-HY]\d{2}[A-Z]\d{0,4})(\d{0,4})/(\d{0,4})$")
+# B records: an 8-char prefix (record bookkeeping) followed by the
+# patent number zero-padded to 9 digits — e.g. "21849611012650000" is
+# patent 12,650,000.  The prefix is ignored.
 _B_LINE_RE = re.compile(
-    r"^B(?P<patent>\d{5,9})(?P<idx>\d{8})"
+    r"^B(?P<prefix>[\d ]{8})(?P<patent>\d{9})"
     r"(?P<symbol>[A-HY]\d{2}[A-Z][\w\s]*?/\d{1,4})")
 
 
@@ -76,7 +80,9 @@ def _normalize_symbol(raw):
 def _parse_mcf_line(line: str):
     """Parse one MCF record line -> (patent, canonical_cpc).
 
-    None for A records and anything unparseable.  Never raises.
+    None for A records and anything unparseable.  The patent number is
+    zero-padded to 9 digits in the file; leading zeros are stripped.
+    Never raises.
     """
     if not isinstance(line, str) or not line.startswith("B"):
         return None
@@ -86,7 +92,7 @@ def _parse_mcf_line(line: str):
     symbol = _normalize_symbol(m.group("symbol"))
     if not symbol:
         return None
-    return m.group("patent"), symbol
+    return str(int(m.group("patent"))), symbol
 
 
 def build_index(zip_path: str, db_path: str, batch: int = 20000) -> dict:

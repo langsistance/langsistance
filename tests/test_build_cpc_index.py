@@ -21,7 +21,7 @@ from scripts.build_cpc_index import (
 )
 
 B_LINE_9 = ("B21849611012650000E02F   3/844   20130101FI  0 0\r\n")
-B_LINE_8 = ("B1100723401265000E02F   3/844   20130101FI  0 0\r\n")
+B_LINE_8 = ("B12345678011007234E02F   3/844   20130101FI  0 0\r\n")
 B_LINE_SUB = ("B21849611012650000H05B45/20    20130101FI  0 0\r\n")
 A_LINE = ("A           100000B68B   1/04    20130101FI  0 0\r\n")
 
@@ -43,9 +43,11 @@ class TestNormalizeSymbol(unittest.TestCase):
 
 
 class TestParseMcfLine(unittest.TestCase):
-    def test_parses_nine_digit_patent(self):
+    def test_parses_zero_padded_patent_from_real_line(self):
+        # real 2026-08 MCF line: 8-char prefix + 9-char zero-padded
+        # patent number ("012650000" -> 12650000)
         result = _parse_mcf_line(B_LINE_9)
-        self.assertEqual(result, ("218496110", "E02F3/844"))
+        self.assertEqual(result, ("12650000", "E02F3/844"))
 
     def test_parses_eight_digit_patent(self):
         result = _parse_mcf_line(B_LINE_8)
@@ -53,7 +55,7 @@ class TestParseMcfLine(unittest.TestCase):
 
     def test_parses_slash_symbol_without_group_digits(self):
         result = _parse_mcf_line(B_LINE_SUB)
-        self.assertEqual(result, ("218496110", "H05B45/20"))
+        self.assertEqual(result, ("12650000", "H05B45/20"))
 
     def test_skips_scheme_a_lines(self):
         self.assertIsNone(_parse_mcf_line(A_LINE))
@@ -91,12 +93,12 @@ class TestBuildIndex(unittest.TestCase):
                 "SELECT cpc, patent FROM cpc_patents ORDER BY cpc").fetchall()
             conn.close()
         self.assertGreaterEqual(stats["patents"], 2)
-        self.assertIn(("E02F3/764", "218496110"), rows)
+        self.assertIn(("E02F3/764", "12650001"), rows)
         self.assertIn(("E02F3/844", "11007234"), rows)
-        self.assertIn(("E02F3/844", "218496110"), rows)
-        self.assertIn(("H05B45/20", "218496110"), rows)
+        self.assertIn(("E02F3/844", "12650000"), rows)
+        self.assertIn(("H05B45/20", "12650000"), rows)
         # duplicates deduped — one row per (cpc, patent)
-        self.assertEqual(rows.count(("E02F3/844", "218496110")), 1)
+        self.assertEqual(rows.count(("E02F3/844", "12650000")), 1)
         # A lines and junk never appear
         self.assertNotIn("B68B", [c for c, _ in rows])
 
