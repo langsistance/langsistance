@@ -70,40 +70,30 @@ def main() -> int:
     files = (product.get("productFileBag")
              or product.get("bulkDataFileBag")
              or product.get("fileBag") or [])
-    print(f"file entries type: {type(files).__name__}, len: {len(files)}")
     if isinstance(files, dict):
-        print("file bag keys:", sorted(files.keys()))
-        print("file bag raw (truncated):")
-        print(json.dumps(files, ensure_ascii=False)[:3000])
-        # normalise: if the dict maps names to entry dicts, keep the
-        # entry dicts as the searchable list
-        files = list(files.values())
-    else:
-        for f in files[-3:]:
-            print(json.dumps(f, ensure_ascii=False)[:800])
+        files = files.get("fileDataBag") or []
+    print(f"file entries: {len(files)}")
+    for f in files[:2]:
+        print(json.dumps(f, ensure_ascii=False)[:400])
     print()
-    print("=== download newest file + inspect XML ===")
-    # find the URI key whatever it is named, preferring the newest file
-    uri = ""
+    print("=== download newest TEXT file + inspect head (streamed) ===")
+    # prefer the newest *_Text_* zip — half the size, line-oriented
+    entry = None
     for f in reversed(files):
         if not isinstance(f, dict):
-            # maybe a plain string URL
-            if isinstance(f, str) and f.startswith("http"):
-                uri = f
+            continue
+        name = f.get("fileName") or ""
+        if "_Text_" in name:
+            entry = f
             break
-        for key in ("fileDownloadURI", "downloadURI", "fileDownloadUrl",
-                    "fileDownloadUri"):
-            v = f.get(key) or ""
-            if v:
-                uri = v if v.startswith("http") \
-                    else "https://api.uspto.gov" + v
-                break
-        if uri:
-            break
-    if not uri:
-        print("ABORT — no download URI found in file entries")
+    if entry is None and files and isinstance(files[0], dict):
+        entry = files[0]
+    if entry is None:
+        print("ABORT — no file entry found")
         return 1
+    uri = entry.get("fileDownloadURI") or ""
     print(f"downloading: {uri}")
+    print(f"size: {entry.get('fileSize', '?')} bytes — wait for it…")
     status, body = _get(uri, {"X-API-KEY": KEY})
     print(f"HTTP {status}, {len(body)} bytes")
     if status != 200 or len(body) < 100:
@@ -114,9 +104,10 @@ def main() -> int:
             names = z.namelist()
             print("zip entries:", names[:5])
             first = names[0]
-            xml = z.read(first).decode("utf-8", errors="replace")
-            print(f"--- first XML ({first}), {len(xml)} chars, head 2500:")
-            print(xml[:2500])
+            with z.open(first) as fh:
+                head = fh.read(2048).decode("utf-8", errors="replace")
+            print(f"--- head of {first}:")
+            print(head)
     except Exception as e:
         print(f"zip parse failed: {type(e).__name__}: {e}")
     return 0
