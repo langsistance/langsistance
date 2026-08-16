@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""Probe which URL serves the CPC Master Classification File (MCF).
+"""Probe the ODP CPC Master Classification File (MCF) download chain.
 
 The MCF maps patent document numbers to CPC symbols — the recall
-expansion's CPC route builds a local CPC->patent index from it.  The
-USPTO bulkdata paths moved onto the Open Data Portal in 2026; this
-script tests the candidate routes on the server (which holds the ODP
-API key).  Run once and share the output.
+expansion's CPC route builds a local CPC->patent index from it.  This
+script verifies the ODP product detail response, extracts the file
+download URIs, and inspects the newest file's XML structure so the
+index builder can be written against the real format.
 
 Usage (server, venv):
     python scripts/mcf_probe.py
 """
+import io
 import json
 import os
 import sys
 import urllib.request
+import zipfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -38,46 +40,70 @@ def _load_env(path: str) -> None:
 _load_env(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 KEY = os.getenv("USPTO_API_KEY", "")
+DETAIL_URL = "https://api.uspto.gov/api/v1/datasets/products/CPCMCPT"
 
 
-def _head(url, headers=None, timeout=30, with_body=False):
+def _get(url, headers=None, timeout=60):
     req = urllib.request.Request(url, headers=headers or {})
     req.add_header("User-Agent", "copiioai-mcf-probe/1.0")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            body = r.read(400) if with_body else b""
-            return (f"HTTP {r.status} type={r.headers.get('Content-Type')} "
-                    f"len={r.headers.get('Content-Length', '?')}"
-                    + (f" body={body[:160]!r}" if body else ""))
+            return r.status, r.read()
     except urllib.error.HTTPError as e:
-        return f"HTTP {e.code} ({e.reason})"
+        return e.code, b""
     except Exception as e:
-        return f"FAIL {type(e).__name__}: {e}"
+        return None, f"{type(e).__name__}: {e}".encode()
 
 
 def main() -> int:
     print(f"USPTO_API_KEY set: {bool(KEY)}")
     print()
-    print("=== C: ODP datasets products/search (correct endpoint) ===")
-    print(_head(
-        "https://api.uspto.gov/api/v1/datasets/products/search"
-        "?q=CPCMCPT",
-        headers={"X-API-KEY": KEY}, with_body=True))
+    print("=== product detail CPCMCPT ===")
+    status, body = _get(DETAIL_URL, {"X-API-KEY": KEY})
+    print(f"HTTP {status}, {len(body)} bytes")
+    if status != 200:
+        print("ABORT — cannot fetch product detail")
+        return 1
+    detail = json.loads(body)
+    product = (detail.get("bulkDataProductBag") or [{}])[0]
+    print("product keys:", sorted(product.keys()))
+    files = product.get("bulkDataFileBag") or product.get("fileBag") or []
+    print(f"file entries: {len(files)}")
+    if files:
+        print("first file entry keys:", sorted(files[0].keys()))
+        print("newest 3 entries:")
+        for f in files[-3:]:
+            print(json.dumps(f, ensure_ascii=False)[:500])
     print()
-    print("=== D: ODP datasets products/search (cpc keyword) ===")
-    print(_head(
-        "https://api.uspto.gov/api/v1/datasets/products/search?q=CPC",
-        headers={"X-API-KEY": KEY}, with_body=True))
-    print()
-    print("=== E: ODP product detail (CPCMCPT) ===")
-    print(_head(
-        "https://api.uspto.gov/api/v1/datasets/products/CPCMCPT",
-        headers={"X-API-KEY": KEY}, with_body=True))
-    print()
-    print("=== F: ODP product files (CPCMCPT) ===")
-    print(_head(
-        "https://api.uspto.gov/api/v1/datasets/products/files/CPCMCPT",
-        headers={"X-API-KEY": KEY}, with_body=True))
+    print("=== download newest file + inspect XML ===")
+    uri = ""
+    for f in files:
+        uri = (f.get("fileDownloadURI")
+               or f.get("downloadURI")
+               or f.get("fileDownloadUrl") or "")
+        if uri:
+            uri = uri if uri.startswith("http") \
+                else "https://api.uspto.gov" + uri
+            break
+    if not uri:
+        print("ABORT — no download URI found in file entries")
+        return 1
+    print(f"downloading: {uri}")
+    status, body = _get(uri, {"X-API-KEY": KEY})
+    print(f"HTTP {status}, {len(body)} bytes")
+    if status != 200 or len(body) < 100:
+        print("ABORT — download failed")
+        return 1
+    try:
+        with zipfile.ZipFile(io.BytesIO(body)) as z:
+            names = z.namelist()
+            print("zip entries:", names[:5])
+            first = names[0]
+            xml = z.read(first).decode("utf-8", errors="replace")
+            print(f"--- first XML ({first}), {len(xml)} chars, head 2500:")
+            print(xml[:2500])
+    except Exception as e:
+        print(f"zip parse failed: {type(e).__name__}: {e}")
     return 0
 
 
