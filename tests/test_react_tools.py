@@ -334,6 +334,150 @@ class _FeedbackProvider:
         return self._response
 
 
+class _FamilyProvider:
+    """Scores the first-round candidate high, later rounds at 3."""
+
+    def __init__(self):
+        self.calls = 0
+        self.ids_scored = []
+
+    async def complete_json(self, system, user):
+        self.calls += 1
+        ids = re.findall(r"id=(\d+)", user)
+        self.ids_scored.extend(ids)
+        if self.calls == 1:
+            return {"scores": [{"id": ids[0], "score": 4}
+                               for ids in [ids]]}
+        return {"scores": [{"id": i, "score": 3} for i in ids]}
+
+
+class _CaptureLogger:
+    def __init__(self):
+        self.lines = []
+
+    def info(self, msg):
+        self.lines.append(str(msg))
+
+
+def _cand(pid, parents=(), children=(), scored=None, semantic=None):
+    raw = {}
+    if parents:
+        raw["parentContinuityBag"] = [
+            {"parentApplicationNumberText": p} for p in parents]
+    if children:
+        raw["childContinuityBag"] = [
+            {"childApplicationNumberText": c} for c in children]
+    c = {"patent_id": pid, "title": f"title {pid}", "applicant": "ACME",
+         "status": "Patented Case", "_raw": raw}
+    if scored is not None:
+        c["relevance_score"] = scored
+    if semantic is not None:
+        c["semantic_score"] = semantic
+    return c
+
+
+class TestFamilyHelpers(unittest.TestCase):
+    def test_family_ids_union_parent_and_child(self):
+        from sources.agents.react_tools import _family_ids
+        c = _cand("1", parents=["P1", "P2"], children=["C1"])
+        self.assertEqual(_family_ids(c), {"P1", "P2", "C1"})
+
+    def test_family_ids_without_raw_empty(self):
+        from sources.agents.react_tools import _family_ids
+        self.assertEqual(_family_ids({"patent_id": "1"}), set())
+
+    def test_members_linked_by_shared_parent_or_child(self):
+        from sources.agents.react_tools import _unscored_family_members
+        from sources.long_task.chat_relevance import SearchPool
+        pool = SearchPool("q")
+        seed = _cand("1001", parents=["P1"], scored=4)
+        member = _cand("1002", parents=["P1"])
+        via_child = _cand("1003", children=["C9"])
+        seed2 = _cand("1004", parents=["P9"], scored=4)
+        via_child_seed = _cand("1005", children=["C9"], scored=4)
+        # 1003 links to 1005 through shared child C9
+        pool.add_from_candidates(
+            [seed, member, via_child, seed2, via_child_seed,
+             _cand("9999", parents=["UNRELATED"])])
+        members = _unscored_family_members(
+            pool, [seed, seed2, via_child_seed], budget=10)
+        got = {c["patent_id"] for c in members}
+        self.assertEqual(got, {"1002", "1003"})
+
+    def test_members_skip_scored_and_cap_budget(self):
+        from sources.agents.react_tools import _unscored_family_members
+        from sources.long_task.chat_relevance import SearchPool
+        pool = SearchPool("q")
+        seed = _cand("1001", parents=["P1"], scored=4)
+        pool.add_from_candidates(
+            [seed, _cand("1002", parents=["P1"], scored=2),
+             _cand("1003", parents=["P1"], semantic=0.9),
+             _cand("1004", parents=["P1"], semantic=0.1)])
+        members = _unscored_family_members(pool, [seed], budget=1)
+        # 1002 already scored -> skipped; 1003 (higher semantic) first
+        self.assertEqual([c["patent_id"] for c in members], ["1003"])
+
+    def test_no_seeds_or_unlinkable_seed_no_members(self):
+        from sources.agents.react_tools import _unscored_family_members
+        from sources.long_task.chat_relevance import SearchPool
+        pool = SearchPool("q")
+        pool.add_from_candidates(
+            [_cand("1001", parents=["P1"], scored=2),
+             _cand("1002", parents=["P1"])])
+        self.assertEqual(_unscored_family_members(pool, [], 10), [])
+        # seed without continuity data can link nothing
+        self.assertEqual(_unscored_family_members(pool, [{"patent_id": "x"}],
+                                                  10), [])
+
+
+class TestFamilyScoring(unittest.IsolatedAsyncioTestCase):
+    async def test_high_seed_lifts_unscored_family_member(self):
+        from sources.agents import react_tools as rt
+        from sources.long_task.chat_relevance import SearchPool
+        agent = _FakeAgent()
+        agent.llm = _FamilyProvider()
+        agent.logger = _CaptureLogger()
+        agent._search_interpretation = None
+        agent._last_user_prompt = "q"
+        pool = SearchPool("q")
+        agent._search_pool = pool
+        with patch.object(rt, "FAMILY_SCORE_ENABLED", True):
+            with patch.object(rt, "_get_flash_provider",
+                              return_value=agent.llm):
+                await rt._rank_pending_pool(
+                    agent,
+                    [_cand("1001", parents=["P1"]),
+                     _cand("1002", parents=["P1"])],
+                    "zh")
+        # first round scored the head (1001 -> 4), family round scored 1002
+        self.assertEqual(agent.llm.calls, 2)
+        self.assertIn("1002", agent.llm.ids_scored)
+        self.assertIn("family scoring", " ".join(agent.logger.lines))
+        self.assertIn("relevance_score",
+                      agent._search_pool._by_id["1002"])
+
+    async def test_no_family_round_without_high_seed(self):
+        from sources.agents import react_tools as rt
+        from sources.long_task.chat_relevance import SearchPool
+        agent = _FakeAgent()
+        agent.llm = _ScoringProvider()  # scores everything at 3
+        agent.logger = _CaptureLogger()
+        agent._search_interpretation = None
+        agent._last_user_prompt = "q"
+        agent._search_pool = SearchPool("q")
+        with patch.object(rt, "FAMILY_SCORE_ENABLED", True):
+            with patch.object(rt, "_get_flash_provider",
+                              return_value=agent.llm):
+                await rt._rank_pending_pool(
+                    agent,
+                    [_cand("1001", parents=["P1"]),
+                     _cand("1002", parents=["P1"])],
+                    "zh")
+        self.assertEqual(agent.llm.calls, 1)  # no family round
+        self.assertNotIn("family scoring",
+                         " ".join(agent.logger.lines))
+
+
 class TestLowHitFeedback(unittest.IsolatedAsyncioTestCase):
     async def test_low_hits_append_suggestions_once(self):
         from sources.agents.react_tools import _maybe_append_feedback

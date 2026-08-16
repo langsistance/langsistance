@@ -49,6 +49,13 @@ TOP_N = int(os.getenv("REACT_TOOL_TOP_N", "5"))
 LOW_HIT_FEEDBACK_THRESHOLD = int(os.getenv(
     "REACT_LOW_HIT_FEEDBACK_THRESHOLD", "10"))
 MAX_PATENT_LIST_ITEMS = int(os.getenv("REACT_MAX_PATENT_LIST_ITEMS", "100"))
+# Family scoring: candidates whose direct family member scored high with
+# the Flash LLM get scored too, even when their own title scored low in
+# the bge-m3 prescore (same invention, different wording — observed with
+# ERP Power "human centric black body dimming" titles).
+FAMILY_SCORE_ENABLED = os.getenv("REACT_FAMILY_SCORE", "1") == "1"
+FAMILY_SEED_MIN = int(os.getenv("REACT_FAMILY_SEED_MIN", "4"))
+FAMILY_SCORE_BUDGET = int(os.getenv("REACT_FAMILY_SCORE_BUDGET", "30"))
 RELEVANCE_RANK_ENABLED = os.getenv("REACT_RELEVANCE_RANK", "1") != "0"
 REACT_POOL_MAX_PAGES = int(os.getenv("REACT_POOL_MAX_PAGES", "2"))
 # Queries whose total hits exceed this threshold are never paged through:
@@ -538,6 +545,60 @@ async def _collect_search_pages(agent, entry, args, first_raw: list) -> list:
     return items
 
 
+def _family_ids(c: dict) -> set:
+    """Continuity application numbers of a candidate (parent + child).
+
+    Direct-family linkage only: sharing a parent/child application
+    number means the two records describe the same invention chain —
+    the strongest available evidence that they belong together, without
+    any title/text comparison.  Records without continuity data (e.g.
+    bare patent numbers from the CPC index) return an empty set and can
+    never be linked.
+    """
+    ids: set = set()
+    raw = c.get("_raw") if isinstance(c, dict) else None
+    if not isinstance(raw, dict):
+        return ids
+    for key in ("parentContinuityBag", "childContinuityBag"):
+        bag = raw.get(key)
+        if not isinstance(bag, list):
+            continue
+        for entry in bag:
+            if not isinstance(entry, dict):
+                continue
+            for k in ("parentApplicationNumberText",
+                      "childApplicationNumberText"):
+                v = entry.get(k)
+                if isinstance(v, str) and v.strip():
+                    ids.add(v.strip())
+    return ids
+
+
+def _unscored_family_members(pool, seeds: list, budget: int) -> list:
+    """Unscored direct-family members of the high-scoring seeds.
+
+    A member is linked when its continuity ids intersect a seed's ids.
+    Members are ordered by semantic prescore desc (the semantically
+    closest wording variant gets scored first) and capped by *budget*.
+    Returns a list of candidate dicts; never mutates the pool.
+    """
+    if not seeds:
+        return []
+    seed_ids = set()
+    for s in seeds:
+        seed_ids |= _family_ids(s)
+    if not seed_ids:
+        return []
+    members = []
+    for c in pool._by_id.values():
+        if "relevance_score" in c:
+            continue
+        if _family_ids(c) & seed_ids:
+            members.append(c)
+    members.sort(key=lambda c: -(c.get("semantic_score") or 0.0))
+    return members[:budget]
+
+
 async def _rank_pending_pool(agent, candidates, lang,
                              apply_rerank: bool = True) -> Tuple[list, str]:
     """Merge collected candidate dicts into the turn's SearchPool, score
@@ -593,6 +654,31 @@ async def _rank_pending_pool(agent, candidates, lang,
             f"relevance scoring — candidates={len(head)} scored={scored} "
             f"elapsed={round(time.monotonic() - _score_start, 1)}s"
         )
+    # Family scoring: a high-scoring seed lifts its direct-family members
+    # into the Flash scoring budget even when their own titles scored
+    # low in the prescore — same invention, different wording.
+    _family_scored = 0
+    if FAMILY_SCORE_ENABLED:
+        try:
+            seeds = [
+                c for c in pool._by_id.values()
+                if isinstance(c.get("relevance_score"), (int, float))
+                and c["relevance_score"] >= FAMILY_SEED_MIN
+            ]
+            members = _unscored_family_members(pool, seeds,
+                                               FAMILY_SCORE_BUDGET)
+            if members:
+                _family_scored = await score_candidates_concurrent(
+                    members, pool.query,
+                    _get_flash_provider(agent) or getattr(agent, "llm", None),
+                    rubric=_rubric)
+                if _glog is not None:
+                    _glog.info(
+                        f"family scoring — seeds={len(seeds)} "
+                        f"members={len(members)} scored={_family_scored}"
+                    )
+        except Exception:
+            pass
     pool.prune()
     ranked = pool.ranked(MAX_PATENT_LIST_ITEMS)
     rerank_note = ""
