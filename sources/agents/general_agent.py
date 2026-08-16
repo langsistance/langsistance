@@ -1576,6 +1576,7 @@ Begin your response now:
         self._missing_dir_done = False  # missing-direction feedback fired flag, per request
         self._missing_dir_queries = None  # inferred supplementary queries, per request
         self._auto_round_done = False  # system-driven second round fired, per request
+        self._auto_ladder_used = 0  # auto-executed ladder queries, per request
         self._tried_queries = []  # queries already sent to the search tool, per request
         self._cpc_hints = None  # matched CPC codes for the question, per request
         self.knowledgeTool = (None, None)  # (knowledge_item, tool_info) — selected inside the loop

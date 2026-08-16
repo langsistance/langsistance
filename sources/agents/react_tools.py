@@ -52,6 +52,12 @@ REACT_POOL_MAX_TOTAL_PAGES = int(os.getenv("REACT_POOL_MAX_TOTAL_PAGES", "1000")
 MISSING_DIR_MIN_CANDIDATES = int(os.getenv("REACT_MISSING_DIR_MIN_CANDIDATES", "3"))
 MISSING_DIR_MIN_SCORE = float(os.getenv("REACT_MISSING_DIR_MIN_SCORE", "4"))
 REACT_AUTO_ROUND_MAX_QUERIES = int(os.getenv("REACT_AUTO_ROUND_MAX_QUERIES", "2"))
+# Ladder exhaustion is system-driven, not left to the agent's discretion:
+# when a search leaves nothing displayable, the next untried ladder
+# queries are executed by the system (observed: the agent concluded "no
+# results" with half the ladder untried despite the zero-hit nudge).
+AUTO_LADDER_BATCH = 2  # untried ladder queries auto-executed per observation
+AUTO_LADDER_MAX = int(os.getenv("REACT_AUTO_LADDER_MAX_QUERIES", "6"))
 # CPC semantic expansion (plan B, route C): matched CPC code/title pairs
 # seed the missing-direction prompt with the domain's classification
 # language.  Off by default — requires the data files and vector cache
@@ -666,6 +672,70 @@ async def _auto_second_round(agent, entry, args, ranked: list, note: str,
     return ranked, note + _format_feedback_note(queries, lang, kind="missing")
 
 
+async def _auto_ladder_round(agent, entry, lang) -> Optional[Tuple[list, str, str]]:
+    """Execute the untried ladder queries when a search leaves nothing
+    displayable, so the ladder is exhausted even if the agent concludes
+    early (observed: "no results" with half the ladder untried despite
+    the zero-hit nudge).
+
+    Bounded: AUTO_LADDER_BATCH per observation, AUTO_LADDER_MAX per
+    request.  Executed queries are recorded as tried so the nudge lists
+    stay accurate.  Returns (ranked, ranking_note, ladder_note) when at
+    least one query executed; None when there was nothing to run.
+    ladder_note says how many LIVE candidates landed (dead-only gains do
+    not count).  Never raises.
+    """
+    if not _relevance_pool_applies_tool(agent, entry.tool_info):
+        return None
+    used = getattr(agent, "_auto_ladder_used", 0) or 0
+    if used >= AUTO_LADDER_MAX:
+        return None
+    queries = (getattr(agent, "_search_rewrite", None) or {}).get("queries") or []
+    tried = getattr(agent, "_tried_queries", None) or []
+    untried = [q for q in queries if q not in tried]
+    if not untried:
+        return None
+    take = untried[:min(AUTO_LADDER_BATCH, AUTO_LADDER_MAX - used)]
+    gained = 0
+    executed: list = []
+    ranked: list = []
+    ranking_note = ""
+    for q in take:
+        agent._auto_ladder_used = used + 1
+        used += 1
+        try:
+            envelope = _build_uspto_envelope(entry.tool_info, q)
+            await asyncio.to_thread(
+                entry.tool.invoke, _tool_invoke_payload(agent, envelope))
+        except Exception:
+            break
+        executed.append(q)
+        if q not in tried:
+            tried.append(q)
+        raw = getattr(agent, "_pending_raw_items", None) or []
+        try:
+            collected = await _collect_search_pages(agent, entry, {"q": q}, raw)
+        except Exception:
+            collected = []
+        gained += len([c for c in collected
+                       if not is_dead_status(c.get("status"))])
+        ranked, ranking_note = await _rank_pending_pool(
+            agent, collected, lang, apply_rerank=False)
+    if not executed:
+        return None
+    if lang == "en":
+        merged = (f"(merged {gained} new candidates into the pool)"
+                  if gained > 0 else "(no live hits)")
+        ladder_note = (f"\n\nAuto-executed untried ladder queries "
+                       f"{merged}:\n" + _query_lines(executed))
+    else:
+        merged = (f"（并入 {gained} 条新候选）" if gained > 0
+                  else "（均无有效命中）")
+        ladder_note = (f"\n\n已自动执行未尝试的阶梯检索式{merged}：\n"
+                       + _query_lines(executed))
+    return ranked, ranking_note, ladder_note
+
+
 def _query_lines(queries: list) -> str:
     """Render a bare numbered query list (no guidance header)."""
     return "\n".join(f"{i}. {q}" for i, q in enumerate(queries, start=1))
@@ -1050,8 +1120,32 @@ async def make_action_executor(agent, registry, push_filter=None):
             text = _apply_ladder_cap(agent, text, total, lang)
             if not shown or (isinstance(total, int) and total == 0):
                 # No displayable results — zero hits, or every hit was
-                # dead-filtered.  Point the agent at the untried ladder
-                # variants instead of letting the turn die here.
+                # dead-filtered.  First execute the untried ladder
+                # queries system-side (the agent cannot conclude early
+                # while they remain untried), then point the agent at
+                # whatever is still left.
+                auto = await _auto_ladder_round(agent, entry, lang)
+                if auto is not None:
+                    ranked, ranking_note, ladder_note = auto
+                    if ranked:
+                        shown = [c["_raw"] for c in ranked]
+                        agent._pending_raw_items = shown
+                        agent._search_ranked = True
+                        digest = _ranked_digest(ranked, lang=lang)
+                        note = ranking_note + ladder_note
+                        if lang == "en":
+                            text = (f"Search results ({len(shown)} records, "
+                                    f"{note}):\n{digest}\n\n"
+                                    "The full list is displayed to the user.")
+                        else:
+                            text = (f"检索结果（{len(shown)} 条，{note}）：\n"
+                                    f"{digest}\n\n"
+                                    "完整列表已展示给用户。")
+                    else:
+                        # Nothing displayable either — keep the existing
+                        # text (dead-filter note etc.) and append only the
+                        # ladder outcome.
+                        text = text.rstrip() + "\n" + ladder_note
                 text = _append_untried_ladder_note(agent, text, lang)
             text = await _maybe_append_feedback(agent, text, total, lang)
             return {"kind": "observation", "text": text}

@@ -662,10 +662,11 @@ class TestZeroHitLadderNudge(unittest.TestCase):
         self.assertIn("尚未尝试", result["text"])
         self.assertIn("q2", result["text"])
 
-    def test_all_dead_hits_noted_and_nudged(self):
+    def test_all_dead_hits_noted_and_ladder_auto_executed(self):
         # total > 0 but every hit is a dead patent: the dead filter
-        # empties the list — the observation must say so and offer the
-        # untried ladder variants instead of going silent.
+        # empties the list — the observation must say so, and the
+        # system auto-executes the untried ladder instead of leaving
+        # it to the agent.
         agent = _FakeAgent()
         agent._last_user_prompt = "干燥空气"
         agent._search_rewrite = {"queries": ["q1", "q2"]}
@@ -707,8 +708,10 @@ class TestZeroHitLadderNudge(unittest.TestCase):
         result = asyncio.run(
             executor("uspto_search", {"params": '{"q": "q1"}'}, 1))
         self.assertIn("失效", result["text"])
-        self.assertIn("尚未尝试", result["text"])
+        self.assertIn("已自动执行未尝试的阶梯检索式", result["text"])
         self.assertIn("q2", result["text"])
+        # the system already ran the ladder — nothing left to nudge with
+        self.assertNotIn("尚未尝试", result["text"])
 
 
 class TestSemanticRerankWiring(unittest.IsolatedAsyncioTestCase):
@@ -848,6 +851,149 @@ class TestAutoSecondRound(unittest.IsolatedAsyncioTestCase):
             agent, entry, {"query": "x"}, self._ranked(pool), "n", "zh")
         self.assertIn("补充检索式", note)
         self.assertIn('"fresh" AND direction', note)
+
+
+class _LadderEntry(_AutoRoundEntry):
+    """Entry whose tool_info passes the pool-eligibility gate (push=2,
+    USPTO URL) — required by _auto_ladder_round's tool guard."""
+
+    def __init__(self, agent):
+        super().__init__(agent)
+        self.tool_info = _ToolInfo(
+            "uspto search",
+            url="https://api.uspto.gov/api/v1/patent/applications/search",
+            push=2)
+
+
+class TestAutoLadderRound(unittest.IsolatedAsyncioTestCase):
+    """When a search leaves nothing displayable, the system executes the
+    untried ladder queries itself — bounded per observation and per
+    request — so the ladder is exhausted even when the agent concludes
+    early."""
+
+    def _agent_with_ladder(self, tried=()):
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        agent._flash_llm = _ScoringProvider()
+        agent._search_rewrite = {"queries": ["q1", "q2", "q3", "q4", "q5"]}
+        agent._tried_queries = list(tried)
+        return agent
+
+    async def test_executes_untried_and_merges_pool(self):
+        from sources.agents.react_tools import _auto_ladder_round
+        agent = self._agent_with_ladder(tried=["q1", "q2", "q3"])
+        entry = _LadderEntry(agent)
+        result = await _auto_ladder_round(agent, entry, "zh")
+        self.assertIsNotNone(result)
+        ranked, ranking_note, ladder_note = result
+        self.assertEqual(entry.invoke_calls, 2)  # batch of 2
+        self.assertIn("已自动执行未尝试的阶梯检索式", ladder_note)
+        self.assertIn("并入 2 条新候选", ladder_note)
+        self.assertIn("q4", ladder_note)
+        self.assertIn("q5", ladder_note)
+        ids = [c["patent_id"] for c in ranked]
+        self.assertIn("210000001", ids)
+        self.assertIn("220000001", ids)
+        # executed queries are recorded as tried
+        self.assertIn("q4", agent._tried_queries)
+        self.assertIn("q5", agent._tried_queries)
+
+    async def test_no_untried_returns_none(self):
+        from sources.agents.react_tools import _auto_ladder_round
+        agent = self._agent_with_ladder(
+            tried=["q1", "q2", "q3", "q4", "q5"])
+        entry = _LadderEntry(agent)
+        self.assertIsNone(await _auto_ladder_round(agent, entry, "zh"))
+        self.assertEqual(entry.invoke_calls, 0)
+
+    async def test_request_cap_limits_total_executions(self):
+        from sources.agents.react_tools import _auto_ladder_round
+        agent = self._agent_with_ladder(tried=["q1"])
+        entry = _LadderEntry(agent)
+        with patch("sources.agents.react_tools.AUTO_LADDER_MAX", 3):
+            first = await _auto_ladder_round(agent, entry, "zh")
+            second = await _auto_ladder_round(agent, entry, "zh")
+            third = await _auto_ladder_round(agent, entry, "zh")
+        self.assertIsNotNone(first)   # q2, q3
+        self.assertIsNotNone(second)  # q4 (cap reached)
+        self.assertIsNone(third)      # budget exhausted
+        self.assertEqual(entry.invoke_calls, 3)
+
+    async def test_non_pool_tool_skipped(self):
+        from sources.agents.react_tools import _auto_ladder_round
+        agent = self._agent_with_ladder()
+        entry = _LadderEntry(agent)
+        entry.tool_info = _ToolInfo("web search", push=1)
+        self.assertIsNone(await _auto_ladder_round(agent, entry, "zh"))
+        self.assertEqual(entry.invoke_calls, 0)
+
+    async def test_invoke_failure_returns_none(self):
+        from sources.agents.react_tools import _auto_ladder_round
+        agent = self._agent_with_ladder()
+        entry = _LadderEntry(agent)
+
+        class _Boom:
+            def invoke(self, payload):
+                raise RuntimeError("down")
+        entry.tool = _Boom()
+        self.assertIsNone(await _auto_ladder_round(agent, entry, "zh"))
+        # the failed query is not marked tried — a later round retries it
+        self.assertNotIn("q1", agent._tried_queries)
+
+
+class TestAutoLadderIntegration(unittest.IsolatedAsyncioTestCase):
+    """Zero-hit observations run the untried ladder inside execute_action
+    so the agent sees real results instead of a dead end."""
+
+    async def test_zero_hit_observation_runs_untried_ladder(self):
+        from sources.agents.react_tools import ToolEntry, make_action_executor
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        agent._flash_llm = _ScoringProvider()
+        agent._feedback_done = True  # keep the observation free of feedback
+        agent._search_rewrite = {"queries": ["ladder1", "ladder2"]}
+
+        class _SeqTool:
+            """Agent's own call returns a zero-hit; later calls (the
+            auto-executed ladder) return a live patent."""
+
+            def __init__(self, agent2):
+                self._agent = agent2
+                self.calls = 0
+
+            def invoke(self, payload):
+                self.calls += 1
+                if self.calls == 1:
+                    # production shape: the backend tool wraps the
+                    # zero-hit dict into a one-element list
+                    self._agent._pending_raw_items = [
+                        {"count": 0,
+                         "message": "No matching records found"}]
+                    self._agent._last_search_total = 0
+                else:
+                    self._agent._pending_raw_items = [
+                        _usp_raw_item("19511555",
+                                      "AIR DRYER CONTROL USING HUMIDITY")]
+                    self._agent._last_search_total = 1
+                return "ok"
+
+        tool_info = _ToolInfo(
+            "uspto search",
+            url="https://api.uspto.gov/api/v1/patent/applications/search")
+        entry = ToolEntry(name="uspto_search", kind="knowledge",
+                          knowledge=_Knowledge(3, ktype=1),
+                          tool_info=tool_info,
+                          tool=_SeqTool(agent))
+        registry = {entry.name: entry}
+        executor = await make_action_executor(agent, registry, None)
+        result = await executor("uspto_search", {"q": "agent query"}, 1)
+        self.assertEqual(result["kind"], "observation")
+        self.assertIn("已自动执行未尝试的阶梯检索式", result["text"])
+        self.assertIn("19511555", result["text"])
+        # the auto-landed candidates surface to the UI pipeline
+        pending = agent._pending_raw_items or []
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["applicationNumberText"], "19511555")
 
 
 if __name__ == "__main__":
