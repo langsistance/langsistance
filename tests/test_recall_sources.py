@@ -243,6 +243,35 @@ class TestFetchByCpc(unittest.TestCase):
                 self.assertEqual(fetch_by_cpc(["H05B45/20"]), [])
         mock_fetch.assert_not_called()
 
+    def test_newest_patents_preferred_numerically(self):
+        # patent numbers vary in length (7-digit grants from the 1900s,
+        # 8/9-digit from 2000s+); TEXT ordering would put "9999999"
+        # (1870s) ahead of "12289808" (2025) — only length-aware
+        # ordering picks the truly newest patents, which are also the
+        # only ones the applications/search API can fetch.
+        import sqlite3
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = os.path.join(tmp, "cpc_index.db")
+            conn = sqlite3.connect(db_path)
+            conn.execute("CREATE TABLE cpc_patents (cpc TEXT, patent TEXT)")
+            conn.execute("CREATE INDEX idx_cpc ON cpc_patents(cpc)")
+            conn.executemany(
+                "INSERT INTO cpc_patents VALUES (?, ?)",
+                [("H05B45/20", "11882632"),
+                 ("H05B45/20", "9999999"),    # 1870s grant
+                 ("H05B45/20", "12289808")])
+            conn.commit()
+            conn.close()
+            with patch("sources.long_task.recall_sources.CPC_INDEX_DB",
+                       db_path), \
+                 patch("sources.long_task.recall_sources.fetch_by_numbers",
+                       return_value=[]) as mock_fetch:
+                self.assertEqual(fetch_by_cpc(["H05B45/20"]), [])
+        numbers = mock_fetch.call_args[0][0]
+        self.assertEqual(numbers[0], "12289808")
+        self.assertEqual(numbers[1], "11882632")
+        self.assertEqual(numbers[-1], "9999999")
+
     def test_no_patents_in_index_returns_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = self._make_index_db(tmp)

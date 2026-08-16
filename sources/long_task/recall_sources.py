@@ -198,12 +198,14 @@ def fetch_by_cpc(codes: list, timeout: int = 30) -> list:
                 if code.endswith("/00") and len(base) >= 4:
                     rows = conn.execute(
                         "SELECT DISTINCT patent FROM cpc_patents "
-                        "WHERE cpc LIKE ? ORDER BY patent DESC LIMIT 25",
+                        "WHERE cpc LIKE ? "
+                        "ORDER BY length(patent) DESC, patent DESC LIMIT 25",
                         (base + "/%",))
                 else:
                     rows = conn.execute(
                         "SELECT DISTINCT patent FROM cpc_patents "
-                        "WHERE cpc = ? ORDER BY patent DESC LIMIT 25",
+                        "WHERE cpc = ? "
+                        "ORDER BY length(patent) DESC, patent DESC LIMIT 25",
                         (code,))
                 for (patent,) in rows:
                     if patent not in seen:
