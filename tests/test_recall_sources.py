@@ -5,6 +5,7 @@ empty results on failure; recall expansion is an enhancement, never a
 hard dependency.
 """
 import os
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -158,31 +159,74 @@ class TestFetchByNumbers(unittest.TestCase):
 
 
 class TestFetchByCpc(unittest.TestCase):
-    def test_without_key_returns_empty_without_http(self):
-        with patch("sources.long_task.recall_sources.outbound_http") as mock, \
-             patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(fetch_by_cpc(["H05B45/20"]), [])
-        mock.request.assert_not_called()
+    """CPC recall reads the local MCF index (built by
+    scripts/build_cpc_index.py) and fetches the matching patents'
+    metadata through the number search."""
 
-    def test_with_key_posts_ppubs_query(self):
-        payload = {"totalCount": 1, "results": [
-            {"patentNumber": "11882632", "inventionTitle": "LED DRIVER"}]}
-        with patch("sources.long_task.recall_sources.outbound_http") as mock, \
-             patch.dict(os.environ, {"PPS_API_KEY": "pps-key"}):
-            mock.request.return_value = _FakeResponse(200, payload)
-            records = fetch_by_cpc(["H05B45/20"])
+    def _make_index_db(self, tmp):
+        import sqlite3
+        db_path = os.path.join(tmp, "cpc_index.db")
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE cpc_patents (cpc TEXT, patent TEXT)")
+        conn.execute("CREATE INDEX idx_cpc ON cpc_patents(cpc)")
+        conn.executemany(
+            "INSERT INTO cpc_patents VALUES (?, ?)",
+            [("H05B45/20", "11882632"),
+             ("H05B45/20", "12289808"),
+             ("H05B45/21", "11647569")])
+        conn.commit()
+        conn.close()
+        return db_path
+
+    def test_queries_index_and_fetches_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = self._make_index_db(tmp)
+            items = [{"applicationNumberText": "17473914",
+                      "applicationMetaData": {
+                          "inventionTitle": "LED DRIVER",
+                          "applicationStatusDescriptionText":
+                              "Patented Case"}}]
+            with patch("sources.long_task.recall_sources.CPC_INDEX_DB",
+                       db_path), \
+                 patch("sources.long_task.recall_sources.fetch_by_numbers",
+                       return_value=items) as mock_fetch:
+                records = fetch_by_cpc(["H05B45/20"])
         self.assertEqual(len(records), 1)
-        call = mock.request.call_args
-        self.assertEqual(call.args[0], "POST")
-        self.assertIn("ppubs.uspto.gov", call.args[1])
-        self.assertEqual(call.kwargs["headers"]["X-API-KEY"], "pps-key")
-        self.assertIn("H05B45/20", call.kwargs["json"]["searchText"])
+        numbers = mock_fetch.call_args[0][0]
+        self.assertIn("11882632", numbers)
+        self.assertIn("12289808", numbers)
 
-    def test_failure_returns_empty(self):
-        with patch("sources.long_task.recall_sources.outbound_http") as mock, \
-             patch.dict(os.environ, {"PPS_API_KEY": "pps-key"}):
-            mock.request.side_effect = RuntimeError("down")
-            self.assertEqual(fetch_by_cpc(["H05B45/20"]), [])
+    def test_main_group_hint_matches_subgroups(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = self._make_index_db(tmp)
+            with patch("sources.long_task.recall_sources.CPC_INDEX_DB",
+                       db_path), \
+                 patch("sources.long_task.recall_sources.fetch_by_numbers",
+                       return_value=[]) as mock_fetch:
+                self.assertEqual(fetch_by_cpc(["H05B45/00"]), [])
+        numbers = mock_fetch.call_args[0][0]
+        # LIKE prefix pulls both subgroups, the exact one excluded
+        self.assertIn("11882632", numbers)
+        self.assertIn("11647569", numbers)
+
+    def test_missing_index_returns_empty_without_http(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("sources.long_task.recall_sources.CPC_INDEX_DB",
+                       os.path.join(tmp, "absent.db")), \
+                 patch("sources.long_task.recall_sources.fetch_by_numbers") \
+                    as mock_fetch:
+                self.assertEqual(fetch_by_cpc(["H05B45/20"]), [])
+        mock_fetch.assert_not_called()
+
+    def test_no_patents_in_index_returns_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = self._make_index_db(tmp)
+            with patch("sources.long_task.recall_sources.CPC_INDEX_DB",
+                       db_path), \
+                 patch("sources.long_task.recall_sources.fetch_by_numbers") \
+                    as mock_fetch:
+                self.assertEqual(fetch_by_cpc(["A01B1/00"]), [])
+        mock_fetch.assert_not_called()
 
 
 if __name__ == "__main__":

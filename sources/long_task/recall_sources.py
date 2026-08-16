@@ -5,8 +5,9 @@ Two transports widen recall beyond the keyword ladder:
 - family fetch — USPTO applications/search free-text q with the patent
   / application numbers collected from the pool candidates' continuity
   bags (childContinuityBag / parentContinuityBag);
-- CPC fetch — Patent Public Search (ppubs) query by the matched CPC
-  codes, gated by the PPS_API_KEY env var (off when absent).
+- CPC fetch — the local MCF index (built monthly by
+  scripts/build_cpc_index.py) resolves the matched CPC codes to patent
+  numbers; their metadata comes through the same number search.
 
 Every function degrades to empty results on any failure — recall
 expansion is an enhancement, never a hard dependency.
@@ -22,8 +23,8 @@ from sources.long_task.candidate_metadata import build_candidates
 logger = Logger("recall_sources.log")
 
 USPTO_SEARCH_URL = "https://api.uspto.gov/api/v1/patent/applications/search"
-PPUBS_SEARCH_URL = ("https://ppubs.uspto.gov/dirsearch-public/searches/"
-                    "searchWithBeFamily")
+CPC_INDEX_DB = os.path.join(
+    os.getenv("CPC_DATA_DIR", "data/cpc"), "cpc_index.db")
 
 # Enough metadata to build candidates and continue the family chain.
 RECALL_SEARCH_FIELDS = [
@@ -162,41 +163,46 @@ def fetch_by_numbers(numbers: list, timeout: int = 30) -> list:
 
 
 def fetch_by_cpc(codes: list, timeout: int = 30) -> list:
-    """Fetch granted US patents classified under the given CPC codes via
-    the Patent Public Search API.
+    """Resolve CPC recall via the local MCF index (built monthly by
+    scripts/build_cpc_index.py), then fetch the matching patents'
+    metadata through the number search.
 
-    Requires PPS_API_KEY — returns [] when the key is absent (recall
-    expansion must never hard-fail).  Response shapes vary; the records
-    are normalized to minimal {patent_number, title, assignee} dicts.
+    Main-group hints (/00) match all their subgroups; subgroup hints
+    match exactly.  Newest patents are preferred.  [] when the index is
+    absent or nothing matches — recall expansion must never hard-fail.
     """
     codes = [str(c).strip() for c in (codes or []) if str(c).strip()]
-    pps_key = os.getenv("PPS_API_KEY", "")
-    if not codes or not pps_key:
+    if not codes or not os.path.exists(CPC_INDEX_DB):
         return []
-    search_text = " OR ".join(f"cpc/{c}" for c in codes)
-    body: dict[str, Any] = {
-        "searchText": search_text,
-        "databaseFilters": [{"databaseName": "USPAT", "countryCode": "US"}],
-        "sort": [{"fieldName": "patentNumber", "order": "desc"}],
-        "pagination": {"offset": 0, "limit": 25},
-    }
+    patents: list = []
+    seen = set()
     try:
-        response = outbound_http.request(
-            "POST", PPUBS_SEARCH_URL, purpose="recall_cpc",
-            headers={"X-API-KEY": pps_key, "X-Search-Scope": "US-PGPUB,USPAT",
-                     "Content-Type": "application/json"},
-            json=body, timeout=timeout)
-        if getattr(response, "status_code", 0) != 200:
-            logger.warning(
-                f"recall cpc fetch failed — "
-                f"status={getattr(response, 'status_code', None)}")
-            return []
-        data = response.json()
-        results = (data.get("results")
-                   or data.get("patents")
-                   or data.get("patentFileWrapperDataBag") or [])
-        logger.info(f"recall cpc fetch — codes={codes} hits={len(results)}")
-        return results
+        import sqlite3
+        conn = sqlite3.connect(CPC_INDEX_DB)
+        try:
+            for code in codes:
+                base = code.split("/")[0]
+                if code.endswith("/00") and len(base) >= 4:
+                    rows = conn.execute(
+                        "SELECT DISTINCT patent FROM cpc_patents "
+                        "WHERE cpc LIKE ? ORDER BY patent DESC LIMIT 25",
+                        (base + "/%",))
+                else:
+                    rows = conn.execute(
+                        "SELECT DISTINCT patent FROM cpc_patents "
+                        "WHERE cpc = ? ORDER BY patent DESC LIMIT 25",
+                        (code,))
+                for (patent,) in rows:
+                    if patent not in seen:
+                        seen.add(patent)
+                        patents.append(patent)
+        finally:
+            conn.close()
     except Exception as exc:
-        logger.warning(f"recall cpc fetch failed: {exc}")
+        logger.warning(f"cpc index lookup failed: {exc}")
         return []
+    if not patents:
+        return []
+    logger.info(f"recall cpc fetch — codes={codes} "
+                f"index_hits={len(patents)}")
+    return fetch_by_numbers(patents, timeout=timeout)
