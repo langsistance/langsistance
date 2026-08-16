@@ -70,10 +70,15 @@ def main() -> int:
     files = (product.get("productFileBag")
              or product.get("bulkDataFileBag")
              or product.get("fileBag") or [])
-    print(f"file entries: {len(files)}")
-    if files:
-        print("first entry type:", type(files[0]).__name__)
-        print("newest 3 entries (raw):")
+    print(f"file entries type: {type(files).__name__}, len: {len(files)}")
+    if isinstance(files, dict):
+        print("file bag keys:", sorted(files.keys()))
+        print("file bag raw (truncated):")
+        print(json.dumps(files, ensure_ascii=False)[:3000])
+        # normalise: if the dict maps names to entry dicts, keep the
+        # entry dicts as the searchable list
+        files = list(files.values())
+    else:
         for f in files[-3:]:
             print(json.dumps(f, ensure_ascii=False)[:800])
     print()
