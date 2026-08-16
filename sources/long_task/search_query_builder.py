@@ -8,7 +8,7 @@ LLM call so they can be unit-tested without a provider.
 
 import json
 import re
-from typing import Any
+from typing import Any, Optional
 
 DEFAULT_QUERY_MAX_LENGTH = 250
 
@@ -347,31 +347,42 @@ MISSING_DIRECTION_SYSTEM_PROMPT = (
     "2. 优先输出「缺失方向」：与用户问题相关、但当前标题中未出现的器件/"
     "电路/系统/应用场景写法（上位/下位/相邻表述），而不是复述已有标题的"
     "用词\n"
-    "3. 每条检索式由 2-3 个概念组组成，多词短语加双引号，同组同义词用 OR "
+    "3. 若给出 cpc_hints（该技术主题对应的专利分类号及分类标题），优先从"
+    "这些分类标题中提取该领域专利文献的实际用词，组合进检索式\n"
+    "4. 每条检索式由 2-3 个概念组组成，多词短语加双引号，同组同义词用 OR "
     "连接，概念组之间用 AND 连接\n"
-    "4. 命中率优先：三概念 AND 组合经常零命中，至少一半检索式只用 2 个"
+    "5. 命中率优先：三概念 AND 组合经常零命中，至少一半检索式只用 2 个"
     "概念组；概念组内优先使用单个单词或词根通配符，避免罕见的完整短语"
     "（短语类词命中率极低，确需短语时给出单词替代词）\n"
-    "5. 输出 2-4 条检索式，按松紧排序（最紧的在前）；每条最多 12 个关键词、"
+    "6. 输出 2-4 条检索式，按松紧排序（最紧的在前）；每条最多 12 个关键词、"
     "250 字符，禁止出现中文\n"
     'Return JSON: {"queries": ["最紧", "较松", ...]}'
 )
 
 
 async def build_missing_direction_queries(question: str, titles: list,
-                                          provider: Any) -> list:
+                                          provider: Any,
+                                          cpc_hints: Optional[list] = None) -> list:
     """Infer technical directions missing from the current candidate pool.
 
     Unlike title refinement (build_feedback_queries), this asks the Flash
     LLM which related phrasings are NOT yet covered by the pool's titles,
     and to derive its own vocabulary from the question when the pool is
-    noise.  Never raises; returns a sanitized query list (possibly empty).
+    noise.  *cpc_hints* (matched CPC code/title pairs, plan B route C)
+    seed the classification language of the domain.  Never raises;
+    returns a sanitized query list (possibly empty).
     """
     if not titles or provider is None:
         return []
-    user_content = json.dumps(
-        {"question": question, "hit_titles": [str(t) for t in titles][:10]},
-        ensure_ascii=False)
+    payload = {"question": question,
+               "hit_titles": [str(t) for t in titles][:10]}
+    if cpc_hints:
+        payload["cpc_hints"] = [
+            {"code": str(h.get("code", "")),
+             "title": str(h.get("title", ""))}
+            for h in cpc_hints[:8] if h.get("code")
+        ]
+    user_content = json.dumps(payload, ensure_ascii=False)
     try:
         result = await provider.complete_json(MISSING_DIRECTION_SYSTEM_PROMPT,
                                               user_content)

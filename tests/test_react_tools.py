@@ -527,6 +527,57 @@ class TestMissingDirectionFeedback(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(note, note)
 
 
+class _CapturingFeedbackProvider(_FeedbackProvider):
+    def __init__(self, response=None, fail=False):
+        super().__init__(response, fail)
+        self.payloads = []
+
+    async def complete_json(self, system, user):
+        self.payloads.append(user)
+        return await super().complete_json(system, user)
+
+
+class TestCpcExpansionWiring(unittest.IsolatedAsyncioTestCase):
+    """CPC hints (plan B, route C) seed the missing-direction inference
+    only when REACT_CPC_EXPANSION is on; failures degrade silently."""
+
+    async def _run(self, switch):
+        from unittest.mock import patch
+        from sources.agents.react_tools import _rank_pending_pool
+        from sources.long_task.candidate_metadata import build_candidates
+        from sources.long_task.chat_relevance import SearchPool
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        agent._flash_llm = _CapturingFeedbackProvider()
+        pool = SearchPool("干燥空气")
+        pool.add([_usp_raw_item("19511555", "AIR DRYER CONTROL USING HUMIDITY"),
+                  _usp_raw_item("18184836", "MOISTURE REGULATION ENCLOSURE"),
+                  _usp_raw_item("17222222", "DEW POINT SENSOR")])
+        for pid in pool._by_id:
+            pool._by_id[pid]["relevance_score"] = 5
+        agent._search_pool = pool
+        items = [_usp_raw_item("19511555", "AIR DRYER CONTROL USING HUMIDITY"),
+                 _usp_raw_item("18184836", "MOISTURE REGULATION ENCLOSURE"),
+                 _usp_raw_item("17222222", "DEW POINT SENSOR")]
+        cands = build_candidates(items)
+        hints = [{"code": "H05B45/00", "title": "LED circuits"}]
+        with patch("sources.agents.react_tools.CPC_EXPANSION_ENABLED", switch), \
+             patch("sources.long_task.cpc_semantic.match_query_to_cpc",
+                   return_value=hints) as mock_cpc:
+            await _rank_pending_pool(agent, cands, "zh")
+        return agent, mock_cpc
+
+    async def test_cpc_hints_reach_inference_when_enabled(self):
+        agent, mock_cpc = await self._run(True)
+        mock_cpc.assert_called_once()
+        self.assertIn("H05B45/00", agent._flash_llm.payloads[0])
+        self.assertIn("LED circuits", agent._flash_llm.payloads[0])
+
+    async def test_cpc_skipped_when_disabled(self):
+        _, mock_cpc = await self._run(False)
+        mock_cpc.assert_not_called()
+
+
 class _AutoRoundEntry:
     """Fake tool entry whose invoke fills _pending_raw_items first."""
 
@@ -663,6 +714,24 @@ class TestZeroHitLadderNudge(unittest.TestCase):
 
 
 class TestSemanticRerankWiring(unittest.IsolatedAsyncioTestCase):
+    async def test_rerank_skipped_when_apply_rerank_false(self):
+        from unittest.mock import patch
+        from sources.agents.react_tools import _rank_pending_pool
+        from sources.long_task.candidate_metadata import build_candidates
+        agent = _FakeAgent()
+        agent._last_user_prompt = "干燥空气"
+        agent._search_pool = None
+        agent._flash_llm = _ScoringProvider()
+        items = [_usp_raw_item("19511555", "A"),
+                 _usp_raw_item("18184836", "B")]
+        cands = build_candidates(items)
+        with patch("sources.agents.react_tools.RERANK_ENABLED", True), \
+             patch("sources.long_task.semantic_rerank.rerank_candidates") as mock_rerank:
+            ranked, note = await _rank_pending_pool(
+                agent, cands, "zh", apply_rerank=False)
+        mock_rerank.assert_not_called()
+        self.assertNotIn("语义重排", note)
+
     async def test_rerank_applied_when_enabled(self):
         from unittest.mock import patch
         from sources.agents.react_tools import _rank_pending_pool

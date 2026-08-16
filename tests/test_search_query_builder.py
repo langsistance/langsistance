@@ -482,6 +482,22 @@ class TestBuildMissingDirectionQueries(unittest.IsolatedAsyncioTestCase):
         out = await build_missing_direction_queries("q", ["t1"], provider)
         self.assertEqual(out, [])
 
+    async def test_cpc_hints_passed_into_user_content(self):
+        provider = _FakeProvider({"queries": ['"x" AND y']})
+        hints = [{"code": "H05B45/00", "title": "LED circuits"}]
+        out = await build_missing_direction_queries(
+            "q", ["t1"], provider, cpc_hints=hints)
+        self.assertEqual(out, ['"x" AND y'])
+        _, user_content = provider.calls[0]
+        self.assertIn("H05B45/00", user_content)
+        self.assertIn("LED circuits", user_content)
+
+    async def test_no_cpc_hints_keeps_old_payload(self):
+        provider = _FakeProvider({"queries": ["q"]})
+        await build_missing_direction_queries("q", ["t1"], provider)
+        _, user_content = provider.calls[0]
+        self.assertNotIn("cpc", user_content)
+
 
 class TestMissingDirectionPromptGeneric(unittest.TestCase):
     def test_prompt_targets_missing_directions(self):
@@ -504,3 +520,7 @@ class TestMissingDirectionPromptGeneric(unittest.TestCase):
         # more often than single words / wildcards
         self.assertIn("短语", MISSING_DIRECTION_SYSTEM_PROMPT)
         self.assertIn("通配符", MISSING_DIRECTION_SYSTEM_PROMPT)
+
+    def test_prompt_uses_cpc_hints_classification_language(self):
+        self.assertIn("cpc_hints", MISSING_DIRECTION_SYSTEM_PROMPT)
+        self.assertIn("分类", MISSING_DIRECTION_SYSTEM_PROMPT)

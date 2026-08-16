@@ -52,6 +52,11 @@ REACT_POOL_MAX_TOTAL_PAGES = int(os.getenv("REACT_POOL_MAX_TOTAL_PAGES", "1000")
 MISSING_DIR_MIN_CANDIDATES = int(os.getenv("REACT_MISSING_DIR_MIN_CANDIDATES", "3"))
 MISSING_DIR_MIN_SCORE = float(os.getenv("REACT_MISSING_DIR_MIN_SCORE", "4"))
 REACT_AUTO_ROUND_MAX_QUERIES = int(os.getenv("REACT_AUTO_ROUND_MAX_QUERIES", "2"))
+# CPC semantic expansion (plan B, route C): matched CPC code/title pairs
+# seed the missing-direction prompt with the domain's classification
+# language.  Off by default — requires the data files and vector cache
+# built by scripts/build_cpc_vectors.py on the server.
+CPC_EXPANSION_ENABLED = os.getenv("REACT_CPC_EXPANSION", "0") == "1"
 REACT_USPTO_SORT_FIELD = os.getenv("REACT_USPTO_SORT_FIELD", "_score")
 LADDER_MAX_HITS = int(os.getenv("REACT_LADDER_MAX_HITS")
                       or os.getenv("REACT_TIGHTEN_SUGGEST_THRESHOLD", "300"))
@@ -509,13 +514,17 @@ async def _collect_search_pages(agent, entry, args, first_raw: list) -> list:
     return items
 
 
-async def _rank_pending_pool(agent, candidates, lang) -> Tuple[list, str]:
+async def _rank_pending_pool(agent, candidates, lang,
+                             apply_rerank: bool = True) -> Tuple[list, str]:
     """Merge collected candidate dicts into the turn's SearchPool, score
     new arrivals against the user's question, and return (ranked
     candidates, note).
 
     The pool lives on the agent for the whole request (created lazily;
-    create_agent resets it per request).
+    create_agent resets it per request).  *apply_rerank* gates the
+    semantic rerank pass — internal merge calls (auto second round)
+    pass False so the final merged pool is reranked exactly once by the
+    outermost call.
     """
     pool = getattr(agent, "_search_pool", None)
     if pool is None:
@@ -540,7 +549,7 @@ async def _rank_pending_pool(agent, candidates, lang) -> Tuple[list, str]:
     pool.prune()
     ranked = pool.ranked(MAX_PATENT_LIST_ITEMS)
     rerank_note = ""
-    if RERANK_ENABLED and len(ranked) > 1:
+    if apply_rerank and RERANK_ENABLED and len(ranked) > 1:
         from sources.long_task.semantic_rerank import (
             RERANK_TOP_K, RERANK_ALPHA, rerank_candidates,
         )
@@ -587,8 +596,17 @@ async def _maybe_append_missing_directions(agent, ranked: list, note: str,
         build_missing_direction_queries,
     )
     provider = _get_flash_provider(agent) or getattr(agent, "llm", None)
+    cpc_hints = None
+    if CPC_EXPANSION_ENABLED:
+        try:
+            from sources.long_task.cpc_semantic import match_query_to_cpc
+            cpc_hints = match_query_to_cpc(
+                getattr(agent, "_last_user_prompt", "") or "")
+        except Exception:
+            cpc_hints = None
     queries = await build_missing_direction_queries(
-        getattr(agent, "_last_user_prompt", "") or "", titles, provider)
+        getattr(agent, "_last_user_prompt", "") or "", titles, provider,
+        cpc_hints=cpc_hints)
     if queries:
         agent._missing_dir_queries = queries
     return note
@@ -624,7 +642,10 @@ async def _auto_second_round(agent, entry, args, ranked: list, note: str,
         except Exception:
             collected = []
         before = len(getattr(agent, "_search_pool", None) or [])
-        ranked, note = await _rank_pending_pool(agent, collected, lang)
+        # no rerank on intermediate merges — the outermost call reranks
+        # the final merged pool exactly once
+        ranked, note = await _rank_pending_pool(
+            agent, collected, lang, apply_rerank=False)
         after = len(getattr(agent, "_search_pool", None) or [])
         new_total += after - before
     if new_total > 0:
