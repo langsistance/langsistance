@@ -548,6 +548,10 @@ async def _rank_pending_pool(agent, candidates, lang) -> Tuple[list, str]:
             pool.query, ranked, RERANK_TOP_K, RERANK_ALPHA)
         rerank_note = (", semantic rerank applied" if lang == "en"
                        else "，语义重排已应用")
+        _glog = getattr(agent, "logger", None)
+        if _glog is not None:
+            _glog.info(
+                f"semantic rerank applied — candidates={len(ranked)}")
     if lang == "en":
         note = f"relevance-ranked — pool {len(pool)}, scored {scored} new{rerank_note}"
     else:

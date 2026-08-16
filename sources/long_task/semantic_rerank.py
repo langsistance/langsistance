@@ -27,6 +27,14 @@ RERANK_ENABLED = os.getenv("REACT_SEMANTIC_RERANK", "0") == "1"
 RERANK_TOP_K = int(os.getenv("REACT_SEMANTIC_RERANK_TOPK", "30"))
 RERANK_ALPHA = float(os.getenv("REACT_SEMANTIC_RERANK_ALPHA", "0.5"))
 
+# Startup observability: the first log file line states whether rerank
+# is active, so an enabled-but-not-restarted server is immediately
+# visible in semantic_rerank.log.
+logger.info(
+    f"semantic rerank config — enabled={RERANK_ENABLED} "
+    f"top_k={RERANK_TOP_K} alpha={RERANK_ALPHA}"
+)
+
 
 def cosine_similarity(a: Any, b: Any) -> float:
     """Cosine between two equal-length numeric vectors.

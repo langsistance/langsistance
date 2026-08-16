@@ -341,6 +341,13 @@ class TestRewritePromptCarrierRules(unittest.TestCase):
     def test_prompt_requires_carrier_words(self):
         self.assertIn("载体词", REWRITE_SYSTEM_PROMPT)
 
+    def test_prompt_forbids_merging_user_concepts(self):
+        # merged concepts (e.g. "X+Y control") lose the AND structure of
+        # the query ladder and drift the search domain — concepts must
+        # map one-to-one to the question's technical elements
+        self.assertIn("一一对应", REWRITE_SYSTEM_PROMPT)
+        self.assertIn("合并", REWRITE_SYSTEM_PROMPT)
+
     def test_prompt_puts_carriers_in_separate_field(self):
         self.assertIn("carriers", REWRITE_SYSTEM_PROMPT)
 
