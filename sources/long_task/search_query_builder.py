@@ -38,16 +38,25 @@ REWRITE_SYSTEM_PROMPT = (
     "复合词的其他词序组合）；裸词根是低精度覆盖面保底项，必须排在"
     "关键词列表靠后位置（精确词在前）\n"
     "   - 判断不清 → 精确词与词尾通配符变体都放入关键词集\n"
-    "3. 可以为提高精度添加用户未提及的合理领域限定概念（如应用场景、"
+    "3. 每个概念除了同义/近义关键词，还必须给出 2-5 个「载体词」：在"
+    "专利文献中实现该概念功能的器件/电路/系统/方法的实际写法（不是"
+    "同义词，而是“这个功能通常由什么实现、专利里叫什么”）。专利"
+    "检索中直译词经常查不到真实技术——例如用户说「保持温度稳定的"
+    "装置」，载体词可以是 thermostat、temperature regulator、thermal "
+    "controller。载体词必须与用户问题技术相关、有依据，不确定时宁可"
+    "少给；载体词单独放在 carriers 字段（不进 keywords 字段）。代码"
+    "会同时组装直译词版与载体词版两套检索式阶梯\n"
+    "4. 可以为提高精度添加用户未提及的合理领域限定概念（如应用场景、"
     "设备载体），但每个限定必须有依据，且限定概念放在概念列表最后"
     "（最弱层级）\n"
-    "4. 关键词规则：词尾通配符只在关键词中生效——filter* 匹配 filter/"
+    "5. 关键词规则：词尾通配符只在关键词中生效——filter* 匹配 filter/"
     "filtering/filtration，cataly* 匹配 catalyst/catalysis/catalytic；"
     "词首通配符无效；词尾通配符只用于单词，多词短语不要附加通配符"
     "（会丢失短语语义）；关键词禁止出现中文；多词短语无需加引号"
     "（代码负责）\n"
     'Return JSON: {"concepts": [{"concept": "中文概念", '
-    '"keywords": ["english term", ...]}, ...]}'
+    '"keywords": ["english term", ...], '
+    '"carriers": ["english term", ...]}, ...]}'
 )
 
 MAX_KEYWORDS_PER_GROUP = 5
@@ -143,7 +152,11 @@ async def build_search_queries(query: str, provider: Any) -> dict:
     """Rewrite a user question into USPTO search queries via the Flash LLM.
 
     The LLM produces concepts + keyword lists only; the query ladder is
-    assembled in code so no variant can be dropped by the model.  Never
+    assembled in code so no variant can be dropped by the model.  Each
+    concept may also carry ``carriers`` (the devices/circuits/systems
+    that implement the concept in patent vocabulary); carrier-based
+    ladder levels are interleaved after each literal level so the agent
+    can switch vocabulary without loosening the concept set.  Never
     raises: on any failure returns ``{"concepts": [], "queries": []}``,
     which signals callers to keep their existing query untouched.
     """
@@ -154,13 +167,35 @@ async def build_search_queries(query: str, provider: Any) -> dict:
     if not isinstance(result, dict):
         return {"concepts": [], "queries": []}
     groups: list[list[str]] = []
+    carrier_groups: list[list[str]] = []
     for c in result.get("concepts") or []:
         if not isinstance(c, dict):
             groups.append([])
+            carrier_groups.append([])
             continue
         kws = c.get("keywords")
+        cars = c.get("carriers")
         groups.append([str(k) for k in kws] if isinstance(kws, list) else [])
-    queries = _assemble_ladder(groups)
+        carrier_groups.append(
+            [str(k) for k in cars] if isinstance(cars, list) else [])
+    literal_ladder = _assemble_ladder(groups)
+    carrier_ladder = _assemble_ladder(carrier_groups)
+    # Interleave tightest-first: each literal level is followed by its
+    # carrier-word variant at the same concept count, so a false-zero on
+    # the literal wording has a ready-made substitute at the same level.
+    interleaved: list[str] = []
+    for i in range(max(len(literal_ladder), len(carrier_ladder))):
+        if i < len(literal_ladder):
+            interleaved.append(literal_ladder[i])
+        if i < len(carrier_ladder):
+            interleaved.append(carrier_ladder[i])
+    seen: set[str] = set()
+    queries: list[str] = []
+    for q in interleaved:
+        if q not in seen:
+            seen.add(q)
+            queries.append(q)
+    queries = queries[:6]
     if not queries:
         # Legacy fallback: a provider that still returns hand-written
         # queries keeps working.
@@ -180,22 +215,30 @@ def format_ladder_guidance(rewrite: dict, lang: str = "zh") -> str:
     if lang == "en":
         header = (
             "Available search queries for the user's question, ordered "
-            "tightest to loosest. You may call a search tool with one of "
-            "these queries directly, or adjust them based on the result "
-            "counts you observe. When hits are fewer than 10, first keep "
-            "the current level and retry with synonym / word-form "
-            "substitutions of the concept terms, and only loosen by "
-            "dropping a constraint if that still fails; aim for hits in "
-            "the 10-300 range and tighten by adding constraints when "
-            "hits are too many:\n"
+            "tightest to loosest. Adjacent entries pair a literal-wording "
+            "query with its carrier-term variant at the same level — "
+            "prefer the carrier variant when the literal wording returns "
+            "0 hits, because patent vocabulary rarely matches direct "
+            "translations. You may call a search tool with one of these "
+            "queries directly, or adjust them based on the result counts "
+            "you observe. When hits are fewer than 10, first keep the "
+            "current level and retry with carrier terms / synonyms from "
+            "the concept keyword bank (substitute whole concept terms, "
+            "not just word forms), and only loosen by dropping a "
+            "constraint if same-level substitutions still fail; aim for "
+            "hits in the 10-300 range and tighten by adding constraints "
+            "when hits are too many:\n"
         )
     else:
         header = (
-            "针对用户问题可用的检索式（由紧到松排列）。你可以直接用其中"
+            "针对用户问题可用的检索式（由紧到松排列；相邻条目是同一层级"
+            "的直译词版与载体词版——直译词命中 0 条时优先直接取用载体词"
+            "版，因为专利文献用词经常与直译不一致）。你可以直接用其中"
             "任一条调用搜索工具，也可以根据观察到的命中数自行调整"
-            "（命中少于 10 条时，先保持当前层级、把概念词换成同义表述"
-            "或词形变体重试，仍不足再去掉某组限定放宽；目标命中区间 "
-            "10-300，命中过多则添加限定收紧）：\n"
+            "（命中少于 10 条时，先保持当前层级、优先用概念词库中的"
+            "「载体词」整组替换直译词重试，仍不足再换同义表述/词形变体，"
+            "最后才去掉某组限定放宽；目标命中区间 10-300，命中过多则"
+            "添加限定收紧）：\n"
         )
     lines = [header]
     for i, q in enumerate(queries, start=1):
@@ -210,24 +253,37 @@ def format_ladder_guidance(rewrite: dict, lang: str = "zh") -> str:
             if not kws:
                 continue
             label = c.get("concept") or ("concept" if lang == "en" else "概念")
-            bank_lines.append(f"- {label}: " + " / ".join(kws))
+            line = f"- {label}: " + " / ".join(kws)
+            carriers = [str(k) for k in (c.get("carriers") or [])
+                        if str(k).strip()]
+            if carriers:
+                if lang == "en":
+                    line += "  | carrier terms: " + " / ".join(carriers)
+                else:
+                    line += "  ｜载体词: " + " / ".join(carriers)
+            bank_lines.append(line)
         if bank_lines:
             if lang == "en":
-                lines.append("\nConcept keyword bank (use for synonym "
-                              "substitution retries):")
+                lines.append("\nConcept keyword bank (carrier terms are "
+                              "the patent-literature wording of the "
+                              "concept — substitute them first on low "
+                              "hits):")
             else:
-                lines.append("\n概念词库（供低命中时换词重试）：")
+                lines.append("\n概念词库（载体词是该概念在专利文献中的"
+                              "实际写法，低命中时优先替换它们）：")
             lines.extend(bank_lines)
     if lang == "en":
         lines.append(
             "\nAlso: if a query returns 0 hits even though the technology "
-            "clearly exists (a false zero), add word-ending wildcard "
+            "clearly exists (a false zero), try the carrier-term variant "
+            "of the same level first, then add word-ending wildcard "
             "variants to the concept terms and retry."
         )
     else:
         lines.append(
             "\n另外：当某级检索式在相关技术确实存在时仍返回 0 命中"
-            "（假性零命中），可给概念词补充词尾通配符变体后重试。"
+            "（假性零命中），先改试同层级的载体词版，仍无效再给概念词"
+            "补充词尾通配符变体后重试。"
         )
     return "\n".join(lines)
 

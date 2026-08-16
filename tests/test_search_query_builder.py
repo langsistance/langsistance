@@ -254,6 +254,101 @@ class TestLadderGuidanceConceptBank(unittest.TestCase):
         self.assertIn("湿度控制", text)
 
 
+class TestBuildSearchQueriesCarrierLadder(unittest.IsolatedAsyncioTestCase):
+    async def test_carrier_variants_interleaved_after_exact_levels(self):
+        provider = _FakeProvider({
+            "concepts": [
+                {"concept": "控制放大器",
+                 "keywords": ["control amplifier", "servo amplifier"],
+                 "carriers": ["LED driver", "error amplifier"]},
+                {"concept": "RGB 颜色输出",
+                 "keywords": ["RGB output"],
+                 "carriers": ["color temperature", "backlight"]},
+            ],
+        })
+        result = await build_search_queries(
+            "控制放大器，独立控制 RGB 颜色输出", provider)
+        self.assertEqual(result["queries"], [
+            '("control amplifier" OR "servo amplifier") AND ("RGB output")',
+            '("LED driver" OR "error amplifier")'
+            ' AND ("color temperature" OR backlight)',
+            '("control amplifier" OR "servo amplifier")',
+            '("LED driver" OR "error amplifier")',
+        ])
+
+    async def test_partial_carriers_produce_looser_carrier_query(self):
+        provider = _FakeProvider({
+            "concepts": [
+                {"concept": "c1", "keywords": ["k1", "k2"]},
+                {"concept": "c2", "keywords": ["k3"], "carriers": ["c3term"]},
+            ],
+        })
+        result = await build_search_queries("q", provider)
+        # Carrier levels interleave positionally: the concept-2-only
+        # carrier query follows the tightest literal level.
+        self.assertEqual(result["queries"], [
+            "(k1 OR k2) AND (k3)",
+            "(c3term)",
+            "(k1 OR k2)",
+        ])
+
+    async def test_carrier_duplicates_of_exact_queries_are_dropped(self):
+        provider = _FakeProvider({
+            "concepts": [
+                {"concept": "c", "keywords": ["k1"],
+                 "carriers": ["k1"]},
+            ],
+        })
+        result = await build_search_queries("q", provider)
+        self.assertEqual(result["queries"], ["(k1)"])
+
+
+class TestLadderGuidanceCarriers(unittest.TestCase):
+    def test_guidance_renders_carrier_bank_zh(self):
+        rewrite = {
+            "concepts": [
+                {"concept": "控制放大器",
+                 "keywords": ["control amplifier"],
+                 "carriers": ["LED driver", "error amplifier"]},
+            ],
+            "queries": ['("control amplifier")'],
+        }
+        text = format_ladder_guidance(rewrite, "zh")
+        self.assertIn("载体词", text)
+        self.assertIn("LED driver", text)
+        self.assertIn("error amplifier", text)
+
+    def test_guidance_renders_carrier_bank_en(self):
+        rewrite = {
+            "concepts": [
+                {"concept": "control amplifier",
+                 "keywords": ["control amplifier"],
+                 "carriers": ["LED driver"]},
+            ],
+            "queries": ['("control amplifier")'],
+        }
+        text = format_ladder_guidance(rewrite, "en")
+        self.assertIn("carrier term", text)
+        self.assertIn("LED driver", text)
+
+    def test_guidance_instructs_carrier_substitution_before_loosening_zh(self):
+        text = format_ladder_guidance({"queries": ['("a" OR "b")']}, "zh")
+        self.assertIn("载体词", text)
+        self.assertIn("少于 10", text)
+
+
+class TestRewritePromptCarrierRules(unittest.TestCase):
+    def test_prompt_requires_carrier_words(self):
+        self.assertIn("载体词", REWRITE_SYSTEM_PROMPT)
+
+    def test_prompt_puts_carriers_in_separate_field(self):
+        self.assertIn("carriers", REWRITE_SYSTEM_PROMPT)
+
+    def test_prompt_carrier_wording_stays_domain_neutral(self):
+        self.assertNotIn("air dry", REWRITE_SYSTEM_PROMPT)
+        self.assertNotIn("dehumidif", REWRITE_SYSTEM_PROMPT)
+
+
 class TestRewritePromptWildcardClarity(unittest.TestCase):
     def test_prompt_requires_clarity_judgment(self):
         self.assertIn("明确程度", REWRITE_SYSTEM_PROMPT)

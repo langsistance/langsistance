@@ -18,6 +18,7 @@ from sources.long_task.candidate_metadata import (
     build_candidates,
     dedupe_candidates,
     is_dead_status,
+    is_design_patent,
 )
 from sources.long_task.relevance_gate import score_candidates
 
@@ -105,10 +106,17 @@ class SearchPool:
             self.unscored(), self.query, provider)
 
     def ranked(self, limit: int) -> list:
-        """Family-deduped candidates ordered live-first (dead statuses
-        sink), then granted, relevance_score desc, then filing date;
-        unscored sink last. Sliced to *limit*."""
-        kept, _ = dedupe_candidates(list(self._by_id.values()))
+        """Family-deduped candidates, dead statuses and design patents
+        excluded entirely (they can never be a useful technical search
+        result and must not reach display or export), then granted,
+        relevance_score desc, then filing date; unscored sink last.
+        Sliced to *limit*."""
+        live = [
+            c for c in self._by_id.values()
+            if not is_dead_status(c.get("status"))
+            and not is_design_patent(c)
+        ]
+        kept, _ = dedupe_candidates(live)
         return kept[:limit]
 
     def prune(self) -> None:

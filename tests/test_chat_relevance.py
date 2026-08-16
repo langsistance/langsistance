@@ -190,7 +190,7 @@ class TestDeadCandidatesNotScored(unittest.IsolatedAsyncioTestCase):
 
 
 class TestSearchPoolRanking(unittest.TestCase):
-    def test_ranked_sinks_dead_below_live(self):
+    def test_ranked_excludes_dead_entirely(self):
         pool = SearchPool("测试问题")
         dead = _usp_raw_item("19511555", "Expired granted dryer")
         dead["applicationMetaData"]["applicationStatusDescriptionText"] = \
@@ -200,10 +200,9 @@ class TestSearchPoolRanking(unittest.TestCase):
         pool._by_id["19511555"]["relevance_score"] = 5
         pool._by_id["18184836"]["relevance_score"] = 1
         ranked = pool.ranked(10)
-        self.assertEqual([c["patent_id"] for c in ranked],
-                         ["18184836", "19511555"])
+        self.assertEqual([c["patent_id"] for c in ranked], ["18184836"])
 
-    def test_ranked_puts_unscored_live_above_scored_dead(self):
+    def test_ranked_excludes_dead_even_when_scored_high(self):
         pool = SearchPool("测试问题")
         dead = _usp_raw_item("19511555", "Expired scored")
         dead["applicationMetaData"]["applicationStatusDescriptionText"] = \
@@ -212,8 +211,30 @@ class TestSearchPoolRanking(unittest.TestCase):
         pool._by_id["19511555"]["relevance_score"] = 5
         # live candidate stays unscored
         ranked = pool.ranked(10)
-        self.assertEqual([c["patent_id"] for c in ranked],
-                         ["18184836", "19511555"])
+        self.assertEqual([c["patent_id"] for c in ranked], ["18184836"])
+
+    def test_ranked_excludes_design_patents(self):
+        pool = SearchPool("测试问题")
+        design = _usp_raw_item("19511555", "Servo amplifier")
+        design["applicationMetaData"]["patentNumber"] = "D9123456"
+        design["applicationMetaData"]["applicationTypeCode"] = "DES"
+        pool.add([design, _usp_raw_item("18184836", "Live utility")])
+        pool._by_id["19511555"]["relevance_score"] = 5
+        ranked = pool.ranked(10)
+        self.assertEqual([c["patent_id"] for c in ranked], ["18184836"])
+
+    def test_ranked_excludes_dead_before_dedupe(self):
+        # A dead parent must not shadow its live child in the same family.
+        pool = SearchPool("测试问题")
+        dead_parent = _usp_raw_item("19511555", "Family root")
+        dead_parent["applicationMetaData"]["applicationStatusDescriptionText"] = \
+            "Provisional Application Expired"
+        pool.add([
+            dead_parent,
+            _usp_raw_item("18184836", "Family root", continuity_ids=["19511555"]),
+        ])
+        ranked = pool.ranked(10)
+        self.assertEqual([c["patent_id"] for c in ranked], ["18184836"])
 
     def test_ranked_sorts_by_score_desc_unscored_sink(self):
         pool = SearchPool("测试问题")
