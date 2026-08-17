@@ -421,7 +421,7 @@ async def _fetch_spec_pdf(source: str, patent_id: str) -> dict:
         raise PatentDetailError(
             f"No downloadable specification PDF for application {app_number}"
         )
-    return {"pdf_url": _build_uspto_download_proxy_url(pdf_url)}
+    return {"success": True, "pdf_url": _build_uspto_download_proxy_url(pdf_url)}
 
 
 _XML_MIME_ORDER = ("XML", "application/xml", "text/xml")
