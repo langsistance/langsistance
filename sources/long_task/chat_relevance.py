@@ -33,6 +33,12 @@ def _env_int(name: str, default: int) -> int:
 POOL_MAX_CANDIDATES = 300
 SCORE_PER_CALL = int(os.getenv("REACT_SCORE_PER_CALL", "50"))
 SCORE_BATCH_SIZE = _env_int("REACT_SCORE_BATCH_SIZE", 10)
+# Final-list noise floor: scored candidates at 0/1 (完全不相关/基本不相关
+# per the gate rubric) are filtered from the displayed/exported list.
+# The pool itself keeps them (prune uses min_score=0) so a mis-scored
+# scheme-level patent can never be lost.  Unscored candidates always
+# survive (provider-failure degradation).
+POOL_MIN_SCORE = int(os.getenv("REACT_POOL_MIN_SCORE", "2"))
 # Cap concurrent scoring calls so a large pool cannot hammer the
 # gateway into 429s; the semaphore bounds the gather burst.
 SCORE_MAX_CONCURRENCY = _env_int("REACT_SCORE_MAX_CONCURRENCY", 6)
@@ -123,22 +129,36 @@ class SearchPool:
         return await score_candidates_concurrent(
             self.unscored(), self.query, provider)
 
-    def ranked(self, limit: int) -> list:
+    def ranked(self, limit: int,
+               min_score: int = POOL_MIN_SCORE) -> list:
         """Family-deduped candidates, dead statuses and design patents
         excluded entirely (they can never be a useful technical search
         result and must not reach display or export), then granted,
         relevance_score desc, then filing date; unscored sink last.
-        Sliced to *limit*."""
+        Sliced to *limit*.
+
+        *min_score* drops scored candidates below the noise floor from the
+        displayed/exported list (0/1 per the gate rubric are obviously
+        irrelevant).  Unscored candidates ALWAYS pass the filter
+        (provider-failure degradation); pass min_score=0 to keep them all."""
         live = [
             c for c in self._by_id.values()
             if not is_dead_status(c.get("status"))
             and not is_design_patent(c)
         ]
+        if min_score > 0:
+            live = [c for c in live
+                    if not isinstance(c.get("relevance_score"), (int, float))
+                    or c["relevance_score"] >= min_score]
         kept, _ = dedupe_candidates(live)
         return kept[:limit]
 
     def prune(self) -> None:
-        """Keep only the top POOL_MAX_CANDIDATES ranked candidates."""
-        kept = self.ranked(POOL_MAX_CANDIDATES)
+        """Keep only the top POOL_MAX_CANDIDATES ranked candidates.
+
+        Prune only caps, never gates on score: min_score=0 keeps every
+        candidate (including low-scored noise) physically in the pool so
+        a mis-scored scheme-level patent can never be lost."""
+        kept = self.ranked(POOL_MAX_CANDIDATES, min_score=0)
         self._by_id = {c["patent_id"]: c for c in kept}
         self._order = [c["patent_id"] for c in kept]

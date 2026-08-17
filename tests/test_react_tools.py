@@ -2159,7 +2159,9 @@ class TestExecuteActionPoolPath(unittest.TestCase):
     @patch("sources.agents.react_tools.RELEVANCE_RANK_ENABLED", True)
     def test_pool_path_ranks_observation_by_score(self):
         agent = _PoolAgent()
-        agent.llm.set_scores({"19511555": 1, "18184836": 5})
+        # 19511555 at 2 (lowest score surviving the display noise floor)
+        # stays visible so the score-order assertion still holds.
+        agent.llm.set_scores({"19511555": 2, "18184836": 5})
         entry_k = _Knowledge(3, ktype=1)
         agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
         tool_info = _ToolInfo("search_patent_by_key_word", url=_USPTO_URL)

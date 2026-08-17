@@ -224,7 +224,7 @@ class TestSearchPoolRanking(unittest.TestCase):
         dead["applicationMetaData"]["patentNumber"] = "9123456"
         pool.add([dead, _usp_raw_item("18184836", "Pending dry air control")])
         pool._by_id["19511555"]["relevance_score"] = 5
-        pool._by_id["18184836"]["relevance_score"] = 1
+        pool._by_id["18184836"]["relevance_score"] = 5
         ranked = pool.ranked(10)
         self.assertEqual([c["patent_id"] for c in ranked], ["18184836"])
 
@@ -270,9 +270,11 @@ class TestSearchPoolRanking(unittest.TestCase):
         pool._by_id["19511555"]["relevance_score"] = 1
         pool._by_id["18184836"]["relevance_score"] = 5
         # C stays unscored
+        # The 1-scored A is filtered from the displayed list by the
+        # noise floor (default min_score=2).
         ranked = pool.ranked(10)
         self.assertEqual([c["patent_id"] for c in ranked],
-                         ["18184836", "19511555", "17222222"])
+                         ["18184836", "17222222"])
 
     def test_ranked_slices_to_limit(self):
         pool = SearchPool("测试问题")
@@ -299,6 +301,39 @@ class TestSearchPoolRanking(unittest.TestCase):
         pool._by_id["18184836"]["relevance_score"] = 4
         ranked = pool.ranked(10)
         self.assertEqual([c["patent_id"] for c in ranked], ["19511555"])
+
+
+class TestRankedNoiseFilter(unittest.TestCase):
+    def _pool(self):
+        from sources.long_task.chat_relevance import SearchPool
+        pool = SearchPool("q")
+        pool.add([_usp_raw_item("19511555", "A"),
+                  _usp_raw_item("18184836", "B"),
+                  _usp_raw_item("17222222", "C"),
+                  _usp_raw_item("16111111", "D")])
+        pool._by_id["19511555"]["relevance_score"] = 0
+        pool._by_id["18184836"]["relevance_score"] = 1
+        pool._by_id["17222222"]["relevance_score"] = 2
+        # D stays unscored
+        return pool
+
+    def test_ranked_filters_zero_and_one_scored_noise(self):
+        ranked = self._pool().ranked(10)
+        ids = [c["patent_id"] for c in ranked]
+        self.assertNotIn("19511555", ids)
+        self.assertNotIn("18184836", ids)
+        self.assertIn("17222222", ids)
+        self.assertIn("16111111", ids)  # unscored survives
+
+    def test_ranked_min_score_zero_keeps_noise(self):
+        ranked = self._pool().ranked(10, min_score=0)
+        ids = [c["patent_id"] for c in ranked]
+        self.assertIn("19511555", ids)
+
+    def test_prune_physically_keeps_low_scores(self):
+        pool = self._pool()
+        pool.prune()
+        self.assertIn("19511555", pool._by_id)  # pool never gates on score
 
 
 class TestSearchPoolPrune(unittest.TestCase):
