@@ -518,7 +518,8 @@ async def _fetch_claims(source: str, patent_id: str) -> dict:
         raise PatentDetailError(
             f"No downloadable claims document for application {app_number}"
         )
-    return {"pdf_url": _build_uspto_download_proxy_url(pdf_url)}
+    logger.info(f"claims branch probe — app={app_number}: PDF fallback selected")
+    return {"success": True, "pdf_url": _build_uspto_download_proxy_url(pdf_url)}
 
 
 def register_patent_detail_routes(logger, config):
