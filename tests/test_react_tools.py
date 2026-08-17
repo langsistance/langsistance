@@ -615,7 +615,7 @@ class TestRankPendingPoolHeadBudget(unittest.IsolatedAsyncioTestCase):
         ranked, note = await _rank_pending_pool(agent, cands, "zh")
         # 40 dead are skipped; the 50-slot head budget covers all 40 live
         self.assertIn("40", note)
-        self.assertEqual(agent._flash_llm.calls, 2)  # 40 live → 25 + 15
+        self.assertEqual(agent._flash_llm.calls, 4)  # 40 live → 4×10
         top_ids = [c["patent_id"] for c in ranked[:10]]
         self.assertTrue(all(i.startswith("2") for i in top_ids))
 

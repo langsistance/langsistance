@@ -24,7 +24,10 @@ from sources.long_task.relevance_gate import score_candidates
 
 POOL_MAX_CANDIDATES = 300
 SCORE_PER_CALL = int(os.getenv("REACT_SCORE_PER_CALL", "50"))
-SCORE_BATCH_SIZE = int(os.getenv("REACT_SCORE_BATCH_SIZE", "25"))
+SCORE_BATCH_SIZE = int(os.getenv("REACT_SCORE_BATCH_SIZE", "10"))
+# Cap concurrent scoring calls so a large pool cannot hammer the
+# gateway into 429s; the semaphore bounds the gather burst.
+SCORE_MAX_CONCURRENCY = int(os.getenv("REACT_SCORE_MAX_CONCURRENCY", "6"))
 
 
 async def score_candidates_concurrent(candidates: list, query: str,
@@ -32,13 +35,14 @@ async def score_candidates_concurrent(candidates: list, query: str,
                                       rubric: str = "") -> int:
     """Score unscored candidates in concurrent small batches.
 
-    The Flash provider is slow on 100-entry batches (~50s); 25-entry
-    batches gathered concurrently cut wall-clock substantially.  Dead
-    candidates (expired/abandoned/PCT storage) are skipped — they rank
-    below every live candidate regardless of score, so scoring them is
-    pure waste.  *rubric* (optional) is the architecture-level
-    interpretation supplement passed through to the gate prompt.  Never
-    raises.  Returns how many candidates gained a score.
+    The Flash provider is slow on 100-entry batches (~50s); 10-entry
+    batches gathered concurrently with a semaphore cap cut wall-clock
+    substantially without hammering the gateway.  Dead candidates
+    (expired/abandoned/PCT storage) are skipped — they rank below every
+    live candidate regardless of score, so scoring them is pure waste.
+    *rubric* (optional) is the architecture-level interpretation
+    supplement passed through to the gate prompt.  Never raises.
+    Returns how many candidates gained a score.
     """
     if provider is None:
         return 0
@@ -51,10 +55,13 @@ async def score_candidates_concurrent(candidates: list, query: str,
         pending[i:i + SCORE_BATCH_SIZE]
         for i in range(0, len(pending), SCORE_BATCH_SIZE)
     ]
-    await asyncio.gather(
-        *(score_candidates(batch, query, provider, rubric)
-          for batch in batches)
-    )
+    sem = asyncio.Semaphore(max(1, SCORE_MAX_CONCURRENCY))
+
+    async def _scored(batch: list) -> None:
+        async with sem:
+            await score_candidates(batch, query, provider, rubric)
+
+    await asyncio.gather(*(_scored(batch) for batch in batches))
     return len(pending) - len([c for c in pending
                                if "relevance_score" not in c])
 

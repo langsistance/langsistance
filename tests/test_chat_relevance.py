@@ -2,6 +2,7 @@
 import asyncio
 import re
 import unittest
+from unittest import mock
 
 from sources.long_task.chat_relevance import POOL_MAX_CANDIDATES, SearchPool
 
@@ -127,9 +128,9 @@ class TestSearchPoolConcurrentScoring(unittest.IsolatedAsyncioTestCase):
                   for i in range(250)])
         provider = _ConcurrentProvider()
         scored = await pool.score_new(provider)
-        # SCORE_BATCH_SIZE=25 → 250/25 = 10 batches, gathered concurrently
-        self.assertEqual(provider.calls, 10)
-        self.assertEqual(provider.max_inflight, 10)  # gathered, not sequential
+        # SCORE_BATCH_SIZE=10 → 250/10 = 25 batches; concurrency capped at 6
+        self.assertEqual(provider.calls, 25)
+        self.assertEqual(provider.max_inflight, 6)
         self.assertEqual(scored, 250)
 
 
@@ -143,9 +144,22 @@ class TestHeadScoringAndConcurrency(unittest.IsolatedAsyncioTestCase):
         cands = build_candidates(items)
         provider = _ConcurrentProvider()
         scored = await score_candidates_concurrent(cands, "q", provider)
-        self.assertEqual(provider.calls, 3)          # 60/25 → 3 batches
-        self.assertEqual(provider.max_inflight, 3)   # gathered concurrently
+        self.assertEqual(provider.calls, 6)          # 60/10 → 6 batches
+        self.assertEqual(provider.max_inflight, 6)   # min(6 batches, cap 6)
         self.assertEqual(scored, 60)
+
+    async def test_concurrency_capped_by_semaphore(self):
+        from sources.long_task import chat_relevance as cr
+        from sources.long_task.candidate_metadata import build_candidates
+        items = [_usp_raw_item(str(19500000 + i), f"T{i}")
+                 for i in range(100)]
+        cands = build_candidates(items)
+        provider = _ConcurrentProvider()
+        with mock.patch.object(cr, "SCORE_MAX_CONCURRENCY", 2):
+            scored = await cr.score_candidates_concurrent(cands, "q", provider)
+        self.assertEqual(provider.calls, 10)         # 100/10 → 10 batches
+        self.assertEqual(provider.max_inflight, 2)   # capped at 2
+        self.assertEqual(scored, 100)
 
     async def test_add_from_candidates_returns_new_list(self):
         pool = SearchPool("测试问题")
