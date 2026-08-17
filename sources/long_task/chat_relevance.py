@@ -22,12 +22,20 @@ from sources.long_task.candidate_metadata import (
 )
 from sources.long_task.relevance_gate import score_candidates
 
+def _env_int(name: str, default: int) -> int:
+    """Parse an int env var, falling back to *default* on garbage."""
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
 POOL_MAX_CANDIDATES = 300
 SCORE_PER_CALL = int(os.getenv("REACT_SCORE_PER_CALL", "50"))
-SCORE_BATCH_SIZE = int(os.getenv("REACT_SCORE_BATCH_SIZE", "10"))
+SCORE_BATCH_SIZE = _env_int("REACT_SCORE_BATCH_SIZE", 10)
 # Cap concurrent scoring calls so a large pool cannot hammer the
 # gateway into 429s; the semaphore bounds the gather burst.
-SCORE_MAX_CONCURRENCY = int(os.getenv("REACT_SCORE_MAX_CONCURRENCY", "6"))
+SCORE_MAX_CONCURRENCY = _env_int("REACT_SCORE_MAX_CONCURRENCY", 6)
 
 
 async def score_candidates_concurrent(candidates: list, query: str,

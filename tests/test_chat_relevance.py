@@ -56,6 +56,18 @@ class _ConcurrentProvider:
         return {"scores": [{"id": i, "score": 3} for i in ids]}
 
 
+class TestEnvIntFallback(unittest.TestCase):
+    def test_garbage_env_falls_back_to_default(self):
+        from sources.long_task import chat_relevance as cr
+        with mock.patch.dict("os.environ",
+                             {"REACT_SCORE_BATCH_SIZE": "junk",
+                              "REACT_SCORE_MAX_CONCURRENCY": "abc"}):
+            self.assertEqual(
+                cr._env_int("REACT_SCORE_BATCH_SIZE", 10), 10)
+            self.assertEqual(
+                cr._env_int("REACT_SCORE_MAX_CONCURRENCY", 6), 6)
+
+
 class TestSearchPoolMerge(unittest.TestCase):
     def test_add_flattens_and_merges_new_ids(self):
         pool = SearchPool("测试问题")
