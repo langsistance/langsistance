@@ -110,14 +110,22 @@ async def _agent_status(agent, message: str) -> None:
     The handler is stored on the agent per request (create_agent); the
     long silent phases (scoring / recall / synthesis) use this so the
     streaming client always has a live "what is happening now" line.
-    Never raises.
+    Never raises.  Probe log on every call so a silently-broken
+    status channel is visible in general_agent.log.
     """
+    _glog = getattr(agent, "logger", None)
     handler = getattr(agent, "_callback_handler", None)
     if handler is None:
+        if _glog is not None:
+            _glog.info(f"agent status — dropped (no handler): {message}")
         return
     on_status = getattr(handler, "on_status", None)
     if on_status is None:
+        if _glog is not None:
+            _glog.info(f"agent status — dropped (no on_status): {message}")
         return
+    if _glog is not None:
+        _glog.info(f"agent status — {message}")
     try:
         await on_status(message)
     except Exception:
