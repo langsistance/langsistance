@@ -49,7 +49,7 @@ export default function ResultsPage() {
   const searchParams = useSearchParams()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const { messages, setMessages, sessionId, setSessionId, resultsSetId, setResultsSetId, input, setInput, streaming, streamingId } = useChatSession()
-  const { send, abort, transientStatus, selectedFiles, setSelectedFiles, addFiles, removeFile, isDragOver, setIsDragOver } = useChatStream()
+  const { send, abort, statusSteps, statusElapsed, selectedFiles, setSelectedFiles, addFiles, removeFile, isDragOver, setIsDragOver } = useChatStream()
 
   const setId = searchParams.get('set') || resultsSetId
   const loadedRef = useRef(false)
@@ -228,7 +228,8 @@ export default function ResultsPage() {
                     artifacts={msg.artifacts || []}
                     resultSummary={msg.resultSummary}
                     streaming={streaming && streamingId === msg.id}
-                    transientStatus={streaming && streamingId === msg.id ? transientStatus : ''}
+                    statusSteps={streaming && streamingId === msg.id ? statusSteps : undefined}
+                    statusElapsed={streaming && streamingId === msg.id ? statusElapsed : 0}
                     analysisType={(msg as any).analysisType}
                     tableColumns={(msg as any).tableColumns}
                     familyOverview={(msg as any).familyOverview}

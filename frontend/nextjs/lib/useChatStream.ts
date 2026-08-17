@@ -34,6 +34,12 @@ function cleanGarbledText(text: string): string {
     .replace(/[-]/g, '')
 }
 
+export interface ChatStatusStep {
+  id: number
+  message: string
+  state: 'running' | 'done'
+}
+
 export function useChatStream() {
   const { t, lang } = useI18n()
   const { user, requireAuth } = useAuth()
@@ -44,7 +50,8 @@ export function useChatStream() {
     abortRef, sessionId, setSessionId,
   } = useChatSession()
 
-  const [transientStatus, setTransientStatus] = useState('')
+  const [statusSteps, setStatusSteps] = useState<ChatStatusStep[]>([])
+  const [statusElapsed, setStatusElapsed] = useState(0)
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
   // Batch polling: one global timer → one POST /batch_status for all active tasks
@@ -116,7 +123,8 @@ export function useChatStream() {
     // input becomes empty (see page.tsx). Behavior preserved.
 
     const queryId = createChatId()
-    setTransientStatus('')
+    setStatusSteps([])
+    setStatusElapsed(0)
     longTaskReceivedRef.current = false
 
     const userMsg = createChatMessage('user', text)
@@ -182,7 +190,17 @@ export function useChatStream() {
           if (evt && typeof evt === 'object') {
             const event = evt as Record<string, unknown>
             if (event.type === 'status') {
-              setTransientStatus(cleanGarbledText(String(event.message ?? '')))
+              const msg = cleanGarbledText(String(event.message ?? '')).trim()
+              if (msg) {
+                setStatusSteps((steps) => {
+                  const last = steps[steps.length - 1]
+                  if (last && last.state === 'running' && last.message === msg) {
+                    return steps
+                  }
+                  return [...steps, { id: Date.now(), message: msg, state: 'running' }]
+                })
+                setStatusElapsed(0)
+              }
               continue
             }
             if (event.type === 'artifact_start') {
@@ -311,7 +329,7 @@ export function useChatStream() {
                 : ''
             )
           if (token) {
-            setTransientStatus('')
+            setStatusSteps((steps) => steps.map((s) => s.state === 'running' ? { ...s, state: 'done' } : s))
             setMessages((m) => updateAssistantMessage(m, assistantId, cleanGarbledText(String(token))))
           }
         }
@@ -370,7 +388,8 @@ export function useChatStream() {
         }
       }
     } finally {
-      setTransientStatus('')
+      setStatusSteps([])
+      setStatusElapsed(0)
       setStreaming(false)
       setStreamingId(null)
       abortRef.current = null
@@ -583,13 +602,21 @@ export function useChatStream() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- stopLongTaskPolling recreated per render
   }, [])
 
+  // Live elapsed-seconds counter while a status step is running
+  useEffect(() => {
+    if (!streaming) return
+    const id = setInterval(() => setStatusElapsed((s) => s + 1), 1000)
+    return () => clearInterval(id)
+  }, [streaming])
+
   return {
     send: (files: File[] = [], presetText: string = '') => {
       if (files.length > 0) setSelectedFiles((prev) => [...prev, ...files])
       return sendRef.current(presetText)
     },
     abort: () => abortRef.current?.abort(),
-    transientStatus,
+    statusSteps,
+    statusElapsed,
     selectedFiles,
     setSelectedFiles,
     addFiles,

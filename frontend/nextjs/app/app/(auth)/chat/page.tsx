@@ -30,7 +30,8 @@ export default function Chat() {
   const {
     send,
     abort,
-    transientStatus,
+    statusSteps,
+    statusElapsed,
     selectedFiles,
     setSelectedFiles,
     addFiles,
@@ -372,7 +373,8 @@ export default function Chat() {
                     artifacts={msg.artifacts || []}
                     resultSummary={msg.resultSummary}
                     streaming={streaming && streamingId === msg.id}
-                    transientStatus={streaming && streamingId === msg.id ? transientStatus : ''}
+                    statusSteps={streaming && streamingId === msg.id ? statusSteps : undefined}
+                    statusElapsed={streaming && streamingId === msg.id ? statusElapsed : 0}
                     analysisType={(msg as any).analysisType}
                     tableColumns={(msg as any).tableColumns}
                     familyOverview={(msg as any).familyOverview}

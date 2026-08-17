@@ -490,6 +490,16 @@ button { cursor: pointer; }
   animation: assistantPulse 1.35s ease-in-out infinite;
 }
 
+.assistant-status-steps { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.assistant-status-step { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #6B7280; }
+.assistant-status-step.done { color: #9CA3AF; }
+.assistant-status-step.done .assistant-status-step-icon { color: #10A37F; }
+.assistant-status-step.running { color: #2563EB; font-weight: 500; }
+.assistant-status-step-icon { width: 16px; text-align: center; flex-shrink: 0; }
+.assistant-status-step.running .assistant-status-step-icon { animation: statusPulse 1.2s ease-in-out infinite; }
+@keyframes statusPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.assistant-status-step-time { margin-left: auto; font-size: 11px; color: #9CA3AF; flex-shrink: 0; }
+
 .assistant-waiting-scan {
   position: absolute;
   inset: 0;

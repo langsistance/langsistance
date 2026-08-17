@@ -5,7 +5,6 @@ import 'highlight.js/styles/github.css'
 import { useI18n } from '@/lib/app-i18n'
 import { attachImageRetryHandlers } from '@/lib/imageRetry'
 import {
-  shouldShowAssistantTransientStatus,
   shouldShowAssistantWaiting,
 } from '@/lib/messagePresentation'
 import { renderMarkdownToHtml } from '@/lib/markdownRender'
@@ -13,12 +12,19 @@ import { copyTextToClipboard } from '@/lib/clipboard'
 import { artifactVisualLabel, orderDownloadArtifacts } from '@/lib/downloadArtifacts'
 import LongTaskProgress from './LongTaskProgress'
 
+export interface ChatStatusStep {
+  id: number
+  message: string
+  state: string
+}
+
 interface Props {
   content: string
   artifacts?: ChatArtifact[]
   resultSummary?: string
   streaming: boolean
-  transientStatus?: string
+  statusSteps?: ChatStatusStep[]
+  statusElapsed?: number
   analysisType?: string
   tableColumns?: string[]
   familyOverview?: Record<string, any>
@@ -104,7 +110,7 @@ function base64ChunksToBlob(chunks: string[], mimeType: string) {
   return new Blob(byteArrays, { type: mimeType })
 }
 
-export default function MarkdownMessage({ content, artifacts = [], resultSummary, streaming, transientStatus = '', analysisType, tableColumns, familyOverview, jurisdictions, agentSteps = [], elapsedSeconds }: Props) {
+export default function MarkdownMessage({ content, artifacts = [], resultSummary, streaming, statusSteps, statusElapsed = 0, analysisType, tableColumns, familyOverview, jurisdictions, agentSteps = [], elapsedSeconds }: Props) {
   const { t } = useI18n()
   const [copied, setCopied] = useState(false)
   const [downloaded, setDownloaded] = useState(false)
@@ -118,7 +124,9 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
   const latestStreamingRef = useRef(streaming)
   const messageContentRef = useRef<HTMLDivElement | null>(null)
   const showWaiting = shouldShowAssistantWaiting(content, streaming)
-  const showTransientStatus = shouldShowAssistantTransientStatus(transientStatus, streaming)
+  const runningSteps = statusSteps?.some((s) => s.state === 'running')
+  const runningElapsed = runningSteps ? statusElapsed : 0
+  const currentRunningStep = statusSteps && runningSteps ? statusSteps[statusSteps.length - 1] : undefined
 
   const steps = agentSteps ?? []
   const hasSteps = steps.length > 0
@@ -292,8 +300,8 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
           </span>
           <span className="assistant-waiting-copy">
             <span className="assistant-waiting-title">{t('chat.processing')}</span>
-            {transientStatus && (
-              <span className="assistant-waiting-detail">{transientStatus}</span>
+            {currentRunningStep && (
+              <span className="assistant-waiting-detail">{currentRunningStep.message}</span>
             )}
           </span>
           <span className="assistant-waiting-scan" aria-hidden="true" />
@@ -304,10 +312,21 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
       ) : (
         <div dangerouslySetInnerHTML={{ __html: html || '▋' }} />
       )}
-      {!showWaiting && showTransientStatus && (
-        <div className="assistant-transient-status" role="status" aria-live="polite">
-          <span className="assistant-transient-status-dot" aria-hidden="true" />
-          <span>{transientStatus}</span>
+      {!showWaiting && statusSteps && statusSteps.length > 0 && (
+        <div className="assistant-status-steps" role="status" aria-live="polite">
+          {statusSteps.map((step) => (
+            <div key={step.id} className={`assistant-status-step ${step.state}`}>
+              <span className="assistant-status-step-icon" aria-hidden="true">
+                {step.state === 'done' ? '✓' : '●'}
+              </span>
+              <span className="assistant-status-step-message">{step.message}</span>
+              {step.state === 'running' && (
+                <span className="assistant-status-step-time">
+                  {t('chat.processingWithTime').replace('{seconds}', String(runningElapsed))}
+                </span>
+              )}
+            </div>
+          ))}
         </div>
       )}
       {showActions && (
