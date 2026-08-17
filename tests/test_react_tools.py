@@ -1326,7 +1326,7 @@ class TestPrescoreRanking(unittest.IsolatedAsyncioTestCase):
         sem = {f"3000000{i}": 0.1 + 0.1 * i for i in range(6)}
         with patch("sources.agents.react_tools.PRESCORE_ENABLED", True), \
              patch("sources.agents.react_tools.semantic_scores_batch",
-                   return_value=sem) as mock_sem, \
+                   new=AsyncMock(return_value=sem)) as mock_sem, \
              patch("sources.agents.react_tools.SCORE_PER_CALL", 2):
             ranked, note = await _rank_pending_pool(
                 agent, build_candidates(records), "zh")
@@ -1364,7 +1364,7 @@ class TestPrescoreRanking(unittest.IsolatedAsyncioTestCase):
                    for i in range(6)]
         with patch("sources.agents.react_tools.PRESCORE_ENABLED", True), \
              patch("sources.agents.react_tools.semantic_scores_batch",
-                   return_value={}), \
+                   new=AsyncMock(return_value={})), \
              patch("sources.agents.react_tools.SCORE_PER_CALL", 2):
             await _rank_pending_pool(agent, build_candidates(records), "zh")
         scored_ids = [i for payload in provider.payloads

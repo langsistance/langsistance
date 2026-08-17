@@ -80,11 +80,13 @@ class TestFuseRanking(unittest.TestCase):
         self.assertEqual([c["patent_id"] for c in fused], ["a", "b"])
 
 
-class TestSemanticScoresBatch(unittest.TestCase):
-    def test_returns_cosines_keyed_by_patent_id(self):
+class TestSemanticScoresBatch(unittest.IsolatedAsyncioTestCase):
+    async def test_returns_cosines_keyed_by_patent_id(self):
+        # query embed call, then the two-title batch chunk call
+        side = [[[1.0, 0.0]], [[1.0, 0.0], [0.0, 1.0]]]
         with patch("sources.long_task.semantic_rerank.embed_texts",
-                   return_value=[[1.0, 0.0], [1.0, 0.0], [0.0, 1.0]]):
-            scores = semantic_scores_batch("q", [
+                   side_effect=side):
+            scores = await semantic_scores_batch("q", [
                 {"patent_id": "a", "title": "A"},
                 {"patent_id": "b", "title": "B"},
                 {"patent_id": "c", "title": "   "},  # untitled — skipped
@@ -93,20 +95,35 @@ class TestSemanticScoresBatch(unittest.TestCase):
         self.assertAlmostEqual(scores["b"], 0.0)
         self.assertNotIn("c", scores)
 
-    def test_embedding_failure_returns_empty(self):
+    async def test_embedding_failure_returns_empty(self):
         with patch("sources.long_task.semantic_rerank.embed_texts",
                    return_value=None):
-            scores = semantic_scores_batch(
+            scores = await semantic_scores_batch(
                 "q", [{"patent_id": "a", "title": "A"},
                       {"patent_id": "b", "title": "B"}])
         self.assertEqual(scores, {})
 
-    def test_fewer_than_two_titled_returns_empty(self):
+    async def test_fewer_than_two_titled_returns_empty(self):
         with patch("sources.long_task.semantic_rerank.embed_texts") as mock:
-            scores = semantic_scores_batch(
+            scores = await semantic_scores_batch(
                 "q", [{"patent_id": "a", "title": "A"}])
         self.assertEqual(scores, {})
         mock.assert_not_called()
+
+    async def test_large_batch_chunked_concurrently(self):
+        # query embed + 64-title chunk + 36-title chunk = 3 calls
+        side = [[[1.0, 0.0]]] + [[[1.0, 0.0]] * 64] + [[[0.0, 1.0]] * 36]
+        with patch("sources.long_task.semantic_rerank.SEMANTIC_BATCH_SIZE",
+                   64), \
+             patch("sources.long_task.semantic_rerank.embed_texts",
+                   side_effect=side) as m:
+            cands = [{"patent_id": str(i), "title": f"T{i}"}
+                     for i in range(100)]
+            scores = await semantic_scores_batch("q", cands)
+        self.assertEqual(m.call_count, 3)
+        self.assertEqual(len(scores), 100)
+        self.assertAlmostEqual(scores["0"], 1.0)
+        self.assertAlmostEqual(scores["99"], 0.0)
 
 
 if __name__ == "__main__":

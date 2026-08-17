@@ -626,7 +626,7 @@ async def _rank_pending_pool(agent, candidates, lang,
         # embedding call, then flash scores only the semantic head —
         # the LLM budget lands on the semantically closest candidates
         # instead of the newest slice.
-        sem_map = semantic_scores_batch(pool.query, live)
+        sem_map = await semantic_scores_batch(pool.query, live)
         if sem_map:
             for c in live:
                 if c["patent_id"] in sem_map:
@@ -696,7 +696,7 @@ async def _rank_pending_pool(agent, candidates, lang,
         from sources.long_task.semantic_rerank import (
             RERANK_TOP_K, RERANK_ALPHA, rerank_candidates,
         )
-        ranked = rerank_candidates(
+        ranked = await rerank_candidates(
             pool.query, ranked, RERANK_TOP_K, RERANK_ALPHA)
         rerank_note = (", semantic rerank applied" if lang == "en"
                        else "，语义重排已应用")

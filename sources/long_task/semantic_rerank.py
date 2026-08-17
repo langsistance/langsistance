@@ -15,6 +15,7 @@ Design constraints:
   value only; the pool itself is never mutated.
 """
 
+import asyncio
 import os
 import time
 from typing import Any, Optional
@@ -32,6 +33,10 @@ RERANK_ALPHA = float(os.getenv("REACT_SEMANTIC_RERANK_ALPHA", "0.5"))
 # instead of the newest slice, and deep-window candidates stop being
 # pruned unscored.
 PRESCORE_ENABLED = os.getenv("REACT_SEMANTIC_PRESCORE", "0") == "1"
+# Embedding calls run chunked in a thread pool: one giant synchronous
+# batch blocks the event loop for seconds, while chunked to_thread
+# calls parallelize and never stall the loop.
+SEMANTIC_BATCH_SIZE = int(os.getenv("SEMANTIC_BATCH_SIZE", "64"))
 
 # Startup observability: the first log file line states whether rerank
 # is active, so an enabled-but-not-restarted server is immediately
@@ -118,13 +123,30 @@ def embed_texts(texts: list) -> Optional[list]:
         return None
 
 
-def semantic_scores_batch(query: str, candidates: list) -> dict:
-    """Semantic cosine scores for every titled candidate, one batch.
+async def _embed_chunks(query: str, titles: list) -> Optional[list]:
+    """Embed the query once, then the title chunks in parallel threads.
 
-    Embeds the question and all titles in a single provider call and
-    returns {patent_id: cosine}.  Untitled candidates get no entry; any
-    failure returns {} — prescoring is an enhancement, never a hard
-    dependency.
+    Returns [query_vec, [chunk vectors...]] or None when the query
+    embedding failed.  Chunk-level failures surface as None entries —
+    callers decide how strict to be.
+    """
+    qv = await asyncio.to_thread(embed_texts, [str(query)])
+    if qv is None or len(qv) != 1:
+        return None
+    chunks = [titles[i:i + SEMANTIC_BATCH_SIZE]
+              for i in range(0, len(titles), SEMANTIC_BATCH_SIZE)]
+    results = await asyncio.gather(
+        *(asyncio.to_thread(embed_texts, chunk) for chunk in chunks))
+    return qv[0], chunks, results
+
+
+async def semantic_scores_batch(query: str, candidates: list) -> dict:
+    """Semantic cosine scores for every titled candidate.
+
+    Embeds the question once and the titles in concurrent chunks via
+    thread pool (never blocks the event loop), returns
+    {patent_id: cosine}.  Untitled candidates get no entry; any failure
+    returns {} — prescoring is an enhancement, never a hard dependency.
     """
     if not query or not str(query).strip():
         return {}
@@ -134,29 +156,37 @@ def semantic_scores_batch(query: str, candidates: list) -> dict:
     if len(titled) < 2:
         return {}
     start = time.monotonic()
-    vectors = embed_texts([query] + [t for _, t in titled])
-    if vectors is None or len(vectors) != len(titled) + 1:
+    embedded = await _embed_chunks(query, [t for _, t in titled])
+    if embedded is None:
         return {}
-    query_vec = vectors[0]
+    query_vec, chunks, results = embedded
     scores: dict = {}
-    for (c, _), vec in zip(titled, vectors[1:]):
-        pid = c.get("patent_id")
-        if pid:
-            scores[str(pid)] = cosine_similarity(query_vec, vec)
+    pos = 0
+    for ch, vecs in zip(chunks, results):
+        if vecs is None or len(vecs) != len(ch):
+            pos += len(ch)
+            continue
+        for (c, _), vec in zip(titled[pos:pos + len(ch)], vecs):
+            pid = c.get("patent_id")
+            if pid:
+                scores[str(pid)] = cosine_similarity(query_vec, vec)
+        pos += len(ch)
     logger.info(
         f"semantic prescore — candidates={len(titled)} "
         f"elapsed={round(time.monotonic() - start, 1)}s")
     return scores
 
 
-def rerank_candidates(query: str, candidates: list, top_k: int = RERANK_TOP_K,
-                      alpha: float = RERANK_ALPHA) -> list:
+async def rerank_candidates(query: str, candidates: list,
+                            top_k: int = RERANK_TOP_K,
+                            alpha: float = RERANK_ALPHA) -> list:
     """Semantically re-rank the top-*top_k* candidates of a ranked list.
 
     Candidates without a non-empty title keep their LLM-only order and
     are excluded from the fusion window (their positions never change
     relative to each other).  Embedding failures return the original
-    list untouched.
+    list untouched.  Embedding runs chunked in threads — the event
+    loop never blocks on the provider.
     """
     if len(candidates) < 2:
         return list(candidates)
@@ -165,18 +195,20 @@ def rerank_candidates(query: str, candidates: list, top_k: int = RERANK_TOP_K,
     if len(titled) < 2:
         return list(candidates)
     start = time.monotonic()
-    vectors = embed_texts([query] + [str(c.get("title") or "").strip()
-                                     for c in titled])
-    if vectors is None or len(vectors) != len(titled) + 1:
+    embedded = await _embed_chunks(
+        query, [str(c.get("title") or "").strip() for c in titled])
+    if embedded is None:
         return list(candidates)
-    query_vec = vectors[0]
-    sem_scores = [cosine_similarity(query_vec, v) for v in vectors[1:]]
+    query_vec, chunks, results = embedded
+    sem_scores: list = []
+    for ch, vecs in zip(chunks, results):
+        if vecs is None or len(vecs) != len(ch):
+            return list(candidates)
+        sem_scores.extend(cosine_similarity(query_vec, v) for v in vecs)
     logger.info(
         f"semantic rerank — candidates={len(titled)} "
         f"elapsed={round(time.monotonic() - start, 1)}s")
     fused_titled = fuse_ranking(titled, sem_scores, alpha)
-    # Rebuild the window: fused titled candidates keep their relative
-    # positions among themselves; untitled ones stay put in the tail.
     out = []
     fused_iter = iter(fused_titled)
     titled_ids = {id(c) for c in titled}
