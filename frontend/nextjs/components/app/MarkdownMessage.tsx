@@ -307,7 +307,7 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
       ) : (
         <div dangerouslySetInnerHTML={{ __html: html || '▋' }} />
       )}
-      {streaming && !content.trim() && stepsToShow && stepsToShow.length > 0 && (
+      {stepsToShow && stepsToShow.length > 0 && (
         <div className="assistant-status-steps" role="status" aria-live="polite">
           {stepsToShow.map((step) => (
             <div key={step.id} className={`assistant-status-step ${step.state}`}>
