@@ -264,27 +264,66 @@ def expand_query_ladder(q: str) -> list:
     return chain
 
 
+def _dimension_queries(interp: Optional[dict]) -> list:
+    """Per-dimension ladder head, round-robin interleaved.
+
+    Each dimension contributes its tight-to-loose AND-drop chain; the
+    chains are interleaved (d1[0], d2[0], d3[0], d1[1], ...) so the
+    ladder head covers every facet before any single dimension's
+    fallbacks, capped at MAX_INTERP_LADDER_SLOTS.  A dimension without
+    queries contributes nothing.
+    """
+    dims = (interp or {}).get("dimensions") or []
+    chains: list = []
+    for d in dims:
+        if not isinstance(d, dict):
+            continue
+        for q in (d.get("queries") or []):
+            q = str(q).strip()
+            if q:
+                chains.append(expand_query_ladder(q))
+                break
+    interleaved: list = []
+    i = 0
+    while any(len(ch) > i for ch in chains) \
+            and len(interleaved) < MAX_INTERP_LADDER_SLOTS:
+        for ch in chains:
+            if i < len(ch):
+                interleaved.append(ch[i])
+                if len(interleaved) >= MAX_INTERP_LADDER_SLOTS:
+                    break
+        i += 1
+    return interleaved
+
+
 def merge_interpretation_queries(rewrite: dict, interp: Optional[dict],
                                  cap: int = MAX_LADDER_QUERIES) -> dict:
     """Prepend the interpretation's queries to the rewrite ladder.
 
-    The interpretation queries are architecture-level, so they go at the
-    TOP (tightest) of the ladder — the auto-ladder and the blank-q
-    injection both pick from the head.  Each query is expanded into its
-    AND-drop chain (see ``expand_query_ladder``) so the ladder falls
-    through to single-concept OR groups instead of burning its budget on
-    404-form combinations.  Returns a new rewrite dict; the input is
-    never mutated.  Dedupes against existing ladder entries.
+    With a dimension skeleton, each dimension contributes one ladder
+    head entry (round-robin over its AND-drop chains) so retrieval
+    covers every facet; without dimensions the flat interpretation
+    queries expand into their full chains as before.  The auto-ladder
+    and the blank-q injection both pick from the head.  Returns a new
+    rewrite dict; the input is never mutated.  Dedupes against existing
+    ladder entries.
     """
     out = dict(rewrite or {})
     existing = [q for q in (rewrite or {}).get("queries") or [] if q]
+    dims = (interp or {}).get("dimensions") or []
     chain: list = []
     seen: set = set()
-    for q in (interp or {}).get("queries") or []:
-        for sub in expand_query_ladder(str(q)):
+    if dims:
+        for sub in _dimension_queries(interp):
             if sub and sub not in seen and sub not in existing:
                 seen.add(sub)
                 chain.append(sub)
+    else:
+        for q in (interp or {}).get("queries") or []:
+            for sub in expand_query_ladder(str(q)):
+                if sub and sub not in seen and sub not in existing:
+                    seen.add(sub)
+                    chain.append(sub)
     chain = chain[:MAX_INTERP_LADDER_SLOTS]
     # The flash rewrite's tail (its single-concept fallbacks) must stay
     # reachable, so the chain never starves it out of the ladder.

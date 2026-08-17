@@ -128,6 +128,43 @@ class TestAndChainExpansion(unittest.TestCase):
         self.assertEqual(len(merged["queries"]), ti.MAX_LADDER_QUERIES)
 
 
+class TestMergeDimensionQueries(unittest.TestCase):
+    def test_one_query_per_dimension_round_robin(self):
+        interp = {"dimensions": [
+            {"name": "d1", "queries": ['("a") AND ("b") AND ("c")']},
+            {"name": "d2", "queries": ['("d") AND ("e")']},
+            {"name": "d3", "queries": ['("f")']},
+        ]}
+        merged = ti.merge_interpretation_queries({"queries": []}, interp)
+        self.assertEqual(merged["queries"][:3],
+                         ['("a") AND ("b") AND ("c")',
+                          '("d") AND ("e")', '("f")'])
+
+    def test_two_dimensions_depth_fills_third_slot(self):
+        interp = {"dimensions": [
+            {"name": "d1", "queries": ['("a") AND ("b") AND ("c")']},
+            {"name": "d2", "queries": ['("d") AND ("e")']},
+        ]}
+        merged = ti.merge_interpretation_queries({"queries": []}, interp)
+        self.assertEqual(merged["queries"][:3],
+                         ['("a") AND ("b") AND ("c")',
+                          '("d") AND ("e")', '("a") AND ("b")'])
+
+    def test_dimension_queries_dedupe_against_rewrite(self):
+        interp = {"dimensions": [{"name": "d1", "queries": ['("a")']}]}
+        merged = ti.merge_interpretation_queries(
+            {"queries": ['("a")', "tail"]}, interp)
+        self.assertEqual(merged["queries"], ['("a")', "tail"])
+
+    def test_flat_path_unchanged_without_dimensions(self):
+        merged = ti.merge_interpretation_queries(
+            {"queries": []},
+            {"queries": ['("a") AND ("b") AND ("c")']})
+        self.assertEqual(
+            merged["queries"],
+            ['("a") AND ("b") AND ("c")', '("a") AND ("b")', '("a")'])
+
+
 class TestMergeInterpretationQueries(unittest.TestCase):
     def test_prepends_and_keeps_original(self):
         rewrite = {"concepts": [], "queries": ["old1", "old2"]}
