@@ -1168,38 +1168,39 @@ class TestAutoFeedbackRound(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await _auto_feedback_round(agent, entry, "zh"))
 
 
+def _agent_with_recall_pool():
+    from sources.long_task.chat_relevance import SearchPool
+    agent = _FakeAgent()
+    agent._last_user_prompt = "干燥空气"
+    agent._flash_llm = _ScoringProvider()
+    pool = SearchPool("干燥空气")
+    raw = {
+        "applicationNumberText": "19511555",
+        "applicationMetaData": {
+            "inventionTitle": "AIR DRYER CONTROL USING HUMIDITY",
+            "firstApplicantName": "ACME Corp",
+            "filingDate": "2024-01-15",
+            "applicationStatusDescriptionText": "Patented Case",
+        },
+        "childContinuityBag": [
+            {"childPatentNumber": "7061668",
+             "childApplicationNumberText": "10393563"},
+        ],
+    }
+    pool.add([raw])
+    agent._search_pool = pool
+    agent._cpc_hints = [{"code": "H05B45/20", "title": "Colour control"}]
+    return agent
+
+
 class TestRecallExpansionRound(unittest.IsolatedAsyncioTestCase):
     """Recall expansion (plan: citation/family + CPC): once per request,
     the system pulls records by the pool candidates' family numbers and
     by the matched CPC codes, merges them into the pool."""
 
-    def _agent_with_pool(self):
-        from sources.long_task.chat_relevance import SearchPool
-        agent = _FakeAgent()
-        agent._last_user_prompt = "干燥空气"
-        agent._flash_llm = _ScoringProvider()
-        pool = SearchPool("干燥空气")
-        raw = {
-            "applicationNumberText": "19511555",
-            "applicationMetaData": {
-                "inventionTitle": "AIR DRYER CONTROL USING HUMIDITY",
-                "firstApplicantName": "ACME Corp",
-                "filingDate": "2024-01-15",
-                "applicationStatusDescriptionText": "Patented Case",
-            },
-            "childContinuityBag": [
-                {"childPatentNumber": "7061668",
-                 "childApplicationNumberText": "10393563"},
-            ],
-        }
-        pool.add([raw])
-        agent._search_pool = pool
-        agent._cpc_hints = [{"code": "H05B45/20", "title": "Colour control"}]
-        return agent
-
     async def test_merges_family_records_into_pool(self):
         from sources.agents.react_tools import _recall_expansion_round
-        agent = self._agent_with_pool()
+        agent = _agent_with_recall_pool()
         entry = _LadderEntry(agent)
         family_records = [{
             "applicationNumberText": "10393563",
@@ -1221,7 +1222,7 @@ class TestRecallExpansionRound(unittest.IsolatedAsyncioTestCase):
 
     async def test_fires_once_per_request(self):
         from sources.agents.react_tools import _recall_expansion_round
-        agent = self._agent_with_pool()
+        agent = _agent_with_recall_pool()
         entry = _LadderEntry(agent)
         with patch("sources.agents.react_tools.fetch_by_numbers",
                    return_value=[]), \
@@ -1243,7 +1244,7 @@ class TestRecallExpansionRound(unittest.IsolatedAsyncioTestCase):
 
     async def test_fetch_failure_degrades_to_none(self):
         from sources.agents.react_tools import _recall_expansion_round
-        agent = self._agent_with_pool()
+        agent = _agent_with_recall_pool()
         entry = _LadderEntry(agent)
         with patch("sources.agents.react_tools.fetch_by_numbers",
                    side_effect=RuntimeError("down")), \
@@ -1260,7 +1261,7 @@ class TestRecallExpansionRound(unittest.IsolatedAsyncioTestCase):
         # like multi-year-old grants sit).
         import re
         from sources.agents.react_tools import _recall_expansion_round
-        agent = self._agent_with_pool()
+        agent = _agent_with_recall_pool()
         entry = _LadderEntry(agent)
 
         class _RecordingScoring(_ScoringProvider):
@@ -1293,6 +1294,188 @@ class TestRecallExpansionRound(unittest.IsolatedAsyncioTestCase):
                       for i in re.findall(r"id=(\d+)", payload)]
         self.assertIn("30000000", scored_ids)  # newest end
         self.assertIn("30000003", scored_ids)  # spread reaches the tail
+
+
+class TestGroundedSynthesisRound(unittest.IsolatedAsyncioTestCase):
+    def _agent_with_scored_pool(self, n=20):
+        from sources.long_task.chat_relevance import SearchPool
+        agent = _FakeAgent()
+        agent._last_user_prompt = "q"
+        agent.logger = _CaptureLogger()
+        pool = SearchPool("q")
+        cands = [{"patent_id": f"10000{i}", "title": f"T{i}",
+                  "applicant": "ACME", "relevance_score": 4}
+                 for i in range(n)]
+        pool.add_from_candidates(cands)
+        agent._search_pool = pool
+        agent._search_interpretation = None
+        return agent
+
+    async def test_probe_logged_and_skipped_below_min(self):
+        from sources.agents import react_tools as rt
+        agent = self._agent_with_scored_pool(n=5)
+        entry = _LadderEntry(agent)
+        with patch("sources.agents.react_tools.GROUNDED_MIN", 15), \
+             patch("sources.long_task.grounded_interpretation"
+                   ".synthesize_grounded") as synth:
+            result = await rt._grounded_synthesis_round(agent, entry, "zh")
+        self.assertIsNone(result)
+        synth.assert_not_awaited()
+        self.assertIn("grounded_interpretation probe",
+                      " ".join(agent.logger.lines))
+        self.assertTrue(agent._grounded_done)
+
+    async def test_synthesizes_once_and_executes_queries(self):
+        from sources.agents import react_tools as rt
+        agent = self._agent_with_scored_pool(n=20)
+        entry = _LadderEntry(agent)
+        grounded = {
+            "dimensions": [{"name": "D1", "role": "核心层", "line": "L1",
+                            "representatives": ["ERP"],
+                            "players": ["ERP"]}],
+            "players": ["ERP"],
+            "supplementary_queries": ['("new") AND ("term")'],
+            "supplementary_cpc": ["H05B45/20"],
+        }
+        with patch("sources.agents.react_tools.GROUNDED_MIN", 15), \
+             patch("sources.long_task.grounded_interpretation"
+                   ".synthesize_grounded",
+                   new=AsyncMock(return_value=grounded)), \
+             patch("sources.agents.react_tools._invoke_and_merge",
+                   new=AsyncMock(return_value=([], "", 0))) as merge_mock:
+            result = await rt._grounded_synthesis_round(agent, entry, "zh")
+            self.assertIsNotNone(result)
+            self.assertEqual(agent._grounded_interpretation, grounded)
+            self.assertEqual(agent._grounded_cpc, ["H05B45/20"])
+            self.assertIn("grounded_interpretation — lines=",
+                          " ".join(agent.logger.lines))
+            self.assertEqual(merge_mock.await_count, 1)
+            q_used = merge_mock.await_args.args[2]
+            self.assertEqual(q_used, '("new") AND ("term")')
+            # fires once per request
+            again = await rt._grounded_synthesis_round(agent, entry, "zh")
+        self.assertIsNone(again)
+        self.assertEqual(merge_mock.await_count, 1)
+
+    async def test_no_pool_logs_probe_without_burning_queries(self):
+        from sources.agents import react_tools as rt
+        agent = _FakeAgent()
+        agent.logger = _CaptureLogger()
+        entry = _LadderEntry(agent)
+        result = await rt._grounded_synthesis_round(agent, entry, "zh")
+        self.assertIsNone(result)
+        self.assertTrue(agent._grounded_done)
+
+    async def test_rank_pending_pool_prefers_grounded_rubric(self):
+        from sources.agents import react_tools as rt
+        from sources.long_task.chat_relevance import SearchPool
+
+        class _Recorder:
+            def __init__(self):
+                self.calls = 0
+                self.prompts = []
+
+            async def complete_json(self, system, user, max_retries=0):
+                self.calls += 1
+                self.prompts.append(system)
+                return {"scores": []}
+
+        agent = _FakeAgent()
+        agent.llm = _Recorder()
+        agent.logger = _CaptureLogger()
+        agent._last_user_prompt = "q"
+        agent._search_pool = SearchPool("q")
+        agent._search_interpretation = {"scheme": "pre", "key_players": ["A"]}
+        agent._grounded_interpretation = {
+            "scheme": "pre",
+            "dimensions": [{"name": "D1", "role": "核心层", "line": "L1",
+                            "representatives": ["ERP"]}],
+            "players": ["ERP"],
+        }
+        provider = _Recorder()
+        with patch.object(rt, "_get_flash_provider", return_value=provider):
+            await rt._rank_pending_pool(agent, [_cand("1001")], "zh")
+        self.assertIn("真实玩家榜", provider.prompts[0])
+        self.assertNotIn("本身不构成相关性依据", provider.prompts[0])
+
+    async def test_rank_pending_pool_keeps_pre_rubric_without_grounded(self):
+        from sources.agents import react_tools as rt
+        from sources.long_task.chat_relevance import SearchPool
+
+        class _Recorder:
+            def __init__(self):
+                self.prompts = []
+
+            async def complete_json(self, system, user, max_retries=0):
+                self.prompts.append(system)
+                return {"scores": []}
+
+        agent = _FakeAgent()
+        agent.llm = _Recorder()
+        agent._last_user_prompt = "q"
+        agent._search_pool = SearchPool("q")
+        agent._search_interpretation = {"scheme": "pre", "key_players": ["A"]}
+        provider = _Recorder()
+        with patch.object(rt, "_get_flash_provider", return_value=provider):
+            await rt._rank_pending_pool(agent, [_cand("1001")], "zh")
+        self.assertIn("本身不构成相关性依据", provider.prompts[0])
+
+    async def test_recall_expansion_uses_grounded_cpc(self):
+        from sources.agents.react_tools import _recall_expansion_round
+        agent = _agent_with_recall_pool()
+        agent._grounded_cpc = ["H05B45/30"]
+        entry = _LadderEntry(agent)
+        with patch("sources.agents.react_tools.fetch_by_numbers",
+                   return_value=[]), \
+             patch("sources.agents.react_tools.fetch_by_cpc") as fcp:
+            fcp.return_value = []
+            await _recall_expansion_round(agent, entry, "zh")
+        codes = fcp.call_args[0][0]
+        self.assertIn("H05B45/20", codes)
+        self.assertIn("H05B45/30", codes)
+
+
+class TestGroundedIntegration(unittest.IsolatedAsyncioTestCase):
+    """execute_action 在主搜索路径调用接地轮（在 feedback 轮之前）。"""
+
+    async def test_search_observation_merges_grounded_results(self):
+        from sources.agents.react_tools import ToolEntry, make_action_executor
+        from sources.long_task.chat_relevance import SearchPool
+        agent = _FakeAgent()
+        agent._last_user_prompt = "q"
+        agent._flash_llm = _ScoringProvider()
+        pool = SearchPool("q")
+        pool.add([_usp_raw_item("19511555", "TITLE ONE")])
+        agent._search_pool = pool
+
+        class _SeqTool:
+            def invoke(self, payload):
+                agent._pending_raw_items = [
+                    _usp_raw_item("19511555", "TITLE ONE")]
+                agent._last_search_total = 1
+                return "ok"
+
+        tool_info = _ToolInfo(
+            "uspto search",
+            url="https://api.uspto.gov/api/v1/patent/applications/search")
+        entry = ToolEntry(name="uspto_search", kind="knowledge",
+                          knowledge=_Knowledge(3, ktype=1),
+                          tool_info=tool_info, tool=_SeqTool())
+        registry = {entry.name: entry}
+        executor = await make_action_executor(agent, registry, None)
+        merged_ranked = [{"patent_id": "18184836", "title": "NEW",
+                          "applicant": "ACME", "status": "Patented Case",
+                          "patent_number": "1",
+                          "_raw": _usp_raw_item("18184836", "NEW TITLE")}]
+        grounded_result = (merged_ranked, "重排", "已自动执行接地解读补检索式：\n- q1")
+        with patch("sources.agents.react_tools._grounded_synthesis_round",
+                   new=AsyncMock(return_value=grounded_result)), \
+             patch("sources.long_task.search_query_builder"
+                   ".build_feedback_queries", return_value=[]):
+            result = await executor("uspto_search", {"q": "agent query"}, 1)
+        self.assertEqual(result["kind"], "observation")
+        self.assertIn("18184836", result["text"])
+        self.assertIn("已自动执行接地解读补检索式", result["text"])
 
 
 class TestPrescoreRanking(unittest.IsolatedAsyncioTestCase):

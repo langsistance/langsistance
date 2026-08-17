@@ -56,6 +56,10 @@ MAX_PATENT_LIST_ITEMS = int(os.getenv("REACT_MAX_PATENT_LIST_ITEMS", "100"))
 FAMILY_SCORE_ENABLED = os.getenv("REACT_FAMILY_SCORE", "1") == "1"
 FAMILY_SEED_MIN = int(os.getenv("REACT_FAMILY_SEED_MIN", "4"))
 FAMILY_SCORE_BUDGET = int(os.getenv("REACT_FAMILY_SCORE_BUDGET", "30"))
+# Post-retrieval grounded interpretation: fires once per request when
+# the scored pool clears the minimum; clusters the scored head.
+GROUNDED_MIN = int(os.getenv("REACT_GROUNDED_MIN", "15"))
+GROUNDED_HEAD = int(os.getenv("REACT_GROUNDED_HEAD", "30"))
 RELEVANCE_RANK_ENABLED = os.getenv("REACT_RELEVANCE_RANK", "1") != "0"
 REACT_POOL_MAX_PAGES = int(os.getenv("REACT_POOL_MAX_PAGES", "2"))
 # Queries whose total hits exceed this threshold are never paged through:
@@ -640,8 +644,12 @@ async def _rank_pending_pool(agent, candidates, lang,
         from sources.long_task.technical_interpretation import (
             format_interpretation_rubric,
         )
+        # Grounded interpretation (post-retrieval) wins over the
+        # pre-retrieval one once it exists: its players/lines are
+        # data-driven.
+        _grounded = getattr(agent, "_grounded_interpretation", None)
         _rubric = format_interpretation_rubric(
-            getattr(agent, "_search_interpretation", None))
+            _grounded or getattr(agent, "_search_interpretation", None))
     except Exception:
         _rubric = ""
     scored = await score_candidates_concurrent(
@@ -927,6 +935,95 @@ async def _auto_feedback_round(agent, entry, lang) -> Optional[Tuple[list, str, 
     return ranked, ranking_note, fb_note
 
 
+async def _grounded_synthesis_round(agent, entry, lang) -> Optional[Tuple[list, str, str]]:
+    """Post-retrieval grounded synthesis with loop feedback.
+
+    Once per request: when the scored pool clears GROUNDED_MIN, cluster
+    the scored head into data-driven dimensions/players (Flash), store
+    the grounded interpretation (rubric upgrades to real signals) and
+    its supplementary CPC codes (recall expansion widens), then
+    auto-execute its supplementary queries into the pool — mirroring
+    the auto-feedback round.  The probe line logs every request (even
+    skipped) so a silent path stays visible.  Returns
+    (ranked, ranking_note, grounded_note) when queries executed; None
+    otherwise.  Never raises.
+    """
+    if getattr(agent, "_grounded_done", False):
+        return None
+    agent._grounded_done = True
+    from sources.long_task.grounded_interpretation import (
+        GROUNDED_ENABLED, synthesize_grounded,
+    )
+    pool = getattr(agent, "_search_pool", None)
+    _glog = getattr(agent, "logger", None)
+    if pool is None:
+        if _glog is not None:
+            _glog.info(
+                "grounded_interpretation probe — pool=0 scored=0 "
+                f"trigger={GROUNDED_ENABLED}")
+        return None
+    scored = [
+        c for c in pool._by_id.values()
+        if isinstance(c.get("relevance_score"), (int, float))
+    ]
+    if _glog is not None:
+        _glog.info(
+            f"grounded_interpretation probe — pool={len(pool)} "
+            f"scored={len(scored)} trigger={GROUNDED_ENABLED}")
+    if not GROUNDED_ENABLED or len(scored) < GROUNDED_MIN:
+        return None
+    top = sorted(
+        scored, key=lambda c: -(c.get("relevance_score") or 0))[:GROUNDED_HEAD]
+    try:
+        grounded = await synthesize_grounded(
+            pool.query, top,
+            pre_interp=getattr(agent, "_search_interpretation", None),
+            cpc_hints=getattr(agent, "_cpc_hints", None))
+    except Exception:
+        grounded = None
+    if not grounded:
+        return None
+    agent._grounded_interpretation = grounded
+    agent._grounded_cpc = list(
+        grounded.get("supplementary_cpc") or [])[:RECALL_MAX_CPC]
+    lines = [str(d.get("name") or "") for d in
+             (grounded.get("dimensions") or [])[:3]]
+    players = ", ".join(str(p) for p in (grounded.get("players") or [])[:5])
+    if _glog is not None:
+        _glog.info(
+            f"grounded_interpretation — lines={lines}"
+            + (f" | players={players}" if players else ""))
+    queries = [q for q in
+               (grounded.get("supplementary_queries") or [])[:AUTO_FEEDBACK_MAX]
+               if q]
+    if not queries:
+        return None
+    executed: list = []
+    gained = 0
+    ranked: list = []
+    ranking_note = ""
+    for q in queries:
+        merged = await _invoke_and_merge(agent, entry, q, lang)
+        if merged is None:
+            break
+        executed.append(q)
+        ranked, ranking_note, live = merged
+        gained += live
+    if not executed:
+        return None
+    if lang == "en":
+        merged_note = (f"(merged {gained} new candidates)" if gained > 0
+                       else "(no live hits)")
+        grounded_note = (f"\n\nAuto-executed grounded queries {merged_note}:\n"
+                         + _query_lines(executed))
+    else:
+        merged_note = (f"（并入 {gained} 条新候选）" if gained > 0
+                       else "（均无有效命中）")
+        grounded_note = (f"\n\n已自动执行接地解读补检索式{merged_note}：\n"
+                         + _query_lines(executed))
+    return ranked, ranking_note, grounded_note
+
+
 async def _recall_expansion_round(agent, entry, lang) -> Optional[Tuple[list, str, str]]:
     """System-driven recall expansion (citation/family + CPC routes).
 
@@ -947,9 +1044,14 @@ async def _recall_expansion_round(agent, entry, lang) -> Optional[Tuple[list, st
     if not candidates:
         return None
     refs = collect_family_refs(candidates)
+    grounded_codes = [
+        str(c).strip().upper()
+        for c in (getattr(agent, "_grounded_cpc", None) or [])
+        if str(c).strip()]
     codes = [str(h.get("code", "")).strip() for h in
              (getattr(agent, "_cpc_hints", None) or [])
-             if isinstance(h, dict) and h.get("code")][:RECALL_MAX_CPC]
+             if isinstance(h, dict) and h.get("code")]
+    codes = (codes + grounded_codes)[:RECALL_MAX_CPC]
     if not (refs["patents"] or refs["applications"] or codes):
         return None
     agent._recall_done = True
@@ -1412,6 +1514,23 @@ async def make_action_executor(agent, registry, push_filter=None):
                         text = text.rstrip() + "\n" + ladder_note
                 text = _append_untried_ladder_note(agent, text, lang)
             text = await _maybe_append_feedback(agent, text, total, lang)
+            grounded = await _grounded_synthesis_round(agent, entry, lang)
+            if grounded is not None:
+                ranked, ranking_note, grounded_note = grounded
+                if ranked:
+                    shown = [c["_raw"] for c in ranked]
+                    agent._pending_raw_items = shown
+                    agent._search_ranked = True
+                    digest = _ranked_digest(ranked, lang=lang)
+                    note = ranking_note + grounded_note
+                    if lang == "en":
+                        text = (f"Search results ({len(shown)} records, "
+                                f"{note}):\n{digest}\n\n"
+                                "The full list is displayed to the user.")
+                    else:
+                        text = (f"检索结果（{len(shown)} 条，{note}）：\n"
+                                f"{digest}\n\n"
+                                "完整列表已展示给用户。")
             feedback = await _auto_feedback_round(agent, entry, lang)
             if feedback is not None:
                 ranked, ranking_note, fb_note = feedback

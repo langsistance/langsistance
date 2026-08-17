@@ -1569,6 +1569,9 @@ Begin your response now:
         self._react_loop_ran = False
         self._search_rewrite = None   # deterministic q rewrite cache, per request
         self._search_interpretation = None  # architecture-level interpretation, per request
+        self._grounded_done = False  # post-retrieval grounded synthesis, once per request
+        self._grounded_interpretation = None  # data-grounded interpretation (players/lines)
+        self._grounded_cpc = None  # supplementary CPC codes from the grounded synthesis
         self._last_search_total = None   # total-hit count captured per request
         self._search_pool = None   # relevance-ranked candidate pool, per request
         self._search_ranked = False  # True once a search list was relevance-ranked
