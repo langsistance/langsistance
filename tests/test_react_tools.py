@@ -1489,6 +1489,12 @@ class TestGroundedSynthesisRound(unittest.IsolatedAsyncioTestCase):
         self.assertIn("H05B45/30", codes)
 
 
+class TestGroundedDefaults(unittest.TestCase):
+    def test_grounded_min_default_is_eighty(self):
+        from sources.agents import react_tools as rt
+        self.assertEqual(rt.GROUNDED_MIN, 80)
+
+
 class TestGroundedIntegration(unittest.IsolatedAsyncioTestCase):
     """execute_action 在主搜索路径调用接地轮（在 feedback 轮之前）。"""
 
