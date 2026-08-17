@@ -421,6 +421,7 @@ async def _fetch_spec_pdf(source: str, patent_id: str) -> dict:
         raise PatentDetailError(
             f"No downloadable specification PDF for application {app_number}"
         )
+    logger.info(f"claims branch probe — app={app_number}: PDF fallback selected")
     return {"success": True, "pdf_url": _build_uspto_download_proxy_url(pdf_url)}
 
 
@@ -464,6 +465,8 @@ async def _fetch_claims(source: str, patent_id: str) -> dict:
         )
 
     # 1. XML — structured CLM.xml parse (numbers live in ClaimNumber).
+    logger.info(f"claims branch probe — app={app_number}, doc mimes: "
+                f"{[(getattr(d, 'mimeType', ''), getattr(d, 'docType', '')) for d in document_bag.get('items', [])][:10]}")
     if get_download_url_from_doc(
         claims_doc, mime_order=_XML_MIME_ORDER, fallback_to_any=False
     ):
