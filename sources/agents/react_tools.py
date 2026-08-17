@@ -57,8 +57,10 @@ FAMILY_SCORE_ENABLED = os.getenv("REACT_FAMILY_SCORE", "1") == "1"
 FAMILY_SEED_MIN = int(os.getenv("REACT_FAMILY_SEED_MIN", "4"))
 FAMILY_SCORE_BUDGET = int(os.getenv("REACT_FAMILY_SCORE_BUDGET", "30"))
 # Post-retrieval grounded interpretation: fires once per request when
-# the scored pool clears the minimum; clusters the scored head.
-GROUNDED_MIN = int(os.getenv("REACT_GROUNDED_MIN", "80"))
+# the scored pool clears the minimum. Set just above the single-round
+# scoring cap so a first-round noise pool never triggers, but a
+# recall-enlarged pool does. Clusters the scored head.
+GROUNDED_MIN = int(os.getenv("REACT_GROUNDED_MIN", "55"))
 GROUNDED_HEAD = int(os.getenv("REACT_GROUNDED_HEAD", "30"))
 RELEVANCE_RANK_ENABLED = os.getenv("REACT_RELEVANCE_RANK", "1") != "0"
 REACT_POOL_MAX_PAGES = int(os.getenv("REACT_POOL_MAX_PAGES", "2"))

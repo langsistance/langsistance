@@ -1509,9 +1509,9 @@ class TestGroundedSynthesisRound(unittest.IsolatedAsyncioTestCase):
 
 
 class TestGroundedDefaults(unittest.TestCase):
-    def test_grounded_min_default_is_eighty(self):
+    def test_grounded_min_default_is_fifty_five(self):
         from sources.agents import react_tools as rt
-        self.assertEqual(rt.GROUNDED_MIN, 80)
+        self.assertEqual(rt.GROUNDED_MIN, 55)
 
 
 class TestGroundedIntegration(unittest.IsolatedAsyncioTestCase):
