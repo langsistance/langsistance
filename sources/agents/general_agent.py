@@ -1570,6 +1570,7 @@ Begin your response now:
         self._react_loop_ran = False
         self._search_rewrite = None   # deterministic q rewrite cache, per request
         self._search_interpretation = None  # architecture-level interpretation, per request
+        self._request_started = time.monotonic()  # whole-request timer (agent_elapsed origin)
         self._grounded_done = False  # post-retrieval grounded synthesis, once per request
         self._grounded_interpretation = None  # data-grounded interpretation (players/lines)
         self._grounded_cpc = None  # supplementary CPC codes from the grounded synthesis
@@ -1700,7 +1701,9 @@ Begin your response now:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
-        result = await loop.run(messages, bind_tools)
+        result = await loop.run(
+            messages, bind_tools,
+            start=getattr(self, "_request_started", None))
         self._react_loop_ran = True
         if result.kind == 'long_task':
             self.logger.info("Long task triggered inside ReAct loop — returning intent")

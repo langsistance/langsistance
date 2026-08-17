@@ -300,23 +300,6 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
             <span className="assistant-waiting-title">{t('chat.processing')}</span>
           </span>
           <span className="assistant-waiting-scan" aria-hidden="true" />
-          {stepsToShow && stepsToShow.length > 0 && (
-            <div className="assistant-status-steps" role="status" aria-live="polite">
-              {stepsToShow.map((step) => (
-                <div key={step.id} className={`assistant-status-step ${step.state}`}>
-                  <span className="assistant-status-step-icon" aria-hidden="true">
-                    {step.state === 'done' ? '✓' : '●'}
-                  </span>
-                  <span className="assistant-status-step-message">{step.message}</span>
-                  {step.state === 'running' && stepsToShow[stepsToShow.length - 1]?.id === step.id && (
-                    <span className="assistant-status-step-time">
-                      {t('chat.processingWithTime').replace('{seconds}', String(runningElapsed))}
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       )}
       {(content.includes('🔬') || content.includes('✅') || content.includes('❌') || content.includes('⏸') || content.includes('⏹') || /\[\d+%\]/.test(content)) ? (
@@ -324,7 +307,7 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
       ) : (
         <div dangerouslySetInnerHTML={{ __html: html || '▋' }} />
       )}
-      {streaming && stepsToShow && stepsToShow.length > 0 && (
+      {streaming && !content.trim() && stepsToShow && stepsToShow.length > 0 && (
         <div className="assistant-status-steps" role="status" aria-live="polite">
           {stepsToShow.map((step) => (
             <div key={step.id} className={`assistant-status-step ${step.state}`}>

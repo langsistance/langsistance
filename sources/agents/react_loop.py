@@ -67,10 +67,13 @@ class ReActLoop:
             text = text[:limit] + "..."
         return text
 
-    async def run(self, messages: List[dict], tools: List[dict]) -> RoundResult:
+    async def run(self, messages: List[dict], tools: List[dict],
+                    start: Optional[float] = None) -> RoundResult:
         """Run the loop. *messages* grows assistant/tool turns in place;
-        tools mounted by search_my_knowledge are appended to *tools*."""
-        start = time.monotonic()
+        tools mounted by search_my_knowledge are appended to *tools*.
+        *start* lets the caller count the whole request (create_agent
+        phase included) instead of only the ReAct loop itself."""
+        start = start if start is not None else time.monotonic()
         steps = 0
         last_failed_action: Optional[str] = None
         consecutive_failures = 0
