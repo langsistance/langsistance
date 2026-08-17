@@ -2734,3 +2734,76 @@ class TestEnvelopeInvokeSchema(unittest.TestCase):
         agent._last_query_id = "q1"
         result = tool.invoke(_tool_invoke_payload(agent, envelope))
         self.assertEqual(result, "ok")
+
+
+class _RecordingHandler:
+    """Duck-typed callback handler that records on_status messages."""
+
+    def __init__(self):
+        self.messages = []
+
+    async def on_status(self, message):
+        self.messages.append(message)
+
+
+class _RaisingStatusHandler:
+    """Handler whose on_status always raises — must be swallowed."""
+
+    async def on_status(self, message):
+        raise RuntimeError("boom")
+
+
+class _NoStatusHandler:
+    """Handler without an on_status attribute — must be ignored."""
+
+    pass
+
+
+class TestAgentStatus(unittest.IsolatedAsyncioTestCase):
+    async def test_sends_message_through_handler(self):
+        from sources.agents.react_tools import _agent_status
+        agent = _FakeAgent()
+        handler = _RecordingHandler()
+        agent._callback_handler = handler
+        await _agent_status(agent, "正在评估 3 条候选专利...")
+        self.assertEqual(handler.messages, ["正在评估 3 条候选专利..."])
+
+    async def test_noop_when_agent_has_no_handler(self):
+        from sources.agents.react_tools import _agent_status
+        agent = _FakeAgent()  # no _callback_handler attribute
+        # must not raise and must not fail
+        await _agent_status(agent, "hello")
+
+    async def test_noop_when_handler_has_no_on_status(self):
+        from sources.agents.react_tools import _agent_status
+        agent = _FakeAgent()
+        agent._callback_handler = _NoStatusHandler()
+        await _agent_status(agent, "hello")
+
+    async def test_swallows_on_status_exception(self):
+        from sources.agents.react_tools import _agent_status
+        agent = _FakeAgent()
+        agent._callback_handler = _RaisingStatusHandler()
+        # must not propagate the RuntimeError
+        await _agent_status(agent, "hello")
+
+    async def test_rank_pending_pool_fires_status_before_scoring(self):
+        from sources.agents import react_tools as rt
+        from sources.long_task.chat_relevance import SearchPool
+        agent = _FakeAgent()
+        agent.llm = _ScoringProvider()
+        agent.logger = _CaptureLogger()
+        handler = _RecordingHandler()
+        agent._callback_handler = handler
+        agent._search_interpretation = None
+        agent._last_user_prompt = "q"
+        agent._search_pool = SearchPool("q")
+        with patch.object(rt, "_get_flash_provider",
+                          return_value=agent.llm):
+            await rt._rank_pending_pool(
+                agent,
+                [_cand("1001"), _cand("1002")],
+                "zh")
+        self.assertTrue(
+            any("正在评估" in m for m in handler.messages),
+            f"expected a 正在评估 status, got {handler.messages!r}")

@@ -104,6 +104,26 @@ LADDER_MAX_HITS = int(os.getenv("REACT_LADDER_MAX_HITS")
                       or os.getenv("REACT_TIGHTEN_SUGGEST_THRESHOLD", "300"))
 
 
+async def _agent_status(agent, message: str) -> None:
+    """Fire a transient status event through the agent's callback handler.
+
+    The handler is stored on the agent per request (create_agent); the
+    long silent phases (scoring / recall / synthesis) use this so the
+    streaming client always has a live "what is happening now" line.
+    Never raises.
+    """
+    handler = getattr(agent, "_callback_handler", None)
+    if handler is None:
+        return
+    on_status = getattr(handler, "on_status", None)
+    if on_status is None:
+        return
+    try:
+        await on_status(message)
+    except Exception:
+        pass
+
+
 def _ladder_cap_note(lang: str = "zh") -> str:
     """Deterministic constraint: once hits exceed the system's processing
     capacity, wider ladder queries are off the table — only tightening
@@ -647,6 +667,10 @@ async def _rank_pending_pool(agent, candidates, lang,
                 key=lambda c: -(c.get("semantic_score") or 0.0)
             )[:SCORE_PER_CALL]
     _score_start = time.monotonic()
+    await _agent_status(agent,
+        f"正在评估 {len(head)} 条候选专利与您问题的相关度..."
+        if lang == "zh" else
+        f"Scoring {len(head)} candidate patents against your question...")
     try:
         from sources.long_task.technical_interpretation import (
             format_interpretation_rubric,
@@ -690,6 +714,9 @@ async def _rank_pending_pool(agent, candidates, lang,
                     f"members={len(members)} enabled={FAMILY_SCORE_ENABLED}"
                 )
             if members:
+                await _agent_status(agent,
+                    "正在评估同族专利的相关性..." if lang == "zh"
+                    else "Scoring family-member patents...")
                 _family_scored = await score_candidates_concurrent(
                     members, pool.query,
                     _get_flash_provider(agent) or getattr(agent, "llm", None),
@@ -988,6 +1015,9 @@ async def _grounded_synthesis_round(agent, entry, lang) -> Optional[Tuple[list, 
     agent._grounded_done = True
     top = sorted(
         scored, key=lambda c: -(c.get("relevance_score") or 0))[:GROUNDED_HEAD]
+    await _agent_status(agent,
+        "正在归纳检索结果的技术主线..." if lang == "zh"
+        else "Summarizing technical themes from the results...")
     try:
         grounded = await synthesize_grounded(
             pool.query, top,
@@ -1069,6 +1099,9 @@ async def _recall_expansion_round(agent, entry, lang) -> Optional[Tuple[list, st
     if not (refs["patents"] or refs["applications"] or codes):
         return None
     agent._recall_done = True
+    await _agent_status(agent,
+        "正在扩展相关专利族与分类..." if lang == "zh"
+        else "Expanding related patent families and classes...")
     records: list = []
     if refs["patents"] or refs["applications"]:
         try:

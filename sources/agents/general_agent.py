@@ -1564,6 +1564,7 @@ Begin your response now:
         self._last_user_prompt = prompt
         self._last_query_id = query_id
         self._last_user_id = user_id
+        self._callback_handler = callback_handler
         self._pending_raw_items = None
         self._workflow_result = None
         self._react_loop_ran = False
