@@ -300,9 +300,6 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
           </span>
           <span className="assistant-waiting-copy">
             <span className="assistant-waiting-title">{t('chat.processing')}</span>
-            {currentRunningStep && (
-              <span className="assistant-waiting-detail">{currentRunningStep.message}</span>
-            )}
           </span>
           <span className="assistant-waiting-scan" aria-hidden="true" />
         </div>
@@ -312,7 +309,7 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
       ) : (
         <div dangerouslySetInnerHTML={{ __html: html || '▋' }} />
       )}
-      {!showWaiting && statusSteps && statusSteps.length > 0 && (
+      {statusSteps && statusSteps.length > 0 && (
         <div className="assistant-status-steps" role="status" aria-live="polite">
           {statusSteps.map((step) => (
             <div key={step.id} className={`assistant-status-step ${step.state}`}>
