@@ -138,9 +138,12 @@ GROUNDED_SYSTEM_PROMPT = (
     "OR、组间 AND；每条最多 12 个关键词、250 字符；禁止中文\n"
     "4. supplementary_cpc：主线对应的 CPC 代码 1-4 个，来自 cpc 频次"
     "统计\n"
+    "5. players：顶层字段，该领域最活跃的真实申请人 3-5 个（英文"
+    "公司名），从 applicant_stats 与候选数据统计得出，禁止编造；"
+    "与各维度内 players 可重合\n"
     'Return JSON: {"dimensions": [{"name", "role", "line", '
-    '"representatives", "players", "cpc"}], "supplementary_queries": '
-    '[...], "supplementary_cpc": [...]}'
+    '"representatives", "players", "cpc"}], "players": [...], '
+    '"supplementary_queries": [...], "supplementary_cpc": [...]}'
 )
 
 

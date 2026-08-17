@@ -159,6 +159,11 @@ class TestPromptGenericity(unittest.TestCase):
         for word in self.FORBIDDEN:
             self.assertNotIn(word, gi.GROUNDED_SYSTEM_PROMPT)
 
+    def test_grounded_prompt_contract_requires_top_level_players(self):
+        self.assertIn('"players"', gi.GROUNDED_SYSTEM_PROMPT)
+        # the top-level players rule must also exist (data-driven, no fabrication)
+        self.assertIn("players", gi.GROUNDED_SYSTEM_PROMPT)
+
 
 class TestGroundedTimeoutDefault(unittest.TestCase):
     def test_timeout_default_is_sixty_seconds(self):
