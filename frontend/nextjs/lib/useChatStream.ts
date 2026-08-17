@@ -6,7 +6,7 @@ import { queryStream, queryStreamWithFiles, pollLongTaskBatchStatus, getLongTask
 import { pollRecoverLongTask } from '@/lib/longTaskRecovery'
 import { useI18n } from '@/lib/app-i18n'
 import { useAuth } from '@/contexts/AuthContext'
-import { useChatSession, type ChatMessage } from '@/contexts/ChatContext'
+import { useChatSession, type ChatMessage, type ChatStatusStep } from '@/contexts/ChatContext'
 import { decodeArtifactChunksToResults, decodeResultsArtifact } from '@/lib/chatSession'
 import { persistResultsSetToStorage } from '@/lib/resultsStore'
 import { persistChatToStorage } from '@/lib/chatStore'
@@ -34,12 +34,6 @@ function cleanGarbledText(text: string): string {
     .replace(/[-]/g, '')
 }
 
-export interface ChatStatusStep {
-  id: number
-  message: string
-  state: 'running' | 'done'
-}
-
 export function useChatStream() {
   const { t, lang } = useI18n()
   const { user, requireAuth } = useAuth()
@@ -48,10 +42,9 @@ export function useChatStream() {
     messages, setMessages, input, setInput,
     streaming, setStreaming, streamingId, setStreamingId,
     abortRef, sessionId, setSessionId,
+    statusSteps, setStatusSteps, statusElapsed, setStatusElapsed,
   } = useChatSession()
 
-  const [statusSteps, setStatusSteps] = useState<ChatStatusStep[]>([])
-  const [statusElapsed, setStatusElapsed] = useState(0)
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
   // Batch polling: one global timer → one POST /batch_status for all active tasks

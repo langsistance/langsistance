@@ -25,6 +25,12 @@ export interface AgentStep {
   status: 'running' | 'done' | 'error'
 }
 
+export interface ChatStatusStep {
+  id: number
+  message: string
+  state: 'running' | 'done'
+}
+
 export interface ChatMessage {
   id: string
   role: string
@@ -57,6 +63,10 @@ interface ChatContextValue {
   setSessionId: Dispatch<SetStateAction<string | null>>
   resultsSetId: string | null
   setResultsSetId: Dispatch<SetStateAction<string | null>>
+  statusSteps: ChatStatusStep[]
+  setStatusSteps: Dispatch<SetStateAction<ChatStatusStep[]>>
+  statusElapsed: number
+  setStatusElapsed: Dispatch<SetStateAction<number>>
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null)
@@ -68,6 +78,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [streamingId, setStreamingId] = useState<string | null>(null)
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [resultsSetId, setResultsSetId] = useState<string | null>(null)
+  const [statusSteps, setStatusSteps] = useState<ChatStatusStep[]>([])
+  const [statusElapsed, setStatusElapsed] = useState(0)
   const abortRef = useRef<AbortController | null>(null)
 
   // Two-phase hydration: the landing page (/) and /app/* routes mount
@@ -125,6 +137,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setSessionId,
         resultsSetId,
         setResultsSetId,
+        statusSteps,
+        setStatusSteps,
+        statusElapsed,
+        setStatusElapsed,
       }}
     >
       {children}
