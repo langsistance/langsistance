@@ -40,7 +40,7 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-GROUNDED_TIMEOUT = _env_int("REACT_GROUNDED_TIMEOUT", 30)
+GROUNDED_TIMEOUT = _env_int("REACT_GROUNDED_TIMEOUT", 60)
 
 # Provider construction is expensive and must stay lazy; cache one.
 _GROUNDED_PROVIDER_CACHE: dict = {}

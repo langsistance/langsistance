@@ -1,5 +1,6 @@
 """Tests for the post-retrieval grounded interpretation module."""
 import asyncio
+import os
 import unittest
 from unittest import mock
 
@@ -157,6 +158,19 @@ class TestPromptGenericity(unittest.TestCase):
     def test_grounded_prompt_free_of_test_vocabulary(self):
         for word in self.FORBIDDEN:
             self.assertNotIn(word, gi.GROUNDED_SYSTEM_PROMPT)
+
+
+class TestGroundedTimeoutDefault(unittest.TestCase):
+    def test_timeout_default_is_sixty_seconds(self):
+        import importlib
+        env_backup = dict(os.environ)
+        os.environ.pop("REACT_GROUNDED_TIMEOUT", None)
+        try:
+            fresh = importlib.reload(gi)
+        finally:
+            os.environ.clear()
+            os.environ.update(env_backup)
+        self.assertEqual(fresh.GROUNDED_TIMEOUT, 60)
 
 
 if __name__ == "__main__":
