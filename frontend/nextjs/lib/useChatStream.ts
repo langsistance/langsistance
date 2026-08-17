@@ -190,7 +190,13 @@ export function useChatStream() {
                   if (last && last.state === 'running' && last.message === msg) {
                     return steps
                   }
-                  return [...steps, { id: Date.now(), message: msg, state: 'running' }]
+                  // A new status means the previous step finished: mark
+                  // any running step done so only the newest one carries
+                  // the elapsed timer.
+                  return [
+                    ...steps.map((s) => (s.state === 'running' ? { ...s, state: 'done' } : s)),
+                    { id: Date.now(), message: msg, state: 'running' },
+                  ]
                 })
                 setStatusElapsed(0)
               }

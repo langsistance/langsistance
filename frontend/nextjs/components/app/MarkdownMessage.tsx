@@ -314,7 +314,7 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
                     {step.state === 'done' ? '✓' : '●'}
                   </span>
                   <span className="assistant-status-step-message">{step.message}</span>
-                  {step.state === 'running' && (
+                  {step.state === 'running' && stepsToShow[stepsToShow.length - 1]?.id === step.id && (
                     <span className="assistant-status-step-time">
                       {t('chat.processingWithTime').replace('{seconds}', String(runningElapsed))}
                     </span>
@@ -338,7 +338,7 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
                 {step.state === 'done' ? '✓' : '●'}
               </span>
               <span className="assistant-status-step-message">{step.message}</span>
-              {step.state === 'running' && (
+              {step.state === 'running' && stepsToShow[stepsToShow.length - 1]?.id === step.id && (
                 <span className="assistant-status-step-time">
                   {t('chat.processingWithTime').replace('{seconds}', String(runningElapsed))}
                 </span>

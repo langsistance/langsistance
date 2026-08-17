@@ -389,6 +389,7 @@ button { cursor: pointer; }
 .assistant-waiting {
   position: relative;
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   min-width: 260px;
