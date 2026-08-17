@@ -4,12 +4,11 @@ The Flash rewrite (``search_query_builder``) produces word-surface
 ladders: synonym and carrier variants of the question's literal terms.
 Patents often describe the same technology with entirely different
 vocabulary, though — the scheme-level wording.  Observed in production:
-a Chinese question about controlling an amplifier with independent RGB
-channel outputs maps in patent literature to per-channel
-constant-current loops (error amplifier + current-sense feedback +
-per-channel reference), while the family that implements it titles its
-patents "human centric black body dimming" — no shared surface terms
-at all.
+a Chinese question about independently controllable channel outputs
+maps in patent literature to per-channel constant-current loops
+(error amplifier + current-sense feedback + per-channel reference),
+while the family that implements it titles its patents "human centric
+black body dimming" — no shared surface terms at all.
 
 This module runs the question through a stronger model (default
 openai/gpt-5.6-terra via openrouter) with a generic interpretation
@@ -31,7 +30,8 @@ import json
 import os
 from typing import Any, Optional
 
-from sources.long_task.search_query_builder import sanitize_uspto_query
+from sources.long_task.search_query_builder import (
+    _CJK_RE, sanitize_uspto_query)
 
 INTERPRET_ENABLED = os.getenv("REACT_INTERPRET_ENABLED", "1") == "1"
 INTERPRET_MODEL = os.getenv("REACT_INTERPRET_MODEL", "openai/gpt-5.6-terra")
@@ -51,6 +51,10 @@ def _env_int(name: str, default: int) -> int:
 
 INTERPRET_TIMEOUT = _env_int("REACT_INTERPRET_TIMEOUT", 45)
 MAX_INTERP_QUERIES = 5
+# The dimension skeleton is capped at three layers (core device /
+# control circuit / application scenario); never let the model's
+# output exceed it — parse enforces the cap, not the model.
+MAX_DIMENSIONS = 3
 MAX_LADDER_QUERIES = 6
 # The interpretation chain and the flash rewrite split the ladder head:
 # the chain's tightest forms go first, but the rewrite's tail (its
@@ -72,24 +76,32 @@ INTERPRET_SYSTEM_PROMPT = (
     "controlled resistor、reference signal、constant current、"
     "feedback loop 这类元件/电路/环路词汇）；禁止用「概念词+control "
     "circuit」式拼词充当\n"
-    "3. independence_terms：「独立控制/分别控制」在专利文献中的常见英文"
+    "3. independence_terms：与「各通道被分别地控制」含义对应的常见英文"
     "表述（如 per-channel、individual、separate loop、independently、"
     "dedicated）\n"
     "4. scenarios：该需求可能出现的专利应用场景（3-5 个，英文）\n"
     "5. queries：用于 US 授权专利全文检索的布尔检索式 3-5 条，方案词"
     "优先、可直接执行；多词短语加双引号、同组同义词用 OR、组间用 "
     "AND；每条最多 12 个关键词、250 字符；禁止出现中文\n"
-    "6. 若提供 cpc_hints（该技术领域命中的专利分类号及分类标题），吸收"
+    "6. dimensions：把技术需求按纵深拆解为 2-3 个技术维度，默认三层"
+    "骨架：核心器件/电路层（实现该功能的硬件核心）、控制算法/电路层"
+    "（实现该功能的控制逻辑）、场景应用层（该功能落地的应用与接口）；"
+    "某层在目标领域无实质内容时并入最接近的层并简要说明；禁止超过 3 "
+    "个维度；每个维度输出 name（维度名）、role（分层角色）、terms"
+    "（该维度方案级英文词 3-6 个）、queries（该维度布尔检索式 1-2 条，"
+    "规则同第 5 条）\n"
+    "7. 若提供 cpc_hints（该技术领域命中的专利分类号及分类标题），吸收"
     "其中与该需求相关的分类措辞——分类标题代表专利文献对这类技术的"
     "官方命名\n"
-    "7. main_lines：该领域的主要技术路线划分（2-3 条，每条一句话，包含"
+    "8. main_lines：该领域的主要技术路线划分（2-3 条，每条一句话，包含"
     "典型电路结构/实现方式——如某一领域可划分为模拟恒流环路与数字 PWM "
     "驱动两条路线，这类划分帮助检索覆盖不同实现流派；只写该领域真实"
     "存在的路线，禁止编造）\n"
-    "8. key_players：该领域的主要申请人（3-5 个，英文公司名，必须是该"
+    "9. key_players：该领域的主要申请人（3-5 个，英文公司名，必须是该"
     "领域真实活跃的专利申请人；不确定时宁可少给，禁止编造）\n"
     'Return JSON: {"scheme": "...", "structure_terms": [...], '
     '"independence_terms": [...], "scenarios": [...], "queries": [...], '
+    '"dimensions": [{"name", "role", "terms", "queries"}], '
     '"main_lines": [...], "key_players": [...]}'
 )
 
@@ -107,6 +119,59 @@ def _interpret_provider(model: str):
     return _PROVIDER_CACHE[model]
 
 
+def _clean_str_list(raw: dict, key: str) -> list:
+    """Non-empty string list for a key; [] on missing/foreign shapes."""
+    items = raw.get(key) or []
+    if not isinstance(items, list):
+        return []
+    return [str(t).strip() for t in items
+            if isinstance(t, str) and str(t).strip()]
+
+
+def _parse_dimensions(raw: dict) -> list:
+    """Sanitize the model's dimension output.
+
+    Hard rules, enforced here not trusted to the model: at most
+    MAX_DIMENSIONS entries, first occurrence of each role label wins,
+    empty dimensions (no name and no terms) dropped, per-dimension
+    queries run through the same sanitizer as top-level queries.
+    """
+    dims = raw.get("dimensions")
+    if not isinstance(dims, list):
+        return []
+    out: list = []
+    seen_roles: set = set()
+    for d in dims:
+        if not isinstance(d, dict):
+            continue
+        name = str(d.get("name") or "").strip()
+        role = str(d.get("role") or "").strip()
+        terms = _clean_str_list(d, "terms")[:10]
+        if not name and not terms:
+            continue
+        if role:
+            if role in seen_roles:
+                continue
+            seen_roles.add(role)
+        queries: list = []
+        qseen: set = set()
+        for q in _clean_str_list(d, "queries")[:4]:
+            # Dimension queries must not carry CJK (prompt rule 禁止出现
+            # 中文): a CJK-bearing query is rejected outright instead of
+            # leaving a dangling Boolean fragment after sanitization.
+            if _CJK_RE.search(str(q)):
+                continue
+            q = sanitize_uspto_query(q)
+            if q and q not in qseen:
+                qseen.add(q)
+                queries.append(q)
+        out.append({"name": name, "role": role, "terms": terms,
+                    "queries": queries[:2]})
+        if len(out) >= MAX_DIMENSIONS:
+            break
+    return out
+
+
 def parse_interpretation(raw: Any) -> Optional[dict]:
     """Validate and sanitize the LLM interpretation into a canonical dict.
 
@@ -117,21 +182,13 @@ def parse_interpretation(raw: Any) -> Optional[dict]:
     """
     if not isinstance(raw, dict):
         return None
-
-    def _str_list(key: str) -> list:
-        items = raw.get(key) or []
-        if not isinstance(items, list):
-            return []
-        return [str(t).strip() for t in items
-                if isinstance(t, str) and str(t).strip()]
-
     scheme = str(raw.get("scheme") or "").strip()
-    structure_terms = _str_list("structure_terms")
+    structure_terms = _clean_str_list(raw, "structure_terms")
     if not scheme and not structure_terms:
         return None
     queries: list = []
     seen: set = set()
-    for q in _str_list("queries"):
+    for q in _clean_str_list(raw, "queries"):
         q = sanitize_uspto_query(q)
         if q and q not in seen:
             seen.add(q)
@@ -139,10 +196,11 @@ def parse_interpretation(raw: Any) -> Optional[dict]:
     return {
         "scheme": scheme,
         "structure_terms": structure_terms[:15],
-        "independence_terms": _str_list("independence_terms")[:10],
-        "scenarios": _str_list("scenarios")[:6],
-        "main_lines": _str_list("main_lines")[:3],
-        "key_players": _str_list("key_players")[:5],
+        "independence_terms": _clean_str_list(raw, "independence_terms")[:10],
+        "scenarios": _clean_str_list(raw, "scenarios")[:6],
+        "main_lines": _clean_str_list(raw, "main_lines")[:3],
+        "key_players": _clean_str_list(raw, "key_players")[:5],
+        "dimensions": _parse_dimensions(raw),
         "queries": queries[:MAX_INTERP_QUERIES],
     }
 
@@ -245,6 +303,48 @@ def format_interpretation_rubric(interp: Optional[dict]) -> str:
     """
     if not interp:
         return ""
+    dims = interp.get("dimensions") or []
+    is_grounded = bool(interp.get("players")) or any(
+            isinstance(d, dict) and (d.get("line") or d.get("representatives"))
+            for d in dims)
+    if is_grounded:
+        parts = []
+        scheme = interp.get("scheme")
+        if scheme:
+            parts.append(f"技术方案解读：{scheme}")
+        terms = interp.get("structure_terms") or []
+        if terms:
+            parts.append(
+                f"关键结构词：{' / '.join(str(t) for t in terms[:10])}")
+        for d in dims[:MAX_DIMENSIONS]:
+            seg = str(d.get("name") or "维度")
+            role = d.get("role")
+            if role:
+                seg += f"（{role}）"
+            line = d.get("line")
+            if line:
+                seg += f"：{line}"
+            reps = d.get("representatives") or []
+            if reps:
+                seg += f"；代表申请人：{'、'.join(str(r) for r in reps[:3])}"
+            parts.append("· " + seg)
+        for line in (interp.get("cpc_hint_lines") or [])[:3]:
+            parts.append("· CPC 主线线索：" + str(line))
+        players = interp.get("players") or []
+        if players:
+            parts.append(
+                "真实玩家榜（数据驱动，来自检索结果统计）："
+                + " / ".join(str(p) for p in players[:5])
+                + "。申请人命中该榜且其他相关性信号吻合时，视为同领域"
+                "证据，评分可上调 3-5 分（满分 100）。"
+            )
+        if not parts:
+            return ""
+        return (
+            "评分补充（来自检索后接地解读）：候选专利的标题/CPC/申请人"
+            "若命中以下维度/玩家，即使不含查询字面词，也应视为同一技术"
+            "方向，评分相应提高。\n" + "\n".join(parts)
+        )
     parts = []
     if interp.get("scheme"):
         parts.append(f"技术方案解读：{interp['scheme']}")
@@ -253,7 +353,7 @@ def format_interpretation_rubric(interp: Optional[dict]) -> str:
         parts.append(f"关键结构词：{' / '.join(terms[:10])}")
     indep = interp.get("independence_terms") or []
     if indep:
-        parts.append(f"独立控制表述：{' / '.join(indep[:6])}")
+        parts.append(f"分别控制表述：{' / '.join(indep[:6])}")
     main_lines = interp.get("main_lines") or []
     if main_lines:
         parts.append("该领域主要技术路线：" + "；".join(main_lines[:3]))

@@ -276,5 +276,86 @@ class TestRubricInScoring(unittest.IsolatedAsyncioTestCase):
         self.assertIn("评分补充：测试", provider.system_prompts[0])
 
 
+class TestParseDimensions(unittest.TestCase):
+    def test_dimensions_parsed_and_capped_at_three(self):
+        raw = _valid_raw()
+        raw["dimensions"] = [
+            {"name": "d1", "role": "核心器件/电路层", "terms": ["a"],
+             "queries": ['("a")']},
+            {"name": "d2", "role": "控制算法/电路层", "terms": [], "queries": []},
+            {"name": "d3", "role": "场景应用层", "terms": ["b"], "queries": []},
+            {"name": "d4", "role": "多余层", "terms": ["c"], "queries": []},
+        ]
+        parsed = ti.parse_interpretation(raw)
+        self.assertEqual(len(parsed["dimensions"]), ti.MAX_DIMENSIONS)
+        self.assertEqual(parsed["dimensions"][0]["name"], "d1")
+
+    def test_dimension_role_deduped_and_empties_dropped(self):
+        raw = _valid_raw()
+        raw["dimensions"] = [
+            {"name": "d1", "role": "核心层", "terms": ["a"]},
+            {"name": "d2", "role": "核心层", "terms": ["b"]},   # dup role
+            {"name": "", "role": "", "terms": []},               # empty
+            {"name": "d3", "role": "场景层", "terms": ["c"]},
+        ]
+        parsed = ti.parse_interpretation(raw)
+        self.assertEqual([d["name"] for d in parsed["dimensions"]], ["d1", "d3"])
+
+    def test_dimension_queries_sanitized(self):
+        raw = _valid_raw()
+        raw["dimensions"] = [
+            {"name": "d1", "role": "核心层",
+             "queries": ["中文垃圾 AND stuff", '("a")']},
+        ]
+        parsed = ti.parse_interpretation(raw)
+        self.assertNotIn("中文", parsed["dimensions"][0]["queries"][0])
+        self.assertEqual(parsed["dimensions"][0]["queries"], ['("a")'])
+
+    def test_no_dimensions_key_returns_empty_list(self):
+        parsed = ti.parse_interpretation(_valid_raw())
+        self.assertEqual(parsed["dimensions"], [])
+
+
+class TestGroundedRubric(unittest.TestCase):
+    """format_interpretation_rubric 的接地分支：数据驱动玩家强信号。"""
+
+    def _grounded(self):
+        return {
+            "scheme": "多通道恒流驱动",
+            "structure_terms": ["error amplifier"],
+            "dimensions": [
+                {"name": "驱动核心", "role": "核心器件/电路层",
+                 "line": "逐通道独立闭环恒流", "representatives": ["ERP Power"]},
+            ],
+            "players": ["ERP Power", "Samsung"],
+        }
+
+    def test_grounded_branch_renders_dimensions_and_strong_players(self):
+        rubric = ti.format_interpretation_rubric(self._grounded())
+        self.assertIn("驱动核心", rubric)
+        self.assertIn("逐通道独立闭环恒流", rubric)
+        self.assertIn("ERP Power", rubric)
+        self.assertIn("真实玩家榜", rubric)
+        self.assertIn("评分可上调 3-5 分", rubric)
+
+    def test_grounded_branch_never_uses_weak_signal_wording(self):
+        rubric = ti.format_interpretation_rubric(self._grounded())
+        self.assertNotIn("本身不构成相关性依据", rubric)
+
+    def test_pre_branch_keeps_weak_signal_wording(self):
+        rubric = ti.format_interpretation_rubric(_valid_raw())
+        self.assertIn("本身不构成相关性依据", rubric)
+
+    def test_pre_dimensions_without_lines_stay_in_pre_branch(self):
+        raw = _valid_raw()
+        raw["dimensions"] = [{"name": "d1", "role": "核心层", "terms": ["a"]}]
+        rubric = ti.format_interpretation_rubric(raw)
+        self.assertIn("本身不构成相关性依据", rubric)
+
+    def test_grounded_empty_returns_empty(self):
+        self.assertEqual(ti.format_interpretation_rubric(
+            {"players": [], "dimensions": []}), "")
+
+
 if __name__ == "__main__":
     unittest.main()
