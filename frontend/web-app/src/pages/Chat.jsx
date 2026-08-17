@@ -21,7 +21,8 @@ export default function Chat() {
   } = useChatSession()
   const bottomRef = useRef(null)
   const textareaRef = useRef(null)
-  const [transientStatus, setTransientStatus] = useState('')
+  const [statusSteps, setStatusSteps] = useState([])
+  const [statusElapsed, setStatusElapsed] = useState(0)
 
   // Keep a ref to the latest send() to avoid stale closure after login
   const sendRef = useRef(send)
@@ -30,6 +31,14 @@ export default function Chat() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  useEffect(() => {
+    if (!streaming) return
+    const id = setInterval(() => {
+      setStatusElapsed((s) => s + 1)
+    }, 1000)
+    return () => clearInterval(id)
+  }, [streaming])
 
   async function send() {
     const text = input.trim()
@@ -41,7 +50,8 @@ export default function Chat() {
     }
 
     setInput('')
-    setTransientStatus('')
+    setStatusSteps([])
+    setStatusElapsed(0)
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
 
     const queryId = createChatId()
@@ -82,7 +92,17 @@ export default function Chat() {
           }
 
           if (evt && typeof evt === 'object' && evt.type === 'status') {
-            setTransientStatus(String(evt.message ?? ''))
+            const msg = String(evt.message ?? '').trim()
+            if (msg) {
+              setStatusSteps((steps) => {
+                const last = steps[steps.length - 1]
+                if (last && last.state === 'running' && last.message === msg) {
+                  return steps // dedupe consecutive identical status messages
+                }
+                return [...steps, { id: Date.now(), message: msg, state: 'running', elapsed: 0 }]
+              })
+              setStatusElapsed(0)
+            }
             continue
           }
           if (evt && typeof evt === 'object' && evt.error) {
@@ -93,7 +113,7 @@ export default function Chat() {
             ? evt
             : (evt?.content ?? evt?.token ?? evt?.answer ?? '')
           if (token) {
-            setTransientStatus('')
+            setStatusSteps((steps) => steps.map((s) => s.state === 'running' ? { ...s, state: 'done' } : s))
             setMessages((m) => updateAssistantMessage(m, assistantId, token))
           }
         }
@@ -109,7 +129,8 @@ export default function Chat() {
         )
       }
     } finally {
-      setTransientStatus('')
+      setStatusSteps([])
+      setStatusElapsed(0)
       setStreaming(false)
       setStreamingId(null)
       abortRef.current = null
@@ -133,6 +154,8 @@ export default function Chat() {
     abortRef.current?.abort()
   }
 
+  const runningElapsed = statusSteps.some((s) => s.state === 'running') ? statusElapsed : 0
+
   return (
     <div className="page active">
       <div className="chat-container">
@@ -151,10 +174,21 @@ export default function Chat() {
                 {msg.content || (
                   msg.role === 'assistant' && streaming && streamingId === msg.id ? '▋' : ''
                 )}
-                {msg.role === 'assistant' && streaming && streamingId === msg.id && transientStatus && (
-                  <div className="assistant-transient-status" role="status" aria-live="polite">
-                    <span className="assistant-transient-status-dot" aria-hidden="true" />
-                    <span>{transientStatus}</span>
+                {msg.role === 'assistant' && streaming && streamingId === msg.id && statusSteps.length > 0 && (
+                  <div className="assistant-status-steps" role="status" aria-live="polite">
+                    {statusSteps.map((step) => (
+                      <div key={step.id} className={`assistant-status-step ${step.state}`}>
+                        <span className="assistant-status-step-icon" aria-hidden="true">
+                          {step.state === 'done' ? '✓' : '●'}
+                        </span>
+                        <span className="assistant-status-step-message">{step.message}</span>
+                        {step.state === 'running' && (
+                          <span className="assistant-status-step-time">
+                            {t('chat.processingWithTime', { seconds: runningElapsed })}
+                          </span>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
