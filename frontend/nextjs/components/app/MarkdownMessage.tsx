@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import 'highlight.js/styles/github.css'
 import { useI18n } from '@/lib/app-i18n'
-import { useChatSession } from '@/contexts/ChatContext'
+import { useChatSession, type ChatStatusStep } from '@/contexts/ChatContext'
 import { attachImageRetryHandlers } from '@/lib/imageRetry'
 import {
   shouldShowAssistantWaiting,
@@ -12,12 +12,6 @@ import { renderMarkdownToHtml } from '@/lib/markdownRender'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { artifactVisualLabel, orderDownloadArtifacts } from '@/lib/downloadArtifacts'
 import LongTaskProgress from './LongTaskProgress'
-
-export interface ChatStatusStep {
-  id: number
-  message: string
-  state: string
-}
 
 interface Props {
   content: string
