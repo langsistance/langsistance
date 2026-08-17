@@ -194,7 +194,7 @@ export function useChatStream() {
                   // any running step done so only the newest one carries
                   // the elapsed timer.
                   return [
-                    ...steps.map((s) => (s.state === 'running' ? { ...s, state: 'done' } : s)),
+                    ...steps.map((s) => (s.state === 'running' ? { ...s, state: 'done' as const } : s)),
                     { id: Date.now(), message: msg, state: 'running' },
                   ]
                 })
@@ -328,7 +328,7 @@ export function useChatStream() {
                 : ''
             )
           if (token) {
-            setStatusSteps((steps) => steps.map((s) => s.state === 'running' ? { ...s, state: 'done' } : s))
+            setStatusSteps((steps) => steps.map((s) => s.state === 'running' ? { ...s, state: 'done' as const } : s))
             setMessages((m) => updateAssistantMessage(m, assistantId, cleanGarbledText(String(token))))
           }
         }
