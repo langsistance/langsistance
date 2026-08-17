@@ -60,7 +60,12 @@ FAMILY_SCORE_BUDGET = int(os.getenv("REACT_FAMILY_SCORE_BUDGET", "30"))
 # the scored pool clears the minimum. Set just above the single-round
 # scoring cap so a first-round noise pool never triggers, but a
 # recall-enlarged pool does. Clusters the scored head.
-GROUNDED_MIN = int(os.getenv("REACT_GROUNDED_MIN", "55"))
+GROUNDED_MIN = int(os.getenv("REACT_GROUNDED_MIN", "45"))
+# Pool-size floor: a single-round noise pool (≤50 candidates) must
+# never trigger synthesis even when fully scored; recall-scale pools
+# (200+) always pass.  Two conditions — pool size AND scored count —
+# are more robust than any single threshold.
+GROUNDED_POOL_MIN = int(os.getenv("REACT_GROUNDED_POOL_MIN", "120"))
 GROUNDED_HEAD = int(os.getenv("REACT_GROUNDED_HEAD", "30"))
 RELEVANCE_RANK_ENABLED = os.getenv("REACT_RELEVANCE_RANK", "1") != "0"
 REACT_POOL_MAX_PAGES = int(os.getenv("REACT_POOL_MAX_PAGES", "2"))
@@ -973,7 +978,8 @@ async def _grounded_synthesis_round(agent, entry, lang) -> Optional[Tuple[list, 
         _glog.info(
             f"grounded_interpretation probe — pool={len(pool)} "
             f"scored={len(scored)} trigger={GROUNDED_ENABLED}")
-    if not GROUNDED_ENABLED or len(scored) < GROUNDED_MIN:
+    if not GROUNDED_ENABLED or len(scored) < GROUNDED_MIN \
+            or len(pool) < GROUNDED_POOL_MIN:
         return None
     # The single-shot flag burns only now — the pool cleared the
     # minimum and synthesis is actually about to run.  An early empty

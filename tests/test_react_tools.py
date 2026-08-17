@@ -1361,6 +1361,7 @@ class TestGroundedSynthesisRound(unittest.IsolatedAsyncioTestCase):
         agent = self._agent_with_scored_pool(n=5)
         entry = _LadderEntry(agent)
         with patch("sources.agents.react_tools.GROUNDED_MIN", 15), \
+             patch("sources.agents.react_tools.GROUNDED_POOL_MIN", 1), \
              patch("sources.long_task.grounded_interpretation"
                    ".synthesize_grounded") as synth:
             result = await rt._grounded_synthesis_round(agent, entry, "zh")
@@ -1383,6 +1384,7 @@ class TestGroundedSynthesisRound(unittest.IsolatedAsyncioTestCase):
             "supplementary_cpc": ["H05B45/20"],
         }
         with patch("sources.agents.react_tools.GROUNDED_MIN", 15), \
+             patch("sources.agents.react_tools.GROUNDED_POOL_MIN", 1), \
              patch("sources.long_task.grounded_interpretation"
                    ".synthesize_grounded",
                    new=AsyncMock(return_value=grounded)), \
@@ -1432,6 +1434,7 @@ class TestGroundedSynthesisRound(unittest.IsolatedAsyncioTestCase):
                     "dimensions": [{"name": "D1", "line": "L1"}],
                     "supplementary_queries": [], "supplementary_cpc": []}
         with patch("sources.agents.react_tools.GROUNDED_MIN", 15), \
+             patch("sources.agents.react_tools.GROUNDED_POOL_MIN", 1), \
              patch("sources.long_task.grounded_interpretation"
                    ".synthesize_grounded",
                    new=AsyncMock(return_value=grounded)):
@@ -1509,9 +1512,10 @@ class TestGroundedSynthesisRound(unittest.IsolatedAsyncioTestCase):
 
 
 class TestGroundedDefaults(unittest.TestCase):
-    def test_grounded_min_default_is_fifty_five(self):
+    def test_grounded_defaults(self):
         from sources.agents import react_tools as rt
-        self.assertEqual(rt.GROUNDED_MIN, 55)
+        self.assertEqual(rt.GROUNDED_MIN, 45)
+        self.assertEqual(rt.GROUNDED_POOL_MIN, 120)
 
 
 class TestGroundedIntegration(unittest.IsolatedAsyncioTestCase):
