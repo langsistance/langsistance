@@ -382,7 +382,7 @@ button { cursor: pointer; }
   margin: 20px 0;
 }
 
-.chat-message.assistant.assistant-is-waiting > div:not(.assistant-waiting) {
+.chat-message.assistant.assistant-is-waiting > div:not(.assistant-waiting):not(.assistant-status-steps) {
   display: none;
 }
 
