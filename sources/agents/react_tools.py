@@ -124,8 +124,6 @@ async def _agent_status(agent, message: str) -> None:
         if _glog is not None:
             _glog.info(f"agent status — dropped (no on_status): {message}")
         return
-    if _glog is not None:
-        _glog.info(f"agent status — {message}")
     try:
         await on_status(message)
     except Exception:
