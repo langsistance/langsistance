@@ -328,7 +328,7 @@ export function useChatStream() {
                 : ''
             )
           if (token) {
-            setStatusSteps((steps) => steps.map((s) => s.state === 'running' ? { ...s, state: 'done' as const } : s))
+            setStatusSteps([])
             setMessages((m) => updateAssistantMessage(m, assistantId, cleanGarbledText(String(token))))
           }
         }
