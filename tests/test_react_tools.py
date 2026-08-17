@@ -51,6 +51,10 @@ class _FakeAgent:
         self._pending_raw_items = None
         self.knowledgeTool = None
         self.tools_made = []
+        # Post-retrieval grounded synthesis, once per request — mirrors
+        # GeneralAgent.create_agent's reset so skipped rounds leave the
+        # flag readable (and unburned) on the fake too.
+        self._grounded_done = False
 
     def get_dynamic_tool_for(self, knowledge_item, tool_info):
         # sync — mirrors the production GeneralAgent.get_dynamic_tool_for
@@ -1323,7 +1327,7 @@ class TestGroundedSynthesisRound(unittest.IsolatedAsyncioTestCase):
         synth.assert_not_awaited()
         self.assertIn("grounded_interpretation probe",
                       " ".join(agent.logger.lines))
-        self.assertTrue(agent._grounded_done)
+        self.assertFalse(agent._grounded_done)
 
     async def test_synthesizes_once_and_executes_queries(self):
         from sources.agents import react_tools as rt
@@ -1364,6 +1368,34 @@ class TestGroundedSynthesisRound(unittest.IsolatedAsyncioTestCase):
         entry = _LadderEntry(agent)
         result = await rt._grounded_synthesis_round(agent, entry, "zh")
         self.assertIsNone(result)
+        self.assertFalse(agent._grounded_done)
+
+    async def test_flag_not_burned_when_skipped_then_fires_later(self):
+        from sources.agents import react_tools as rt
+        agent = _FakeAgent()
+        agent.logger = _CaptureLogger()
+        entry = _LadderEntry(agent)
+        # first: no pool -> skipped, flag NOT burned
+        result = await rt._grounded_synthesis_round(agent, entry, "zh")
+        self.assertIsNone(result)
+        self.assertFalse(agent._grounded_done)
+        # then a scored pool appears (recall expansion) -> synthesis fires
+        from sources.long_task.chat_relevance import SearchPool
+        pool = SearchPool("q")
+        pool.add_from_candidates(
+            [{"patent_id": f"1000{i}", "title": f"T{i}",
+              "applicant": "ACME", "relevance_score": 4}
+             for i in range(20)])
+        agent._search_pool = pool
+        grounded = {"players": ["ERP"],
+                    "dimensions": [{"name": "D1", "line": "L1"}],
+                    "supplementary_queries": [], "supplementary_cpc": []}
+        with patch("sources.agents.react_tools.GROUNDED_MIN", 15), \
+             patch("sources.long_task.grounded_interpretation"
+                   ".synthesize_grounded",
+                   new=AsyncMock(return_value=grounded)):
+            result2 = await rt._grounded_synthesis_round(agent, entry, "zh")
+        self.assertEqual(agent._grounded_interpretation, grounded)
         self.assertTrue(agent._grounded_done)
 
     async def test_rank_pending_pool_prefers_grounded_rubric(self):

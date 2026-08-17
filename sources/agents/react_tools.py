@@ -944,13 +944,14 @@ async def _grounded_synthesis_round(agent, entry, lang) -> Optional[Tuple[list, 
     its supplementary CPC codes (recall expansion widens), then
     auto-execute its supplementary queries into the pool — mirroring
     the auto-feedback round.  The probe line logs every request (even
-    skipped) so a silent path stays visible.  Returns
+    skipped) so a silent path stays visible.  Fires at most once per
+    request — the flag burns only when a synthesis actually runs, so an
+    early empty pool never wastes the single shot.  Returns
     (ranked, ranking_note, grounded_note) when queries executed; None
     otherwise.  Never raises.
     """
     if getattr(agent, "_grounded_done", False):
         return None
-    agent._grounded_done = True
     from sources.long_task.grounded_interpretation import (
         GROUNDED_ENABLED, synthesize_grounded,
     )
@@ -972,6 +973,11 @@ async def _grounded_synthesis_round(agent, entry, lang) -> Optional[Tuple[list, 
             f"scored={len(scored)} trigger={GROUNDED_ENABLED}")
     if not GROUNDED_ENABLED or len(scored) < GROUNDED_MIN:
         return None
+    # The single-shot flag burns only now — the pool cleared the
+    # minimum and synthesis is actually about to run.  An early empty
+    # or below-min pool (common on the first round) must not waste the
+    # one shot before recall expansion grows the pool.
+    agent._grounded_done = True
     top = sorted(
         scored, key=lambda c: -(c.get("relevance_score") or 0))[:GROUNDED_HEAD]
     try:
