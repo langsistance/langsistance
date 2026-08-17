@@ -1299,6 +1299,28 @@ class TestRecallExpansionRound(unittest.IsolatedAsyncioTestCase):
         self.assertIn("30000000", scored_ids)  # newest end
         self.assertIn("30000003", scored_ids)  # spread reaches the tail
 
+    async def test_grounded_synthesis_fires_after_recall_merge(self):
+        from sources.agents.react_tools import _recall_expansion_round
+        agent = _agent_with_recall_pool()
+        entry = _LadderEntry(agent)
+        g_ranked = [{"patent_id": "99999999", "title": "GROUNDED HIT",
+                     "applicant": "ACME", "status": "Patented Case",
+                     "patent_number": "1",
+                     "_raw": _usp_raw_item("99999999", "GROUNDED HIT")}]
+        grounded_result = (g_ranked, "g排名", "已自动执行接地解读补检索式：\n- q1")
+        with patch("sources.agents.react_tools.fetch_by_numbers",
+                   return_value=[]), \
+             patch("sources.agents.react_tools.fetch_by_cpc",
+                   return_value=[]), \
+             patch("sources.agents.react_tools._grounded_synthesis_round",
+                   new=AsyncMock(return_value=grounded_result)) as gr:
+            result = await _recall_expansion_round(agent, entry, "zh")
+        self.assertIsNotNone(result)
+        ranked, ranking_note, recall_note = result
+        gr.assert_awaited_once()
+        self.assertEqual(ranked[0]["patent_id"], "99999999")  # fresher ranking wins
+        self.assertIn("已自动执行接地解读补检索式", recall_note)
+
 
 class TestGroundedSynthesisRound(unittest.IsolatedAsyncioTestCase):
     def _agent_with_scored_pool(self, n=20):

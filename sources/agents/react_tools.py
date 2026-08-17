@@ -1078,28 +1078,55 @@ async def _recall_expansion_round(agent, entry, lang) -> Optional[Tuple[list, st
     fresh = [c for c in records_to_candidates(records)
              if c["patent_id"] not in known]
     live = [c for c in fresh if not is_dead_status(c.get("status"))]
-    if not live:
+    # Grounded synthesis gets a second, reliable trigger here.  The pool
+    # just grew via recall while the main-path trigger may have missed
+    # its window — the LLM often stops calling the search tool after
+    # recall lands, so execute_action's pre-merge check never runs while
+    # the pool is already large.  The real round still returns None
+    # unless the pool clears GROUNDED_MIN, so a small pool or a recall
+    # fetch that lands nothing wastes nothing.
+    grounded_result = await _grounded_synthesis_round(agent, entry, lang)
+    grounded_note = ""
+    g_ranked: Optional[list] = None
+    g_ranking_note = ""
+    if grounded_result is not None:
+        g_ranked, g_ranking_note, g_note = grounded_result
+        grounded_note = g_note
+    if not live and not g_ranked:
         return None
-    # The pool scores only the first SCORE_PER_CALL of each merge and
-    # prunes the rest — pass a spread-ordered batch so the scored head
-    # represents the whole recall window instead of just the newest
-    # slice (the deep end of the CPC sampling is where established
-    # multi-year-old grants sit).
-    stride = max(1, len(fresh) // max(1, SCORE_PER_CALL))
-    spread_head = fresh[::stride][:SCORE_PER_CALL]
-    spread_ids = {c["patent_id"] for c in spread_head}
-    ordered = spread_head + [c for c in fresh
-                             if c["patent_id"] not in spread_ids]
-    ranked, ranking_note = await _rank_pending_pool(
-        agent, ordered, lang, apply_rerank=False)
-    ranked, ranking_note = await _auto_second_round(
-        agent, entry, {"q": ""}, ranked, ranking_note, lang)
+    if not live:
+        # No recall yield this round — grounded's supplementary queries
+        # own the ranking.
+        ranked = g_ranked or []
+        ranking_note = g_ranking_note
+    else:
+        # The pool scores only the first SCORE_PER_CALL of each merge
+        # and prunes the rest — pass a spread-ordered batch so the
+        # scored head represents the whole recall window instead of just
+        # the newest slice (the deep end of the CPC sampling is where
+        # established multi-year-old grants sit).
+        stride = max(1, len(fresh) // max(1, SCORE_PER_CALL))
+        spread_head = fresh[::stride][:SCORE_PER_CALL]
+        spread_ids = {c["patent_id"] for c in spread_head}
+        ordered = spread_head + [c for c in fresh
+                                 if c["patent_id"] not in spread_ids]
+        ranked, ranking_note = await _rank_pending_pool(
+            agent, ordered, lang, apply_rerank=False)
+        ranked, ranking_note = await _auto_second_round(
+            agent, entry, {"q": ""}, ranked, ranking_note, lang)
+        # When grounded's supplementary queries land new candidates,
+        # its fresher ranking replaces this round's.
+        if g_ranked:
+            ranked = g_ranked
+            ranking_note = g_ranking_note
     if lang == "en":
         recall_note = (f"\n\nRecall expansion (family/CPC) merged "
-                       f"{len(live)} new candidates into the pool.")
+                       f"{len(live)} new candidates into the pool."
+                       + grounded_note)
     else:
         recall_note = (f"\n\n已自动执行分类/引文扩展检索"
-                       f"（并入 {len(live)} 条新候选）。")
+                       f"（并入 {len(live)} 条新候选）。"
+                       + grounded_note)
     return ranked, ranking_note, recall_note
 
 
