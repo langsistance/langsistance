@@ -1303,22 +1303,41 @@ class TestRecallExpansionRound(unittest.IsolatedAsyncioTestCase):
         from sources.agents.react_tools import _recall_expansion_round
         agent = _agent_with_recall_pool()
         entry = _LadderEntry(agent)
+        records = [{
+            "applicationNumberText": "30000001",
+            "applicationMetaData": {
+                "inventionTitle": "RECALL HIT",
+                "applicationStatusDescriptionText": "Patented Case",
+            },
+        }]
         g_ranked = [{"patent_id": "99999999", "title": "GROUNDED HIT",
                      "applicant": "ACME", "status": "Patented Case",
                      "patent_number": "1",
                      "_raw": _usp_raw_item("99999999", "GROUNDED HIT")}]
         grounded_result = (g_ranked, "g排名", "已自动执行接地解读补检索式：\n- q1")
+        grounded_pool_snapshot = {}
+
+        async def _fake_grounded(agent, entry, lang):
+            # Capture the pool at the moment grounded synthesis runs, so we
+            # can assert the recall candidate was ALREADY merged/scored
+            # (the whole point of the placement fix).
+            grounded_pool_snapshot["pool"] = set(
+                agent._search_pool._by_id.keys())
+            return grounded_result
+
         with patch("sources.agents.react_tools.fetch_by_numbers",
-                   return_value=[]), \
+                   return_value=records), \
              patch("sources.agents.react_tools.fetch_by_cpc",
                    return_value=[]), \
              patch("sources.agents.react_tools._grounded_synthesis_round",
-                   new=AsyncMock(return_value=grounded_result)) as gr:
+                   new=AsyncMock(wraps=_fake_grounded)) as gr:
             result = await _recall_expansion_round(agent, entry, "zh")
         self.assertIsNotNone(result)
         ranked, ranking_note, recall_note = result
         gr.assert_awaited_once()
-        self.assertEqual(ranked[0]["patent_id"], "99999999")  # fresher ranking wins
+        # the grounded call must see the recall candidate already merged
+        self.assertIn("30000001", grounded_pool_snapshot["pool"])
+        self.assertEqual(ranked[0]["patent_id"], "99999999")
         self.assertIn("已自动执行接地解读补检索式", recall_note)
 
 
