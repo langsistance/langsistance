@@ -522,6 +522,26 @@ class TestPathTemplateSubstitution(unittest.TestCase):
             "18893954/documents",
         )
 
+    def test_dict_path_with_template_path_still_applies_template(self):
+        # Production tool shape: the placeholder lives in the params
+        # template path, not the URL (url=.../applications,
+        # path="{applicationNumberText}/documents").  The 03:38 production
+        # call {"path":{"applicationNumber":"18893954"}} went out as the
+        # bare base URL (403 Missing Authentication Token) because the
+        # dict-path branch dropped the template path.
+        tool = self._tool(
+            '{"method":"GET","path":"{applicationNumberText}/documents",'
+            '"query":{},"body":{}}',
+            "https://api.uspto.gov/api/v1/patent/applications",
+        )
+        url = self._sent_url(
+            tool, {"path": {"applicationNumber": "18893954"}})
+        self.assertEqual(
+            url,
+            "https://api.uspto.gov/api/v1/patent/applications/"
+            "18893954/documents",
+        )
+
     def test_unresolved_template_left_untouched(self):
         # No matching param value — the URL must not crash or be mangled.
         tool = self._tool(

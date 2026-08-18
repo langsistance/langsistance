@@ -165,6 +165,18 @@ class ReActLoop:
 
                 messages.append(tool_msg)
 
+                if result.get("final"):
+                    # One tool call completed the task (e.g. a document-list
+                    # tool returned every document of an application) — give
+                    # the LLM a single no-tools pass to phrase the answer,
+                    # then end the loop.  Observed without this: the loop
+                    # kept calling search/spec tools and streamed pool
+                    # patents instead of the documents.
+                    text, _calls, _reasoning = await self.llm_call(messages, [])
+                    messages.append({"role": "assistant", "content": text or ""})
+                    return await self._finish("answer", messages, steps, start,
+                                              answer_text=text or "")
+
         return await self._finish("fallback", messages, steps, start)
 
     async def _finish(self, kind: str, messages: List[dict], steps: int,

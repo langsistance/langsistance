@@ -106,6 +106,33 @@ class TestReActLoop(unittest.TestCase):
         self.assertEqual(result.steps, 2)
         self.assertEqual(result.answer_text, "抱歉，无法完成。")
 
+    def test_final_result_ends_loop_with_no_tools_answer(self):
+        # A document-list tool marks its observation "final": the loop
+        # gives the LLM one no-tools pass to phrase the answer and ends —
+        # no further tool rounds (observed: after the 68-document result
+        # the loop kept running search/spec rounds and streamed pool
+        # patents instead of the documents).
+        model = _FakeModel([
+            ("", [{"id": "c1", "name": "documents", "args": {}}], ""),
+            ("已获取 68 份文档。", [], ""),
+        ])
+        executor = _FakeExecutor({
+            "documents": {"kind": "observation",
+                          "text": "工具返回 68 条记录（文档列表不截断）",
+                          "final": True},
+        })
+        events = _Events()
+        result, messages = _run(ReActLoop(model, executor, events), model, executor)
+        self.assertEqual(result.kind, "answer")
+        self.assertEqual(result.answer_text, "已获取 68 份文档。")
+        self.assertEqual(result.steps, 1)
+        self.assertEqual(executor.seen, [("documents", {}, 1)])
+        # user + assistant(tool_calls) + tool + assistant(final answer)
+        self.assertEqual(len(messages), 4)
+        self.assertEqual(messages[-1]["role"], "assistant")
+        # the final phrasing call had NO tools bound
+        self.assertEqual(model.calls[-1][1], [])
+
     def test_long_task_kind_terminates(self):
         model = _FakeModel([("", [{"id": "c1", "name": "lt", "args": {}}], "")])
         executor = _FakeExecutor({"lt": {"kind": "long_task", "knowledge": "K", "tool_info": "T"}})

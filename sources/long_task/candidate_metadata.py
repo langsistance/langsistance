@@ -37,6 +37,28 @@ def is_uspto_tool(tool: Any) -> bool:
     return "uspto" in url
 
 
+def is_documents_tool(tool: Any) -> bool:
+    """True for USPTO document-list tools.
+
+    Checks the tool URL *and* its params template path — the production
+    documents tool stores the placeholder path in params
+    (url=``.../applications``, path=``"{applicationNumberText}/documents"``),
+    so a URL-only check misses it and the document list gets treated as a
+    search pool (observed: 68 documents replaced by recall patents).
+    """
+    url = (getattr(tool, "url", "") or "").lower()
+    if "documents" in url:
+        return True
+    try:
+        from sources.dynamic_tool_params import _coerce_json_object
+        params = _coerce_json_object(
+            getattr(tool, "params", "") or "", "tool_info.params")
+        path = str(params.get("path", "") or "").lower()
+        return "documents" in path
+    except Exception:
+        return False
+
+
 def ensure_search_fields(params: dict) -> dict:
     """Return a deep copy of tool params with required USPTO fields added.
 

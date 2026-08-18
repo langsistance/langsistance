@@ -124,6 +124,20 @@ class TestRelevancePoolGate(unittest.TestCase):
         )
         self.assertFalse(_relevance_pool_applies(None, tool, []))
 
+    def test_document_list_tool_with_template_path_never_enters_pool(self):
+        # Production shape: url is the base (no 'documents'), the
+        # placeholder path lives in the params template.
+        from sources.agents.react_tools import _relevance_pool_applies
+        tool = _ToolInfo(
+            "get_patent_documents_application_number",
+            url="https://api.uspto.gov/api/v1/patent/applications",
+        )
+        tool.params = ('{"method":"GET",'
+                       '"path":"{applicationNumberText}/documents",'
+                       '"query":{}}')
+        # Even a fully parseable document bag must not become a pool.
+        self.assertFalse(_relevance_pool_applies(None, tool, self._doc_bag(68)))
+
 
 class TestCapPatentList(unittest.TestCase):
     def test_search_list_capped_at_100(self):
@@ -142,6 +156,18 @@ class TestCapPatentList(unittest.TestCase):
         items = list(range(MAX_PATENT_LIST_ITEMS + 40))
         capped, note = _cap_patent_list(
             _ToolInfo("d", url="https://api.example.com/documents"), items, "zh")
+        self.assertEqual(len(capped), MAX_PATENT_LIST_ITEMS + 40)
+        self.assertIn("不截断", note)
+
+    def test_document_list_with_template_path_never_capped(self):
+        # Production shape: url is the base; 'documents' is in the params
+        # template path.
+        tool = _ToolInfo("d", url="https://api.uspto.gov/api/v1/patent/applications")
+        tool.params = ('{"method":"GET",'
+                       '"path":"{applicationNumberText}/documents",'
+                       '"query":{}}')
+        items = list(range(MAX_PATENT_LIST_ITEMS + 40))
+        capped, note = _cap_patent_list(tool, items, "zh")
         self.assertEqual(len(capped), MAX_PATENT_LIST_ITEMS + 40)
         self.assertIn("不截断", note)
 
@@ -255,6 +281,38 @@ class TestExecuteAction(unittest.TestCase):
         self.assertEqual(len(agent._pending_raw_items), MAX_PATENT_LIST_ITEMS)
         self.assertIn("已截断", result["text"])
         self.assertEqual(agent.knowledgeTool[0], entry_k)
+
+    def test_document_list_action_marks_final(self):
+        # Document-list tools are the final answer: the loop must end
+        # after this one call (observed: after the 68-document result the
+        # loop kept calling search/spec tools and streamed pool patents).
+        # Production tool shape: 'documents' lives in the params template
+        # path, not the URL.
+        agent = _FakeAgent()
+        entry_k = _Knowledge(3, ktype=1)
+        agent.get_dynamic_tool_for = _make_tool_with_pending(agent)
+        tool_info = _ToolInfo(
+            "get_patent_documents_application_number",
+            url="https://api.uspto.gov/api/v1/patent/applications",
+        )
+        tool_info.params = ('{"method":"GET",'
+                            '"path":"{applicationNumberText}/documents",'
+                            '"query":{}}')
+        from sources.agents.react_tools import ToolEntry
+        dynamic_tool = agent.get_dynamic_tool_for(entry_k, tool_info)
+        entry = ToolEntry(name=dynamic_tool.name, kind="knowledge",
+                          knowledge=entry_k, tool_info=tool_info,
+                          tool=dynamic_tool)
+        executor = asyncio.run(make_action_executor(agent, {entry.name: entry}, None))
+        agent._pending_raw_items = [
+            {"applicationNumberText": "18893954",
+             "documentIdentifier": f"doc{i}",
+             "downloadOptionBag": []} for i in range(68)]
+        result = asyncio.run(executor(entry.name, {"params": "{}"}, 1))
+        self.assertEqual(result["kind"], "observation")
+        self.assertTrue(result.get("final"))
+        self.assertIn("文档列表不截断", result["text"])
+        self.assertEqual(len(agent._pending_raw_items), 68)
 
     def test_long_task_action_returns_intent(self):
         agent = _FakeAgent()

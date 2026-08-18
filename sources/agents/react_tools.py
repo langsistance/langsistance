@@ -25,6 +25,7 @@ from sources.long_task.candidate_metadata import (
     build_candidates,
     ensure_search_fields,
     is_dead_status,
+    is_documents_tool,
     is_keyword_search_tool,
     is_uspto_tool,
 )
@@ -353,8 +354,7 @@ def _cap_patent_list(tool_info, items: list, lang: str) -> Tuple[list, str]:
     Document-list tools (uspto_documents, URL contains 'documents') are
     uncapped — the user wants every document of a single patent.
     """
-    url = (getattr(tool_info, "url", "") or "").lower()
-    if "documents" in url:
+    if is_documents_tool(tool_info):
         note = "document list (uncapped)" if lang == "en" else "文档列表不截断"
         return items, note
     if len(items) > MAX_PATENT_LIST_ITEMS:
@@ -391,8 +391,7 @@ def _relevance_pool_applies(agent, tool_info, raw_items) -> bool:
     """
     if not _relevance_pool_applies_tool(agent, tool_info):
         return False
-    url = (getattr(tool_info, "url", "") or "").lower()
-    if "documents" in url:
+    if is_documents_tool(tool_info):
         return False
     return bool(build_candidates(raw_items or []))
 
@@ -1508,6 +1507,7 @@ async def make_action_executor(agent, registry, push_filter=None):
 
         pending = getattr(agent, "_pending_raw_items", None)
         if pending:
+            _is_doc_list = is_documents_tool(entry.tool_info)
             applies = _relevance_pool_applies(agent, entry.tool_info, pending)
             _glog = getattr(agent, "logger", None)
             if _glog is not None:
@@ -1531,8 +1531,6 @@ async def make_action_executor(agent, registry, push_filter=None):
             else:
                 shown, note = _cap_patent_list(entry.tool_info, pending, lang)
                 pool = getattr(agent, "_search_pool", None)
-                _is_doc_list = "documents" in (
-                    getattr(entry.tool_info, "url", "") or "").lower()
                 if pool is not None and not _is_doc_list:
                     # The tool function already wrote this legacy result
                     # into _pending_raw_items; restore the turn's ranked
@@ -1653,6 +1651,11 @@ async def make_action_executor(agent, registry, push_filter=None):
                                 "完整列表已展示给用户。")
                 else:
                     text = text.rstrip() + "\n" + recall_note
+            if _is_doc_list:
+                # Document-list tools are the final answer — the documents
+                # of ONE application; one call suffices.  The loop ends
+                # after this observation (the result list is displayed).
+                return {"kind": "observation", "text": text, "final": True}
             return {"kind": "observation", "text": text}
 
         return {"kind": "observation", "text": _summarize_observation(result, lang)}

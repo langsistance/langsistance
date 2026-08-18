@@ -3,6 +3,7 @@ import json
 from pydantic import BaseModel, Field
 from bs4 import BeautifulSoup
 
+from sources.long_task.candidate_metadata import is_documents_tool
 from sources.knowledge.knowledge import (
     get_redis_connection,
     get_knowledge_tool,
@@ -201,7 +202,7 @@ def _infer_result_source(tool_info) -> str:
     url = (getattr(tool_info, "url", "") or "").lower()
     if "patents.google.com" in url:
         return "google_patents"
-    if "documents" in url:
+    if is_documents_tool(tool_info):
         return "uspto_documents"
     return "uspto"
 

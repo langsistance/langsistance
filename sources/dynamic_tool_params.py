@@ -538,10 +538,17 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
     if isinstance(_path_value, dict):
         # The LLM sometimes passes path as an object
         # ({"path":{"applicationNumber":"18893954"}}) instead of a literal
-        # path string — its values feed the {placeholder} substitution
-        # and no literal path is appended.
+        # path string — its values feed the {placeholder} substitution.
+        # The URL may carry no placeholder itself (the params template
+        # path does, e.g. "{applicationNumberText}/documents"), so the
+        # template path is applied too — dropping it sent the bare base
+        # URL to the gateway (403 Missing Authentication Token).
         _value_sources.insert(0, _path_value)
-        url = tool_info.url
+        url = _substitute_url_placeholders(tool_info.url, _value_sources)
+        _tpl_path = params_data.get("path", "")
+        if not _path_covers_placeholder_tail(url, _tpl_path, _value_sources):
+            url = _append_path_to_url(url, _tpl_path)
+        url = _substitute_url_placeholders(url, _value_sources)
     elif _path_covers_placeholder_tail(tool_info.url, _path_value, _value_sources):
         url = tool_info.url
     else:
