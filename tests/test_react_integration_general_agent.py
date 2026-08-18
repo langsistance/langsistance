@@ -173,6 +173,64 @@ from sources.agents.general_agent import (
 )
 
 
+class TestDynamicToolDescriptionGuide(unittest.TestCase):
+    """The loop's dynamic tool description must carry the knowledge item's
+    answer as a usage guide — the pre-loop flow injected it as "Context
+    from knowledge base".  Without it the LLM passed the USPTO application
+    number as a query param, sending the literal {applicationNumberText}
+    path template to the gateway (403)."""
+
+    def _make_agent(self):
+        with patch.object(GeneralAgent, "load_prompt", return_value="sys prompt"):
+            return GeneralAgent("test", "prompts/base/general_agent.txt",
+                                _FakeProvider(), verbose=False)
+
+    def test_description_includes_knowledge_answer_usage_guide(self):
+        from unittest.mock import MagicMock
+        agent = self._make_agent()
+
+        knowledge = MagicMock()
+        knowledge.id = 289
+        knowledge.answer = (
+            "调用方式：URL 已包含 /applications 时，path 只需 /{patent_id}/documents，"
+            "将申请号替换进 path，不要放入 query。"
+        )
+        tool_info = MagicMock()
+        tool_info.title = "USPTO 专利文档"
+        tool_info.description = "获取美国专利文档列表"
+        tool_info.push = 2
+        tool_info.url = (
+            "https://api.uspto.gov/api/v1/patent/applications/"
+            "{applicationNumberText}/documents"
+        )
+        tool_info.params = '{"method":"GET","query":{}}'
+
+        tool = agent.get_dynamic_tool_for(knowledge, tool_info)
+
+        self.assertIn("获取美国专利文档列表", tool.description)
+        self.assertIn("Usage guide:", tool.description)
+        self.assertIn("path 只需 /{patent_id}/documents", tool.description)
+
+    def test_description_without_answer_uses_bare_tool_description(self):
+        from unittest.mock import MagicMock
+        agent = self._make_agent()
+
+        knowledge = MagicMock()
+        knowledge.id = 289
+        knowledge.answer = ""
+        tool_info = MagicMock()
+        tool_info.title = "USPTO 专利文档"
+        tool_info.description = "获取美国专利文档列表"
+        tool_info.push = 2
+        tool_info.url = "https://api.uspto.gov/api/v1/patent/applications/search"
+        tool_info.params = '{"method":"GET","query":{}}'
+
+        tool = agent.get_dynamic_tool_for(knowledge, tool_info)
+
+        self.assertEqual(tool.description, "获取美国专利文档列表")
+        self.assertNotIn("Usage guide:", tool.description)
+
+
 class TestLoopGuidanceTopN(unittest.TestCase):
     def test_guidance_requires_top_n_relevant_listing(self):
         agent = _make_agent()

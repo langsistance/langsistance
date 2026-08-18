@@ -236,6 +236,95 @@ def _append_path_to_url(base_url: str, path: Any) -> str:
     return urlunsplit(base_parts._replace(path=combined_path))
 
 
+def _lookup_url_param(name: str, value_sources: list[dict]) -> str | None:
+    """Find the value for a ``{placeholder}`` among the request params.
+
+    Matching order: exact key → case-insensitive key → OpenAPI parameter
+    stem (``applicationNumberText`` accepts the value the LLM put under
+    ``applicationNumber`` — the failing USPTO documents call named the
+    query param without the ``Text`` suffix).
+    """
+    for src in value_sources:
+        if not isinstance(src, dict):
+            continue
+        if name in src and not _is_empty_param_value(src[name]):
+            return str(src[name])
+    name_lower = name.lower()
+    for src in value_sources:
+        if not isinstance(src, dict):
+            continue
+        for key, value in src.items():
+            if key.lower() == name_lower and not _is_empty_param_value(value):
+                return str(value)
+    # OpenAPI stems, longest suffix first (applicationNumberText must
+    # strip "Text", not "Number").
+    for suffix in ("text", "number", "id"):
+        if name_lower.endswith(suffix) and len(name_lower) > len(suffix):
+            stem = name[: -len(suffix)]
+            for src in value_sources:
+                if not isinstance(src, dict):
+                    continue
+                for key, value in src.items():
+                    if key.lower() == stem.lower() and not _is_empty_param_value(value):
+                        return str(value)
+    return None
+
+
+def _substitute_url_placeholders(url: str, value_sources: list[dict]) -> str:
+    """Replace ``{name}`` path templates in a tool URL with request values.
+
+    A literal template must never reach the wire — USPTO's API gateway
+    denies an unsubstituted path with 403 "explicit deny in an
+    identity-based policy" (observed for
+    ``/patent/applications/{applicationNumberText}/documents``).
+    Unresolved placeholders are left intact.
+    """
+    def _replace(match) -> str:
+        value = _lookup_url_param(match.group(1), value_sources)
+        if value is None:
+            return match.group(0)
+        return quote(value, safe="")
+
+    return re.sub(r"\{([^{}]+)\}", _replace, url)
+
+
+def _path_covers_placeholder_tail(
+    url: str,
+    path: Any,
+    value_sources: list[dict],
+) -> bool:
+    """True when *path* already carries the substituted tail of the URL's
+    own ``{placeholder}`` template.
+
+    The tool schema tells the LLM to replace template placeholders itself
+    and pass the result as path.  When it obeys, appending the path would
+    duplicate the URL's template tail
+    (``…/applications/{applicationNumberText}/documents`` +
+    ``18893954/documents`` → the double tail) — so the append is skipped
+    and the substitution below builds the correct URL.
+    """
+    if _is_empty_param_value(path):
+        return False
+    path_segments = [s for s in str(path).strip("/").split("/") if s]
+    if not path_segments:
+        return False
+    url_segments = [s for s in urlsplit(url).path.split("/") if s]
+    for idx in range(len(url_segments) - 1, -1, -1):
+        match = re.fullmatch(r"\{([^{}]+)\}", url_segments[idx])
+        if not match:
+            continue
+        value = _lookup_url_param(match.group(1), value_sources)
+        if value is None:
+            continue
+        quoted = quote(value, safe="")
+        tail = url_segments[idx + 1:]
+        # path == the placeholder value (static tail stays in the URL),
+        # or the value plus the static segments after the placeholder.
+        if path_segments == [quoted] or path_segments == [quoted] + tail:
+            return True
+    return False
+
+
 def _extract_first_url(value: Any) -> str | None:
     """Extract the first URL from a response string."""
     if not isinstance(value, str):
@@ -433,10 +522,24 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
             user_params = dict(params_data)
             user_params['body'] = merged_body
 
-    url = _append_path_to_url(
-        tool_info.url,
-        user_params.get("path", params_data.get("path", "")),
-    )
+    # Substitute OpenAPI-style {placeholder} path templates from the
+    # request params before the request goes out — a literal template
+    # reaches the wire only as a 403 from USPTO's API gateway.  The LLM
+    # may instead pass the substituted tail as path (per the schema
+    # description); skip the append when it duplicates the URL's own
+    # template tail.
+    _value_sources = [
+        user_params.get("query"),
+        user_params.get("body"),
+        params_data,
+        user_params,
+    ]
+    _path_value = user_params.get("path", params_data.get("path", ""))
+    if _path_covers_placeholder_tail(tool_info.url, _path_value, _value_sources):
+        url = tool_info.url
+    else:
+        url = _append_path_to_url(tool_info.url, _path_value)
+    url = _substitute_url_placeholders(url, _value_sources)
 
     method = params_data.get("method", "GET").upper()
     content_type = params_data.get("Content-Type", "application/json")

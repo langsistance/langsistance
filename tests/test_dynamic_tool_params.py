@@ -367,6 +367,157 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class TestPathTemplateSubstitution(unittest.TestCase):
+    """OpenAPI-style {placeholder} path templates in tool URLs must be
+    substituted from the LLM's request params before the request goes
+    out.  Observed production failure: the USPTO documents tool URL
+    ``.../applications/{applicationNumberText}/documents`` was sent
+    verbatim (the LLM put the number in ``query`` instead of ``path``),
+    and USPTO's API gateway rejected the literal-brace path with 403
+    "explicit deny in an identity-based policy"."""
+
+    def _tool(self, params_str, url):
+        from unittest.mock import MagicMock
+        tool = MagicMock()
+        tool.params = params_str
+        tool.url = url
+        tool.timeout = 30
+        return tool
+
+    def _resp(self):
+        from unittest.mock import MagicMock
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.headers = {"Content-Type": "application/json"}
+        resp.content = b'{}'
+        resp.text = '{}'
+        resp.json = lambda: {}
+        return resp
+
+    def _sent_url(self, tool, params):
+        from unittest.mock import patch
+        from sources.dynamic_tool_params import execute_backend_tool_request
+        with patch("sources.dynamic_tool_params.outbound_http.request",
+                   return_value=self._resp()) as mock_req:
+            execute_backend_tool_request(tool, params)
+        return mock_req.call_args[0][1]
+
+    def test_substitutes_template_from_query_param(self):
+        # The production failure shape: the LLM passed the application
+        # number as a query param named applicationNumber (OpenAPI stem
+        # of applicationNumberText), not as a path.
+        tool = self._tool(
+            '{"method":"GET","query":{},"body":{}}',
+            "https://api.uspto.gov/api/v1/patent/applications/"
+            "{applicationNumberText}/documents",
+        )
+        url = self._sent_url(tool, {"query": {"applicationNumber": "18893954"}})
+        self.assertEqual(
+            url,
+            "https://api.uspto.gov/api/v1/patent/applications/"
+            "18893954/documents",
+        )
+
+    def test_substitutes_template_from_exact_name_query_param(self):
+        tool = self._tool(
+            '{"method":"GET","query":{},"body":{}}',
+            "https://api.uspto.gov/api/v1/patent/applications/"
+            "{applicationNumberText}/documents",
+        )
+        url = self._sent_url(
+            tool, {"query": {"applicationNumberText": "18893954"}})
+        self.assertEqual(
+            url,
+            "https://api.uspto.gov/api/v1/patent/applications/"
+            "18893954/documents",
+        )
+
+    def test_substitutes_template_from_body_param(self):
+        tool = self._tool(
+            '{"method":"GET","query":{},"body":{}}',
+            "https://api.uspto.gov/api/v1/patent/applications/"
+            "{applicationNumberText}/documents",
+        )
+        url = self._sent_url(tool, {"body": {"applicationNumber": "18893954"}})
+        self.assertEqual(
+            url,
+            "https://api.uspto.gov/api/v1/patent/applications/"
+            "18893954/documents",
+        )
+
+    def test_substitutes_template_in_params_template_path(self):
+        # The URL carries no placeholder; the template's own path does.
+        tool = self._tool(
+            '{"method":"GET","path":"{applicationNumberText}/documents",'
+            '"query":{},"body":{}}',
+            "https://api.uspto.gov/api/v1/patent/applications",
+        )
+        url = self._sent_url(tool, {"query": {"applicationNumber": "18893954"}})
+        self.assertEqual(
+            url,
+            "https://api.uspto.gov/api/v1/patent/applications/"
+            "18893954/documents",
+        )
+
+    def test_llm_path_that_replaces_template_tail_not_appended_twice(self):
+        # A well-behaved LLM follows the schema instruction and passes the
+        # substituted tail as path — it must not be appended a second time
+        # on top of the URL's own template tail.
+        tool = self._tool(
+            '{"method":"GET","query":{},"body":{}}',
+            "https://api.uspto.gov/api/v1/patent/applications/"
+            "{applicationNumberText}/documents",
+        )
+        url = self._sent_url(
+            tool, {"path": "18893954/documents",
+                   "query": {"applicationNumber": "18893954"}})
+        self.assertEqual(
+            url,
+            "https://api.uspto.gov/api/v1/patent/applications/"
+            "18893954/documents",
+        )
+
+    def test_url_without_placeholders_unchanged(self):
+        tool = self._tool(
+            '{"method":"GET","query":{},"body":{}}',
+            "https://api.uspto.gov/api/v1/patent/applications/search",
+        )
+        url = self._sent_url(tool, {"query": {"q": "dry air"}})
+        self.assertEqual(
+            url,
+            "https://api.uspto.gov/api/v1/patent/applications/search",
+        )
+
+    def test_value_encoded_for_path_safety(self):
+        # A value with a slash (18/893954) must stay one path segment.
+        tool = self._tool(
+            '{"method":"GET","query":{},"body":{}}',
+            "https://api.uspto.gov/api/v1/patent/applications/"
+            "{applicationNumberText}/documents",
+        )
+        url = self._sent_url(
+            tool, {"query": {"applicationNumber": "18/893954"}})
+        self.assertEqual(
+            url,
+            "https://api.uspto.gov/api/v1/patent/applications/"
+            "18%2F893954/documents",
+        )
+
+    def test_unresolved_template_left_untouched(self):
+        # No matching param value — the URL must not crash or be mangled.
+        tool = self._tool(
+            '{"method":"GET","query":{},"body":{}}',
+            "https://api.uspto.gov/api/v1/patent/applications/"
+            "{applicationNumberText}/documents",
+        )
+        url = self._sent_url(tool, {"query": {"q": "anything"}})
+        self.assertEqual(
+            url,
+            "https://api.uspto.gov/api/v1/patent/applications/"
+            "{applicationNumberText}/documents",
+        )
+
+
 class TestStringQueryKeyEnvelopeCollision(unittest.TestCase):
     def test_string_query_key_flat_merges_into_body_q(self):
         """params={"query": "<search term>"} — the LLM names the search-term

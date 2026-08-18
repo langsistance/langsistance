@@ -1422,10 +1422,22 @@ Begin your response now:
             if tool_info.push == 2
             else DynamicToolFunction
         )
+        description = (
+            tool_info.description if tool_info.description else "Dynamic knowledge tool"
+        )
+        usage_guide = (getattr(knowledge_item, "answer", "") or "").strip()
+        if usage_guide:
+            # Restore the usage guide the pre-loop flow injected as
+            # "Context from knowledge base".  It explains how the tool's
+            # params map (e.g. which value goes into path vs query) — the
+            # loop's bare tool_info.description let the LLM pass the USPTO
+            # application number as a query param, sending the literal
+            # {applicationNumberText} path template to the gateway (403).
+            description = f"{description}\n\nUsage guide: {usage_guide[:1000]}"[:1600]
         return StructuredTool.from_function(
             func=tool_func,
             name=cleaned_tool_name,
-            description=tool_info.description if tool_info.description else "Dynamic knowledge tool",
+            description=description,
             args_schema=args_schema,
         )
 
