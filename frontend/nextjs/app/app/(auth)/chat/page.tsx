@@ -8,7 +8,7 @@ import { useI18n } from '@/lib/app-i18n'
 import { useAuth } from '@/contexts/AuthContext'
 import MarkdownMessage from '@/components/app/MarkdownMessage'
 import UserCopyButton from '@/components/app/UserCopyButton'
-import SceneHint from '@/components/app/SceneHint'
+import ChatLanding from '@/components/app/ChatLanding'
 import ChatComposer from '@/components/app/ChatComposer'
 import { pruneResultsForPersistence } from '@/lib/results'
 import { loadResultsStore, restoreResultsInMessages } from '@/lib/resultsStore'
@@ -48,6 +48,11 @@ export default function Chat() {
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
   const isNearBottomRef = useRef(true)
   const pendingQuerySentRef = useRef<string | null>(null)
+
+  // Empty conversation shows the ChatLanding empty state (slogan + centered
+  // composer + six capabilities).  send() adds user+assistant messages
+  // synchronously, so any send flips straight back into normal chat mode.
+  const showLanding = messages.length === 0
 
   // Auto-send a query arriving via URL (?pending_query=...) — used by the
   // results page's 审查历史 button to trigger prosecution analysis back in
@@ -307,16 +312,21 @@ export default function Chat() {
     <div className="page active">
       <div className="chat-container">
         <div className="chat-messages" ref={chatContainerRef}>
-          {messages.length === 0 && (
-            <div className="chat-message-wrapper">
-              <div className="empty-state">
-                <h3>{t('chat.welcome.greeting')}</h3>
-                <p>{t('chat.welcome.prompt')}</p>
-              </div>
-            </div>
-          )}
-          <SceneHint />
-          {messages.map((msg) => (
+          {showLanding ? (
+            <ChatLanding
+              input={input}
+              setInput={setInput}
+              streaming={streaming}
+              send={send}
+              abort={abort}
+              selectedFiles={selectedFiles}
+              addFiles={addFiles}
+              removeFile={removeFile}
+              setIsDragOver={setIsDragOver}
+            />
+          ) : (
+            <>
+              {messages.map((msg) => (
             <div key={msg.id} className={`chat-message-wrapper ${msg.role}`}>
               {msg.role === 'assistant' ? (
                 <>
@@ -345,6 +355,8 @@ export default function Chat() {
             </div>
           ))}
           <div ref={bottomRef} />
+            </>
+          )}
         </div>
 
         {isDragOver && (
@@ -365,19 +377,21 @@ export default function Chat() {
             </div>
           </div>
         )}
-        <div className="chat-input-container">
-          <ChatComposer
-            input={input}
-            setInput={setInput}
-            streaming={streaming}
-            send={send}
-            abort={abort}
-            selectedFiles={selectedFiles}
-            addFiles={addFiles}
-            removeFile={removeFile}
-            setIsDragOver={setIsDragOver}
-          />
-        </div>
+        {!showLanding && (
+          <div className="chat-input-container">
+            <ChatComposer
+              input={input}
+              setInput={setInput}
+              streaming={streaming}
+              send={send}
+              abort={abort}
+              selectedFiles={selectedFiles}
+              addFiles={addFiles}
+              removeFile={removeFile}
+              setIsDragOver={setIsDragOver}
+            />
+          </div>
+        )}
       </div>
     </div>
   )

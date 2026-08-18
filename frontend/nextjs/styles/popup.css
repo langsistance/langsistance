@@ -3755,3 +3755,108 @@ body {
   from { opacity: 0; }
   to { opacity: 1; }
 }
+
+/* =============================================================================
+   Chat Landing (empty state) — slogan + centered composer + six capabilities
+   ============================================================================= */
+
+.chat-landing {
+  width: 100%;
+  max-width: var(--chat-max-width);
+  margin: 0 auto;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: var(--spacing-6);
+  padding: var(--spacing-8) var(--spacing-4);
+  animation: fadeIn 0.3s ease-out;
+}
+
+.chat-landing-slogan {
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  text-align: center;
+  line-height: 1.3;
+}
+
+.chat-landing-composer {
+  width: 100%;
+  max-width: 720px;
+  padding: 0 var(--spacing-4);
+}
+
+.chat-landing-grid {
+  width: 100%;
+  max-width: 900px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--spacing-3);
+  padding: 0 var(--spacing-4);
+}
+
+.chat-landing-card {
+  background: var(--color-bg-white);
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  padding: var(--spacing-4);
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.chat-landing-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.chat-landing-card.free {
+  border-color: #f59e0b;
+}
+
+.chat-landing-card.free .chat-landing-card-title {
+  color: #b45309;
+}
+
+.chat-landing-card-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: var(--spacing-1);
+}
+
+.chat-landing-card-desc {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+
+.chat-landing-section {
+  width: 100%;
+  max-width: 900px;
+  padding: 0 var(--spacing-4);
+}
+
+.chat-landing-section-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  text-align: center;
+  margin-bottom: var(--spacing-3);
+}
+
+@media (max-width: 1023px) {
+  .chat-landing-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 639px) {
+  .chat-landing-grid {
+    grid-template-columns: 1fr;
+  }
+  .chat-landing-slogan {
+    font-size: 24px;
+  }
+}
