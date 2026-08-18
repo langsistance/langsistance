@@ -121,6 +121,68 @@ class TestCreateAgentWiring(unittest.TestCase):
         mock_cpc.assert_called_once_with("hello", extra_terms=[])
         self.assertEqual(getattr(agent, "_cpc_hints", None), hints)
 
+    def test_create_agent_structured_mode_skips_cpc_and_interpretation(self):
+        # Identifier/document/prosecution queries classify as structured:
+        # the ladder still gets the rewrite, but the CPC match and the
+        # architecture interpretation are skipped entirely.
+        agent = _make_agent()
+        handler = _FakeHandler()
+        with patch("sources.long_task.query_mode.classify_query_mode",
+                   new=AsyncMock(return_value="structured")), \
+             patch("sources.long_task.search_query_builder.build_search_queries",
+                   new=AsyncMock(return_value={"concepts": [], "queries": ["q1"]})) as mock_rewrite, \
+             patch("sources.long_task.cpc_semantic.match_query_to_cpc") as mock_cpc, \
+             patch("sources.long_task.technical_interpretation.interpret_query",
+                   new=AsyncMock(return_value=None)) as mock_interp, \
+             patch("sources.agents.general_agent.build_tool_set",
+                   new=AsyncMock(return_value=({}, []))), \
+             patch("sources.agents.general_agent.ReActLoop") as MockLoop:
+            MockLoop.return_value.run = AsyncMock(
+                return_value=RoundResult(kind="answer", answer_text="hi", steps=1))
+            _run(agent.create_agent(
+                "u1", "I want all patent documents for application 18893954",
+                "q1", "", handler, push_filter=None))
+        self.assertEqual(agent._query_mode, "structured")
+        self.assertEqual(agent._search_rewrite.get("queries"), ["q1"])
+        self.assertIsNone(agent._cpc_hints)
+        self.assertIsNone(agent._search_interpretation)
+        mock_rewrite.assert_awaited_once()
+        mock_cpc.assert_not_called()
+        mock_interp.assert_not_called()
+
+    def test_create_agent_semantic_mode_runs_all_three(self):
+        # Semantic technology searches keep rewrite + CPC + interpretation
+        # (now run concurrently).
+        agent = _make_agent()
+        handler = _FakeHandler()
+        hints = [{"code": "H05B45/00", "title": "LED circuits"}]
+        interp = {"scheme": "温控闭环", "queries": ["\"temperature\" AND \"feedback\""]}
+        with patch("sources.agents.general_agent.CPC_EXPANSION_ENABLED", True), \
+             patch("sources.long_task.query_mode.classify_query_mode",
+                   new=AsyncMock(return_value="semantic")), \
+             patch("sources.long_task.search_query_builder.build_search_queries",
+                   new=AsyncMock(return_value={"concepts": [], "queries": ["q1"]})) as mock_rewrite, \
+             patch("sources.long_task.cpc_semantic.match_query_to_cpc",
+                   return_value=hints) as mock_cpc, \
+             patch("sources.long_task.technical_interpretation.interpret_query",
+                   new=AsyncMock(return_value=interp)) as mock_interp, \
+             patch("sources.agents.general_agent.build_tool_set",
+                   new=AsyncMock(return_value=({}, []))), \
+             patch("sources.agents.general_agent.ReActLoop") as MockLoop:
+            MockLoop.return_value.run = AsyncMock(
+                return_value=RoundResult(kind="answer", answer_text="hi", steps=1))
+            _run(agent.create_agent(
+                "u1", "保持温度稳定的装置", "q1", "", handler, push_filter=None))
+        self.assertEqual(agent._query_mode, "semantic")
+        self.assertEqual(agent._cpc_hints, hints)
+        self.assertEqual(agent._search_interpretation, interp)
+        mock_rewrite.assert_awaited_once()
+        mock_cpc.assert_called_once()
+        mock_interp.assert_awaited_once()
+        # interpretation queries merged into the ladder
+        self.assertIn("\"temperature\" AND \"feedback\"",
+                      agent._search_rewrite.get("queries"))
+
     def test_long_task_kind_returns_intent_dict(self):
         agent = _make_agent()
         handler = _FakeHandler()

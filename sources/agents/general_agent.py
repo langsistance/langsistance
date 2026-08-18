@@ -1605,71 +1605,110 @@ Begin your response now:
         self.tools = []
         lang = self._detect_lang(prompt)
         self._lang = lang
-        # Pre-build the tight-to-loose query ladder for this request so the
-        # loop system prompt can offer it to the LLM upfront.
+        # Query-mode classification: structured/analytical requests
+        # (identifier, assignee, keyword, prosecution/family analysis,
+        # document lists) skip the CPC match and the architecture
+        # interpretation — those only serve semantic technology searches.
+        # Never raises; defaults to "semantic" so tech searches keep the
+        # full pipeline.
+        self._query_mode = "semantic"
+        try:
+            from sources.long_task.query_mode import (
+                QUERY_MODE_ENABLED, classify_query_mode)
+            if QUERY_MODE_ENABLED:
+                self._query_mode = await classify_query_mode(prompt, self.llm)
+        except Exception:
+            self._query_mode = "semantic"
         if callback_handler:
             await _emit_status(callback_handler,
                 "正在构造检索式..." if lang == 'zh' else "Building search queries...")
+
         from sources.long_task.search_query_builder import build_search_queries
-        try:
-            self._search_rewrite = await build_search_queries(prompt, self.llm)
-        except Exception:
-            self._search_rewrite = {"concepts": [], "queries": []}
-        self.logger.info(
-            f"search_rewrite — queries={self._search_rewrite.get('queries')}"
-        )
-        # CPC semantic match runs once per request right after the
-        # rewrite, so cpc_semantic.log records every round regardless of
-        # whether the missing-direction stage later fires.  The rewrite's
-        # carrier vocabulary joins the match text: a raw question where
-        # one word dominates (e.g. "control") would otherwise match
-        # control-themed classes instead of the technical domain.
-        if CPC_EXPANSION_ENABLED:
+
+        async def _rewrite() -> dict:
+            try:
+                return await build_search_queries(prompt, self.llm)
+            except Exception:
+                return {"concepts": [], "queries": []}
+
+        async def _cpc_match():
+            # The rewrite's carrier vocabulary joins the match text: a raw
+            # question where one word dominates (e.g. "control") would
+            # otherwise match control-themed classes instead of the
+            # technical domain.  Waits for the concurrently running
+            # rewrite; the embedding search itself is blocking, so it
+            # runs in a thread and never stalls the other tasks.
+            if not CPC_EXPANSION_ENABLED:
+                return None
             try:
                 from sources.long_task.cpc_semantic import match_query_to_cpc
+                rewrite = await _rewrite_task
                 # Each concept's carrier vocabulary forms its own match
                 # text — one dominant concept must not dilute the others.
                 extra_term_groups = [
                     " ".join(str(kw) for kw in (
                         concept.get("carriers") or [])[:4])
-                    for concept in (self._search_rewrite.get("concepts") or [])
+                    for concept in (rewrite.get("concepts") or [])
                     if isinstance(concept, dict) and concept.get("carriers")
                 ]
-                self._cpc_hints = match_query_to_cpc(
-                    prompt, extra_terms=extra_term_groups)
+                return await asyncio.to_thread(
+                    match_query_to_cpc, prompt, extra_terms=extra_term_groups)
             except Exception:
-                self._cpc_hints = None
-        # Architecture-level interpretation (strong model): maps the
-        # question to the circuit/system patterns patent literature
-        # actually uses.  Its queries seed the ladder top so the
-        # auto-ladder and the blank-q injection try the architecture
-        # wording first; its scheme/terms feed the scoring rubric.
-        # Runs after the CPC match so the matched classifications can
-        # guide the interpretation.  Never raises — any failure keeps
-        # the flash rewrite untouched.
-        try:
-            from sources.long_task.technical_interpretation import (
-                INTERPRET_ENABLED, interpret_query,
-                merge_interpretation_queries,
-            )
-            if INTERPRET_ENABLED:
-                self._search_interpretation = await interpret_query(
-                    prompt, cpc_hints=self._cpc_hints)
-                if self._search_interpretation:
-                    self._search_rewrite = merge_interpretation_queries(
-                        self._search_rewrite, self._search_interpretation)
-                    scheme = str(
-                        self._search_interpretation.get("scheme") or ""
-                    )[:120]
-                    players = ", ".join(
-                        (self._search_interpretation.get("key_players")
-                         or [])[:5])
-                    self.logger.info(
-                        f"search_interpretation — scheme={scheme}"
-                        + (f" | players={players}" if players else "")
-                    )
-        except Exception:
+                return None
+
+        async def _interpret():
+            # Architecture-level interpretation (strong model): maps the
+            # question to the circuit/system patterns patent literature
+            # actually uses.  Its queries seed the ladder top so the
+            # auto-ladder and the blank-q injection try the architecture
+            # wording first; its scheme/terms feed the scoring rubric.
+            # Never raises — any failure keeps the flash rewrite untouched.
+            try:
+                from sources.long_task.technical_interpretation import (
+                    INTERPRET_ENABLED, interpret_query,
+                )
+                if not INTERPRET_ENABLED:
+                    return None
+                return await interpret_query(prompt)
+            except Exception:
+                return None
+
+        if self._query_mode == "structured":
+            # Identifier/assignee/keyword/analysis requests: the ladder
+            # still needs the rewrite; CPC and interpretation add nothing.
+            self._search_rewrite = await _rewrite()
+            self._cpc_hints = None
             self._search_interpretation = None
+        else:
+            # Semantic technology search: rewrite + CPC match +
+            # interpretation run concurrently — the interpretation no
+            # longer waits for the CPC hints (they were a guidance
+            # nicety, not a dependency).
+            _rewrite_task = asyncio.create_task(_rewrite())
+            _cpc_task = asyncio.create_task(_cpc_match())
+            _interp_task = asyncio.create_task(_interpret())
+            (self._search_rewrite, self._cpc_hints,
+             self._search_interpretation) = await asyncio.gather(
+                _rewrite_task, _cpc_task, _interp_task)
+            if self._search_interpretation:
+                from sources.long_task.technical_interpretation import (
+                    merge_interpretation_queries)
+                self._search_rewrite = merge_interpretation_queries(
+                    self._search_rewrite, self._search_interpretation)
+                scheme = str(
+                    self._search_interpretation.get("scheme") or ""
+                )[:120]
+                players = ", ".join(
+                    (self._search_interpretation.get("key_players")
+                     or [])[:5])
+                self.logger.info(
+                    f"search_interpretation — scheme={scheme}"
+                    + (f" | players={players}" if players else "")
+                )
+        self.logger.info(
+            f"search_rewrite — queries={self._search_rewrite.get('queries')} "
+            f"| mode={self._query_mode}"
+        )
         if callback_handler:
             await _emit_status(callback_handler,
                 "正在分析您的问题..." if lang == 'zh' else "Analyzing your question...")
