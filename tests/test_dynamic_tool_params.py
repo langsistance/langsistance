@@ -503,6 +503,25 @@ class TestPathTemplateSubstitution(unittest.TestCase):
             "18%2F893954/documents",
         )
 
+    def test_dict_path_params_feed_substitution_without_append(self):
+        # The LLM sometimes passes path as an object
+        # ({"path":{"applicationNumber":"18893954"}}) instead of a literal
+        # path — its values must feed the {placeholder} substitution and
+        # no literal path is appended (previously ValueError "path must
+        # be a URL path string").
+        tool = self._tool(
+            '{"method":"GET","query":{},"body":{}}',
+            "https://api.uspto.gov/api/v1/patent/applications/"
+            "{applicationNumberText}/documents",
+        )
+        url = self._sent_url(
+            tool, {"path": {"applicationNumber": "18893954"}, "query": {}})
+        self.assertEqual(
+            url,
+            "https://api.uspto.gov/api/v1/patent/applications/"
+            "18893954/documents",
+        )
+
     def test_unresolved_template_left_untouched(self):
         # No matching param value — the URL must not crash or be mangled.
         tool = self._tool(

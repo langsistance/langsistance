@@ -382,8 +382,17 @@ def _relevance_pool_applies_tool(agent, tool_info) -> bool:
 def _relevance_pool_applies(agent, tool_info, raw_items) -> bool:
     """Pool + ranking applies to backend USPTO search tools whose results
     flatten via build_candidates (any USPTO-shaped patent list — keyword,
-    assignee, or otherwise — merges into the turn's ranked pool)."""
+    assignee, or otherwise — merges into the turn's ranked pool).
+
+    Document-list tools (uspto_documents — URL contains 'documents') are
+    the final answer: every document of ONE application, never a search
+    pool.  Ranking/recall would replace them with unrelated pool patents
+    (observed: 68 documents streamed to the frontend as 34 recall patents).
+    """
     if not _relevance_pool_applies_tool(agent, tool_info):
+        return False
+    url = (getattr(tool_info, "url", "") or "").lower()
+    if "documents" in url:
         return False
     return bool(build_candidates(raw_items or []))
 
@@ -1522,11 +1531,15 @@ async def make_action_executor(agent, registry, push_filter=None):
             else:
                 shown, note = _cap_patent_list(entry.tool_info, pending, lang)
                 pool = getattr(agent, "_search_pool", None)
-                if pool is not None:
+                _is_doc_list = "documents" in (
+                    getattr(entry.tool_info, "url", "") or "").lower()
+                if pool is not None and not _is_doc_list:
                     # The tool function already wrote this legacy result
                     # into _pending_raw_items; restore the turn's ranked
                     # pool as the display list — the legacy result still
-                    # feeds the observation digest below.
+                    # feeds the observation digest below.  Document-list
+                    # tools keep their own result: the documents of ONE
+                    # application are the answer, not a search pool.
                     ranked = pool.ranked(MAX_PATENT_LIST_ITEMS)
                     agent._pending_raw_items = [c["_raw"] for c in ranked]
                 else:

@@ -535,7 +535,14 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
         user_params,
     ]
     _path_value = user_params.get("path", params_data.get("path", ""))
-    if _path_covers_placeholder_tail(tool_info.url, _path_value, _value_sources):
+    if isinstance(_path_value, dict):
+        # The LLM sometimes passes path as an object
+        # ({"path":{"applicationNumber":"18893954"}}) instead of a literal
+        # path string — its values feed the {placeholder} substitution
+        # and no literal path is appended.
+        _value_sources.insert(0, _path_value)
+        url = tool_info.url
+    elif _path_covers_placeholder_tail(tool_info.url, _path_value, _value_sources):
         url = tool_info.url
     else:
         url = _append_path_to_url(tool_info.url, _path_value)

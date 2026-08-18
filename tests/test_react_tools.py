@@ -75,6 +75,56 @@ class _FakeAgent:
         return tool
 
 
+class TestRelevancePoolGate(unittest.TestCase):
+    """The relevance pool (ranking/recall/rerank) applies to USPTO *search*
+    tools.  Document-list tools (uspto_documents) return every document of
+    ONE application — the final answer, never a search pool.  Observed
+    production bug: the documents gate applied, the loop ran recall and
+    streamed 34 unrelated pool patents instead of the application's 68
+    documents."""
+
+    def _doc_bag(self, n=5):
+        return [{"applicationNumberText": "18893954",
+                 "documentIdentifier": f"doc{i}",
+                 "downloadOptionBag": []} for i in range(n)]
+
+    def test_document_list_tool_never_enters_pool(self):
+        from sources.agents.react_tools import _relevance_pool_applies
+        tool = _ToolInfo(
+            "get_patent_documents_application_number",
+            url="https://api.uspto.gov/api/v1/patent/applications/"
+                "{applicationNumberText}/documents",
+        )
+        # Even a fully parseable document bag must not become a pool.
+        self.assertFalse(_relevance_pool_applies(None, tool, self._doc_bag(68)))
+
+    def test_search_tool_enters_pool(self):
+        from sources.agents.react_tools import _relevance_pool_applies
+        tool = _ToolInfo(
+            "uspto search",
+            url="https://api.uspto.gov/api/v1/patent/applications/search",
+        )
+        items = [{"applicationMetaData": {"applicationNumberText": "19511555"},
+                  "applicationNumberText": "19511555"}]
+        self.assertTrue(_relevance_pool_applies(None, tool, items))
+
+    def test_non_uspto_tool_never_enters_pool(self):
+        from sources.agents.react_tools import _relevance_pool_applies
+        tool = _ToolInfo("zldjs search",
+                         url="https://open.zldsj.com/api/patents")
+        items = [{"patent_id": "CN12345"}]
+        self.assertFalse(_relevance_pool_applies(None, tool, items))
+
+    def test_document_list_tool_skips_pool_even_when_unparseable(self):
+        from sources.agents.react_tools import _relevance_pool_applies
+        tool = _ToolInfo(
+            "get_patent_documents_application_number",
+            url="https://api.uspto.gov/api/v1/patent/applications/"
+                "{applicationNumberText}/documents",
+        )
+        self.assertFalse(_relevance_pool_applies(None, tool, []))
+
+
 class TestCapPatentList(unittest.TestCase):
     def test_search_list_capped_at_100(self):
         items = list(range(MAX_PATENT_LIST_ITEMS + 40))
