@@ -20,6 +20,7 @@ export default function Chat() {
   const { user, requireAuth } = useAuth()
   const {
     messages,
+    hydrated,
     setMessages,
     input,
     setInput,
@@ -52,7 +53,7 @@ export default function Chat() {
   // Empty conversation shows the ChatLanding empty state (slogan + centered
   // composer + six capabilities).  send() adds user+assistant messages
   // synchronously, so any send flips straight back into normal chat mode.
-  const showLanding = messages.length === 0
+  const showLanding = hydrated && messages.length === 0
 
   // Auto-send a query arriving via URL (?pending_query=...) — used by the
   // results page's 审查历史 button to trigger prosecution analysis back in

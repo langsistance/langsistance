@@ -64,12 +64,6 @@ export default function ChatComposer({
     setIsDragOver(true)
   }
 
-  function handleDragLeave(e: React.DragEvent) {
-    e.preventDefault()
-    e.stopPropagation()
-    setIsDragOver(false)
-  }
-
   function handleDrop(e: React.DragEvent) {
     e.preventDefault()
     e.stopPropagation()

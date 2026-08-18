@@ -52,6 +52,7 @@ export interface ChatMessage {
 interface ChatContextValue {
   messages: ChatMessage[]
   setMessages: Dispatch<SetStateAction<ChatMessage[]>>
+  hydrated: boolean
   input: string
   setInput: Dispatch<SetStateAction<string>>
   streaming: boolean
@@ -73,6 +74,7 @@ const ChatContext = createContext<ChatContextValue | null>(null)
 
 export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [hydrated, setHydrated] = useState(false)
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [streamingId, setStreamingId] = useState<string | null>(null)
@@ -96,6 +98,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       restorePendingRef.current = true
       setMessages(restoreResultsInMessages(stored, loadResultsStore(window.localStorage)))
     }
+    // Hydration is complete once the restore pass has run — set unconditionally
+    // so the landing page never flashes on async message restoration.
+    setHydrated(true)
   }, [])
 
   // Persist every change so the next provider mount (navigation, refresh,
@@ -126,6 +131,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       value={{
         messages,
         setMessages,
+        hydrated,
         input,
         setInput,
         streaming,
