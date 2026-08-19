@@ -7,9 +7,9 @@ import { useAuth } from '@/contexts/AuthContext'
 const STORAGE_KEY_PREFIX = 'copiioai_patent_onboarding_done'
 
 interface TourStep {
-  /** CSS selector for the element to highlight */
-  target: string
-  /** Tooltip position relative to target */
+  /** CSS selectors for the element(s) to highlight — union-bounded when multiple */
+  targets: string[]
+  /** Tooltip position relative to the highlighted area */
   placement: 'bottom' | 'top' | 'right' | 'left'
   /** Title */
   titleKey: string
@@ -17,28 +17,30 @@ interface TourStep {
   bodyKey: string
 }
 
-// ── Define what elements to point at on the chat page ──
+// ── Define what elements to point at on the chat landing page ──
 
 function getTourSteps(t: (key: string, params?: Record<string, string | number>) => string, lang: string): TourStep[] {
   return [
     {
-      target: '.scene-hint-group-smart .knowledge-group-item',
+      // 落地页六大能力卡片：自然语言检索
+      targets: ['[data-cap="nl-search"]'],
       placement: 'bottom',
-      titleKey: lang === 'zh' ? '💬 智能问答 — 示例提问' : '💬 Smart Q&A — Example',
+      titleKey: lang === 'zh' ? '💬 自然语言检索' : '💬 Natural Language Search',
       bodyKey: lang === 'zh'
-        ? '这是智能问答的一个示例。你可以按申请号、专利号、公开号、关键词或权利人检索专利文档，点击即可快速开始。'
-        : 'This is a Smart Q&A example. You can search patents by application number, patent number, publication number, keyword, or assignee. Click to try it.',
+        ? '用日常语言描述你的检索需求——按申请号、专利号、公开号、关键词或权利人，AI 自动理解并为你找到专利。'
+        : 'Describe your search in everyday language — by application number, publication number, keyword, or assignee. AI understands and finds the patents for you.',
     },
     {
-      target: '.scene-hint-group-deep .knowledge-group-item',
+      // 落地页六大能力卡片：审查历史分析 + 跨国同族专利审查历史分析（两张卡片一起高亮）
+      targets: ['[data-cap="prosecution"]', '[data-cap="family"]'],
       placement: 'top',
-      titleKey: lang === 'zh' ? '🔬 深度研究 — 示例提问' : '🔬 Deep Research — Example',
+      titleKey: lang === 'zh' ? '🔬 审查历史与跨国同族分析' : '🔬 Prosecution & Family Analysis',
       bodyKey: lang === 'zh'
-        ? '这是深度研究的一个示例。支持全球专利家族审查分析（跨国分析、OA答复、权利要求演变等）以及专利LLM驱动的批量分析。'
-        : 'This is a Deep Research example. It covers global patent family prosecution analysis (cross-country, OA response, claim evolution, etc.) and patent LLM-powered batch analysis.',
+        ? '深入分析单件专利的审查历史（OA 答复、权利要求演变），也可跨国家对比同族专利的审查过程，洞察授权策略。'
+        : 'Dive deep into a patent’s prosecution history (OA responses, claim evolution), or compare prosecution across its global family members.',
     },
     {
-      target: '.chat-input-wrapper',
+      targets: ['.chat-input-wrapper'],
       placement: 'top',
       titleKey: lang === 'zh' ? '⌨️ 在这里输入问题' : '⌨️ Type Your Question Here',
       bodyKey: lang === 'zh'
@@ -70,13 +72,28 @@ export default function PatentOnboardingWizard() {
 
   // Calculate spotlight + tooltip position for current step
   const updatePositions = useCallback(() => {
-    const target = document.querySelector(tourSteps[step].target)
-    if (!target) {
+    const els = tourSteps[step].targets
+      .map((s) => document.querySelector(s))
+      .filter((el): el is Element => Boolean(el))
+    if (els.length !== tourSteps[step].targets.length) {
       setReady(false)
       return
     }
 
-    const rect = target.getBoundingClientRect()
+    // Union bounding box across all targets (e.g. two capability cards)
+    const union = els.reduce(
+      (acc, el) => {
+        const r = el.getBoundingClientRect()
+        return {
+          left: Math.min(acc.left, r.left),
+          top: Math.min(acc.top, r.top),
+          right: Math.max(acc.right, r.right),
+          bottom: Math.max(acc.bottom, r.bottom),
+        }
+      },
+      { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity },
+    )
+    const rect = { ...union, width: union.right - union.left, height: union.bottom - union.top }
     const padding = 8
     setSpotlight({
       x: rect.left - padding,
@@ -132,25 +149,31 @@ export default function PatentOnboardingWizard() {
     if (!visible || step >= tourSteps.length) return
 
     setReady(false)
-    const selector = tourSteps[step].target
+    const selectors = tourSteps[step].targets
+    const timeouts: ReturnType<typeof setTimeout>[] = []
     let attempts = 0
     const maxAttempts = 30 // 3 seconds
 
     function tryShow() {
-      const target = document.querySelector(selector)
-      if (target) {
-        target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      const targets = selectors.map((s) => document.querySelector(s))
+      if (targets.every(Boolean)) {
+        // Scroll first + last so the whole union (e.g. two cards) is visible
+        const first = targets[0] as Element
+        const last = targets[targets.length - 1] as Element
+        first.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        if (last !== first) last.scrollIntoView({ behavior: 'smooth', block: 'center' })
         updatePositions()
         return
       }
       attempts++
       if (attempts < maxAttempts) {
-        setTimeout(tryShow, 100)
+        timeouts.push(setTimeout(tryShow, 100))
       }
     }
 
     // Small initial delay in case React is still rendering
-    setTimeout(tryShow, 50)
+    timeouts.push(setTimeout(tryShow, 50))
+    return () => timeouts.forEach(clearTimeout)
   }, [visible, step, tourSteps, updatePositions])
 
   if (!visible || !ready) return null

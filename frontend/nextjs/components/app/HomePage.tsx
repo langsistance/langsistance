@@ -5,8 +5,7 @@ import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { ChatProvider } from '@/contexts/ChatContext'
 import { I18nProvider } from '@/lib/app-i18n'
 import AppLayout from '@/components/app/AppLayout'
-import SceneOnboardingModal from '@/components/app/SceneOnboardingModal'
-import PatentOnboardingWizard from '@/components/app/PatentOnboardingWizard'
+import SceneAutoOnboard from '@/components/app/SceneAutoOnboard'
 import Chat from '@/app/app/(auth)/chat/page'
 
 function HomePageContent() {
@@ -26,8 +25,7 @@ function HomePageContent() {
   // Skip scene onboarding for anonymous users (API would fail, no scenes to select).
   return (
     <AppLayout>
-      {user && <SceneOnboardingModal />}
-      <PatentOnboardingWizard />
+      {user && <SceneAutoOnboard />}
       <Chat />
     </AppLayout>
   )

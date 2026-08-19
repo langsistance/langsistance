@@ -150,7 +150,7 @@ export default {
       cap5Title: '全流程文件下载',
       cap5Desc: '专利说明书、权利要求、分析报告，PDF / DOCX 一键下载',
       cap6Title: '免费',
-      cap6Desc: '六大能力当前全部免费开放，无需信用卡，无隐藏费用',
+      cap6Desc: '六大能力当前全部免费开放',
     },
     processingWithTime: '⏳ 正在处理中... (已用时 {seconds} 秒)',
     queryFailed: '查询失败',
@@ -574,43 +574,9 @@ export default {
   // 专利能力引导
   patentOnboarding: {
     skip: '跳过',
-    step: '第 {current} 步',
-    of: '/ {total}',
     prev: '上一步',
     next: '下一步',
     startChat: '开始使用',
-    reopen: '📖 查看能力指南',
-
-    step1: {
-      title: '欢迎使用专利分析助手',
-      subtitle: '请了解我支持的能力，选择一项以查看示例',
-      smartQA: { name: '智能问答', desc: '按申请号、专利号、公开号、关键词或权利人检索专利文档' },
-      deepResearch: { name: '深度研究', desc: '全球专利家族审查分析及专利LLM批量分析' },
-    },
-
-    step2: {
-      title: '选择一项能力查看详情',
-      tip: '点击示例可自动填入输入框',
-      familyAnalysis: '全球专利家族审查分析 (USPTO/EPO/JPO)',
-      batchAnalysis: '批量专利分析 (专利LLM驱动)',
-      items: {
-        crossCountry: { label: '跨国分析', example: 'Analyze prosecution differences between US12506212 and its global family members' },
-        oaResponse: { label: 'OA答复分析', example: 'Analyze rejection reasons and applicant response strategies for US12506212' },
-        claimEvolution: { label: '权利要求演变', example: 'Analyze claim amendments and scope changes of US12506212 and its family members' },
-        grantStrategy: { label: '授权策略', example: 'Analyze why US12506212 was granted and key amendment strategies' },
-        invalidityRisk: { label: '无效风险', example: 'Find limiting statements and legal risks in the prosecution history of US12506212' },
-        searchAnalysis: { label: '搜索分析', example: 'What recent patents does Tesla have in autonomous driving' },
-        specifiedAnalysis: { label: '指定专利分析', example: 'Analyze patents 17429113, 18012525, 18331482' },
-        fileUpload: { label: '文件上传分析', example: 'Upload specification files (PDF/XML/DOCX) for text analysis. Filter these documents for AI-related patents' },
-        followUp: { label: '追问分析', example: 'Query and filter previously retrieved patent results. Which of these are AI-related patents' },
-      },
-    },
-
-    step3: {
-      title: '输入您的问题',
-      subtitle: '可以直接发送示例，也可以修改后发送',
-      placeholder: '请描述您的专利分析需求...',
-    },
   },
 
   // 用户反馈

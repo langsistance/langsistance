@@ -6,7 +6,7 @@ import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { ChatProvider } from '@/contexts/ChatContext'
 import { I18nProvider } from '@/lib/app-i18n'
 import AppLayout from '@/components/app/AppLayout'
-import SceneOnboardingModal from '@/components/app/SceneOnboardingModal'
+import SceneAutoOnboard from '@/components/app/SceneAutoOnboard'
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { user } = useAuth()
@@ -31,7 +31,7 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
     return null
   }
 
-  return <AppLayout><SceneOnboardingModal />{children}</AppLayout>
+  return <AppLayout><SceneAutoOnboard />{children}</AppLayout>
 }
 
 export default function AuthLayout({ children }: { children: React.ReactNode }) {

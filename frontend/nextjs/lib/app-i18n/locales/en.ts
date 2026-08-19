@@ -574,43 +574,9 @@ export default {
   // Patent Capability Onboarding
   patentOnboarding: {
     skip: 'Skip',
-    step: 'Step {current}',
-    of: '/ {total}',
     prev: 'Previous',
     next: 'Next',
     startChat: 'Start Chat',
-    reopen: '📖 View Capability Guide',
-
-    step1: {
-      title: 'Welcome to Patent Analysis Assistant',
-      subtitle: 'Explore the supported capabilities. Select one to see examples.',
-      smartQA: { name: 'Smart Q&A', desc: 'Search patents by application number, patent number, publication number, keyword, or assignee' },
-      deepResearch: { name: 'Deep Research', desc: 'Global patent family prosecution analysis and patent LLM batch analysis' },
-    },
-
-    step2: {
-      title: 'Select a capability to view details',
-      tip: 'Click an example to auto-fill it',
-      familyAnalysis: 'Global Patent Family Prosecution Analysis (USPTO/EPO/JPO)',
-      batchAnalysis: 'Batch Patent Analysis (Powered by Patent LLM)',
-      items: {
-        crossCountry: { label: 'Cross-country', example: 'Analyze prosecution differences between US12506212 and its global family members' },
-        oaResponse: { label: 'OA Response', example: 'Analyze rejection reasons and applicant response strategies for US12506212' },
-        claimEvolution: { label: 'Claim Evolution', example: 'Analyze claim amendments and scope changes of US12506212 and its family members' },
-        grantStrategy: { label: 'Grant Strategy', example: 'Analyze why US12506212 was granted and key amendment strategies' },
-        invalidityRisk: { label: 'Invalidity & Risk', example: 'Find limiting statements and legal risks in the prosecution history of US12506212' },
-        searchAnalysis: { label: 'Search Analysis', example: 'What recent patents does Tesla have in autonomous driving' },
-        specifiedAnalysis: { label: 'Specified Patent', example: 'Analyze patents 17429113, 18012525, 18331482' },
-        fileUpload: { label: 'File Upload', example: 'Upload specification files (PDF/XML/DOCX) for text analysis. Filter these documents for AI-related patents' },
-        followUp: { label: 'Follow-up', example: 'Query and filter previously retrieved patent results. Which of these are AI-related patents' },
-      },
-    },
-
-    step3: {
-      title: 'Enter your question',
-      subtitle: 'Send the example directly, or modify it before sending',
-      placeholder: 'Describe your patent analysis needs...',
-    },
   },
 
   // Feedback

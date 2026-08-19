@@ -725,11 +725,6 @@ input[type="checkbox"] {
   padding: var(--spacing-md);
 }
 
-/* Scene Onboarding Modal */
-.scene-onboarding-modal {
-  max-width: 520px;
-}
-
 /* Scene Hint (Chat) */
 .scene-hint {
   margin: 0 auto var(--spacing-md);

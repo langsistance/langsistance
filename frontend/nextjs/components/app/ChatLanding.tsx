@@ -3,6 +3,7 @@
 import { useI18n } from '@/lib/app-i18n'
 import ChatComposer, { type ChatComposerProps } from './ChatComposer'
 import SceneHint from './SceneHint'
+import PatentOnboardingWizard from './PatentOnboardingWizard'
 
 // Linear icons matching the app's existing stroke-2px style (feather/lucide
 // family). cap1 adds a star inside the magnifier for the US element.
@@ -51,12 +52,12 @@ const ICONS = {
 }
 
 const CAPABILITIES = [
-  { icon: ICONS.search, titleKey: 'chat.landing.cap1Title', descKey: 'chat.landing.cap1Desc', free: false },
-  { icon: ICONS.chat, titleKey: 'chat.landing.cap2Title', descKey: 'chat.landing.cap2Desc', free: false },
-  { icon: ICONS.clock, titleKey: 'chat.landing.cap3Title', descKey: 'chat.landing.cap3Desc', free: false },
-  { icon: ICONS.globe, titleKey: 'chat.landing.cap4Title', descKey: 'chat.landing.cap4Desc', free: false },
-  { icon: ICONS.download, titleKey: 'chat.landing.cap5Title', descKey: 'chat.landing.cap5Desc', free: false },
-  { icon: ICONS.gift, titleKey: 'chat.landing.cap6Title', descKey: 'chat.landing.cap6Desc', free: true },
+  { cap: 'us-search', icon: ICONS.search, titleKey: 'chat.landing.cap1Title', descKey: 'chat.landing.cap1Desc', free: false },
+  { cap: 'nl-search', icon: ICONS.chat, titleKey: 'chat.landing.cap2Title', descKey: 'chat.landing.cap2Desc', free: false },
+  { cap: 'prosecution', icon: ICONS.clock, titleKey: 'chat.landing.cap3Title', descKey: 'chat.landing.cap3Desc', free: false },
+  { cap: 'family', icon: ICONS.globe, titleKey: 'chat.landing.cap4Title', descKey: 'chat.landing.cap4Desc', free: false },
+  { cap: 'download', icon: ICONS.download, titleKey: 'chat.landing.cap5Title', descKey: 'chat.landing.cap5Desc', free: false },
+  { cap: 'free', icon: ICONS.gift, titleKey: 'chat.landing.cap6Title', descKey: 'chat.landing.cap6Desc', free: true },
 ] as const
 
 export default function ChatLanding(composerProps: ChatComposerProps) {
@@ -70,7 +71,7 @@ export default function ChatLanding(composerProps: ChatComposerProps) {
       </div>
       <div className="chat-landing-grid">
         {CAPABILITIES.map((cap) => (
-          <div key={cap.titleKey} className={`chat-landing-card${cap.free ? ' free' : ''}`}>
+          <div key={cap.titleKey} className={`chat-landing-card${cap.free ? ' free' : ''}`} data-cap={cap.cap}>
             <div className="chat-landing-card-icon">{cap.icon}</div>
             <div className="chat-landing-card-body">
               <h3 className="chat-landing-card-title">{t(cap.titleKey)}</h3>
@@ -82,6 +83,7 @@ export default function ChatLanding(composerProps: ChatComposerProps) {
       <div className="chat-landing-section">
         <SceneHint />
       </div>
+      <PatentOnboardingWizard />
     </div>
   )
 }
