@@ -150,7 +150,7 @@ export default {
       cap5Title: 'Full-Cycle File Downloads',
       cap5Desc: 'Download specs, claims & reports as PDF / DOCX',
       cap6Title: 'Free',
-      cap6Desc: 'All six capabilities are free — no credit card, no hidden fees',
+      cap6Desc: 'All five capabilities are free — no credit card, no hidden fees',
     },
     processingWithTime: '⏳ Processing... (elapsed {seconds} seconds)',
     queryFailed: 'Query failed',

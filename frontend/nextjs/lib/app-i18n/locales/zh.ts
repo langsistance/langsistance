@@ -150,7 +150,7 @@ export default {
       cap5Title: '全流程文件下载',
       cap5Desc: '专利说明书、权利要求、分析报告，PDF / DOCX 一键下载',
       cap6Title: '免费',
-      cap6Desc: '六大能力当前全部免费开放',
+      cap6Desc: '五大能力当前全部免费开放',
     },
     processingWithTime: '⏳ 正在处理中... (已用时 {seconds} 秒)',
     queryFailed: '查询失败',
