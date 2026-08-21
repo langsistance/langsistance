@@ -100,7 +100,11 @@ class TestBuildIndex(unittest.TestCase):
             rows = conn.execute(
                 "SELECT cpc, patent FROM cpc_patents ORDER BY cpc").fetchall()
             conn.close()
-        self.assertGreaterEqual(stats["patents"], 2)
+        # pairs counts raw parsed lines (incl. duplicates); patents and
+        # the table are deduplicated by the final DISTINCT pass.
+        self.assertEqual(stats["pairs"], 5)
+        self.assertEqual(stats["patents"], 3)
+        self.assertEqual(len(rows), 4)
         self.assertIn(("E02F3/764", "12650001"), rows)
         self.assertIn(("E02F3/844", "11007234"), rows)
         self.assertIn(("E02F3/844", "12650000"), rows)

@@ -243,6 +243,39 @@ class TestFetchByCpc(unittest.TestCase):
                 self.assertEqual(fetch_by_cpc(["H05B45/20"]), [])
         mock_fetch.assert_not_called()
 
+    def test_prefix_query_uses_index_not_scan(self):
+        # sqlite refuses the index for a case-insensitive LIKE pattern
+        # that starts with a letter (full scan of the ~50M-row index per
+        # query) — the prefix branch must stay on GLOB, which is
+        # case-sensitive and always index-usable.
+        import sqlite3
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = self._make_index_db(tmp)
+            conn = sqlite3.connect(db_path)
+            try:
+                plan = conn.execute(
+                    "EXPLAIN QUERY PLAN SELECT DISTINCT patent FROM "
+                    "cpc_patents WHERE cpc GLOB 'H05B45/*'").fetchone()[3]
+            finally:
+                conn.close()
+        self.assertIn("USING INDEX idx_cpc", plan)
+        self.assertNotIn("SCAN", plan)
+
+    def test_lowercase_codes_normalized(self):
+        # fetch_by_cpc uppercases at the boundary — a lowercase hint
+        # must still hit the uppercase canonical index (GLOB is
+        # case-sensitive, unlike LIKE).
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = self._make_index_db(tmp)
+            with patch("sources.long_task.recall_sources.CPC_INDEX_DB",
+                       db_path), \
+                 patch("sources.long_task.recall_sources.fetch_by_numbers",
+                       return_value=[]) as mock_fetch:
+                self.assertEqual(fetch_by_cpc(["h05b45/20"]), [])
+        numbers = mock_fetch.call_args[0][0]
+        self.assertIn("11882632", numbers)
+        self.assertIn("12289808", numbers)
+
     def test_newest_patents_preferred_numerically(self):
         # patent numbers vary in length (7-digit grants from the 1900s,
         # 8/9-digit from 2000s+); TEXT ordering would put "9999999"

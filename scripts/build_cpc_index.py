@@ -108,9 +108,18 @@ def build_index(zip_path: str, db_path: str, batch: int = 100000) -> dict:
     The index is written to <db_path>.tmp and atomically renamed into
     place only on success — a killed build never leaves a half-written
     index at the final path, and a stale index (if any) stays usable
-    until the replacement is complete.  fsync and the journal are
-    disabled during the bulk load (the table is rebuilt from scratch
-    every run anyway); progress is printed every PROGRESS_EVERY lines
+    until the replacement is complete.
+
+    Memory stays under ~100MB — the server may have <1GB RAM.  That is
+    why the load phase uses a plain rowid table with ordinary INSERT
+    instead of INSERT OR IGNORE on a (cpc, patent) PRIMARY KEY: probing
+    the growing PK B-tree on every row is both a per-row random-disk
+    read and the main reason the insert rate collapses as the table
+    grows.  Duplicates are collapsed once at the end with a single
+    disk-sorted SELECT DISTINCT pass (fetch_by_cpc queries DISTINCT
+    anyway, so a duplicate pair never leaks into results).  fsync and
+    the journal are disabled during the load (the table is rebuilt from
+    scratch every run); progress is printed every PROGRESS_EVERY lines
     since the full run takes hours.
     """
     if not os.path.exists(zip_path):
@@ -122,13 +131,16 @@ def build_index(zip_path: str, db_path: str, batch: int = 100000) -> dict:
         pass
     conn = sqlite3.connect(tmp_path)
     try:
+        # page_size must be set before any table is created; 16KB pages
+        # halve the B-tree depth and the random-I/O count for free.
+        conn.execute("PRAGMA page_size=16384")
         conn.execute("PRAGMA journal_mode=OFF")
         conn.execute("PRAGMA synchronous=OFF")
-        conn.execute("DROP TABLE IF EXISTS cpc_patents")
-        conn.execute(
-            "CREATE TABLE cpc_patents "
-            "(cpc TEXT NOT NULL, patent TEXT NOT NULL, "
-            "PRIMARY KEY (cpc, patent))")
+        # The dedupe sort must spill to disk, not to a tmpfs-backed
+        # temp dir that counts against the <1GB RAM budget.
+        conn.execute("PRAGMA temp_store=FILE")
+        conn.execute("CREATE TABLE cpc_patents "
+                     "(cpc TEXT NOT NULL, patent TEXT NOT NULL)")
         buffer: list = []
         pairs = 0
         chunks = 0
@@ -140,8 +152,7 @@ def build_index(zip_path: str, db_path: str, batch: int = 100000) -> dict:
             nonlocal pairs
             if buffer:
                 conn.executemany(
-                    "INSERT OR IGNORE INTO cpc_patents VALUES (?, ?)",
-                    buffer)
+                    "INSERT INTO cpc_patents VALUES (?, ?)", buffer)
                 pairs += len(buffer)
                 buffer.clear()
                 conn.commit()
@@ -172,11 +183,16 @@ def build_index(zip_path: str, db_path: str, batch: int = 100000) -> dict:
                                 f"{time.monotonic() - start:.0f}s",
                                 flush=True)
         flush()
+        # One disk-sorted pass replaces the per-row PK probe of an
+        # INSERT OR IGNORE design — hours of random I/O for ~20-30 min
+        # of sequential work, with no extra memory.
+        conn.execute("CREATE TABLE cpc_dedup AS "
+                     "SELECT DISTINCT cpc, patent FROM cpc_patents")
+        conn.execute("DROP TABLE cpc_patents")
+        conn.execute("ALTER TABLE cpc_dedup RENAME TO cpc_patents")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_cpc "
                      "ON cpc_patents(cpc)")
         conn.commit()
-        # The distinct patent count comes from sqlite — a Python set of
-        # ~11.5M patent numbers would hold ~1GB of RAM on the server.
         patents = conn.execute(
             "SELECT COUNT(DISTINCT patent) FROM cpc_patents").fetchone()[0]
     finally:

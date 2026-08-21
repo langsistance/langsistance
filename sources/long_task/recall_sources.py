@@ -186,7 +186,7 @@ def fetch_by_cpc(codes: list, timeout: int = 30) -> list:
     match exactly.  Newest patents are preferred.  [] when the index is
     absent or nothing matches — recall expansion must never hard-fail.
     """
-    codes = [str(c).strip() for c in (codes or []) if str(c).strip()]
+    codes = [str(c).strip().upper() for c in (codes or []) if str(c).strip()]
     if not codes:
         return []
     if not os.path.exists(CPC_INDEX_DB):
@@ -205,11 +205,18 @@ def fetch_by_cpc(codes: list, timeout: int = 30) -> list:
                 limit = (RECALL_CPC_TOP_PER_CODE if i == 0
                          else RECALL_CPC_PER_CODE)
                 if code.endswith("/00") and len(base) >= 4:
+                    # GLOB, not LIKE: sqlite's LIKE is case-insensitive
+                    # by default and the planner refuses the index when
+                    # the pattern starts with a letter — a full scan of
+                    # the ~50M-row table per query.  GLOB is
+                    # case-sensitive and always index-usable; both the
+                    # codes above and the index hold canonical uppercase
+                    # symbols, so the semantics are identical.
                     rows = conn.execute(
                         "SELECT DISTINCT patent FROM cpc_patents "
-                        "WHERE cpc LIKE ? "
+                        "WHERE cpc GLOB ? "
                         "ORDER BY length(patent) DESC, patent DESC LIMIT ?",
-                        (base + "/%", limit))
+                        (base + "/*", limit))
                 else:
                     rows = conn.execute(
                         "SELECT DISTINCT patent FROM cpc_patents "
