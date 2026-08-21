@@ -24,6 +24,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 import urllib.request
 import zipfile
 
@@ -62,6 +63,10 @@ _B_LINE_RE = re.compile(
     r"^B(?P<idx>[\d ]{9})(?P<patent>[\d ]{8})"
     r"(?P<symbol>[A-HY]\d{2}[A-Z][\w\s]*?/\d{1,4})")
 
+# Progress print every N parsed lines (~5M lines is a few minutes of
+# parsing on the ~100M-line MCF).
+PROGRESS_EVERY = 5_000_000
+
 
 def _normalize_symbol(raw):
     """Canonicalize a raw MCF symbol ('E02F   3/844' -> 'E02F3/844').
@@ -94,27 +99,42 @@ def _parse_mcf_line(line: str):
     return str(int(m.group("patent"))), symbol
 
 
-def build_index(zip_path: str, db_path: str, batch: int = 20000) -> dict:
+def build_index(zip_path: str, db_path: str, batch: int = 100000) -> dict:
     """Parse a downloaded MCF zip into the sqlite index.
 
     Returns stats {patents, pairs, chunks}.  Raises on unreadable
-    input; the index is written incrementally so a mid-build failure
-    leaves no partial table behind (the table is recreated on each
-    run).
+    input.
+
+    The index is written to <db_path>.tmp and atomically renamed into
+    place only on success — a killed build never leaves a half-written
+    index at the final path, and a stale index (if any) stays usable
+    until the replacement is complete.  fsync and the journal are
+    disabled during the bulk load (the table is rebuilt from scratch
+    every run anyway); progress is printed every PROGRESS_EVERY lines
+    since the full run takes hours.
     """
     if not os.path.exists(zip_path):
         raise FileNotFoundError(zip_path)
-    conn = sqlite3.connect(db_path)
+    tmp_path = db_path + ".tmp"
     try:
+        os.remove(tmp_path)  # leftover from a killed run
+    except OSError:
+        pass
+    conn = sqlite3.connect(tmp_path)
+    try:
+        conn.execute("PRAGMA journal_mode=OFF")
+        conn.execute("PRAGMA synchronous=OFF")
         conn.execute("DROP TABLE IF EXISTS cpc_patents")
         conn.execute(
             "CREATE TABLE cpc_patents "
             "(cpc TEXT NOT NULL, patent TEXT NOT NULL, "
             "PRIMARY KEY (cpc, patent))")
         buffer: list = []
-        patents = set()
         pairs = 0
         chunks = 0
+        lines = 0
+        start = time.monotonic()
+        last_progress = 0
 
         def flush():
             nonlocal pairs
@@ -133,6 +153,7 @@ def build_index(zip_path: str, db_path: str, batch: int = 20000) -> dict:
                 chunks += 1
                 with z.open(name) as fh:
                     for raw in fh:
+                        lines += 1
                         try:
                             line = raw.decode("utf-8", errors="replace")
                         except Exception:
@@ -141,17 +162,27 @@ def build_index(zip_path: str, db_path: str, batch: int = 20000) -> dict:
                         if not parsed:
                             continue
                         patent, cpc = parsed
-                        patents.add(patent)
                         buffer.append((cpc, patent))
                         if len(buffer) >= batch:
                             flush()
+                        if lines - last_progress >= PROGRESS_EVERY:
+                            last_progress = lines
+                            print(
+                                f"  {lines:,} lines, {pairs:,} pairs, "
+                                f"{time.monotonic() - start:.0f}s",
+                                flush=True)
         flush()
         conn.execute("CREATE INDEX IF NOT EXISTS idx_cpc "
                      "ON cpc_patents(cpc)")
         conn.commit()
+        # The distinct patent count comes from sqlite — a Python set of
+        # ~11.5M patent numbers would hold ~1GB of RAM on the server.
+        patents = conn.execute(
+            "SELECT COUNT(DISTINCT patent) FROM cpc_patents").fetchone()[0]
     finally:
         conn.close()
-    return {"patents": len(patents), "pairs": pairs, "chunks": chunks}
+    os.replace(tmp_path, db_path)
+    return {"patents": patents, "pairs": pairs, "chunks": chunks}
 
 
 def _fetch_newest_text_entry(api_key: str) -> dict:

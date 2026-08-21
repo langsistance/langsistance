@@ -110,6 +110,39 @@ class TestBuildIndex(unittest.TestCase):
         # A lines and junk never appear
         self.assertNotIn("B68B", [c for c, _ in rows])
 
+    def test_success_renames_atomically_and_leaves_no_tmp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = _synthetic_zip(tmp)
+            db_path = os.path.join(tmp, "cpc_index.db")
+            build_index(zip_path, db_path)
+            self.assertTrue(os.path.exists(db_path))
+            self.assertFalse(os.path.exists(db_path + ".tmp"))
+
+    def test_cleans_up_leftover_tmp_from_killed_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = _synthetic_zip(tmp)
+            db_path = os.path.join(tmp, "cpc_index.db")
+            with open(db_path + ".tmp", "wb") as f:
+                f.write(b"junk from a killed build")
+            build_index(zip_path, db_path)
+            conn = sqlite3.connect(db_path)
+            count = conn.execute(
+                "SELECT COUNT(*) FROM cpc_patents").fetchone()[0]
+            conn.close()
+            self.assertGreater(count, 0)
+            self.assertFalse(os.path.exists(db_path + ".tmp"))
+
+    def test_failed_build_never_leaves_final_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = os.path.join(tmp, "corrupt.zip")
+            with open(zip_path, "wb") as f:
+                f.write(b"not a zip archive")
+            db_path = os.path.join(tmp, "cpc_index.db")
+            with self.assertRaises(Exception):
+                build_index(zip_path, db_path)
+            # the final path must never hold a partial index
+            self.assertFalse(os.path.exists(db_path))
+
     def test_missing_zip_raises(self):
         with self.assertRaises(Exception):
             build_index("/nonexistent/mcf.zip", "/tmp/never.db")
