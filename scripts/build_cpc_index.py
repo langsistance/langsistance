@@ -190,8 +190,12 @@ def build_index(zip_path: str, db_path: str, batch: int = 100000) -> dict:
                      "SELECT DISTINCT cpc, patent FROM cpc_patents")
         conn.execute("DROP TABLE cpc_patents")
         conn.execute("ALTER TABLE cpc_dedup RENAME TO cpc_patents")
+        # Composite (cpc, patent): the recall query selects patent by
+        # cpc prefix, so both columns living in the index makes it a
+        # covering index — no table lookups, matching what the old
+        # PRIMARY KEY gave the deployed db.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_cpc "
-                     "ON cpc_patents(cpc)")
+                     "ON cpc_patents(cpc, patent)")
         conn.commit()
         patents = conn.execute(
             "SELECT COUNT(DISTINCT patent) FROM cpc_patents").fetchone()[0]
