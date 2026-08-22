@@ -33,6 +33,7 @@ from sources.agents.react_tools import (
     CPC_EXPANSION_ENABLED,
     build_tool_set,
     make_action_executor,
+    _match_long_task_intent,
 )
 from sources.http_outbound import outbound_http
 
@@ -1741,6 +1742,26 @@ Begin your response now:
 
         registry, bind_tools = await build_tool_set(self, user_id, prompt, push_filter)
         self._react_registry = registry
+
+        # Deterministic long-task routing: when the request clearly
+        # matches a type-3 knowledge item's question, trigger the long
+        # task directly instead of relying on the LLM to pick the
+        # long-task tool from the bound list (observed: prosecution
+        # requests went down the USPTO keyword ladder with the long-task
+        # tool bound).  Failure-safe: any routing failure falls through
+        # to the normal loop.
+        long_task_entries = [
+            entry for entry in registry.values()
+            if entry.kind == "long_task"
+        ]
+        if long_task_entries:
+            matched = await _match_long_task_intent(
+                self, prompt, long_task_entries, lang)
+            if matched is not None:
+                self.logger.info(
+                    "Long task intent routed by query match — returning intent")
+                return _build_long_task_intent(
+                    matched.knowledge, matched.tool_info)
 
         loop = ReActLoop(
             llm_call=make_llm_call(self.llm, wrapped),

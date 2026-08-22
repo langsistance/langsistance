@@ -31,6 +31,18 @@ def is_keyword_search_tool(tool: Any) -> bool:
     return "key" in title or "keyword" in title
 
 
+def is_identifying_number_tool(tool: Any) -> bool:
+    """True for tools that fetch a single application by number.
+
+    The LLM uses these to verify candidate details one by one.  Repeated
+    calls with no cap (observed: 8+ verification calls, each followed by
+    a full ~2.5s semantic rerank) stall the request — the loop caps them
+    per request via REACT_VERIFY_CALL_MAX.
+    """
+    title = (getattr(tool, "title", "") or "").lower()
+    return "identifying_number" in title
+
+
 def is_uspto_tool(tool: Any) -> bool:
     """True when the tool's URL targets api.uspto.gov."""
     url = (getattr(tool, "url", "") or "").lower()

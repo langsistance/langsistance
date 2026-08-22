@@ -7,6 +7,7 @@ from sources.long_task.candidate_metadata import (
     ensure_search_fields,
     is_dead_status,
     is_design_patent,
+    is_identifying_number_tool,
     is_keyword_search_tool,
     is_uspto_tool,
 )
@@ -264,6 +265,15 @@ class TestToolPredicates(unittest.TestCase):
             _FakeTool("search_patent_by_key_word", "https://api.uspto.gov/api/v1/patent/applications/search")))
         self.assertFalse(is_uspto_tool(
             _FakeTool("cnipa_search", "https://open.zldsj.com/api/search")))
+
+    def test_identifying_number_tool_detection(self):
+        self.assertTrue(is_identifying_number_tool(
+            _FakeTool(
+                "search_patent_by_identifying_number_attributes_of_a_patent",
+                "https://api.uspto.gov/api/v1/patent/applications/search")))
+        self.assertFalse(is_identifying_number_tool(
+            _FakeTool("search_patent_by_key_word",
+                      "https://api.uspto.gov/api/v1/patent/applications/search")))
 
 
 if __name__ == "__main__":

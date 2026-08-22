@@ -2915,3 +2915,142 @@ class TestAgentStatus(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             any("正在评估" in m for m in handler.messages),
             f"expected a 正在评估 status, got {handler.messages!r}")
+
+
+class TestParseBilingualQuestion(unittest.TestCase):
+    def test_picks_zh_side_for_chinese(self):
+        from sources.agents.react_tools import _parse_bilingual_question
+        text = ("zh:输入美国专利申请号，分析其审查历史（USPTO）"
+                "|en:Enter a US patent application number to analyze "
+                "its prosecution history")
+        self.assertEqual(
+            _parse_bilingual_question(text, "zh"),
+            "输入美国专利申请号，分析其审查历史（USPTO）")
+
+    def test_picks_en_side_for_english(self):
+        from sources.agents.react_tools import _parse_bilingual_question
+        text = ("zh:输入美国专利申请号，分析其审查历史（USPTO）"
+                "|en:Enter a US patent application number to analyze "
+                "its prosecution history")
+        self.assertEqual(
+            _parse_bilingual_question(text, "en"),
+            "Enter a US patent application number to analyze its "
+            "prosecution history")
+
+    def test_plain_text_passthrough(self):
+        from sources.agents.react_tools import _parse_bilingual_question
+        self.assertEqual(_parse_bilingual_question("随便一句话", "zh"),
+                         "随便一句话")
+        self.assertEqual(_parse_bilingual_question("", "zh"), "")
+
+    def test_single_language_side_falls_back_to_other(self):
+        from sources.agents.react_tools import _parse_bilingual_question
+        text = "zh:只有中文"
+        self.assertEqual(_parse_bilingual_question(text, "en"), "只有中文")
+
+
+class TestParseMatchIndex(unittest.TestCase):
+    def test_parsed_dict_match(self):
+        from sources.agents.react_tools import _parse_match_index
+        self.assertEqual(_parse_match_index({"match": 0}), 0)
+        self.assertEqual(_parse_match_index({"match": 2}), 2)
+        self.assertIsNone(_parse_match_index({"match": None}))
+        self.assertIsNone(_parse_match_index({"match": "null"}))
+
+    def test_json_string_match(self):
+        from sources.agents.react_tools import _parse_match_index
+        self.assertEqual(_parse_match_index('{"match": 1}'), 1)
+        self.assertIsNone(_parse_match_index('{"match": null}'))
+
+    def test_bool_and_junk_rejected(self):
+        from sources.agents.react_tools import _parse_match_index
+        self.assertIsNone(_parse_match_index({"match": True}))
+        self.assertIsNone(_parse_match_index({"match": "yes"}))
+        self.assertIsNone(_parse_match_index("garbage"))
+        self.assertIsNone(_parse_match_index(None))
+
+
+class TestLongTaskIntentRouting(unittest.TestCase):
+    """Deterministic long-task routing: the classifier picks the matching
+    type-3 item; anything else falls through to the normal loop."""
+
+    class _RouteProvider:
+        def __init__(self, result):
+            self.result = result
+            self.sent_messages = []
+
+        async def complete_json(self, system, user):
+            self.sent_messages.append((system, user))
+            return self.result
+
+    def _entry(self, name="prosecution", question=""):
+        from sources.agents.react_tools import ToolEntry
+        from unittest.mock import MagicMock
+        knowledge = MagicMock()
+        knowledge.question = question or (
+            "zh:输入美国专利申请号，分析其审查历史（USPTO）|"
+            "en:Enter a US patent application number to analyze its "
+            "prosecution history")
+        tool = MagicMock()
+        return ToolEntry(name=name, kind="long_task",
+                         knowledge=knowledge, tool_info=None, tool=tool)
+
+    def test_matches_prosecution_request_to_item(self):
+        from sources.agents.react_tools import _match_long_task_intent
+        agent = _FakeAgent()
+        provider = self._RouteProvider({"match": 0})
+        with patch("sources.agents.react_tools._get_flash_provider",
+                   return_value=provider):
+            entry = self._entry()
+            matched = asyncio.run(_match_long_task_intent(
+                agent, "分析专利 11701773 的审查历史", [entry], "zh"))
+        self.assertIs(matched, entry)
+        # the classifier saw the resolved bilingual question, not the
+        # raw zh:|en: scaffolding
+        system, user = provider.sent_messages[0]
+        self.assertIn("审查历史", system)
+        self.assertNotIn("zh:", system)
+        self.assertEqual(user, "分析专利 11701773 的审查历史")
+
+    def test_no_match_falls_through(self):
+        from sources.agents.react_tools import _match_long_task_intent
+        agent = _FakeAgent()
+        provider = self._RouteProvider({"match": None})
+        with patch("sources.agents.react_tools._get_flash_provider",
+                   return_value=provider):
+            matched = asyncio.run(_match_long_task_intent(
+                agent, "帮我找工业机器人专利", [self._entry()], "zh"))
+        self.assertIsNone(matched)
+
+    def test_out_of_range_index_rejected(self):
+        from sources.agents.react_tools import _match_long_task_intent
+        agent = _FakeAgent()
+        provider = self._RouteProvider({"match": 5})
+        with patch("sources.agents.react_tools._get_flash_provider",
+                   return_value=provider):
+            matched = asyncio.run(_match_long_task_intent(
+                agent, "分析专利 11701773 的审查历史", [self._entry()], "zh"))
+        self.assertIsNone(matched)
+
+    def test_provider_failure_falls_through(self):
+        from sources.agents.react_tools import _match_long_task_intent
+
+        class _BoomProvider:
+            async def complete_json(self, system, user):
+                raise RuntimeError("provider down")
+
+        agent = _FakeAgent()
+        with patch("sources.agents.react_tools._get_flash_provider",
+                   return_value=_BoomProvider()):
+            matched = asyncio.run(_match_long_task_intent(
+                agent, "分析专利 11701773 的审查历史", [self._entry()], "zh"))
+        self.assertIsNone(matched)
+
+    def test_no_flash_provider_falls_through(self):
+        from sources.agents.react_tools import _match_long_task_intent
+        agent = _FakeAgent()
+        with patch("sources.agents.react_tools._get_flash_provider",
+                   return_value=None):
+            matched = asyncio.run(_match_long_task_intent(
+                agent, "分析专利 11701773 的审查历史", [self._entry()], "zh"))
+        self.assertIsNone(matched)

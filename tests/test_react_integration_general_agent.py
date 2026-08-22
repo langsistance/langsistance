@@ -324,3 +324,67 @@ class TestSummarySystemPrompt(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCreateAgentLongTaskRouting(unittest.TestCase):
+    """Deterministic long-task routing in create_agent: when the request
+    matches a type-3 knowledge item, the intent is returned WITHOUT running
+    the ReAct loop (the LLM picking the long-task tool from the bound list
+    is unreliable — observed going down the USPTO keyword ladder instead)."""
+
+    def _long_task_entry(self):
+        from sources.agents.react_tools import ToolEntry
+        from unittest.mock import MagicMock
+        knowledge = MagicMock()
+        knowledge.id = 289
+        knowledge.type = 3
+        knowledge.question = (
+            "zh:输入美国专利申请号，分析其审查历史（USPTO）|"
+            "en:Enter a US patent application number to analyze its "
+            "prosecution history")
+        tool = MagicMock()
+        return ToolEntry(name="prosecution_history", kind="long_task",
+                         knowledge=knowledge, tool_info=MagicMock(),
+                         tool=tool)
+
+    def test_matched_request_returns_intent_without_loop(self):
+        agent = _make_agent()
+        handler = _FakeHandler()
+        entry = self._long_task_entry()
+        registry = {"prosecution_history": entry}
+        with patch("sources.agents.general_agent.build_tool_set",
+                   new=AsyncMock(return_value=(registry, []))), \
+             patch("sources.agents.general_agent._match_long_task_intent",
+                   new=AsyncMock(return_value=entry)) as mock_match, \
+             patch("sources.agents.general_agent.ReActLoop") as MockLoop:
+            MockLoop.return_value.run = AsyncMock(return_value=RoundResult(
+                kind="answer", answer_text="unused", steps=0))
+            result = _run(agent.create_agent(
+                "u1", "分析专利 11701773 的审查历史", "q1", "",
+                handler, push_filter=None))
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result.get("intent"), "long_task")
+        self.assertEqual(result.get("knowledge"), entry.knowledge)
+        mock_match.assert_awaited_once()
+        # The loop must NOT run when routing matched
+        MockLoop.return_value.run.assert_not_awaited()
+        self.assertFalse(getattr(agent, "_react_loop_ran", False))
+
+    def test_no_match_runs_loop(self):
+        agent = _make_agent()
+        handler = _FakeHandler()
+        entry = self._long_task_entry()
+        registry = {"prosecution_history": entry}
+        with patch("sources.agents.general_agent.build_tool_set",
+                   new=AsyncMock(return_value=(registry, []))), \
+             patch("sources.agents.general_agent._match_long_task_intent",
+                   new=AsyncMock(return_value=None)), \
+             patch("sources.agents.general_agent.ReActLoop") as MockLoop:
+            MockLoop.return_value.run = AsyncMock(return_value=RoundResult(
+                kind="answer", answer_text="hi", steps=1))
+            result = _run(agent.create_agent(
+                "u1", "帮我找工业机器人专利", "q1", "",
+                handler, push_filter=None))
+        self.assertIsNone(result)
+        MockLoop.return_value.run.assert_awaited_once()
+        self.assertTrue(getattr(agent, "_react_loop_ran", False))

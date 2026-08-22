@@ -557,6 +557,199 @@ class TestPathTemplateSubstitution(unittest.TestCase):
         )
 
 
+class TestQueryObjectEnvelopeCollision(unittest.TestCase):
+    """params={"query": {"q": "<search term>"}} — the LLM follows the
+    push=2 schema ("params may contain path, query, and body") and puts
+    the search term in query.q.  Production failure: the term was
+    dropped, body stayed empty, and the request failed — the LLM then
+    retried with a degraded bag-of-words query that hit 5.2M records."""
+
+    def _tool(self):
+        from unittest.mock import MagicMock
+        tool = MagicMock()
+        tool.params = ('{"method":"POST",'
+                       '"body":{"q":"template","pagination":{"offset":0,"limit":50}}}')
+        tool.url = "https://api.uspto.gov/api/v1/patent/applications/search"
+        tool.timeout = 30
+        return tool
+
+    def test_query_object_with_q_merges_into_body(self):
+        from unittest.mock import MagicMock, patch
+        from sources.dynamic_tool_params import execute_backend_tool_request
+
+        payload = {"count": 1, "patentFileWrapperDataBag": [
+            {"applicationMetaData": {"applicationNumberText": "19511555"}}]}
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.headers = {"Content-Type": "application/json"}
+        resp.content = b'{"count": 1}'
+        resp.text = '{"count": 1}'
+        resp.json = lambda: payload
+
+        query = ('("machine vision" OR "visual recognition") AND '
+                 '("grasp pose adjustment" OR "vision-guided grasping")')
+        with patch("sources.dynamic_tool_params.outbound_http.request",
+                   return_value=resp) as mock_req:
+            result = execute_backend_tool_request(
+                self._tool(), {"query": {"q": query}})
+        sent_body = mock_req.call_args[1]["json"]
+        self.assertEqual(sent_body["q"], query)
+        self.assertEqual(result["raw_items"], payload["patentFileWrapperDataBag"])
+
+
+class TestFullwidthPunctuationNormalization(unittest.TestCase):
+    """LLM-generated queries carry fullwidth quotes “ ” and brackets （ ）
+    (observed in production: count=4 / count=2 on queries that should hit
+    hundreds).  USPTO's query parser treats them as ordinary characters —
+    they must be normalized to halfwidth before the request goes out."""
+
+    def _tool(self):
+        from unittest.mock import MagicMock
+        tool = MagicMock()
+        tool.params = ('{"method":"POST",'
+                       '"body":{"q":"template","pagination":{"offset":0,"limit":50}}}')
+        tool.url = "https://api.uspto.gov/api/v1/patent/applications/search"
+        tool.timeout = 30
+        return tool
+
+    def _sent_q(self, query):
+        from unittest.mock import MagicMock, patch
+        from sources.dynamic_tool_params import execute_backend_tool_request
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.headers = {"Content-Type": "application/json"}
+        resp.content = b'{"count": 0}'
+        resp.text = '{"count": 0}'
+        resp.json = lambda: {"count": 0}
+        with patch("sources.dynamic_tool_params.outbound_http.request",
+                   return_value=resp) as mock_req:
+            execute_backend_tool_request(self._tool(), {"query": {"q": query}})
+        return mock_req.call_args[1]["json"]["q"]
+
+    def test_fullwidth_quotes_and_brackets_normalized(self):
+        sent = self._sent_q(
+            '“visual servoing” AND (“gripper” OR “end effector”) AND (adjust* OR adapt*)')
+        self.assertEqual(
+            sent,
+            '"visual servoing" AND ("gripper" OR "end effector") AND (adjust* OR adapt*)')
+
+    def test_halfwidth_query_untouched(self):
+        q = '("grasp pose" OR "grasping pose") AND robot'
+        self.assertEqual(self._sent_q(q), q)
+
+    def test_fullwidth_space_normalized(self):
+        sent = self._sent_q('"visual　servoing"')
+        self.assertEqual(sent, '"visual servoing"')
+
+
+class TestUspto404RetryWithNormalizedQuery(unittest.TestCase):
+    """USPTO rejects some query syntaxes with the same 404 "No matching
+    records found" it uses for genuine zero hits.  When the query still
+    carries normalizable fullwidth punctuation, retry once with the
+    normalized query before declaring zero hits."""
+
+    def _tool(self):
+        from unittest.mock import MagicMock
+        tool = MagicMock()
+        tool.params = ('{"method":"POST",'
+                       '"body":{"q":"template","pagination":{"offset":0,"limit":50}}}')
+        tool.url = "https://api.uspto.gov/api/v1/patent/applications/search"
+        tool.timeout = 30
+        return tool
+
+    def _run(self, query, first_status=404, second_status=200):
+        import json
+        from unittest.mock import MagicMock, patch
+        not_found = MagicMock()
+        not_found.status_code = first_status
+        not_found.headers = {"Content-Type": "application/json"}
+        not_found.body = ('{"code":"404","message":"Not Found",'
+                          '"detailedMessage":"No matching records found, '
+                          'refine your search criteria and try again"}')
+        not_found.content = not_found.body.encode("utf-8")
+        not_found.text = not_found.body
+        not_found.json = lambda: json.loads(not_found.body)
+
+        ok_payload = {"count": 3, "patentFileWrapperDataBag": [
+            {"applicationMetaData": {"applicationNumberText": "1"}},
+            {"applicationMetaData": {"applicationNumberText": "2"}},
+            {"applicationMetaData": {"applicationNumberText": "3"}},
+        ]}
+        ok = MagicMock()
+        ok.status_code = second_status
+        ok.headers = {"Content-Type": "application/json"}
+        ok.content = json.dumps(ok_payload).encode("utf-8")
+        ok.text = json.dumps(ok_payload)
+        ok.json = lambda: ok_payload
+
+        with patch("sources.dynamic_tool_params.outbound_http.request",
+                   side_effect=[not_found, ok]) as mock_req:
+            from sources.dynamic_tool_params import execute_backend_tool_request
+            result = execute_backend_tool_request(
+                self._tool(), {"query": {"q": query}})
+        return result, mock_req
+
+    def test_retry_cleaned_uspto_query_normalizes_and_returns_hits(self):
+        # Direct unit test of the 404-retry helper: a query that reaches
+        # the wire with fullwidth punctuation (a path that bypassed the
+        # request-time normalization) is retried once normalized.
+        import json
+        from unittest.mock import MagicMock, patch
+        from sources.dynamic_tool_params import _retry_cleaned_uspto_query
+
+        ok_payload = {"count": 3, "patentFileWrapperDataBag": [
+            {"applicationMetaData": {"applicationNumberText": "1"}},
+            {"applicationMetaData": {"applicationNumberText": "2"}},
+            {"applicationMetaData": {"applicationNumberText": "3"}},
+        ]}
+        ok = MagicMock()
+        ok.status_code = 200
+        ok.headers = {"Content-Type": "application/json"}
+        ok.content = json.dumps(ok_payload).encode("utf-8")
+        ok.text = json.dumps(ok_payload)
+        ok.json = lambda: ok_payload
+
+        with patch("sources.dynamic_tool_params.outbound_http.request",
+                   return_value=ok) as mock_req:
+            result = _retry_cleaned_uspto_query(
+                "POST",
+                "https://api.uspto.gov/api/v1/patent/applications/search",
+                {}, {"q": "“visual servoing” robot"}, {}, 30)
+        self.assertEqual(mock_req.call_count, 1)
+        self.assertEqual(mock_req.call_args[1]["json"]["q"],
+                         '"visual servoing" robot')
+        self.assertEqual(len(result["raw_items"]), 3)
+
+    def test_retry_cleaned_uspto_query_ascii_no_retry(self):
+        from unittest.mock import MagicMock, patch
+        from sources.dynamic_tool_params import _retry_cleaned_uspto_query
+        with patch("sources.dynamic_tool_params.outbound_http.request",
+                   return_value=MagicMock()) as mock_req:
+            result = _retry_cleaned_uspto_query(
+                "POST",
+                "https://api.uspto.gov/api/v1/patent/applications/search",
+                {}, {"q": '"grasp pose" AND robot'}, {}, 30)
+        self.assertIsNone(result)
+        mock_req.assert_not_called()
+
+    def test_404_after_request_time_normalization_does_not_double_retry(self):
+        # The request-time normalization already replaced fullwidth
+        # punctuation before the wire — a 404 on the normalized query must
+        # NOT trigger the retry helper again (idempotency backstop).
+        result, mock_req = self._run('“visual servoing” robot')
+        self.assertEqual(mock_req.call_count, 1)
+        self.assertEqual(
+            mock_req.call_args[1]["json"]["q"], '"visual servoing" robot')
+        self.assertIsInstance(result["data"], dict)
+        self.assertEqual(result["data"].get("count"), 0)
+
+    def test_ascii_query_404_does_not_retry(self):
+        result, mock_req = self._run('("grasp pose" OR "grasping pose") AND robot')
+        self.assertEqual(mock_req.call_count, 1)
+        self.assertIsInstance(result["data"], dict)
+        self.assertEqual(result["data"].get("count"), 0)
+
+
 class TestStringQueryKeyEnvelopeCollision(unittest.TestCase):
     def test_string_query_key_flat_merges_into_body_q(self):
         """params={"query": "<search term>"} — the LLM names the search-term

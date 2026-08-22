@@ -26,6 +26,7 @@ from sources.long_task.candidate_metadata import (
     ensure_search_fields,
     is_dead_status,
     is_documents_tool,
+    is_identifying_number_tool,
     is_keyword_search_tool,
     is_uspto_tool,
 )
@@ -103,6 +104,12 @@ CPC_EXPANSION_ENABLED = os.getenv("REACT_CPC_EXPANSION", "0") == "1"
 REACT_USPTO_SORT_FIELD = os.getenv("REACT_USPTO_SORT_FIELD", "_score")
 LADDER_MAX_HITS = int(os.getenv("REACT_LADDER_MAX_HITS")
                       or os.getenv("REACT_TIGHTEN_SUGGEST_THRESHOLD", "300"))
+# Per-number verification tools (search_patent_by_identifying_number_...)
+# are capped per request: the LLM was observed looping through 8+ one-by-one
+# fetches (each followed by a full ~2.5s semantic rerank) without
+# converging.  At the cap the tool returns a stop-nudge instead of fetching
+# yet another application.
+VERIFY_CALL_MAX = int(os.getenv("REACT_VERIFY_CALL_MAX", "8"))
 
 
 async def _agent_status(agent, message: str) -> None:
@@ -184,21 +191,79 @@ class ToolEntry:
     tool: Optional[StructuredTool]
 
 
+def _parse_bilingual_question(text: str, lang: str) -> str:
+    """Pick the ``zh:`` / ``en:`` side of a bilingual knowledge question.
+
+    Knowledge items store question/description as ``zh:...|en:...`` (see
+    mysql/init/update_uspto_prosecution_knowledge.sql).  The raw payload
+    must never leak into tool names/descriptions — the LLM then sees
+    ``zh:|en:`` scaffolding instead of the actual scenario.  Falls back
+    to the first non-empty side when only one language is present.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return raw
+    parts: dict[str, str] = {}
+    for seg in raw.split("|"):
+        seg = seg.strip()
+        m = re.match(r"^(zh|en):(.*)$", seg, re.IGNORECASE)
+        if m:
+            parts[m.group(1).lower()] = m.group(2).strip()
+    if parts:
+        return parts.get("zh" if lang == "zh" else "en") \
+            or next(iter(parts.values()))
+    return raw
+
+
 def _clean_tool_name(knowledge) -> str:
     """Sanitise a knowledge title into a tool name (same rules as before)."""
-    title = (getattr(knowledge, "question", "") or "").strip() or "dynamic_knowledge_tool"
+    question = _parse_bilingual_question(
+        getattr(knowledge, "question", "") or "", "zh")
+    title = question.strip() or "dynamic_knowledge_tool"
     cleaned = re.sub(r"[^a-zA-Z0-9_-]", "_", title)
     return cleaned or "dynamic_knowledge_tool"
 
 
-def _long_task_description(knowledge) -> str:
-    question = (getattr(knowledge, "question", "") or "").strip()
-    desc = (getattr(knowledge, "description", "") or "").strip()
+def _long_task_description(knowledge, lang: str = "zh") -> str:
+    question = _parse_bilingual_question(
+        getattr(knowledge, "question", "") or "", lang)
+    desc = _parse_bilingual_question(
+        getattr(knowledge, "description", "") or "", lang)
     return (
-        f"Start a background batch-analysis task (long task). {question}. "
+        f"Background analysis long task: {question}. "
         f"{desc} After calling, the task runs asynchronously and the user "
         f"is notified — do not wait for results."
     )[:800]
+
+
+def _parse_match_index(raw) -> int | None:
+    """Extract the matched entry index from a classifier output.
+
+    Accepts the parsed dict ({'match': n}), a JSON string, or a bare
+    number/string.  None for null/none/no-match/parse failures so the
+    caller falls through to the normal loop.
+    """
+    val = None
+    if isinstance(raw, dict):
+        val = raw.get("match")
+    elif isinstance(raw, str):
+        try:
+            val = json.loads(raw).get("match")
+        except (ValueError, TypeError):
+            stripped = raw.strip()
+            val = None if stripped.lower() in ("null", "none", "") else stripped
+    if val is None:
+        return None
+    if isinstance(val, bool):
+        return None
+    if isinstance(val, (int, float)) and float(val).is_integer():
+        return int(val)
+    if isinstance(val, str):
+        try:
+            return int(float(val.strip()))
+        except (ValueError, TypeError):
+            return None
+    return None
 
 
 async def _search_knowledge_stub(query: str) -> str:
@@ -287,7 +352,8 @@ async def build_tool_set(
             tool = StructuredTool.from_function(
                 func=_long_task_stub,
                 name=title,
-                description=_long_task_description(knowledge),
+                description=_long_task_description(
+                    knowledge, getattr(agent, "_lang", "zh")),
                 args_schema=_QueryArgs,
             )
             add(ToolEntry(name=title, kind="long_task",
@@ -448,6 +514,53 @@ def _get_flash_provider(agent):
         cached = None
     agent._flash_llm = cached
     return cached
+
+
+LONG_TASK_ROUTE_ENABLED = os.getenv("REACT_LONG_TASK_ROUTE", "1") == "1"
+
+
+async def _match_long_task_intent(agent, query: str, entries: list,
+                                  lang: str) -> Optional[ToolEntry]:
+    """Deterministic long-task routing.
+
+    The LLM freely choosing the long-task tool from the bound list is
+    unreliable — observed in production: a prosecution-history request
+    ("分析专利 11701773 的审查历史") went down the USPTO keyword ladder
+    for minutes with the long-task tool bound, because the search
+    discipline prompt steered it into searching.  When the request
+    clearly matches a type-3 knowledge item's question, trigger the long
+    task directly instead.
+
+    One small flash-LLM classification call (no embedding, no context
+    dump — just the item questions).  Never raises: any failure returns
+    None and the request falls through to the normal loop.  Returns the
+    matched ToolEntry or None.
+    """
+    if not LONG_TASK_ROUTE_ENABLED or not entries:
+        return None
+    provider = _get_flash_provider(agent)
+    if provider is None:
+        return None
+    lines = []
+    for idx, entry in enumerate(entries):
+        question = _parse_bilingual_question(
+            getattr(entry.knowledge, "question", "") or "", lang)
+        lines.append(f"{idx}. {question}")
+    system = (
+        "你是任务路由分类器。下面列出可用的后台分析长任务及其触发条件。"
+        "判断用户请求是否明确命中其中一个任务：请求对该任务所指对象（如某专利）"
+        "提出了该任务所描述的分析需求，且请求包含任务的核心意图。"
+        "只输出 JSON：{\"match\": 序号或 null}\n\n任务列表：\n"
+        + "\n".join(lines)
+    )
+    try:
+        result = await provider.complete_json(system, str(query or "").strip())
+    except Exception:
+        return None
+    idx = _parse_match_index(result)
+    if idx is None or not (0 <= idx < len(entries)):
+        return None
+    return entries[idx]
 
 
 _ENVELOPE_KEYS = frozenset({"method", "body", "query", "path", "header"})
@@ -1477,6 +1590,24 @@ async def make_action_executor(agent, registry, push_filter=None):
             return {"kind": "long_task", "text": "",
                     "knowledge": entry.knowledge, "tool_info": entry.tool_info}
 
+        # Per-number verification calls are capped per request — the LLM
+        # was observed looping through 8+ one-by-one fetches (each
+        # followed by a ~2.5s semantic rerank) without converging.  At
+        # the cap, stop and nudge the LLM to answer from the pool.
+        is_verify = is_identifying_number_tool(entry.tool_info)
+        if is_verify:
+            verify_count = (getattr(agent, "_verify_call_count", 0) or 0) + 1
+            agent._verify_call_count = verify_count
+            if verify_count > VERIFY_CALL_MAX:
+                return {
+                    "kind": "observation",
+                    "text": ("Already verified enough candidate details; "
+                             "stop fetching by number and answer from the "
+                             "results on hand." if lang == "en"
+                             else "已按编号核实了足够多的候选专利，"
+                                  "请停止逐条查证，直接基于现有检索结果给出最终答案。")
+                }
+
         try:
             args = await _maybe_rewrite_search_query(agent, entry.tool_info, args)
             pool_eligible = _relevance_pool_applies_tool(agent, entry.tool_info)
@@ -1521,7 +1652,13 @@ async def make_action_executor(agent, registry, push_filter=None):
                 )
             if applies:
                 collected = await _collect_search_pages(agent, entry, args, pending)
-                ranked, note = await _rank_pending_pool(agent, collected, lang)
+                # A one-by-one number verification adds a single candidate —
+                # re-ranking the whole pool (~2.5s) for it is pure waste.
+                # Skip the rerank on verification calls; the pool keeps its
+                # last keyword-round ranking.
+                ranked, note = await _rank_pending_pool(
+                    agent, collected, lang,
+                    apply_rerank=not is_identifying_number_tool(entry.tool_info))
                 ranked, note = await _auto_second_round(
                     agent, entry, args, ranked, note, lang)
                 shown = [c["_raw"] for c in ranked]

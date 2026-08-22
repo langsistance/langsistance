@@ -125,6 +125,29 @@ def _repair_llm_json(text: str) -> str:
     return text
 
 
+_FULLWIDTH_TO_HALFWIDTH = str.maketrans({
+    "“": '"', "”": '"',   # “ ” → "
+    "‘": "'", "’": "'",   # ‘ ’ → '
+    "（": "(", "）": ")",   # （ ） → ( )
+    "，": ",", "；": ";",   # ， ； → , ;
+    "　": " ",                  # fullwidth space → space
+})
+
+
+def _normalize_query_punctuation(text: str) -> str:
+    """Normalize fullwidth punctuation in a search query to halfwidth.
+
+    LLM-generated queries routinely carry fullwidth quotes “ ” and
+    brackets （ ） — observed in production: USPTO hit counts collapsed
+    to 4 / 2 / 0 on queries that should hit hundreds.  USPTO's query
+    parser treats fullwidth characters as ordinary characters, so they
+    must be replaced before the request goes out.  Idempotent.
+    """
+    if not text:
+        return text
+    return text.translate(_FULLWIDTH_TO_HALFWIDTH)
+
+
 def _coerce_json_object(value: Any, value_name: str) -> Dict[str, Any]:
     """Return a JSON object from a dict or legacy JSON string.
 
@@ -484,14 +507,29 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
     # names the search-term field "query" per the tool schema description),
     # NOT a request-envelope query-params dict.  Treat it as flat params so
     # the term is grafted into the template body.q instead of raising
-    # "LLM tool params query must be a JSON object".
+    # "LLM tool params query must be a JSON object".  The same applies to a
+    # dict under "query" carrying q ({"query": {"q": ...}}) — the push=2
+    # schema explicitly allows "params may contain path, query, and body",
+    # so the LLM putting the term in query.q is schema-conformant.  Observed
+    # production failure: the term was dropped, body stayed empty, and the
+    # LLM retried with a degraded bag-of-words query (5.2M hits).
+    _query_obj = (
+        user_params.get("query")
+        if isinstance(user_params, dict) else None
+    )
     _flat_params = (
         isinstance(user_params, dict) and user_params
         and (
             not _envelope_keys_present
             or (
                 _envelope_keys_present == {'query'}
-                and isinstance(user_params.get('query'), str)
+                and (
+                    isinstance(user_params.get('query'), str)
+                    or (
+                        isinstance(_query_obj, dict)
+                        and isinstance(_query_obj.get('q'), str)
+                    )
+                )
             )
         )
     )
@@ -499,9 +537,16 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
         template_body = params_data.get('body')
         if isinstance(template_body, dict):
             merged_body = dict(template_body)
-            # Extract the first string value from user_params as the
-            # search/query term and inject it as body.q.
-            flat_value = next((v for v in user_params.values() if isinstance(v, str) and v.strip()), None)
+            # Extract the search term and inject it as body.q: take a dict
+            # query's q first (schema-conformant shape), then fall back to
+            # the first string value ({"query": "..."} or {"q": "..."}).
+            if isinstance(_query_obj, dict):
+                flat_value = _query_obj.get("q")
+            else:
+                flat_value = next(
+                    (v for v in user_params.values()
+                     if isinstance(v, str) and v.strip()),
+                    None)
             if flat_value:
                 merged_body['q'] = flat_value
                 logger.info(
@@ -568,6 +613,15 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
         request_params = {}
     if not isinstance(request_params, dict):
         raise ValueError("LLM tool params query must be a JSON object")
+    # Normalize fullwidth punctuation in any q carried as a query param
+    # (GET-style tools) before the request goes out.
+    if isinstance(request_params.get("q"), str):
+        _cleaned_q = _normalize_query_punctuation(request_params["q"])
+        if _cleaned_q != request_params["q"]:
+            logger.info(
+                f"normalized fullwidth punctuation in query.q — "
+                f"'{request_params['q'][:120]}' → '{_cleaned_q[:120]}'")
+            request_params["q"] = _cleaned_q
     request_params["_t"] = str(int(time.time() * 1000))
 
     # Inject DI patent platform auth params for open.zldsj.com requests
@@ -599,6 +653,8 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
             if isinstance(_v, (dict, list)):
                 request_params[_k] = json.dumps(_v, ensure_ascii=False)
             else:
+                if _k == "q" and isinstance(_v, str):
+                    _v = _normalize_query_punctuation(_v)
                 request_params[_k] = _v
     if method in {"POST", "PUT", "PATCH"}:
         if not request_body:
@@ -612,6 +668,15 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
                     f"param_keys={list(user_params.keys()) if isinstance(user_params, dict) else type(user_params).__name__}"
                 )
                 return {"data": "Request failed: LLM did not generate valid request parameters (empty body)", "raw_items": None}
+        # Normalize fullwidth punctuation in body.q (LLM-generated queries
+        # carry “ ” / （ ） — USPTO treats them as literal characters).
+        if isinstance(request_body, dict) and isinstance(request_body.get("q"), str):
+            _cleaned_q = _normalize_query_punctuation(request_body["q"])
+            if _cleaned_q != request_body["q"]:
+                logger.info(
+                    f"normalized fullwidth punctuation in body.q — "
+                    f"'{request_body['q'][:120]}' → '{_cleaned_q[:120]}'")
+                request_body = {**request_body, "q": _cleaned_q}
         request_kwargs["json"] = request_body
 
     # 对 open.zldsj.com 请求打印完整请求信息
@@ -686,6 +751,13 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
             # USPTO search reports zero hits as HTTP 404 — surface it as
             # a zero-hit result (not an API failure) so the search ladder
             # discipline (substitute vocabulary before loosening) kicks in.
+            # Some query-syntax rejections (fullwidth punctuation that
+            # escaped normalization) carry the same 404 — retry once with
+            # the normalized query before declaring zero hits.
+            retried = _retry_cleaned_uspto_query(
+                method, url, request_params, request_body, headers, timeout)
+            if retried is not None:
+                return retried
             return {
                 "data": {"count": 0, "message": message},
                 "raw_items": [],
@@ -695,6 +767,11 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
             result += f" — {message[:300]}"
         return {"data": result, "raw_items": None}
 
+    return _parse_ok_response(response, url)
+
+
+def _parse_ok_response(response: Any, url: str) -> Dict[str, Any]:
+    """Parse a 2xx backend-tool response into {data, raw_items}."""
     response_content_type = response.headers.get("Content-Type", "").lower()
     if "text/html" in response_content_type:
         result = BeautifulSoup(response.content, "html.parser").get_text()
@@ -727,3 +804,41 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
         "data": result_data,
         "raw_items": raw_items,
     }
+
+
+def _retry_cleaned_uspto_query(method: str, url: str, request_params: dict,
+                               request_body: Any, headers: dict,
+                               timeout: float) -> Dict[str, Any] | None:
+    """Retry a USPTO search once with fullwidth punctuation normalized.
+
+    USPTO rejects some query syntaxes with the same 404 "No matching
+    records found" it uses for genuine zero hits.  When the query still
+    carries normalizable fullwidth punctuation (a query that reached the
+    wire before normalization, e.g. built outside the LLM-params path),
+    retry once with the normalized query.  Returns the parsed
+    {data, raw_items} on a successful retry; None when there is nothing
+    to normalize or the retry still fails (the caller surfaces the
+    original 404 as a zero-hit result).
+    """
+    q_value = None
+    if isinstance(request_body, dict) and isinstance(request_body.get("q"), str):
+        q_value = request_body["q"]
+    elif isinstance(request_params, dict) and isinstance(request_params.get("q"), str):
+        q_value = request_params["q"]
+    if not q_value:
+        return None
+    cleaned = _normalize_query_punctuation(q_value)
+    if cleaned == q_value:
+        return None
+    retry_body = dict(request_body) if isinstance(request_body, dict) else request_body
+    if isinstance(retry_body, dict):
+        retry_body["q"] = cleaned
+    logger.info(
+        f"uspto 404 retry — normalized query: {cleaned[:200]}")
+    resp = outbound_http.request(
+        method, url, purpose="backend_tool",
+        params=request_params, headers=headers,
+        json=retry_body, timeout=timeout)
+    if resp.status_code != 200:
+        return None
+    return _parse_ok_response(resp, url)
