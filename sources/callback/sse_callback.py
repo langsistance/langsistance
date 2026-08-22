@@ -5,7 +5,10 @@ import sys
 import traceback
 
 
-ARTIFACT_CHUNK_BYTES = 32768
+# 256KB per artifact chunk: a 100-row result set packs a multi-MB CSV/XLSX
+# JSON; at 32KB/chunk that was 300+ SSE events — the frontend buffered them
+# and committed state once per chunk, freezing the tab for minutes.
+ARTIFACT_CHUNK_BYTES = 262144
 
 
 class SSECallbackHandler(AsyncCallbackHandler):

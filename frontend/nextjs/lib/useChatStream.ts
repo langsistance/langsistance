@@ -12,7 +12,7 @@ import { persistResultsSetToStorage } from '@/lib/resultsStore'
 import { persistChatToStorage } from '@/lib/chatStore'
 import { resultsPath } from '@/lib/appRoutes'
 import {
-  addAssistantArtifactChunk,
+  addAssistantArtifactComplete,
   addAssistantArtifactEnd,
   addAssistantArtifactStart,
   addAssistantPatentIds,
@@ -51,6 +51,11 @@ export function useChatStream() {
   const activeTasksRef = useRef<Map<string, string>>(new Map())       // taskId → assistantId
   const globalPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const longTaskReceivedRef = useRef(false)
+  // Artifact chunks are buffered in a ref and committed in ONE state update
+  // at artifact_end.  Per-chunk setMessages rebuilt the artifacts array —
+  // and re-persisted the whole conversation (multi-MB CSV/XLSX included) —
+  // for every 32KB chunk, freezing the tab for minutes on 100-row results.
+  const artifactChunksRef = useRef<Map<string, string[]>>(new Map())  // artifactId → chunks
 
   const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
   const MAX_FILE_COUNT = 100
@@ -210,6 +215,8 @@ export function useChatStream() {
                 pendingJsonId = String(event.artifact_id ?? event.artifactId ?? '')
                 pendingJsonChunks = []
               }
+              artifactChunksRef.current.set(
+                String(event.artifact_id ?? event.artifactId ?? ''), [])
               setMessages((m) => addAssistantArtifactStart(m, assistantId, event))
               continue
             }
@@ -218,16 +225,15 @@ export function useChatStream() {
               if (pendingJsonId !== null && chunkArtifactId === pendingJsonId) {
                 pendingJsonChunks.push(String(event.data ?? ''))
               }
-              setMessages((m) => addAssistantArtifactChunk(
-                m,
-                assistantId,
-                chunkArtifactId,
-                String(event.data ?? '')
-              ))
+              // Buffer in the ref — NO state update per chunk (see
+              // artifactChunksRef comment).
+              const buffer = artifactChunksRef.current.get(chunkArtifactId)
+              if (buffer) buffer.push(String(event.data ?? ''))
               continue
             }
             if (event.type === 'artifact_end') {
               const endArtifactId = String(event.artifact_id ?? event.artifactId ?? '')
+              const bufferedChunks = artifactChunksRef.current.get(endArtifactId) ?? []
               if (pendingJsonId !== null && endArtifactId === pendingJsonId) {
                 const decodedResults = decodeArtifactChunksToResults(
                   pendingJsonChunks, pendingJsonId,
@@ -245,11 +251,15 @@ export function useChatStream() {
                   )
                 }
               }
-              setMessages((m) => addAssistantArtifactEnd(
+              // Commit the buffered chunks in a single state update and mark
+              // the artifact complete — one write instead of one per chunk.
+              setMessages((m) => addAssistantArtifactComplete(
                 m,
                 assistantId,
-                endArtifactId
+                endArtifactId,
+                bufferedChunks,
               ))
+              artifactChunksRef.current.delete(endArtifactId)
               // Decode the completed JSON results artifact into message.results
               // for the results page. Idempotent — safe to call unconditionally.
               setMessages((m) => decodeResultsArtifact(m, assistantId))

@@ -89,6 +89,35 @@ export function addAssistantArtifactEnd(messages, messageId, artifactId) {
   })
 }
 
+export function addAssistantArtifactComplete(messages, messageId, artifactId, chunks) {
+  // Commit a fully-received artifact in ONE state update.  The stream hook
+  // buffers chunks in a ref and calls this at artifact_end — the previous
+  // per-chunk setMessages rebuilt the artifacts array (and re-persisted the
+  // whole conversation, multi-MB CSV/XLSX included) for every 32KB chunk,
+  // freezing the tab for minutes on large result sets.
+  // Returns the ORIGINAL messages array when nothing matched, so a
+  // no-op never triggers a re-render.
+  if (!artifactId || !Array.isArray(chunks)) return messages
+
+  let found = false
+  const next = messages.map((msg) => {
+    if (msg.id !== messageId) return msg
+    const artifacts = Array.isArray(msg.artifacts) ? msg.artifacts : []
+    let replaced = false
+    const updated = artifacts.map((artifact) => {
+      if (artifact.artifactId === artifactId) {
+        replaced = true
+        found = true
+        return { ...artifact, chunks, complete: true }
+      }
+      return artifact
+    })
+    if (!replaced) return msg
+    return { ...msg, artifacts: updated }
+  })
+  return found ? next : messages
+}
+
 /**
  * Attach hidden patent_ids to the assistant message so follow-up
  * conversation_refs queries include them in conversation_history.

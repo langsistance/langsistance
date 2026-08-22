@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   addAssistantArtifactChunk,
+  addAssistantArtifactComplete,
   addAssistantArtifactEnd,
   addAssistantArtifactStart,
   createChatId,
@@ -67,7 +68,36 @@ test('chat session stores streamed assistant artifacts by id', () => {
   assert.equal(complete[0].artifacts.length, 1)
   assert.equal(complete[0].artifacts[0].format, 'csv')
   assert.deepEqual(complete[0].artifacts[0].chunks, ['YmFzZTY0'])
+})
+
+test('addAssistantArtifactComplete commits all chunks in one write', () => {
+  // The stream hook buffers artifact chunks in a ref and commits them in a
+  // single state update at artifact_end — 300 per-chunk setMessages calls
+  // on a multi-MB CSV used to freeze the tab for minutes (each one also
+  // triggered a full JSON.stringify + sessionStorage write).
+  const assistant = createChatMessage('assistant', 'answer')
+  const messages = [assistant]
+
+  const withArtifact = addAssistantArtifactStart(messages, assistant.id, {
+    artifact_id: 'big-csv',
+    format: 'csv',
+    filename: 'results.csv',
+    mime_type: 'text/csv;charset=utf-8',
+    row_count: 100,
+    column_count: 40,
+  })
+  const chunks = ['Y2h1bmsx', 'Y2h1bmsy', 'Y2h1bmsz']
+  const complete = addAssistantArtifactComplete(
+    withArtifact, assistant.id, 'big-csv', chunks)
+
+  assert.equal(complete[0].artifacts.length, 1)
   assert.equal(complete[0].artifacts[0].complete, true)
+  assert.deepEqual(complete[0].artifacts[0].chunks, chunks)
+
+  // Missing artifact / no chunks is a safe no-op shape (idempotent).
+  const untouched = addAssistantArtifactComplete(
+    messages, assistant.id, 'nope', ['x'])
+  assert.equal(untouched, messages)
 })
 
 test('decodes complete JSON artifact into message.results', () => {
