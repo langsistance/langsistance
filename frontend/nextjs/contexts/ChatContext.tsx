@@ -115,17 +115,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     persistChatToStorage(window.sessionStorage, messages)
   }, [messages])
 
-  // [DIAG3] per-message artifact state — temporary probe
-  useEffect(() => {
-    console.log(
-      '[copiioai-diag3] provider msgs=',
-      messages.map((m: any) =>
-        `${m.role}:${(m.artifacts || []).map((a: any) => `${a.format}${a.complete ? '✓' : '…'}:${(a.chunks || []).length}`).join('|') || '-'}`
-      ).join(' , '),
-      'streaming=', streaming,
-    )
-  }, [messages, streaming])
-
   return (
     <ChatContext.Provider
       value={{

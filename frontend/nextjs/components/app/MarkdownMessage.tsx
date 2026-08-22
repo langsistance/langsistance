@@ -7,6 +7,7 @@ import { useChatSession, type ChatStatusStep } from '@/contexts/ChatContext'
 import { attachImageRetryHandlers } from '@/lib/imageRetry'
 import {
   shouldShowAssistantWaiting,
+  shouldShowStatusSteps,
 } from '@/lib/messagePresentation'
 import { renderMarkdownToHtml } from '@/lib/markdownRender'
 import { copyTextToClipboard } from '@/lib/clipboard'
@@ -307,7 +308,7 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
       ) : (
         <div dangerouslySetInnerHTML={{ __html: html || '▋' }} />
       )}
-      {stepsToShow && stepsToShow.length > 0 && (
+      {shouldShowStatusSteps(stepsToShow, streaming) && (
         <div className="assistant-status-steps" role="status" aria-live="polite">
           {stepsToShow.map((step) => (
             <div key={step.id} className={`assistant-status-step ${step.state}`}>

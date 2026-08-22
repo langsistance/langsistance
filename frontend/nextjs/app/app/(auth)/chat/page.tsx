@@ -336,7 +336,7 @@ export default function Chat() {
                     artifacts={msg.artifacts || []}
                     resultSummary={msg.resultSummary}
                     streaming={streaming && streamingId === msg.id}
-                    statusSteps={statusSteps}
+                    statusSteps={streaming && streamingId === msg.id ? statusSteps : undefined}
                     statusElapsed={statusElapsed}
                     analysisType={(msg as any).analysisType}
                     tableColumns={(msg as any).tableColumns}
