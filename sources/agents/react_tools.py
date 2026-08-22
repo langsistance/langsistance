@@ -517,6 +517,31 @@ def _get_flash_provider(agent):
 
 
 LONG_TASK_ROUTE_ENABLED = os.getenv("REACT_LONG_TASK_ROUTE", "1") == "1"
+# Rule-fallback floor for the long-task router: the flash classifier has
+# been observed missing an obvious prosecution request ({"match": null}
+# on "分析专利 12096133 的审查历史" — the request then spent 5 minutes
+# in the keyword ladder before the LLM picked the long-task tool).  When
+# the classifier says null, a query that carries an 8-digit US patent
+# number AND shares a ≥4-char contiguous overlap with the item question
+# (the intent phrase, e.g. 审查历史) still routes.  No domain vocabulary
+# is hardcoded — both signals are generic.
+ROUTE_RULE_MIN_OVERLAP = 4
+US_PATENT_NUMBER_RE = re.compile(r"\b\d{8}\b")
+
+
+def _common_substring_len(a: str, b: str) -> int:
+    """Length of the longest common CONTIGUOUS substring of a and b."""
+    if not a or not b:
+        return 0
+    dp = [[0] * (len(b) + 1) for _ in range(len(a) + 1)]
+    best = 0
+    for i in range(1, len(a) + 1):
+        for j in range(1, len(b) + 1):
+            if a[i - 1] == b[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1] + 1
+                if dp[i][j] > best:
+                    best = dp[i][j]
+    return best
 
 
 async def _match_long_task_intent(agent, query: str, entries: list,
@@ -549,7 +574,10 @@ async def _match_long_task_intent(agent, query: str, entries: list,
     system = (
         "你是任务路由分类器。下面列出可用的后台分析长任务及其触发条件。"
         "判断用户请求是否明确命中其中一个任务：请求对该任务所指对象（如某专利）"
-        "提出了该任务所描述的分析需求，且请求包含任务的核心意图。"
+        "提出了该任务所描述的分析需求，且请求包含任务的核心意图（如审查历史、"
+        "同族分析等任务 question 中的意图表述）。"
+        "只要请求包含任务的核心意图并针对该任务的适用对象，就必须返回该任务序号"
+        "（宁可命中不可漏判）；只有请求与所有任务都明显无关时才返回 null。"
         "只输出 JSON：{\"match\": 序号或 null}\n\n任务列表：\n"
         + "\n".join(lines)
     )
@@ -558,9 +586,28 @@ async def _match_long_task_intent(agent, query: str, entries: list,
     except Exception:
         return None
     idx = _parse_match_index(result)
-    if idx is None or not (0 <= idx < len(entries)):
+    if idx is not None and 0 <= idx < len(entries):
+        return entries[idx]
+    # ── Rule fallback ──
+    # The classifier missed a clear match before ({"match": null} on a
+    # prosecution request); the request then burned minutes in the search
+    # ladder.  When the query carries an 8-digit US patent number AND the
+    # item question overlaps it by ≥ ROUTE_RULE_MIN_OVERLAP contiguous
+    # chars, route anyway.  Both signals are generic; either missing →
+    # stay on the normal loop.
+    query_text = str(query or "").strip()
+    if not US_PATENT_NUMBER_RE.search(query_text):
         return None
-    return entries[idx]
+    best_entry = None
+    best_overlap = 0
+    for entry in entries:
+        question = _parse_bilingual_question(
+            getattr(entry.knowledge, "question", "") or "", lang)
+        overlap = _common_substring_len(query_text, question)
+        if overlap >= ROUTE_RULE_MIN_OVERLAP and overlap > best_overlap:
+            best_overlap = overlap
+            best_entry = entry
+    return best_entry
 
 
 _ENVELOPE_KEYS = frozenset({"method", "body", "query", "path", "header"})

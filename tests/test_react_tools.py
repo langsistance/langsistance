@@ -3022,15 +3022,22 @@ class TestLongTaskIntentRouting(unittest.TestCase):
                 agent, "帮我找工业机器人专利", [self._entry()], "zh"))
         self.assertIsNone(matched)
 
-    def test_out_of_range_index_rejected(self):
+    def test_out_of_range_index_falls_to_rule_fallback(self):
+        # A broken classifier index (5 with 1 entry) falls through to the
+        # rule fallback — a patent-number query overlapping the question
+        # still routes; without either signal it stays None.
         from sources.agents.react_tools import _match_long_task_intent
         agent = _FakeAgent()
-        provider = self._RouteProvider({"match": 5})
         with patch("sources.agents.react_tools._get_flash_provider",
-                   return_value=provider):
+                   return_value=self._RouteProvider({"match": 5})):
             matched = asyncio.run(_match_long_task_intent(
                 agent, "分析专利 11701773 的审查历史", [self._entry()], "zh"))
-        self.assertIsNone(matched)
+        self.assertIsNotNone(matched)
+        with patch("sources.agents.react_tools._get_flash_provider",
+                   return_value=self._RouteProvider({"match": 5})):
+            missed = asyncio.run(_match_long_task_intent(
+                agent, "帮我找一些技术方案", [self._entry()], "zh"))
+        self.assertIsNone(missed)
 
     def test_provider_failure_falls_through(self):
         from sources.agents.react_tools import _match_long_task_intent
@@ -3054,3 +3061,87 @@ class TestLongTaskIntentRouting(unittest.TestCase):
             matched = asyncio.run(_match_long_task_intent(
                 agent, "分析专利 11701773 的审查历史", [self._entry()], "zh"))
         self.assertIsNone(matched)
+
+
+class TestLongTaskRuleFallback(unittest.TestCase):
+    """Rule-level fallback for the long-task router: when the flash
+    classifier misses (observed: "分析专利 12096133 的审查历史" returned
+    {"match": null} and the request spent 5 minutes in the keyword
+    ladder before the LLM finally picked the long-task tool), a query
+    carrying a patent number AND a ≥4-char overlap with the item's
+    question still routes.  Generic — no domain vocabulary is hardcoded."""
+
+    class _NullProvider:
+        def __init__(self):
+            self.sent = []
+
+        async def complete_json(self, system, user):
+            self.sent.append((system, user))
+            return {"match": None}
+
+    def _entry(self, question=None):
+        from sources.agents.react_tools import ToolEntry
+        from unittest.mock import MagicMock
+        knowledge = MagicMock()
+        knowledge.question = question or (
+            "zh:输入美国专利申请号，分析其审查历史（USPTO）|"
+            "en:Enter a US patent application number to analyze its "
+            "prosecution history")
+        tool = MagicMock()
+        return ToolEntry(name="prosecution_history", kind="long_task",
+                         knowledge=knowledge, tool_info=None, tool=tool)
+
+    def test_patent_number_plus_question_overlap_routes(self):
+        # The exact production miss: classifier says null, rule fallback
+        # must still route the request to the prosecution long task.
+        from sources.agents.react_tools import _match_long_task_intent
+        agent = _FakeAgent()
+        provider = self._NullProvider()
+        with patch("sources.agents.react_tools._get_flash_provider",
+                   return_value=provider):
+            entry = self._entry()
+            matched = asyncio.run(_match_long_task_intent(
+                agent, "分析专利 12096133 的审查历史", [entry], "zh"))
+        self.assertIs(matched, entry)
+
+    def test_no_patent_number_does_not_route(self):
+        # "帮我找美国专利" shares the "美国专利" 4-gram with the question
+        # but carries no 8-digit patent number — must NOT route.
+        from sources.agents.react_tools import _match_long_task_intent
+        agent = _FakeAgent()
+        with patch("sources.agents.react_tools._get_flash_provider",
+                   return_value=self._NullProvider()):
+            matched = asyncio.run(_match_long_task_intent(
+                agent, "帮我找美国专利相关技术", [self._entry()], "zh"))
+        self.assertIsNone(matched)
+
+    def test_short_overlap_with_number_does_not_route(self):
+        # 8-digit number alone is not enough — the intent overlap must be
+        # real (≥4 chars), not just "专利" (2 chars).
+        from sources.agents.react_tools import _match_long_task_intent
+        agent = _FakeAgent()
+        with patch("sources.agents.react_tools._get_flash_provider",
+                   return_value=self._NullProvider()):
+            matched = asyncio.run(_match_long_task_intent(
+                agent, "帮我查一下 12096133 的状态", [self._entry()], "zh"))
+        self.assertIsNone(matched)
+
+    def test_english_question_side_matches(self):
+        from sources.agents.react_tools import _match_long_task_intent
+        agent = _FakeAgent()
+        with patch("sources.agents.react_tools._get_flash_provider",
+                   return_value=self._NullProvider()):
+            entry = self._entry()
+            matched = asyncio.run(_match_long_task_intent(
+                agent, "analyze the prosecution history of patent 12096133",
+                [entry], "en"))
+        self.assertIs(matched, entry)
+
+    def test_common_substring_len_helper(self):
+        from sources.agents.react_tools import _common_substring_len
+        self.assertEqual(
+            _common_substring_len("分析专利 12096133 的审查历史",
+                                  "输入美国专利申请号，分析其审查历史（USPTO）"),
+            4)
+        self.assertEqual(_common_substring_len("abc", "xyz"), 0)
+        self.assertEqual(_common_substring_len("", "abc"), 0)
