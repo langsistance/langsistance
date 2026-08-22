@@ -634,6 +634,8 @@ export default {
     docUnavailable: 'Document unavailable',
     collapseList: 'Collapse list',
     expandList: 'Expand results',
+    collapseChat: 'Collapse chat',
+    expandChat: 'Expand chat',
     specLoading: 'Loading specification…',
     specError: 'Failed to load specification',
     specTab: 'Patent specification',

@@ -33,6 +33,9 @@ export default function ResultsPage() {
   const [activeRowId, setActiveRowId] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<string>('details')
   const [listCollapsed, setListCollapsed] = useState(false)
+  // Chat sidebar collapsed — the results list gets the full width (helpful
+  // on small screens where the detail overlay PDF is cramped otherwise).
+  const [chatCollapsed, setChatCollapsed] = useState(false)
   // Adjustable sidebar/list width ratio (persisted per browser).
   const [sidebarRatio, setSidebarRatio] = useState<number>(() => {
     if (typeof window === 'undefined') return 0.5
@@ -89,9 +92,10 @@ export default function ResultsPage() {
     if (setId) setResultsSetId(setId)
   }, [setId, setResultsSetId])
 
-  // New result set → the list always starts visible
+  // New result set → the list and chat always start visible
   useEffect(() => {
     setListCollapsed(false)
+    setChatCollapsed(false)
   }, [setId])
 
   // Two-phase store read: render-path resolution must not touch
@@ -195,10 +199,22 @@ export default function ResultsPage() {
     <div className="page active results-page">
       <div
         ref={layoutRef}
-        className={`results-layout${listCollapsed ? ' collapsed' : ''}`}
+        className={`results-layout${listCollapsed ? ' collapsed' : ''}${chatCollapsed ? ' chat-collapsed' : ''}`}
         style={{ '--results-sidebar-ratio': sidebarRatio } as React.CSSProperties}
       >
-        {!listCollapsed && (
+        {chatCollapsed && (
+          <button
+            type="button"
+            className="results-expand-btn"
+            onClick={() => setChatCollapsed(false)}
+            aria-label={t('results.expandChat')}
+            title={t('results.expandChat')}
+          >
+            <span className="results-expand-arrow" aria-hidden="true">⟨</span>
+            <span className="results-expand-label">{t('results.expandChat')}</span>
+          </button>
+        )}
+        {!listCollapsed && !chatCollapsed && (
           <div
             className="results-resize-handle"
             role="separator"
@@ -210,7 +226,19 @@ export default function ResultsPage() {
             onPointerCancel={handleResizePointerUp}
           />
         )}
+        {!chatCollapsed && (
         <aside className="results-chat-sidebar">
+          <div className="results-chat-header">
+            <button
+              type="button"
+              className="results-collapse-btn"
+              onClick={() => setChatCollapsed(true)}
+              aria-label={t('results.collapseChat')}
+              title={t('results.collapseChat')}
+            >
+              <span aria-hidden="true">⟨</span>
+            </button>
+          </div>
           <div className="chat-messages">
             {messages.length === 0 && (
               <div className="empty-state">
@@ -341,6 +369,7 @@ export default function ResultsPage() {
             </div>
           </div>
         </aside>
+        )}
         {listCollapsed && (
           <button
             type="button"

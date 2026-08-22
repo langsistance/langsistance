@@ -1049,6 +1049,28 @@ button { cursor: pointer; }
   grid-template-columns: 1fr auto;
 }
 
+/* Chat sidebar collapsed: the expand tab sits on the LEFT edge and the
+   results list takes the full remaining width (small screens need the
+   room for the detail overlay's PDF viewer).  When both sides are
+   collapsed the chat tab stays left and the list tab right. */
+.results-layout.chat-collapsed {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.results-layout.collapsed.chat-collapsed {
+  grid-template-columns: auto 1fr;
+}
+
+/* Collapse control at the top of the chat sidebar */
+.results-chat-header {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: var(--spacing-1) var(--spacing-2);
+  border-bottom: 1px solid var(--color-border);
+}
+
 .results-collapse-btn {
   flex: 0 0 auto;
   border: none;
@@ -1106,14 +1128,18 @@ button { cursor: pointer; }
   overflow: hidden;
 }
 
-/* Detail overlay: right-aligned, full height, leaves ~280px of the list
-   visible on the left (matching the chat sidebar width). */
+/* Detail overlay: right-aligned, full height, leaves the result list
+   visible on the left.  The fixed 280px reserve kept the overlay at
+   ~420px on a laptop (main column ~700px), shrinking the inline PDF
+   viewer so much the text was barely readable.  The reserve is now
+   min(18% of the main column, 280px): large screens keep the old
+   280px, small screens give the overlay proportionally more room. */
 .results-overlay {
   position: absolute;
   top: 0;
   right: 0;
   bottom: 0;
-  width: calc(100% - 280px);
+  width: max(calc(100% - 18%), calc(100% - 280px));
   display: flex;
   flex-direction: column;
   background: var(--color-bg-white);

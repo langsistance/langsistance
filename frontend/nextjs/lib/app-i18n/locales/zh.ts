@@ -634,6 +634,8 @@ export default {
     docUnavailable: '文档不可用',
     collapseList: '收起列表',
     expandList: '展开结果列表',
+    collapseChat: '收起聊天',
+    expandChat: '展开聊天',
     specLoading: '正在加载说明书…',
     specError: '说明书加载失败',
     specTab: '专利说明书',
