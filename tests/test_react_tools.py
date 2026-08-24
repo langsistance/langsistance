@@ -3062,6 +3062,63 @@ class TestLongTaskIntentRouting(unittest.TestCase):
                 agent, "分析专利 11701773 的审查历史", [self._entry()], "zh"))
         self.assertIsNone(matched)
 
+    def test_retrieval_request_never_routes_to_analysis(self):
+        # "获取...所有档案" wants the DOCUMENTS — the document-list tools
+        # answer it, so the analysis long task must not hijack it even
+        # when the classifier would say match (宁可命中不可漏判).  The
+        # pre-check runs BEFORE the LLM call, so the classifier is never
+        # consulted — prove it by returning a match that must be ignored.
+        from sources.agents.react_tools import _match_long_task_intent
+        agent = _FakeAgent()
+        provider = self._RouteProvider({"match": 0})
+        with patch("sources.agents.react_tools._get_flash_provider",
+                   return_value=provider):
+            matched = asyncio.run(_match_long_task_intent(
+                agent, "我想要获取US9019058B2的所有档案",
+                [self._entry()], "zh"))
+        self.assertIsNone(matched)
+        self.assertEqual(provider.sent_messages, [],
+                         "retrieval requests must not reach the classifier")
+
+    def test_retrieval_request_chinese_variants(self):
+        from sources.agents.react_tools import _match_long_task_intent
+        agent = _FakeAgent()
+        provider = self._RouteProvider({"match": 0})
+        with patch("sources.agents.react_tools._get_flash_provider",
+                   return_value=provider):
+            for query in ("帮我下载US9019058B2的审查档案",
+                          "获取美国专利文档列表",
+                          "列出这个专利的所有文件"):
+                matched = asyncio.run(_match_long_task_intent(
+                    agent, query, [self._entry()], "zh"))
+                self.assertIsNone(matched, f"must not route: {query}")
+                self.assertEqual(provider.sent_messages, [])
+
+    def test_retrieval_request_english(self):
+        from sources.agents.react_tools import _match_long_task_intent
+        agent = _FakeAgent()
+        provider = self._RouteProvider({"match": 0})
+        with patch("sources.agents.react_tools._get_flash_provider",
+                   return_value=provider):
+            matched = asyncio.run(_match_long_task_intent(
+                agent, "I want to get all documents of US9019058B2",
+                [self._entry()], "en"))
+        self.assertIsNone(matched)
+        self.assertEqual(provider.sent_messages, [])
+
+    def test_analysis_request_still_routes(self):
+        # The pre-check must not swallow genuine analysis requests —
+        # "查看审查历史" has no retrieval object, "分析" no retrieval verb.
+        from sources.agents.react_tools import _match_long_task_intent
+        agent = _FakeAgent()
+        entry = self._entry()
+        provider = self._RouteProvider({"match": 0})
+        with patch("sources.agents.react_tools._get_flash_provider",
+                   return_value=provider):
+            matched = asyncio.run(_match_long_task_intent(
+                agent, "查看专利 11701773 的审查历史", [entry], "zh"))
+        self.assertIs(matched, entry)
+
 
 class TestLongTaskRuleFallback(unittest.TestCase):
     """Rule-level fallback for the long-task router: when the flash

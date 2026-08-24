@@ -12,6 +12,7 @@ from fastapi import APIRouter, Query, HTTPException, Request
 from fastapi.responses import Response
 from sources.long_task.status_manager import get_task_status, lookup_query_task
 from sources.long_task.storage import create_storage, get_storage_config, LocalReportStorage
+from sources.patent_id_utils import extract_us_patent_digits, kind_code_of
 from sources.user.passport import verify_firebase_token
 
 
@@ -106,7 +107,15 @@ def _normalize_submit_patent_id(raw: str, scenario: str) -> str:
     if not value:
         raise ValueError("patent_id is required")
     if scenario == "prosecution":
-        digits = "".join(ch for ch in value if ch.isdigit())
+        # Kind codes (B2/A1) carry digits — naive all-digits extraction
+        # would pass "US9019058B2" through as the 8-digit "90190582".
+        # A grant/publication number (any kind code) is never an
+        # application number; reject it explicitly instead.
+        if kind_code_of(value):
+            raise ValueError(
+                "Prosecution analysis requires an 8-digit US application number"
+            )
+        digits = extract_us_patent_digits(value)
         if len(digits) != 8:
             raise ValueError(
                 "Prosecution analysis requires an 8-digit US application number"

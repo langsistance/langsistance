@@ -527,6 +527,26 @@ LONG_TASK_ROUTE_ENABLED = os.getenv("REACT_LONG_TASK_ROUTE", "1") == "1"
 # is hardcoded — both signals are generic.
 ROUTE_RULE_MIN_OVERLAP = 4
 US_PATENT_NUMBER_RE = re.compile(r"\b\d{8}\b")
+# Retrieval-intent pre-check: "获取/下载/查看...文档/档案" asks for the
+# DOCUMENTS, not an analysis — the document-list tools in the ReAct loop
+# answer it, so the analysis long task must never hijack it (observed:
+# "我想要获取US9019058B2的审查档案" routed into the prosecution task and
+# the user got a patent list instead of the document list).  Both the
+# verb and the object must appear; "查看审查历史" keeps the 分析 verb
+# missing so it still routes to the analysis task.
+RETRIEVAL_VERBS = ("获取", "下载", "查看", "列出", "导出", "拿",
+                   "get", "download", "view", "list", "fetch", "retrieve")
+RETRIEVAL_OBJECTS = ("文档", "档案", "文件", "清单", "目录", "列表",
+                     "document", "file", "docket")
+
+
+def _is_retrieval_request(query: str) -> bool:
+    """True when the query asks to retrieve/obtain documents — the
+    document-list tools' job, never the analysis long task's."""
+    text = str(query or "").lower()
+    has_verb = any(v in text for v in RETRIEVAL_VERBS)
+    has_object = any(o in text for o in RETRIEVAL_OBJECTS)
+    return has_verb and has_object
 
 
 def _common_substring_len(a: str, b: str) -> int:
@@ -563,6 +583,13 @@ async def _match_long_task_intent(agent, query: str, entries: list,
     """
     if not LONG_TASK_ROUTE_ENABLED or not entries:
         return None
+    query_text = str(query or "").strip()
+    # Retrieval requests ("获取...档案/文档") are the document-list tools'
+    # job — the analysis long task must never answer them.  Determined
+    # BEFORE the LLM call so the classifier's "宁可命中不可漏判" bias
+    # cannot hijack a document download.
+    if _is_retrieval_request(query_text):
+        return None
     provider = _get_flash_provider(agent)
     if provider is None:
         return None
@@ -578,11 +605,13 @@ async def _match_long_task_intent(agent, query: str, entries: list,
         "同族分析等任务 question 中的意图表述）。"
         "只要请求包含任务的核心意图并针对该任务的适用对象，就必须返回该任务序号"
         "（宁可命中不可漏判）；只有请求与所有任务都明显无关时才返回 null。"
+        "注意：获取、下载、查看、导出文档/档案/文件类请求不是分析需求（用户要的是"
+        "原始文件，由文档列表工具提供），一律返回 null。"
         "只输出 JSON：{\"match\": 序号或 null}\n\n任务列表：\n"
         + "\n".join(lines)
     )
     try:
-        result = await provider.complete_json(system, str(query or "").strip())
+        result = await provider.complete_json(system, query_text)
     except Exception:
         return None
     idx = _parse_match_index(result)
@@ -595,7 +624,6 @@ async def _match_long_task_intent(agent, query: str, entries: list,
     # item question overlaps it by ≥ ROUTE_RULE_MIN_OVERLAP contiguous
     # chars, route anyway.  Both signals are generic; either missing →
     # stay on the normal loop.
-    query_text = str(query or "").strip()
     if not US_PATENT_NUMBER_RE.search(query_text):
         return None
     best_entry = None

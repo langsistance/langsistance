@@ -18,6 +18,7 @@ if _project_root not in sys.path:
 from celery import Celery
 from sources.logger import Logger
 from sources.analytics import track_event
+from sources.patent_id_utils import extract_us_patent_digits
 
 _pipeline_logger = Logger("long_task_pipeline.log")
 
@@ -1763,7 +1764,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
             # - patentNumber → bare digits (no prefix, no kind code)
             # - applicationNumberText → bare digits
             _up = app_id.upper()
-            _digits = ''.join(c for c in _up if c.isdigit())
+            _digits = extract_us_patent_digits(_up)
             if not _digits or len(_digits) < 6:
                 return None, None, None
 
@@ -4569,7 +4570,10 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                            analysis_type='prosecution')
 
         raw_patent_id = patent_id.strip()
-        digits_only = ''.join(c for c in raw_patent_id if c.isdigit())
+        # Kind codes (B2/A1/B1) carry digits — naive all-digits
+        # extraction mangles US9019058B2 into "90190582" and the USPTO
+        # search 404s.  Parse the identifier shape instead.
+        digits_only = extract_us_patent_digits(raw_patent_id)
         id_type = params.get('patent_id_type', 'unknown')
         app_number = None
 
