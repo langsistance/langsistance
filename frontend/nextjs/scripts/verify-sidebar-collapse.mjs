@@ -66,6 +66,10 @@ try {
           const el = document.querySelector('.session-history')
           return el ? getComputedStyle(el).display : 'no-el'
         })(),
+        devSwitchVisible: (() => {
+          const el = document.querySelector('.switch-wrap')
+          return el ? getComputedStyle(el).display !== 'none' : 'no-el'
+        })(),
       }
     })
 

@@ -399,6 +399,10 @@ body {
   justify-content: center;
 }
 
+.sidebar-footer .nav-item .switch-wrap {
+  margin-left: auto;
+}
+
 /* ── Collapsed icon-rail mode ─────────────────────────────────────────── */
 .sidebar.sidebar-collapsed {
   width: var(--sidebar-width-collapsed);
@@ -413,21 +417,13 @@ body {
   padding: var(--spacing-2) 0;
 }
 
-/* Hide all text labels in the rail; the dev-mode toggle swaps to icon-only */
+/* Hide all text labels in the rail; the dev-mode toggle stays as the bare switch */
 .sidebar.sidebar-collapsed .nav-item span {
   display: none;
 }
 
-.nav-dev-icon {
-  display: none;
-}
-
-.sidebar.sidebar-collapsed .nav-item .nav-dev-icon {
-  display: block;
-}
-
-.sidebar.sidebar-collapsed .switch-wrap {
-  display: none;
+.sidebar.sidebar-collapsed .nav-item .switch-wrap {
+  margin-left: 0;
 }
 
 .sidebar.sidebar-collapsed .session-history {

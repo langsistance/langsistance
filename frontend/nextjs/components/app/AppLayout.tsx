@@ -300,9 +300,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               style={{ cursor: 'pointer' }}
               title={t('developer.pattern')}
             >
-              <span className="nav-dev-icon">{DEVTOOLS_ICON}</span>
-              <span className="nav-dev-label">{t('developer.pattern')}</span>
-              <div className="switch-wrap" style={{ marginLeft: 'auto' }}>
+              <span>{t('developer.pattern')}</span>
+              <div className="switch-wrap">
                 <div className={`switch-container${devMode ? ' active' : ''}`}>
                   <div className="switch-slider" />
                 </div>
