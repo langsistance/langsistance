@@ -165,6 +165,7 @@ body {
    ============================================================================= */
 
 .sidebar {
+  position: relative;
   width: var(--sidebar-width);
   background: var(--color-bg-white);
   border-right: 1px solid var(--color-border);
@@ -399,21 +400,21 @@ body {
 }
 
 /* ── Collapsed icon-rail mode ─────────────────────────────────────────── */
-.sidebar.collapsed {
+.sidebar.sidebar-collapsed {
   width: var(--sidebar-width-collapsed);
 }
 
-.sidebar.collapsed .nav-menu {
+.sidebar.sidebar-collapsed .nav-menu {
   padding: var(--spacing-4) var(--spacing-2) var(--spacing-1);
 }
 
-.sidebar.collapsed .nav-item {
+.sidebar.sidebar-collapsed .nav-item {
   justify-content: center;
   padding: var(--spacing-2) 0;
 }
 
 /* Hide all text labels in the rail; the dev-mode toggle swaps to icon-only */
-.sidebar.collapsed .nav-item span {
+.sidebar.sidebar-collapsed .nav-item span {
   display: none;
 }
 
@@ -421,34 +422,42 @@ body {
   display: none;
 }
 
-.sidebar.collapsed .nav-item .nav-dev-icon {
+.sidebar.sidebar-collapsed .nav-item .nav-dev-icon {
   display: block;
 }
 
-.sidebar.collapsed .switch-wrap {
+.sidebar.sidebar-collapsed .switch-wrap {
   display: none;
 }
 
-.sidebar.collapsed .session-history {
+.sidebar.sidebar-collapsed .session-history {
   display: none;
 }
 
-.sidebar.collapsed .sidebar-footer {
+.sidebar.sidebar-collapsed .sidebar-footer {
   padding: var(--spacing-4) var(--spacing-2);
 }
 
+/* Floating collapse/expand handle — vertically centered on the right edge,
+   always visible in both states (chevron flips 180° when collapsed). */
 .sidebar-collapse-btn {
+  position: absolute;
+  top: 50%;
+  right: -13px;
+  transform: translateY(-50%);
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-white);
+  color: var(--color-text-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 100%;
-  margin-top: var(--spacing-2);
-  border: none;
-  background: transparent;
-  color: var(--color-text-secondary);
-  padding: var(--spacing-1) 0;
-  border-radius: var(--radius-lg);
   cursor: pointer;
+  z-index: 10;
+  box-shadow: var(--shadow-sm);
   transition: color 0.15s, background 0.15s;
 }
 
