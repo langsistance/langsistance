@@ -43,6 +43,7 @@ ol, ul {
   /* Layout */
   --topbar-height: 56px;
   --sidebar-width: 260px;
+  --sidebar-width-collapsed: 64px;
   --chat-max-width: 900px;
 }
 
@@ -169,6 +170,7 @@ body {
   border-right: 1px solid var(--color-border);
   display: flex;
   flex-direction: column;
+  transition: width 0.2s ease;
 }
 
 .nav-menu {
@@ -394,6 +396,73 @@ body {
 .sidebar-footer .nav-item {
   align-items: center;
   justify-content: center;
+}
+
+/* ── Collapsed icon-rail mode ─────────────────────────────────────────── */
+.sidebar.collapsed {
+  width: var(--sidebar-width-collapsed);
+}
+
+.sidebar.collapsed .nav-menu {
+  padding: var(--spacing-4) var(--spacing-2) var(--spacing-1);
+}
+
+.sidebar.collapsed .nav-item {
+  justify-content: center;
+  padding: var(--spacing-2) 0;
+}
+
+/* Hide all text labels in the rail; the dev-mode toggle swaps to icon-only */
+.sidebar.collapsed .nav-item span {
+  display: none;
+}
+
+.nav-dev-icon {
+  display: none;
+}
+
+.sidebar.collapsed .nav-item .nav-dev-icon {
+  display: block;
+}
+
+.sidebar.collapsed .switch-wrap {
+  display: none;
+}
+
+.sidebar.collapsed .session-history {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-footer {
+  padding: var(--spacing-4) var(--spacing-2);
+}
+
+.sidebar-collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin-top: var(--spacing-2);
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  padding: var(--spacing-1) 0;
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.sidebar-collapse-btn:hover {
+  color: var(--color-primary);
+  background: var(--color-primary-faint);
+}
+
+.sidebar-collapse-chevron {
+  transition: transform 0.25s ease;
+}
+
+.sidebar-collapse-chevron.flipped {
+  transform: rotate(180deg);
 }
 
 /* =============================================================================

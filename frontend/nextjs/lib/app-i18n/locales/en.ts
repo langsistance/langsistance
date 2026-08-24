@@ -183,6 +183,8 @@ export default {
   sidebar: {
     analysisHistory: 'Analysis History',
     defaultSessionTitle: 'Patent Analysis',
+    collapseSidebar: 'Collapse sidebar',
+    expandSidebar: 'Expand sidebar',
   },
 
   // Deep analysis task card

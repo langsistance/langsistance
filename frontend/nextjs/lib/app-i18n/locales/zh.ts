@@ -183,6 +183,8 @@ export default {
   sidebar: {
     analysisHistory: '分析历史',
     defaultSessionTitle: '专利分析',
+    collapseSidebar: '收起侧边栏',
+    expandSidebar: '展开侧边栏',
   },
 
   // 深度分析任务卡片

@@ -69,19 +69,29 @@ const NAV_ITEMS = [
   },
 ]
 
+const DEVTOOLS_ICON = (
+  <svg className="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+  </svg>
+)
+
 const DEVTOOLS_ITEM = {
   to: '/app/devtools',
   key: 'browser.devTools',
-  icon: (
-    <svg className="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
-    </svg>
-  ),
+  icon: DEVTOOLS_ICON,
 }
 
 function getInitialDevMode() {
   try {
     return localStorage.getItem('devMode') === 'true'
+  } catch {
+    return false
+  }
+}
+
+function getInitialSidebarCollapsed() {
+  try {
+    return localStorage.getItem('sidebarCollapsed') === 'true'
   } catch {
     return false
   }
@@ -94,6 +104,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const [devMode, setDevMode] = useState(getInitialDevMode)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(getInitialSidebarCollapsed)
 
   // Use sessionStorage for reliable highlight across full-page refreshes
   const [activeSid, setActiveSid] = useState<string | null>(() => {
@@ -172,6 +183,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     try { localStorage.setItem('devMode', String(next)) } catch {}
   }
 
+  function toggleSidebarCollapsed() {
+    const next = !sidebarCollapsed
+    setSidebarCollapsed(next)
+    try { localStorage.setItem('sidebarCollapsed', String(next)) } catch {}
+  }
+
   const visibleNavItems = devMode ? [...NAV_ITEMS, DEVTOOLS_ITEM] : NAV_ITEMS
 
   return (
@@ -219,11 +236,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       </header>
 
       <div className="main-container">
-        <aside className="sidebar">
+        <aside className={`sidebar${sidebarCollapsed ? ' collapsed' : ''}`}>
           <nav className="nav-menu">
             {visibleNavItems.map(({ to, key, icon }) => (
               <Link key={to} href={to} style={{ textDecoration: 'none' }}>
-                <button className={`nav-item${pathname === to ? ' active' : ''}`}>
+                <button className={`nav-item${pathname === to ? ' active' : ''}`} title={t(key)}>
                   {icon}
                   <span>{t(key)}</span>
                 </button>
@@ -277,13 +294,41 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           )}
 
           <div className="sidebar-footer">
-            <button className="nav-item" onClick={toggleDevMode} style={{ cursor: 'pointer' }}>
-              <span>{t('developer.pattern')}</span>
+            <button
+              className="nav-item"
+              onClick={toggleDevMode}
+              style={{ cursor: 'pointer' }}
+              title={t('developer.pattern')}
+            >
+              <span className="nav-dev-icon">{DEVTOOLS_ICON}</span>
+              <span className="nav-dev-label">{t('developer.pattern')}</span>
               <div className="switch-wrap" style={{ marginLeft: 'auto' }}>
                 <div className={`switch-container${devMode ? ' active' : ''}`}>
                   <div className="switch-slider" />
                 </div>
               </div>
+            </button>
+            <button
+              type="button"
+              className="sidebar-collapse-btn"
+              onClick={toggleSidebarCollapsed}
+              aria-label={t(sidebarCollapsed ? 'sidebar.expandSidebar' : 'sidebar.collapseSidebar')}
+              title={t(sidebarCollapsed ? 'sidebar.expandSidebar' : 'sidebar.collapseSidebar')}
+            >
+              <svg
+                className={`sidebar-collapse-chevron${sidebarCollapsed ? ' flipped' : ''}`}
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
             </button>
           </div>
         </aside>
