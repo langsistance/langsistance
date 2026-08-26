@@ -182,6 +182,39 @@ async def _fetch_patent_spec_stub(patent_id: str) -> str:
     raise NotImplementedError("executed via dispatch, not directly")
 
 
+# ── Built-in dual/single-source patent search (USPTO + Baiten CN) ────────────
+# Registered per query in build_tool_set based on the detected patent
+# source; executed via make_action_executor (kind="patent_search").
+
+DUAL_PATENT_SEARCH_TOOL_NAME = "patent_search_dual"
+CN_PATENT_SEARCH_TOOL_NAME = "patent_search_cn"
+
+
+class _DualPatentSearchArgs(BaseModel):
+    query_string_us: str | None = Field(
+        default=None,
+        description="USPTO free-form search query (English, from the guidance ladder)",
+    )
+    query_string_cn: str | None = Field(
+        default=None,
+        description="Baiten CN search query (Chinese, from the guidance ladder)",
+    )
+    page: int = Field(default=1, description="Page number")
+    page_size: int = Field(default=20, description="Results per page")
+
+
+class _CnPatentSearchArgs(BaseModel):
+    query_string_cn: str = Field(
+        description="Baiten CN search query (Chinese, from the guidance ladder)",
+    )
+    page: int = Field(default=1, description="Page number")
+    page_size: int = Field(default=20, description="Results per page")
+
+
+async def _patent_search_stub(query_string_cn: str = None) -> str:
+    raise NotImplementedError("executed via dispatch, not directly")
+
+
 @dataclass
 class ToolEntry:
     name: str
@@ -288,11 +321,19 @@ async def build_tool_set(
     user_id: str,
     question: str,
     push_filter: Optional[int] = None,
+    patent_source: str = "dual",
 ) -> Tuple[Dict[str, ToolEntry], List[dict]]:
     """Build (registry, tools) for one query.
 
     search_my_knowledge is always first; type-3 items become long-task
     tools; vector-recalled type-1 items (top TOP_N) become knowledge tools.
+
+    *patent_source* (uspto/cn/dual — post map_source_for_tool_route
+    semantics) decides whether the built-in patent search tool is
+    registered: ``dual`` (unspecified country, the default) registers
+    the combined USPTO+Baiten tool, ``cn`` registers the Baiten-only
+    tool, ``uspto`` registers neither (the existing USPTO scene tools
+    keep their current behavior).
     """
     registry: Dict[str, ToolEntry] = {}
     tools: List[dict] = []
@@ -331,6 +372,37 @@ async def build_tool_set(
     )
     add(ToolEntry(name=SEARCH_KNOWLEDGE_TOOL_NAME, kind="search",
                   knowledge=None, tool_info=None, tool=search_tool))
+
+    # ── Built-in patent search (Baiten CN + optional USPTO) ──
+    if patent_source in ("dual", "cn"):
+        is_dual = patent_source == "dual"
+        if is_dual:
+            search_name = DUAL_PATENT_SEARCH_TOOL_NAME
+            search_schema = _DualPatentSearchArgs
+            search_desc = (
+                "Search patents when the user does NOT specify a country: "
+                "returns BOTH US patents (USPTO) and Chinese patents "
+                "(Baiten) in one call. Pass the English ladder query as "
+                "query_string_us and the Chinese ladder query as "
+                "query_string_cn. One source failing returns only the "
+                "other source's results."
+            )
+        else:
+            search_name = CN_PATENT_SEARCH_TOOL_NAME
+            search_schema = _CnPatentSearchArgs
+            search_desc = (
+                "Search Chinese patents (Baiten) for a user question "
+                "about Chinese patents. Pass the Chinese ladder query "
+                "as query_string_cn."
+            )
+        search_tool = StructuredTool.from_function(
+            func=_patent_search_stub,
+            name=search_name,
+            description=search_desc,
+            args_schema=search_schema,
+        )
+        add(ToolEntry(name=search_name, kind="patent_search",
+                      knowledge=None, tool_info=None, tool=search_tool))
 
     candidates = await asyncio.to_thread(
         get_knowledge_tool_candidates, user_id, question, TOP_N, 0, push_filter,
@@ -388,22 +460,36 @@ def _items_digest(raw_items, limit: int = SEARCH_DIGEST_LIMIT,
     items = raw_items or []
     if not items:
         return ""
+    lines: list = []
     candidates = build_candidates(items)
-    if candidates:
-        lines = []
-        for c in candidates[:limit]:
-            parts = [
-                c.get("patent_id") or "?",
-                c.get("title") or "(无标题)",
-                c.get("applicant") or "?",
-                c.get("filing_date") or "?",
-                c.get("status") or "?",
-            ]
-            lines.append(" | ".join(str(p) for p in parts))
+    for c in candidates[:limit]:
+        parts = [
+            c.get("patent_id") or "?",
+            c.get("title") or "(无标题)",
+            c.get("applicant") or "?",
+            c.get("filing_date") or "?",
+            c.get("status") or "?",
+        ]
+        lines.append(" | ".join(str(p) for p in parts))
+    # Baiten CN candidates (flat mapped shape with source="baiten") ride
+    # alongside USPTO rows in a mixed dual-source pool.
+    flat = [c for c in items if isinstance(c, dict)
+            and c.get("source") == "baiten"
+            and c.get("patent_id")]
+    for c in flat[:limit]:
+        parts = [
+            c.get("patent_id") or "?",
+            c.get("title") or "(无标题)",
+            c.get("applicant") or "?",
+            c.get("pub_date") or c.get("apply_date") or "?",
+        ]
+        lines.append(" | ".join(str(p) for p in parts))
+    if lines:
         text = "\n".join(lines)
-        if len(candidates) > limit:
-            note = (f"\n…共 {len(candidates)} 条" if lang == "zh"
-                    else f"\n...{len(candidates)} items total")
+        total = len(candidates) + len(flat)
+        if total > limit:
+            note = (f"\n…共 {total} 条" if lang == "zh"
+                    else f"\n...{total} items total")
             text += note
         return text[:SEARCH_DIGEST_CHARS]
     import json
@@ -1615,6 +1701,154 @@ async def _maybe_rewrite_search_query(agent, tool_info, args) -> dict:
     return out
 
 
+def _baiten_results_to_candidates(body: dict) -> list:
+    """Map Baiten search fieldValues rows into candidate structures.
+
+    Expected row shape (from the SDK): {id, an, ad, pn, pd, ti, pa} —
+    ``patent_id`` is the CN publication number (pn, e.g. CN112345678A),
+    which the existing candidate consumers (_extract_patent_ids_from_items
+    via patentNumber) handle natively.  Unknown shapes are skipped;
+    never raises.
+    """
+    data = body.get("data")
+    if isinstance(data, dict):
+        rows = data.get("fieldValues")
+    else:
+        rows = body.get("fieldValues")
+    candidates = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        pn = str(row.get("pn") or "").strip()
+        if not pn:
+            continue
+        candidates.append({
+            "patent_id": pn,
+            "source": "baiten",
+            "title": str(row.get("ti") or "").strip(),
+            "pub_date": str(row.get("pd") or "").strip(),
+            "app_num": str(row.get("an") or "").strip(),
+            "apply_date": str(row.get("ad") or "").strip(),
+            "applicant": str(row.get("pa") or "").strip(),
+            "status": "",
+            "grant_date": "",
+            "patent_number": pn,
+            "type_code": "",
+            "cpc_codes": [],
+            "_raw": row,
+        })
+    return candidates
+
+
+async def _uspto_search_by_query(
+    q: str, page: int = 1, page_size: int = 20,
+) -> tuple[list, str]:
+    """POST USPTO applications/search; returns (raw_items, note)."""
+    try:
+        from sources.http_outbound import outbound_http
+        from sources.long_task.recall_sources import (
+            USPTO_SEARCH_URL, RECALL_SEARCH_FIELDS,
+        )
+        import os as _os
+        headers = {"Content-Type": "application/json"}
+        uspto_key = _os.getenv("USPTO_API_KEY")
+        if uspto_key:
+            headers["X-API-Key"] = uspto_key
+        body = {
+            "q": q,
+            "pagination": {
+                "offset": max(page - 1, 0) * page_size,
+                "limit": page_size,
+            },
+            "fields": RECALL_SEARCH_FIELDS,
+            "sort": [{"field": "_score", "order": "desc"}],
+        }
+        response = await outbound_http.arequest(
+            "POST", USPTO_SEARCH_URL, purpose="dual_patent_search",
+            headers=headers, json=body, timeout=30,
+        )
+        if getattr(response, "status_code", 0) != 200:
+            return [], f"USPTO HTTP {response.status_code}"
+        data = response.json()
+        items = data.get("patentFileWrapperDataBag") or []
+        return items, f"USPTO {len(items)} hits"
+    except Exception as exc:
+        return [], f"USPTO failed: {exc}"
+
+
+async def _baiten_search_by_query(
+    q: str, page: int = 1, page_size: int = 20,
+) -> tuple[list, str]:
+    """BaitenClient.search(source=15); returns (candidates, note).
+
+    Any failure — missing key, wrong method path (unverified until the
+    live gateway is smoke-tested), network error — degrades to an empty
+    list so the parallel USPTO source is never blocked.
+    """
+    try:
+        from sources.baiten_client import BaitenClient
+        from sources.long_task.config import get_baiten_config
+
+        cfg = get_baiten_config()
+        if not cfg["app_key"] or not cfg["app_secret"]:
+            return [], "Baiten not configured (BAITEN_APP_KEY/APP_SECRET)"
+        client = BaitenClient(
+            cfg["app_key"], cfg["app_secret"], cfg["gateway_url"])
+        body = await client.search(q, page=page, page_size=page_size)
+        items = _baiten_results_to_candidates(body)
+        return items, f"Baiten {len(items)} hits"
+    except Exception as exc:
+        return [], f"Baiten failed: {exc}"
+
+
+async def _run_patent_search(agent, args, lang: str) -> dict:
+    """Built-in dual/single-source patent search for the loop.
+
+    Runs the requested sources in parallel (``asyncio.gather`` with
+    ``return_exceptions=True``): one source failing never blocks the
+    other.  Merged candidates land on ``agent._pending_raw_items`` (the
+    same channel the dynamic search tools use) so the pool, patent-id
+    extraction and result-page artifact paths all work unchanged.
+    """
+    us_q = str((args or {}).get("query_string_us") or "").strip()
+    cn_q = str((args or {}).get("query_string_cn") or "").strip()
+    if not us_q and not cn_q:
+        return {"kind": "observation",
+                "text": ("Error: provide at least query_string_us or "
+                         "query_string_cn" if lang == "en"
+                         else "Error: 至少需要 query_string_us 或 query_string_cn")}
+
+    page = int((args or {}).get("page") or 1)
+    page_size = int((args or {}).get("page_size") or 20)
+    tasks = []
+    if us_q:
+        tasks.append(_uspto_search_by_query(us_q, page=page, page_size=page_size))
+    if cn_q:
+        tasks.append(_baiten_search_by_query(cn_q, page=page, page_size=page_size))
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    merged: list = []
+    notes: list = []
+    for result in results:
+        if isinstance(result, Exception):
+            notes.append(f"{type(result).__name__}: {result}")
+            continue
+        items, note = result
+        merged.extend(items)
+        if note:
+            notes.append(note)
+    agent._pending_raw_items = merged
+
+    digest = _items_digest(merged, lang=lang)
+    if not digest:
+        digest = ("No results from any source." if lang == "en"
+                  else "两个数据源均未返回结果。")
+    if notes:
+        digest += "\n\n" + ("status: " if lang == "en" else "状态：") \
+            + "; ".join(notes)
+    return {"kind": "observation", "text": digest}
+
+
 async def _run_patent_spec(agent, args, lang: str) -> dict:
     """Download one patent's specification and distill it into the loop."""
     patent_id = str((args or {}).get("patent_id") or "").strip()
@@ -1655,6 +1889,9 @@ async def make_action_executor(agent, registry, push_filter=None):
 
         if entry.kind == "patent_spec":
             return await _run_patent_spec(agent, args, lang)
+
+        if entry.kind == "patent_search":
+            return await _run_patent_search(agent, args, lang)
 
         if entry.kind == "search":
             return await _run_search_knowledge(agent, registry, user_id, args, push_filter)

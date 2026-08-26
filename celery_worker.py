@@ -821,11 +821,17 @@ async def _run_pipeline(
             extract_patent_id_url_map,
         )
         patent_source = params.get('patent_source', 'cnipa')
+        # Consumer-side mapping: cnipa → cn (Baiten semantics). The scene
+        # tool prompt only routes on the "cnipa" wording — mapping the
+        # injected value keeps the zldsj/cnipa rule text from ever firing
+        # (see docs/superpowers/specs/2026-08-24-baiten-dual-source-search-design.md §4.4).
+        from sources.patent_source_detect import map_source_for_tool_route
+        route_source = map_source_for_tool_route(patent_source)
         update_task_status(task_id, 'searching_patents', 0,
                            _t('tool_select', batch_lang, count=len(scene_candidates)))
         selected = await select_tool(
             'search patents',
-            f"专利来源: {patent_source}\n用户查询: {params['query']}",
+            f"专利来源: {route_source}\n用户查询: {params['query']}",
             scene_candidates, flash_provider,
         )
         _pipeline_logger.info(
@@ -5223,7 +5229,11 @@ async def _download_patent_via_scene_or_fallback(
     if scene_candidates:
         from sources.long_task.scene_tools import select_tool, execute_tool
 
-        context = f'专利来源: {patent_source}\npatent_id={patent_id}'
+        # Consumer-side mapping (cnipa → cn) — see the PHASE0 injection.
+        from sources.patent_source_detect import map_source_for_tool_route
+        route_source = map_source_for_tool_route(patent_source)
+
+        context = f'专利来源: {route_source}\npatent_id={patent_id}'
         if doc_url:
             context += f', document_url={doc_url}'
         if pid:

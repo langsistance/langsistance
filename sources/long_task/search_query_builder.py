@@ -210,16 +210,54 @@ async def build_search_queries(query: str, provider: Any) -> dict:
     return {"concepts": result.get("concepts") or [], "queries": queries}
 
 
-def format_ladder_guidance(rewrite: dict, lang: str = "zh") -> str:
-    """Render the rewrite ladder for the loop system prompt.
+def format_ladder_guidance(rewrite: dict, lang: str = "zh",
+                           cn_rewrite: dict = None) -> str:
+    """Render the rewrite ladder(s) for the loop system prompt.
 
     Queries are listed tightest-first so the LLM can pick a variant or
-    adjust from it.  Returns "" when there is nothing to show.
+    adjust from it.  When *cn_rewrite* is given (dual-source / CN mode),
+    the Baiten ladder is appended with its field-prefix semantics
+    (ti=标题 ab=摘要 clm=权利要求).  Returns "" when there is nothing to
+    show.
     """
+    us_text = _render_ladder_guidance(rewrite, lang, cn=False)
+    if not cn_rewrite or not (cn_rewrite.get("queries") or []):
+        return us_text
+    cn_text = _render_ladder_guidance(cn_rewrite, lang, cn=True)
+    if not us_text:
+        return cn_text
+    return us_text + "\n\n" + cn_text
+
+
+def _render_ladder_guidance(rewrite: dict, lang: str, cn: bool) -> str:
+    """Render one ladder (USPTO or Baiten-CN) into guidance text."""
     queries = (rewrite or {}).get("queries") or []
     if not isinstance(queries, list) or not queries:
         return ""
-    if lang == "en":
+    if cn:
+        if lang == "en":
+            header = (
+                "Available Baiten (China patent) search queries for the "
+                "user's question, ordered tightest to loosest. Field "
+                "prefixes: ti=title, ab=abstract, clm=claims. Chinese has "
+                "no word forms, so queries carry no wildcards — synonyms "
+                "are OR-joined. You may call the China patent search tool "
+                "with one of these directly, or adjust based on hit "
+                "counts (aim for 10-300 hits; when too few, substitute "
+                "synonym phrasings from the concept bank first, and only "
+                "loosen by dropping a constraint group last):\n"
+            )
+        else:
+            header = (
+                "针对用户问题可用的佰腾（中国专利）检索式（由紧到松排列）。"
+                "字段前缀语义：ti=标题 ab=摘要 clm=权利要求。中文无词形变化，"
+                "检索式不使用通配符，同义词用 OR 连接。你可以直接用其中"
+                "任一条调用中国专利检索工具，也可以根据观察到的命中数"
+                "自行调整（命中少于 10 条时，先保持当前层级、优先替换"
+                "同义表述，最后才去掉某组限定放宽；目标命中区间 10-300，"
+                "命中过多则添加限定收紧）：\n"
+            )
+    elif lang == "en":
         header = (
             "Available search queries for the user's question, ordered "
             "tightest to loosest. Adjacent entries pair a literal-wording "
@@ -279,7 +317,22 @@ def format_ladder_guidance(rewrite: dict, lang: str = "zh") -> str:
                 lines.append("\n概念词库（载体词是该概念在专利文献中的"
                               "实际写法，低命中时优先替换它们）：")
             lines.extend(bank_lines)
-    if lang == "en":
+    if cn:
+        if lang == "en":
+            lines.append(
+                "\nAlso: if a query returns 0 hits even though the "
+                "technology clearly exists (a false zero), try the "
+                "carrier-term variant of the same level first, then "
+                "substitute synonym phrasings; wildcard variants are not "
+                "available for Chinese."
+            )
+        else:
+            lines.append(
+                "\n另外：当某级检索式在相关技术确实存在时仍返回 0 命中"
+                "（假性零命中），先改试同层级的载体词版，仍无效再替换"
+                "同义表述重试（中文检索不支持通配符）。"
+            )
+    elif lang == "en":
         lines.append(
             "\nAlso: if a query returns 0 hits even though the technology "
             "clearly exists (a false zero), try the carrier-term variant "
@@ -401,3 +454,175 @@ async def build_missing_direction_queries(question: str, titles: list,
     except Exception:
         return []
     return _validated_rewrite(result)["queries"]
+
+
+# ── Baiten (佰腾) CN search query assembly ──────────────────────────────────
+#
+# Chinese has no word forms, so the CN ladder carries no trailing
+# wildcards — synonym groups are OR-joined instead, and every query is
+# field-prefixed (ti=title / ab=abstract / clm=claims).  Pure functions
+# only, so they unit-test without a provider (mirrors the USPTO half).
+
+_BAITEN_FIELDS = ("ti", "ab", "clm")
+
+# Control characters and wildcards have no place in a CN query: strip
+# them in sanitize so a wayward LLM output can never corrupt the syntax.
+_BAITEN_STRIP_RE = re.compile(r"[\x00-\x1f\x7f*]+")
+
+
+def sanitize_baiten_query(q: str) -> str:
+    """Keep CJK + latin + digits; drop control chars / wildcards; cap length.
+
+    Unlike ``sanitize_uspto_query`` this does NOT strip CJK — Chinese is
+    the primary query language here.
+    """
+    if not q:
+        return ""
+    q = _BAITEN_STRIP_RE.sub(" ", q)
+    q = re.sub(r"\s+", " ", q).strip()
+    return q[:DEFAULT_QUERY_MAX_LENGTH]
+
+
+def assemble_baiten_query(groups: list[list[str]], field: str = "ti") -> str:
+    """Join keyword groups into a Baiten query string.
+
+    Each inner list is one concept: its keywords are OR-joined inside a
+    ``field:(...)`` group; concepts are AND-joined.  Multi-word phrases
+    (containing a space) are double-quoted.  No wildcards are emitted —
+    Chinese needs none and Baiten's syntax treats them differently.
+    """
+    parts = []
+    for group in groups:
+        group = [str(k).strip() for k in group if str(k).strip()]
+        if not group:
+            continue
+        joined = " OR ".join(
+            f'"{k}"' if (" " in k and not (k.startswith('"') and k.endswith('"')))
+            else k
+            for k in group
+        )
+        parts.append(f"{field}:({joined})")
+    return " AND ".join(parts)
+
+
+def _baiten_query_with_budget(groups: list[list[str]], field: str) -> str:
+    """Assemble one CN query, shrinking the keyword cap until it fits."""
+    cap = MAX_KEYWORDS_PER_GROUP
+    while cap > 1:
+        if len(assemble_baiten_query([g[:cap] for g in groups], field)) \
+                <= MAX_ASSEMBLED_QUERY_CHARS:
+            break
+        cap -= 1
+    return assemble_baiten_query([g[:cap] for g in groups], field)
+
+
+def _assemble_baiten_ladder(groups: list[list[str]]) -> list[str]:
+    """Assemble the tight-to-loose CN query ladder, deterministically.
+
+    Level 1-3 hold every concept, sweeping the fields tightest-first
+    (ti → ab → clm); each further level drops the weakest (last) concept
+    and cycles through the fields again.  Deduplicates and caps at 6.
+    """
+    cleaned: list[list[str]] = []
+    for group in groups:
+        seen: list[str] = []
+        for k in group:
+            k = sanitize_baiten_query(str(k))
+            if k and k not in seen:
+                seen.append(k)
+        if seen:
+            cleaned.append(seen)
+    if not cleaned:
+        return []
+    queries: list[str] = []
+    for level, field in enumerate(_BAITEN_FIELDS):
+        q = _baiten_query_with_budget(cleaned, field)
+        if q and (not queries or q != queries[-1]):
+            queries.append(q)
+    for drop in range(1, len(cleaned)):
+        subset = cleaned[:-drop]
+        field = _BAITEN_FIELDS[(drop + 2) % len(_BAITEN_FIELDS)]
+        q = _baiten_query_with_budget(subset, field)
+        if q and (not queries or q != queries[-1]):
+            queries.append(q)
+    return queries[:6]
+
+
+REWRITE_SYSTEM_PROMPT_CN = (
+    "你是一个专利检索概念提取专家。把用户的自然语言技术问题分解为 "
+    "核心技术概念及其检索关键词；检索式阶梯由代码按确定性规则组装，"
+    "你无需输出检索式。本工具面向所有技术领域，不得为特定领域预设"
+    "关键词。\n\n"
+    "步骤：\n"
+    "1. 从用户问题中抽取 2-4 个核心技术概念（忽略语气词和通用词），"
+    "概念按重要性排序（最重要的放最前）——代码将按此顺序组装由紧到松"
+    "的检索式阶梯。概念必须与提问中的独立技术要素一一对应，禁止把两"
+    "个技术要素合并成一个概念——合并会丢失概念组合的检索结构，导致"
+    "检索域漂移\n"
+    "2. 每个概念给出 3-8 个同义/近义检索关键词，**以中文为主**（含"
+    "全称/简称、上位/下位词、俗名/别称），可以允许少量英文术语（中国"
+    "专利文献常见中英混用）。关键词按重要性排序（最重要的放最前，"
+    "代码只取前若干个进入检索式）。中文无词形变化，不要使用任何通配符\n"
+    "3. 每个概念除了同义/近义关键词，还必须给出 2-5 个「载体词」：在"
+    "专利文献中实现该概念功能的器件/电路/系统/方法的实际写法（不是"
+    "同义词，而是“这个功能通常由什么实现、专利里叫什么”）。禁止用"
+    "「概念词+控制电路/控制装置/控制系统」这类后缀拼词充当载体词——"
+    "这只是同义复述，不是实现载体。检验标准：以该词为主题的技术是否"
+    "天然实现了该概念的功能；载体词应指向具体器件、电路拓扑、系统"
+    "类别或应用场景。载体词必须与用户问题技术相关、有依据，不得与"
+    "keywords 重复，不确定时宁可少给；载体词单独放在 carriers 字段"
+    "（不进 keywords 字段）。代码会同时组装直译词版与载体词版两套"
+    "检索式阶梯\n"
+    "4. 可以为提高精度添加用户未提及的合理领域限定概念（如应用场景、"
+    "设备载体），但每个限定必须有依据，且限定概念放在概念列表最后"
+    "（最弱层级）\n"
+    "5. 关键词规则：中文为主，允许少量英文术语；多词短语无需加引号"
+    "（代码负责）；禁止通配符；关键词中不要混入检索式语法符号"
+    "（括号、AND、OR 等）\n"
+    'Return JSON: {"concepts": [{"concept": "中文概念", '
+    '"keywords": ["中文检索词", ...], '
+    '"carriers": ["中文载体词", ...]}, ...]}'
+)
+
+
+async def build_baiten_queries(query: str, provider: Any) -> dict:
+    """Rewrite a user question into Baiten (CN) search queries.
+
+    Same contract as ``build_search_queries``: the LLM produces concepts
+    + keyword lists only, the ladder is assembled in code, and the
+    carrier-variant ladder interleaves after each literal level.  Never
+    raises — on any failure returns ``{"concepts": [], "queries": []}``.
+    """
+    try:
+        result = await provider.complete_json(REWRITE_SYSTEM_PROMPT_CN, query)
+    except Exception:
+        return {"concepts": [], "queries": []}
+    if not isinstance(result, dict):
+        return {"concepts": [], "queries": []}
+    groups: list[list[str]] = []
+    carrier_groups: list[list[str]] = []
+    for c in result.get("concepts") or []:
+        if not isinstance(c, dict):
+            groups.append([])
+            carrier_groups.append([])
+            continue
+        kws = c.get("keywords")
+        cars = c.get("carriers")
+        groups.append([str(k) for k in kws] if isinstance(kws, list) else [])
+        carrier_groups.append(
+            [str(k) for k in cars] if isinstance(cars, list) else [])
+    literal_ladder = _assemble_baiten_ladder(groups)
+    carrier_ladder = _assemble_baiten_ladder(carrier_groups)
+    interleaved: list[str] = []
+    for i in range(max(len(literal_ladder), len(carrier_ladder))):
+        if i < len(literal_ladder):
+            interleaved.append(literal_ladder[i])
+        if i < len(carrier_ladder):
+            interleaved.append(carrier_ladder[i])
+    seen: set[str] = set()
+    queries: list[str] = []
+    for q in interleaved:
+        if q not in seen:
+            seen.add(q)
+            queries.append(q)
+    return {"concepts": result.get("concepts") or [], "queries": queries[:6]}

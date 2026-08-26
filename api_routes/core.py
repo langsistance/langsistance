@@ -116,54 +116,13 @@ def _detect_patent_source(
     """
     conv_history = conv_history or []
 
-    # ── Build combined text ──
-    combined = query + " " + " ".join(
-        m.get("content", "") for m in (conv_history or [])
-        if isinstance(m, dict)
-    )
-    combined_lower = combined.lower()
-
     # ── 1. Text keywords (primary — user intent) ──
-    uspto_keywords = ["uspto", "美国专利", "美国专利商标局", "united states patent",
-                      "us patent", "us application"]
-    cnipa_keywords = ["cnipa", "中国专利", "中国国家知识产权", "国家知识产权局",
-                      "chinese patent", "china patent",
-                      "zldsj"]
-    # Chinese company names → infer cnipa
-    cn_company_keywords = [
-        "华为", "小米", "oppo", "vivo", "腾讯", "阿里巴巴", "百度",
-        "比亚迪", "宁德时代", "中兴", "大疆", "字节跳动", "中芯国际",
-        "京东方", "格力", "美的", "海尔", "联想", "蔚来", "小鹏", "理想",
-        "寒武纪", "地平线", "紫光", "长江存储", "长鑫",
-    ]
-    # US company names → infer uspto
-    us_company_keywords = [
-        "apple", "google", "microsoft", "tesla", "intel", "amd",
-        "nvidia", "qualcomm", "ibm", "meta", "amazon", "broadcom",
-        "micron", "cisco", "oracle", "hp", "dell",
-    ]
-    if any(kw in combined_lower for kw in uspto_keywords):
-        source = "uspto"
+    from sources.patent_source_detect import detect_patent_source_text
+    text_source = detect_patent_source_text(query, conv_history)
+    if text_source != "auto":
         if app_logger:
-            app_logger.info(f"patent_source: text_keywords → uspto")
-        return source
-    if any(kw in combined_lower for kw in cnipa_keywords):
-        source = "cnipa"
-        if app_logger:
-            app_logger.info(f"patent_source: text_keywords → cnipa")
-        return source
-
-    # Company name inference (lower priority than explicit patent office keywords)
-    if any(kw in combined_lower for kw in us_company_keywords):
-        source = "uspto"
-        if app_logger:
-            app_logger.info(f"patent_source: us_company → uspto")
-        return source
-    if any(kw in combined_lower for kw in cn_company_keywords):
-        source = "cnipa"
-        if app_logger:
-            app_logger.info(f"patent_source: cn_company → cnipa")
-        return source
+            app_logger.info(f"patent_source: text_keywords → {text_source}")
+        return text_source
 
     # ── 2. Scene tools (fallback) ──
     if scene_id:

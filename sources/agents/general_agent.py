@@ -1583,6 +1583,8 @@ Begin your response now:
         self._workflow_result = None
         self._react_loop_ran = False
         self._search_rewrite = None   # deterministic q rewrite cache, per request
+        self._search_rewrite_cn = None  # Baiten CN rewrite, per request
+        self._patent_tool_source = "auto"  # uspto/cn/dual — built-in search tool
         self._search_interpretation = None  # architecture-level interpretation, per request
         self._request_started = time.monotonic()  # whole-request timer (agent_elapsed origin)
         self._grounded_done = False  # post-retrieval grounded synthesis, once per request
@@ -1620,15 +1622,35 @@ Begin your response now:
                 self._query_mode = await classify_query_mode(prompt, self.llm)
         except Exception:
             self._query_mode = "semantic"
+
+        # ── Patent source routing (built-in search tool + CN ladder) ──
+        from sources.patent_source_detect import (
+            detect_patent_source_text, map_source_for_tool_route)
+        _conv_turns = getattr(self, "_conversation_turns", []) or []
+        self._patent_tool_source = map_source_for_tool_route(
+            detect_patent_source_text(prompt, [
+                {"content": t.get("user", "")} for t in _conv_turns
+                if isinstance(t, dict)
+            ])
+        )
+        _need_cn = self._patent_tool_source in ("dual", "cn")
+
         if callback_handler:
             await _emit_status(callback_handler,
                 "正在构造检索式..." if lang == 'zh' else "Building search queries...")
 
-        from sources.long_task.search_query_builder import build_search_queries
+        from sources.long_task.search_query_builder import (
+            build_baiten_queries, build_search_queries)
 
         async def _rewrite() -> dict:
             try:
                 return await build_search_queries(prompt, self.llm)
+            except Exception:
+                return {"concepts": [], "queries": []}
+
+        async def _rewrite_cn() -> dict:
+            try:
+                return await build_baiten_queries(prompt, self.llm)
             except Exception:
                 return {"concepts": [], "queries": []}
 
@@ -1678,6 +1700,8 @@ Begin your response now:
             # Identifier/assignee/keyword/analysis requests: the ladder
             # still needs the rewrite; CPC and interpretation add nothing.
             self._search_rewrite = await _rewrite()
+            if _need_cn:
+                self._search_rewrite_cn = await _rewrite_cn()
             self._cpc_hints = None
             self._search_interpretation = None
         else:
@@ -1688,9 +1712,13 @@ Begin your response now:
             _rewrite_task = asyncio.create_task(_rewrite())
             _cpc_task = asyncio.create_task(_cpc_match())
             _interp_task = asyncio.create_task(_interpret())
+            _cn_task = (asyncio.create_task(_rewrite_cn())
+                        if _need_cn else None)
             (self._search_rewrite, self._cpc_hints,
              self._search_interpretation) = await asyncio.gather(
                 _rewrite_task, _cpc_task, _interp_task)
+            if _cn_task is not None:
+                self._search_rewrite_cn = await _cn_task
             if self._search_interpretation:
                 from sources.long_task.technical_interpretation import (
                     merge_interpretation_queries)
@@ -1732,7 +1760,9 @@ Begin your response now:
             self._get_fixed_system_prefix()
             + conversation_block
             + self._loop_system_guidance()
-            + format_ladder_guidance(self._search_rewrite, lang)
+            + format_ladder_guidance(
+                self._search_rewrite, lang,
+                cn_rewrite=self._search_rewrite_cn)
         )
         self.memory.reset([
             {'role': 'user', 'content': user_prompt},
@@ -1740,7 +1770,9 @@ Begin your response now:
         ])
         self.logger.info(f"memory.get():{self.memory.get()}")
 
-        registry, bind_tools = await build_tool_set(self, user_id, prompt, push_filter)
+        registry, bind_tools = await build_tool_set(
+            self, user_id, prompt, push_filter,
+            patent_source=getattr(self, "_patent_tool_source", "auto"))
         self._react_registry = registry
 
         # Deterministic long-task routing: when the request clearly

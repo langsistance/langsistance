@@ -27,7 +27,7 @@ from sources.user.passport import verify_firebase_token
 
 logger = Logger("backend.log")
 
-VALID_SOURCES = {"uspto", "google_patents"}
+VALID_SOURCES = {"uspto", "google_patents", "baiten"}
 
 _CLAIM_START_PATTERN = re.compile(r"(?m)^\s*(\d{1,3})\.\s*")
 
@@ -385,14 +385,142 @@ def _parse_claims_xml(text: str) -> list[dict] | None:
     return claims or None
 
 
-async def _fetch_spec_pdf(source: str, patent_id: str) -> dict:
-    """Resolve the USPTO specification PDF and return its proxy URL.
+def _get_baiten_client():
+    """Build a BaitenClient from config; PatentDetailError when unset."""
+    from sources.baiten_client import BaitenClient
+    from sources.long_task.config import get_baiten_config
 
-    The URL points at the existing lazy-download proxy (``/uspto/download``)
-    so the frontend can embed the original PDF in an inline viewer without
-    exposing the USPTO API key — the same mechanism patent document rows
-    already use.
+    cfg = get_baiten_config()
+    if not cfg["app_key"] or not cfg["app_secret"]:
+        raise PatentDetailError("Baiten not configured (BAITEN_APP_KEY/APP_SECRET)")
+    return BaitenClient(cfg["app_key"], cfg["app_secret"], cfg["gateway_url"])
+
+
+def _extract_doc_field(doc: dict, *keys) -> str:
+    """First non-empty string value among *keys* in *doc* (flat or in data)."""
+    data = doc.get("data") if isinstance(doc.get("data"), dict) else doc
+    for container in (doc, data):
+        if not isinstance(container, dict):
+            continue
+        for key in keys:
+            value = str(container.get(key) or "").strip()
+            if value:
+                return value
+    return ""
+
+
+def _normalize_baiten_date(value: str) -> str:
+    """YYYY-MM-DD / YYYYMMDD / YYYY.MM.DD → YYYYMMDD (getFile contract)."""
+    if not value:
+        return ""
+    digits = "".join(ch for ch in value if ch.isdigit())
+    return digits[:8]
+
+
+def _build_baiten_download_url(pub_num: str, pub_date: str) -> str:
+    return (f"/baiten/download?pub_num={pub_num}"
+            f"&pub_date={_normalize_baiten_date(pub_date)}")
+
+
+def _flatten_baiten_claims(body: dict) -> list[str]:
+    """Flatten Baiten patentClaimses[] into claim texts.
+
+    Rows are {claim, claimsNum, claimsParentNum}; only the claim text is
+    needed here — independence is re-derived from the opener by the
+    existing build_claims_payload rules (如权利要求1所述 …).
     """
+    data = body.get("data") if isinstance(body.get("data"), dict) else body
+    rows = None
+    for container in (data, body):
+        if isinstance(container, dict):
+            rows = container.get("patentClaimses")
+            if rows:
+                break
+    texts: list[str] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        text = str(row.get("claim") or "").strip()
+        if text and text not in texts:
+            texts.append(text)
+    return texts
+
+
+async def _fetch_baiten_spec(patent_id: str) -> dict:
+    """Resolve a CN patent spec PDF proxy URL via Baiten.
+
+    getDoc fills pubDate (needed by the file API), then the PDF is
+    streamed through ``/baiten/download`` so the frontend inline viewer
+    keeps working unchanged.  (getSpec text is deferred: the spec tab
+    renders pdf_url only, and a text channel would need frontend work.)
+    """
+    from sources.baiten_client import BaitenError
+
+    try:
+        client = _get_baiten_client()
+        doc = await client.get_doc(patent_id)
+    except BaitenError as exc:
+        raise PatentDetailError(str(exc)) from exc
+    pub_date = _normalize_baiten_date(_extract_doc_field(doc, "pd", "pubDate"))
+    if not pub_date:
+        raise PatentDetailError(
+            f"No publication date for Baiten patent {patent_id}")
+    return {"success": True,
+            "pdf_url": _build_baiten_download_url(patent_id, pub_date)}
+
+
+async def _fetch_baiten_claims(patent_id: str) -> dict:
+    """Fetch structured CN claims via Baiten.
+
+    getDoc fills appNum → getClaims(AUTH) with APP fallback → flattened
+    into the existing {number, text, status, independent} payload.
+    Scanned-only patents fall back to the PDF proxy URL.
+    """
+    from sources.baiten_client import BaitenError
+
+    try:
+        client = _get_baiten_client()
+        doc = await client.get_doc(patent_id)
+    except BaitenError as exc:
+        raise PatentDetailError(str(exc)) from exc
+    app_num = _extract_doc_field(doc, "an", "appNum", "applicationNumber")
+    if not app_num:
+        raise PatentDetailError(
+            f"No application number for Baiten patent {patent_id}")
+
+    claim_texts: list[str] = []
+    for pat_type in ("AUTH", "APP"):
+        try:
+            body = await client.get_claims(app_num, pat_type)
+        except BaitenError:
+            continue
+        claim_texts = _flatten_baiten_claims(body)
+        if claim_texts:
+            break
+
+    if claim_texts:
+        return build_claims_payload(claim_texts)
+
+    # No structured claims (scanned original) — inline viewer fallback.
+    pub_date = _normalize_baiten_date(_extract_doc_field(doc, "pd", "pubDate"))
+    if pub_date:
+        return {"success": True,
+                "pdf_url": _build_baiten_download_url(patent_id, pub_date)}
+    raise PatentDetailError(
+        f"No claims available for Baiten patent {patent_id}")
+
+
+async def _fetch_spec_pdf(source: str, patent_id: str) -> dict:
+    """Resolve the specification PDF and return its proxy URL.
+
+    The URL points at the lazy-download proxy (``/uspto/download`` for
+    USPTO, ``/baiten/download`` for Baiten CN) so the frontend can embed
+    the original PDF in an inline viewer without exposing the upstream
+    API key — the same mechanism patent document rows already use.
+    """
+    if source == "baiten":
+        return await _fetch_baiten_spec(patent_id)
+    from sources import uspto_download
     from sources import uspto_download
     from sources.dynamic_tool_params import _build_uspto_download_proxy_url
     from sources.long_task.text_extractor import (
@@ -432,15 +560,19 @@ _DOCX_MIME_ORDER = (
 
 
 async def _fetch_claims(source: str, patent_id: str) -> dict:
-    """Fetch the USPTO claims document for *patent_id*.
+    """Fetch the claims document for *patent_id*.
 
-    Preference order:
+    Baiten CN source: structured patentClaimses via getDoc+getClaims,
+    with an AUTH→APP fallback and a PDF proxy fallback for scanned
+    originals.  USPTO preference order:
     1. XML (xmlarchive CLM.XML) — structured parse into the claims list.
     2. DOCX — text-layer parse (numbered / paragraph fallback).
     3. PDF — no extraction at all: return the proxy URL and let the
        frontend show the original PDF in the inline viewer (scanned
        documents never get OCR'd).
     """
+    if source == "baiten":
+        return await _fetch_baiten_claims(patent_id)
     from sources import uspto_download
     from sources.dynamic_tool_params import _build_uspto_download_proxy_url
     from sources.long_task.text_extractor import (

@@ -41,6 +41,7 @@ Reference
 from __future__ import annotations
 
 import hashlib
+import tempfile
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
@@ -49,6 +50,13 @@ import httpx
 from sources.logger import Logger
 
 _logger = Logger("baiten_client.log")
+
+# Shared POST headers for the TOP-style gateway.
+_REQUEST_HEADERS = {
+    "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+    "User-Agent": "top-sdk-java",
+    "Accept": "application/json",
+}
 
 # ── Constants (from SDK bytecode and live testing) ─────────────────────────
 
@@ -64,8 +72,21 @@ _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 # Charset (from Constants.CHARSET_UTF8)
 _CHARSET = "UTF-8"
 
-# API method name (from CubeOpenLawRequest.getApiMethodName())
+# API method names (from SDK request classes; live-tested for law only)
 _API_METHOD_LAW = "/openService/law"
+
+# ── 以下 5 个 method 路径为推测值（SDK 只给 Java 类名），
+#    待 APP_KEY 实测确认后调整（docs/technical/baiten-cn-search-proposal.md §八）──
+_API_METHOD_SEARCH = "/openService/search"     # CubeOpenSearchRequest
+_API_METHOD_GET_DOC = "/openService/getDoc"    # CubeOpenGetDocRequest
+_API_METHOD_CLAIMS = "/openService/claims"     # CubeOpenGetClaimsRequest
+_API_METHOD_SPEC = "/openService/spec"         # CubeOpenGetSpecRequest
+_API_METHOD_FILE = "/openService/file"         # CubeOpenFileRequest
+
+# PDF base64 spool: keep this many bytes in memory before spilling to disk.
+# The server has <1GB RAM; a multi-page spec PDF (tens of MB, 1.33x base64)
+# must never be buffered whole (memory: server-memory-constraint).
+_SPOOL_MAX_MEMORY = 8 * 1024 * 1024  # 8 MB
 
 # Sign method (from Constants.SIGN_METHOD_MD5)
 _SIGN_METHOD = "md5"
@@ -170,54 +191,10 @@ class BaitenClient:
                 f"Valid values: {list(_LAW_CATEGORY)}"
             )
 
-        # Build TOP-style params (method included in signature)
-        all_params = self._build_top_params(law_category, app_num)
-
-        # POST body excludes 'method' — it's expressed in the URL path
-        api_method = all_params.pop("method")
-        api_method_path = api_method  # e.g. "/openService/law"
-        if api_method_path.startswith("/"):
-            api_method_path = api_method_path[1:]  # "openService/law"
-
-        form_data = self._encode_params(all_params)
-
-        url = f"{self._gateway_url}/{api_method_path}"
-
-        _logger.info(
-            f"baiten_request — url={url}, "
-            f"lawCategory={law_category}, appNum={app_num}"
+        body = await self._request_json(
+            _API_METHOD_LAW,
+            {"app_num": app_num, "law_category": law_category},
         )
-
-        async with httpx.AsyncClient(timeout=BAITEN_REQUEST_TIMEOUT) as client:
-            response = await client.post(
-                url,
-                content=form_data,
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-                    "User-Agent": "top-sdk-java",
-                    "Accept": "application/json",
-                },
-            )
-
-        if response.status_code != 200:
-            raise BaitenAPIError(
-                f"Baiten API HTTP {response.status_code}: "
-                f"{response.text[:300]}"
-            )
-
-        body = response.json()
-        if not isinstance(body, dict):
-            raise BaitenAPIError(
-                f"Baiten returned non-JSON response: {response.text[:300]}"
-            )
-
-        # Check error response
-        error_code = body.get("code", "")
-        if error_code and str(error_code) != "200":
-            msg = body.get("msg", "Unknown error")
-            raise BaitenAPIError(
-                f"Baiten API error code={error_code}: {msg}"
-            )
 
         _logger.info(
             f"baiten_response — lawCategory={law_category}, "
@@ -226,6 +203,126 @@ class BaitenClient:
             f"has_declareList={bool(body.get('patentLawDeclare_list'))}"
         )
         return body
+
+    # ── Baiten open-platform methods (search / doc / claims / spec / file) ──
+    #
+    # Method paths and parameter names below are inferred from the SDK
+    # request classes (cube-sdk-ext-1.0.jar) and are marked 待实测 until
+    # the live gateway confirms them (proposal §八 ①-③).  All failures
+    # raise BaitenAPIError so callers can degrade gracefully.
+
+    async def search(
+        self, query_string: str, source: str = "15", page: int = 1,
+        page_size: int = 20, api_level: str = "ONE",
+    ) -> dict[str, Any]:
+        """Basic full-text search (source=15 → China patent library).
+
+        Returns the gateway payload; the caller maps ``fieldValues``
+        {id, an, ad, pn, pd, ti, pa} into candidate structures.
+        """
+        body = await self._request_json(
+            _API_METHOD_SEARCH,
+            {
+                "queryString": query_string,
+                "source": source,
+                "page": page,
+                "pageSize": page_size,
+                "apiLevel": api_level,
+            },
+        )
+        _logger.info(
+            f"baiten_search — query={query_string[:80]}, source={source}, "
+            f"page={page}"
+        )
+        return body
+
+    async def get_doc(self, doc_id: str) -> dict[str, Any]:
+        """Full bibliographic record for one patent (docId = pn or id)."""
+        body = await self._request_json(
+            _API_METHOD_GET_DOC, {"docId": doc_id},
+        )
+        _logger.info(f"baiten_get_doc — docId={doc_id}")
+        return body
+
+    async def get_claims(
+        self, app_num: str, pat_type: str = "APP",
+    ) -> dict[str, Any]:
+        """Structured claims (patentClaimses[] hierarchy) for one patent.
+
+        pat_type: "AUTH" (granted) or "APP" (application).
+        """
+        body = await self._request_json(
+            _API_METHOD_CLAIMS,
+            {"appNum": app_num, "patType": pat_type},
+        )
+        _logger.info(f"baiten_get_claims — appNum={app_num}, patType={pat_type}")
+        return body
+
+    async def get_spec(self, doc_id: str) -> dict[str, Any]:
+        """Specification text (docId = CN application number)."""
+        body = await self._request_json(
+            _API_METHOD_SPEC, {"docId": doc_id},
+        )
+        _logger.info(f"baiten_get_spec — docId={doc_id}")
+        return body
+
+    async def get_file(
+        self, pub_num: str, pub_date: str, file_category: str = "PDF",
+    ):
+        """Download a patent PDF as a streaming spooled file.
+
+        The gateway returns ``fileByte`` as a base64 JSON string that can
+        reach tens of MB (1.33x expansion) — the response is streamed and
+        base64-decoded chunk-by-chunk into a ``tempfile.SpooledTemporaryFile``
+        (8 MB memory threshold, then disk), so peak memory stays far below
+        the server's 1 GB budget.
+
+        Returns:
+            ``tempfile.SpooledTemporaryFile`` rewound to position 0.
+            The caller owns it and must close it when done.
+        """
+        all_params = self._build_top_params(
+            _API_METHOD_FILE,
+            {
+                "pubNum": pub_num,
+                "pubDate": pub_date,
+                "fileCategory": file_category,
+            },
+        )
+        api_method = all_params.pop("method")
+        api_method_path = api_method[1:] if api_method.startswith("/") else api_method
+        form_data = self._encode_params(all_params)
+        url = f"{self._gateway_url}/{api_method_path}"
+
+        _logger.info(
+            f"baiten_file — url={url}, pubNum={pub_num}, pubDate={pub_date}"
+        )
+
+        spool = tempfile.SpooledTemporaryFile(max_size=_SPOOL_MAX_MEMORY)
+        try:
+            async with httpx.AsyncClient(timeout=BAITEN_REQUEST_TIMEOUT) as client:
+                async with client.stream(
+                    "POST", url, content=form_data, headers=self._REQUEST_HEADERS,
+                ) as response:
+                    if response.status_code != 200:
+                        preview = (await response.aread())[:300]
+                        raise BaitenAPIError(
+                            f"Baiten API HTTP {response.status_code}: "
+                            f"{preview!r}"
+                        )
+                    found = await self._stream_base64_field(
+                        response.aiter_bytes(), b'"fileByte"', spool,
+                    )
+            if not found:
+                raise BaitenAPIError(
+                    f"Baiten file response carries no fileByte field "
+                    f"(pubNum={pub_num}, pubDate={pub_date})"
+                )
+        except Exception:
+            spool.close()
+            raise
+        spool.seek(0)
+        return spool
 
     # ── Convenience: SIPOP-compatible wrappers ────────────────────────────────
 
@@ -295,13 +392,13 @@ class BaitenClient:
     # ── Internal: TOP-style request building ──────────────────────────────────
 
     def _build_top_params(
-        self, law_category: str, app_num: str,
+        self, method: str, application: dict[str, Any],
     ) -> dict[str, str]:
         """Build the complete parameter map for a TOP-style API call.
 
         Combines protocol-mandatory params (method, app_key, timestamp, v,
-        sign_method, format) with application-specific params (app_num,
-        law_category), then computes the MD5 signature over ALL params.
+        sign_method, format) with application-specific params, then
+        computes the MD5 signature over ALL params.
 
         The ``method`` param is returned for use in the URL path; the caller
         removes it from the POST body.
@@ -312,18 +409,12 @@ class BaitenClient:
 
         # Protocol-mandatory parameters (from DefaultCubeClient)
         protocol = {
-            "method": _API_METHOD_LAW,
+            "method": method,
             "app_key": self._app_key,
             "timestamp": timestamp,
             "v": _API_VERSION,
             "sign_method": _SIGN_METHOD,
             "format": _FORMAT,
-        }
-
-        # Application parameters (from CubePatentLawRequest.getTextParams())
-        application = {
-            "app_num": app_num,
-            "law_category": law_category,
         }
 
         # Merge all params for signing
@@ -332,6 +423,112 @@ class BaitenClient:
         all_params["sign"] = sign
 
         return all_params
+
+    async def _request_json(self, method: str, params: dict[str, Any]) -> dict:
+        """POST one JSON-returning API method with shared error handling.
+
+        Signs and encodes *params*, routes to ``{gateway}/{method}`` and
+        raises ``BaitenAPIError`` on HTTP errors or a non-200 gateway
+        ``code``.  Returns the parsed JSON object.
+        """
+        all_params = self._build_top_params(method, params)
+        api_method = all_params.pop("method")
+        api_method_path = api_method[1:] if api_method.startswith("/") else api_method
+        form_data = self._encode_params(all_params)
+        url = f"{self._gateway_url}/{api_method_path}"
+
+        _logger.info(f"baiten_request — url={url}, method={method}")
+
+        async with httpx.AsyncClient(timeout=BAITEN_REQUEST_TIMEOUT) as client:
+            response = await client.post(
+                url,
+                content=form_data,
+                headers=self._REQUEST_HEADERS,
+            )
+
+        if response.status_code != 200:
+            raise BaitenAPIError(
+                f"Baiten API HTTP {response.status_code}: "
+                f"{response.text[:300]}"
+            )
+
+        body = response.json()
+        if not isinstance(body, dict):
+            raise BaitenAPIError(
+                f"Baiten returned non-JSON response: {response.text[:300]}"
+            )
+
+        # Check error response
+        error_code = body.get("code", "")
+        if error_code and str(error_code) != "200":
+            msg = body.get("msg", "Unknown error")
+            raise BaitenAPIError(
+                f"Baiten API error code={error_code}: {msg}"
+            )
+        return body
+
+    @staticmethod
+    async def _stream_base64_field(
+        chunks, field: bytes, out,
+    ) -> bool:
+        """Stream-scan a JSON response for a base64 string field.
+
+        Decodes the field's base64 content chunk-by-chunk into *out*
+        (a binary file-like), keeping at most 4 undecoded bytes in memory
+        and the rest written straight through.  The base64 alphabet
+        (A-Za-z0-9+/=) contains neither ``"`` nor ``\\``, so the first
+        unescaped quote after the opening one terminates the value —
+        no full JSON parse is needed, and peak memory stays O(chunk).
+
+        Returns True when the field was found and decoded; False when the
+        stream ended without it (e.g. an error JSON with no fileByte).
+        """
+        import base64 as _b64
+        import binascii as _binascii
+
+        b64_buf = bytearray()
+        tail = bytearray()  # carry the half-split field marker across chunks
+        state = "scan"      # scan → value_start → collect → done
+        value = False
+
+        async for chunk in chunks:
+            data = bytes(tail) + chunk
+            del tail[:]
+            if state == "scan":
+                idx = data.find(field)
+                if idx < 0:
+                    tail.extend(data[-len(field) + 1:])
+                    continue
+                data = data[idx + len(field):]
+                state = "value_start"
+            if state == "value_start":
+                data = data.lstrip(b" \t\r\n:")  # colon/whitespace after key
+                if not data:
+                    continue
+                if data[0] != 34:  # 34 = '"' — null/absent value
+                    return False
+                data = data[1:]
+                state = "collect"
+            if state == "collect":
+                end = data.find(b'"')
+                if end < 0:
+                    b64_buf.extend(data)
+                else:
+                    b64_buf.extend(data[:end])
+                    state = "done"
+                # decode aligned runs, keep <4-byte remainder for next chunk
+                n = len(b64_buf) - (len(b64_buf) % 4)
+                if n:
+                    try:
+                        out.write(_b64.b64decode(bytes(b64_buf[:n]),
+                                                 validate=False))
+                    except (_binascii.Error, ValueError):
+                        out.write(bytes(b64_buf[:n]))
+                    del b64_buf[:n]
+                if state == "done":
+                    value = True
+                    break
+        return value
 
     # ── Internal: TOP signature algorithm ─────────────────────────────────────
 
