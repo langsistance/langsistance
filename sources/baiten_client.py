@@ -77,17 +77,21 @@ _CHARSET = "UTF-8"
 # gateway 2026-08-26 — a missing required param returns Spring "Required
 # ... parameter 'x' is not present" BEFORE auth, which is how the wire
 # contracts below were confirmed without a valid key).
+#
+# Two gateway surfaces exist: /openService/* (newer aliases, level-based
+# permission: "no access for this api: DATA_PAT_BASE_<LEVEL>") and
+# /extService/* (the SDK's native paths — no level, needs client_sign).
+# We follow the SDK surface: /extService/* (user decision 2026-08-26).
 _API_METHOD_LAW = "/openService/law"           # verified: app_num, law_category
-_API_METHOD_SEARCH = "/openService/search"     # verified: query, level, page_index, page_size
+_API_METHOD_SEARCH = "/extService/search"      # verified: query, page_index, page_size, fields, client_sign
 _API_METHOD_CLAIMS = "/openService/claims"     # verified: app_num, pat_type
 _API_METHOD_DOWNLOAD = "/openService/download"  # verified: pub_num, pub_date
+_API_METHOD_GET_DOC = "/extService/get"        # verified: doc_id, client_sign
+_API_METHOD_SPEC = "/extService/get_spec"      # verified: doc_id, client_sign
 
-# ── 以下 2 个 method 路径在网关上返回 404（2026-08-26 实测），
-#    真实路径未知——SDK 类名（CubeOpenGetDocRequest/CubeOpenGetSpecRequest）
-#    与线上路径命名不一致。search 响应自带 an/pd 时 getDoc 可绕开；spec
-#    文本通道已延后（patent_detail 只渲染 pdf_url）。──
-_API_METHOD_GET_DOC = "/openService/getDoc"    # UNVERIFIED — 404 on gateway
-_API_METHOD_SPEC = "/openService/spec"         # UNVERIFIED — 404 on gateway
+# Default search fields (PatField codes from the SDK enum; the candidate
+# structure needs pn/ti/pa/an/pd/ad; ab adds abstract coverage).
+_DEFAULT_SEARCH_FIELDS = "ti,pa,an,pn,pd,ad,ab"
 
 # PDF base64 spool: keep this many bytes in memory before spilling to disk.
 # The server has <1GB RAM; a multi-page spec PDF (tens of MB, 1.33x base64)
@@ -154,6 +158,25 @@ def _error_preview(text: str) -> str:
     return text[:300]
 
 
+def _compute_client_sign(query: str, app_secret: str,
+                         now: datetime | None = None) -> str:
+    """SDK client_sign algorithm (DefaultCubeClient.doPost, bytecode
+    reverse-engineered 2026-08-26).
+
+    ``client_sign = MD5(fmt.format(new Date()) + v + appSecret)`` where
+    *v* is ``str(len(query.trim()))`` for a search request (app_num /
+    pub_num / doc_id pass their raw value instead).  Date format is
+    ``yyyy-MM-dd HH:mm:ss`` in GMT+8 (Constants.DATE_TIME_FORMAT /
+    DATE_TIMEZONE), uppercase hex — same conventions as the TOP ``sign``
+    in this client.
+    """
+    now = now or datetime.now(timezone(timedelta(hours=8)))
+    date_str = now.strftime(_DATE_FORMAT)
+    v = str(len(query.strip()))
+    raw = f"{date_str}{v}{app_secret}"
+    return hashlib.md5(raw.encode(_CHARSET)).hexdigest().upper()
+
+
 def summarize_search_response(body: dict) -> dict:
     """Defensive summary of a Baiten search response for diagnostics.
 
@@ -172,12 +195,16 @@ def summarize_search_response(body: dict) -> dict:
     if rows is None:
         rows = body.get("fieldValues")
     if rows is None:
+        rows = body.get("documents")
+    if rows is None:
         rows = body.get("grouped_hits")
     if not isinstance(rows, list):
         rows = []
     total = body.get("total")
     if total is None:
-        total = body.get("total_hits")
+        total = body.get("total_hits")   # live gateway error envelope
+    if total is None:
+        total = body.get("totalHits")    # documented success shape
     if total is None and isinstance(data, dict):
         total = data.get("total")
     return {
@@ -277,17 +304,18 @@ class BaitenClient:
 
     async def search(
         self, query_string: str, source: str = "15", page: int = 1,
-        page_size: int = 20, api_level: str = "ONE",
+        page_size: int = 20, fields: str = _DEFAULT_SEARCH_FIELDS,
     ) -> dict[str, Any]:
         """Basic full-text search (source=15 → China patent library).
 
-        Wire contract verified against the live gateway 2026-08-26:
-        ``query`` / ``level`` / ``page_index`` / ``page_size`` (NOT the
-        SDK-style queryString/apiLevel/page/pageSize — those get a Spring
-        400 "Required ... parameter is not present").  Returns the
-        gateway payload; the caller maps the hit rows (fieldValues /
-        grouped_hits — shape confirmed on first valid-key success) into
-        candidate structures.
+        SDK-native wire contract (verified against the live gateway
+        2026-08-26): ``/extService/search`` with ``query`` /
+        ``page_index`` / ``page_size`` / ``fields`` / ``client_sign`` —
+        no ``level`` (the /openService alias requires it and gates on a
+        DATA_PAT_BASE_* product the account lacks).  ``client_sign`` is
+        computed exactly like the SDK's DefaultCubeClient.doPost.  The
+        caller maps the hit rows (documents[] wrapping fieldValues, per
+        the 2023 API docs) into candidate structures.
         """
         body = await self._request_json(
             _API_METHOD_SEARCH,
@@ -296,7 +324,9 @@ class BaitenClient:
                 "source": source,
                 "page_index": page,
                 "page_size": page_size,
-                "level": api_level,
+                "fields": fields,
+                "client_sign": _compute_client_sign(
+                    query_string, self._app_secret),
             },
         )
         _logger.info(
@@ -308,10 +338,17 @@ class BaitenClient:
         )
         return body
 
-    async def get_doc(self, doc_id: str) -> dict[str, Any]:
-        """Full bibliographic record for one patent (docId = pn or id)."""
+    async def get_doc(self, doc_id: str, client_sign: str = "") -> dict[str, Any]:
+        """Full bibliographic record for one patent (doc_id = pn or id).
+
+        Wire contract verified 2026-08-26: path ``/extService/get`` with
+        ``doc_id`` + ``client_sign`` (both required by the gateway).
+        *client_sign*'s value algorithm is unverified — any present value
+        passes Spring validation; the server-side check happens after
+        auth.
+        """
         body = await self._request_json(
-            _API_METHOD_GET_DOC, {"docId": doc_id},
+            _API_METHOD_GET_DOC, {"doc_id": doc_id, "client_sign": client_sign},
         )
         _logger.info(f"baiten_get_doc — docId={doc_id}")
         return body
@@ -331,10 +368,14 @@ class BaitenClient:
         _logger.info(f"baiten_get_claims — appNum={app_num}, patType={pat_type}")
         return body
 
-    async def get_spec(self, doc_id: str) -> dict[str, Any]:
-        """Specification text (docId = CN application number)."""
+    async def get_spec(self, doc_id: str, client_sign: str = "") -> dict[str, Any]:
+        """Specification text (doc_id = CN application number).
+
+        Wire contract verified 2026-08-26: path ``/extService/get_spec``
+        with ``doc_id`` + ``client_sign`` (both required by the gateway).
+        """
         body = await self._request_json(
-            _API_METHOD_SPEC, {"docId": doc_id},
+            _API_METHOD_SPEC, {"doc_id": doc_id, "client_sign": client_sign},
         )
         _logger.info(f"baiten_get_spec — docId={doc_id}")
         return body

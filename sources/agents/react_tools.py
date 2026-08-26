@@ -1715,14 +1715,21 @@ def _baiten_results_to_candidates(body: dict) -> list:
     never raises.
     """
     data = body.get("data")
+    rows = None
     if isinstance(data, dict):
         rows = data.get("fieldValues")
-    else:
+    if rows is None:
         rows = body.get("fieldValues")
+    if rows is None:
+        # Documented success shape (2023 API docs): documents[] where each
+        # item wraps a flat fieldValues map {an, pn, pd, ti, pa, ...}.
+        rows = body.get("documents")
     candidates = []
     for row in rows or []:
         if not isinstance(row, dict):
             continue
+        if "fieldValues" in row and isinstance(row.get("fieldValues"), dict):
+            row = row["fieldValues"]
         pn = str(row.get("pn") or "").strip()
         if not pn:
             continue

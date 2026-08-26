@@ -59,6 +59,17 @@ class TestBaitenResultsToCandidates(unittest.TestCase):
     def test_handles_top_level_and_absent_field(self):
         self.assertEqual(_baiten_results_to_candidates({"code": "200"}), [])
 
+    def test_maps_documented_documents_shape(self):
+        # 2023 API docs: search returns documents[] wrapping fieldValues.
+        body = {"qTime": 1, "totalHits": 1, "documents": [
+            {"fieldValues": {"pn": "CN118000001A", "ti": "散热装置",
+                             "an": "CN202310123456"}},
+        ]}
+        cands = _baiten_results_to_candidates(body)
+        self.assertEqual(len(cands), 1)
+        self.assertEqual(cands[0]["patent_id"], "CN118000001A")
+        self.assertEqual(cands[0]["title"], "散热装置")
+
 
 class TestItemsDigestBaiten(unittest.TestCase):
     def test_renders_baiten_rows(self):

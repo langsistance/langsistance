@@ -13,6 +13,7 @@ from sources.baiten_client import (
     _API_METHOD_SEARCH,
     _REQUEST_HEADERS,
     _SPOOL_MAX_MEMORY,
+    _compute_client_sign,
     _error_preview,
     summarize_search_response,
 )
@@ -108,7 +109,7 @@ class TestRequestJson(unittest.TestCase):
         self.assertEqual(body["code"], "200")
         self.assertEqual(len(calls), 1)
         url, headers = calls[0]
-        self.assertIn("/openService/search", url)
+        self.assertIn("/extService/search", url)
         self.assertEqual(headers, _REQUEST_HEADERS)
 
 
@@ -153,6 +154,45 @@ class TestSummarizeSearchResponse(unittest.TestCase):
         self.assertEqual(summary["total"], 152)
         self.assertEqual(summary["rows"], 2)
 
+    def test_documented_success_shape_documents(self):
+        # 2023 API docs: search returns {qTime, totalHits, documents}.
+        summary = summarize_search_response({
+            "qTime": 1, "totalHits": 3, "documents": [{"a": 1}, {"a": 2}],
+        })
+        self.assertEqual(summary["total"], 3)
+        self.assertEqual(summary["rows"], 2)
+
+
+class TestComputeClientSign(unittest.TestCase):
+    """Known-vector regression for the SDK DefaultCubeClient.doPost
+    algorithm (bytecode-reverse-engineered 2026-08-26):
+    MD5(dateStr + str(len(query.strip())) + appSecret), dateStr =
+    "yyyy-MM-dd HH:mm:ss" GMT+8, uppercase hex."""
+
+    def test_known_vector(self):
+        import hashlib
+        from datetime import datetime, timezone, timedelta
+        now = datetime(2026, 8, 26, 5, 30, 0,
+                       tzinfo=timezone(timedelta(hours=8)))
+        # len("ti:(散热)") = 7（t i : ( 散 热 )）
+        sign = _compute_client_sign("ti:(散热)", "secret123", now=now)
+        expected = hashlib.md5(
+            ("2026-08-26 05:30:00" + "7" + "secret123").encode("UTF-8"),
+        ).hexdigest().upper()
+        self.assertEqual(sign, expected)
+
+    def test_trims_whitespace_in_length(self):
+        from datetime import datetime, timezone, timedelta
+        now = datetime(2026, 8, 26, 5, 30, 0,
+                       tzinfo=timezone(timedelta(hours=8)))
+        # Java trim(): "  ti:(散热)  " → len 7
+        sign = _compute_client_sign("  ti:(散热)  ", "s", now=now)
+        import hashlib
+        expected = hashlib.md5(
+            ("2026-08-26 05:30:00" + "7" + "s").encode("UTF-8"),
+        ).hexdigest().upper()
+        self.assertEqual(sign, expected)
+
 
 class TestErrorPreview(unittest.TestCase):
     """HTML error pages from the Spring gateway must yield their Message."""
@@ -186,22 +226,36 @@ class TestLiveWireParams(unittest.TestCase):
     download pub_num/pub_date — the SDK-style names get a Spring 400."""
 
     def test_search_wire_param_names(self):
+        # SDK-native surface: /extService/search with query/page_index/
+        # page_size/fields/client_sign — no level (the /openService alias
+        # requires it and gates on DATA_PAT_BASE_* product permission).
         fake = _FakeHttpClient(status=200, body={"code": "200"})
         with patch("sources.baiten_client.httpx.AsyncClient",
                    return_value=fake):
             client = BaitenClient("k", "s", "http://gw")
             asyncio.run(client.search("ti:(散热)", page=2, page_size=30))
         call = fake.calls[0]
-        self.assertIn("/openService/search", call["url"])
+        self.assertIn("/extService/search", call["url"])
         params = parse_qs(call["content"])
         self.assertEqual(params["query"], ["ti:(散热)"])
-        self.assertEqual(params["level"], ["ONE"])
         self.assertEqual(params["page_index"], ["2"])
         self.assertEqual(params["page_size"], ["30"])
         self.assertEqual(params["source"], ["15"])
-        self.assertNotIn("queryString", params)
+        self.assertEqual(params["fields"], ["ti,pa,an,pn,pd,ad,ab"])
+        self.assertNotIn("level", params)
         self.assertNotIn("apiLevel", params)
-        self.assertNotIn("pageSize", params)
+        self.assertIn("client_sign", params)
+        self.assertEqual(len(params["client_sign"][0]), 32)  # MD5 hex
+        self.assertTrue(params["client_sign"][0].isupper())
+
+    def test_search_fields_override(self):
+        fake = _FakeHttpClient(status=200, body={"code": "200"})
+        with patch("sources.baiten_client.httpx.AsyncClient",
+                   return_value=fake):
+            client = BaitenClient("k", "s", "http://gw")
+            asyncio.run(client.search("ti:(散热)", fields="ti,pa"))
+        params = parse_qs(fake.calls[0]["content"])
+        self.assertEqual(params["fields"], ["ti,pa"])
 
     def test_claims_wire_param_names(self):
         fake = _FakeHttpClient(status=200, body={"code": "200"})
@@ -216,6 +270,19 @@ class TestLiveWireParams(unittest.TestCase):
         self.assertEqual(params["pat_type"], ["AUTH"])
         self.assertNotIn("patType", params)
         self.assertNotIn("appNum", params)
+
+    def test_get_doc_wire_params_and_path(self):
+        # SDK-native path: /extService/get with doc_id + client_sign.
+        fake = _FakeHttpClient(status=200, body={"code": "200"})
+        with patch("sources.baiten_client.httpx.AsyncClient",
+                   return_value=fake):
+            client = BaitenClient("k", "s", "http://gw")
+            asyncio.run(client.get_doc("CN118000001A", client_sign="abc"))
+        call = fake.calls[0]
+        self.assertIn("/extService/get", call["url"])
+        params = parse_qs(call["content"])
+        self.assertEqual(params["doc_id"], ["CN118000001A"])
+        self.assertEqual(params["client_sign"], ["abc"])
 
     def test_download_wire_params_and_path(self):
         fake = _FakeStreamClient()
