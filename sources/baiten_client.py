@@ -332,7 +332,7 @@ class BaitenClient:
         try:
             async with httpx.AsyncClient(timeout=BAITEN_REQUEST_TIMEOUT) as client:
                 async with client.stream(
-                    "POST", url, content=form_data, headers=self._REQUEST_HEADERS,
+                    "POST", url, content=form_data, headers=_REQUEST_HEADERS,
                 ) as response:
                     if response.status_code != 200:
                         preview = (await response.aread())[:300]
@@ -473,7 +473,7 @@ class BaitenClient:
             response = await client.post(
                 url,
                 content=form_data,
-                headers=self._REQUEST_HEADERS,
+                headers=_REQUEST_HEADERS,
             )
 
         if response.status_code != 200:

@@ -4,11 +4,13 @@ import base64
 import io
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from sources.baiten_client import (
     BaitenClient,
     _API_METHOD_LAW,
     _API_METHOD_SEARCH,
+    _REQUEST_HEADERS,
     _SPOOL_MAX_MEMORY,
     summarize_search_response,
 )
@@ -65,6 +67,47 @@ class TestBuildTopParams(unittest.TestCase):
         params = client._build_top_params(
             _API_METHOD_LAW, {"app_num": "CN1", "law_category": "FSWX"})
         self.assertEqual(params["law_category"], "FSWX")
+
+
+class TestRequestJson(unittest.TestCase):
+    """Regression: _REQUEST_HEADERS is a module constant — referencing it as
+    self._REQUEST_HEADERS raised AttributeError on every request, so the
+    client never reached the gateway (production 2026-08-26)."""
+
+    async def _run(self):
+        class _FakeResponse:
+            status_code = 200
+            text = '{"code": "200", "data": {"fieldValues": []}}'
+
+            def json(self):
+                return {"code": "200", "data": {"fieldValues": []}}
+
+        calls = []
+
+        class _FakeClient:
+            async def post(self, url, content, headers):
+                calls.append((url, headers))
+                return _FakeResponse()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+        with patch("sources.baiten_client.httpx.AsyncClient",
+                   return_value=_FakeClient()):
+            client = BaitenClient("k", "s", "http://gw")
+            return await client._request_json(
+                _API_METHOD_SEARCH, {"queryString": "ti:(散热)"}), calls
+
+    def test_post_reaches_gateway_with_module_headers(self):
+        body, calls = asyncio.run(self._run())
+        self.assertEqual(body["code"], "200")
+        self.assertEqual(len(calls), 1)
+        url, headers = calls[0]
+        self.assertIn("/openService/search", url)
+        self.assertEqual(headers, _REQUEST_HEADERS)
 
 
 class TestSummarizeSearchResponse(unittest.TestCase):
