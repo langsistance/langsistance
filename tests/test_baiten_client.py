@@ -5,6 +5,7 @@ import io
 import tempfile
 import unittest
 from unittest.mock import patch
+from urllib.parse import parse_qs
 
 from sources.baiten_client import (
     BaitenClient,
@@ -12,6 +13,7 @@ from sources.baiten_client import (
     _API_METHOD_SEARCH,
     _REQUEST_HEADERS,
     _SPOOL_MAX_MEMORY,
+    _error_preview,
     summarize_search_response,
 )
 
@@ -139,6 +141,163 @@ class TestSummarizeSearchResponse(unittest.TestCase):
                          {"total": None, "rows": 0, "keys": []})
         self.assertEqual(summarize_search_response("junk"),
                          {"total": None, "rows": 0, "keys": []})
+
+    def test_live_gateway_shape_grouped_hits(self):
+        # Error envelope observed on the live gateway (2026-08-26):
+        # {qTime, total_hits, grouped_hits, code, msg}.
+        summary = summarize_search_response({
+            "qTime": 0, "total_hits": 152,
+            "grouped_hits": [{"id": 1}, {"id": 2}],
+            "code": "200", "msg": "ok",
+        })
+        self.assertEqual(summary["total"], 152)
+        self.assertEqual(summary["rows"], 2)
+
+
+class TestErrorPreview(unittest.TestCase):
+    """HTML error pages from the Spring gateway must yield their Message."""
+
+    def test_extracts_spring_required_param_message(self):
+        html = ('<!doctype html><html lang="en"><head><title>HTTP Status 400 '
+                '– Bad Request</title><style>body {font-family:Tahoma}</style>'
+                '</head><body><h1>HTTP Status 400 – Bad Request</h1><p><b>'
+                'Message</b> Required String parameter &#39;level&#39; is not '
+                'present</p></body></html>')
+        preview = _error_preview(html)
+        self.assertEqual(
+            preview, "Required String parameter 'level' is not present")
+
+    def test_extracts_title_when_no_message(self):
+        preview = _error_preview(
+            "<html><head><title>HTTP Status 404 – Not Found</title></head></html>")
+        self.assertEqual(preview, "HTTP Status 404 – Not Found")
+
+    def test_plain_text_truncated(self):
+        preview = _error_preview("x" * 500)
+        self.assertEqual(len(preview), 300)
+
+    def test_empty_body(self):
+        self.assertEqual(_error_preview(""), "(empty body)")
+
+
+class TestLiveWireParams(unittest.TestCase):
+    """Wire contracts verified against the live gateway 2026-08-26: search
+    wants query/level/page_index/page_size, claims app_num/pat_type,
+    download pub_num/pub_date — the SDK-style names get a Spring 400."""
+
+    def test_search_wire_param_names(self):
+        fake = _FakeHttpClient(status=200, body={"code": "200"})
+        with patch("sources.baiten_client.httpx.AsyncClient",
+                   return_value=fake):
+            client = BaitenClient("k", "s", "http://gw")
+            asyncio.run(client.search("ti:(散热)", page=2, page_size=30))
+        call = fake.calls[0]
+        self.assertIn("/openService/search", call["url"])
+        params = parse_qs(call["content"])
+        self.assertEqual(params["query"], ["ti:(散热)"])
+        self.assertEqual(params["level"], ["ONE"])
+        self.assertEqual(params["page_index"], ["2"])
+        self.assertEqual(params["page_size"], ["30"])
+        self.assertEqual(params["source"], ["15"])
+        self.assertNotIn("queryString", params)
+        self.assertNotIn("apiLevel", params)
+        self.assertNotIn("pageSize", params)
+
+    def test_claims_wire_param_names(self):
+        fake = _FakeHttpClient(status=200, body={"code": "200"})
+        with patch("sources.baiten_client.httpx.AsyncClient",
+                   return_value=fake):
+            client = BaitenClient("k", "s", "http://gw")
+            asyncio.run(client.get_claims("CN1", "AUTH"))
+        call = fake.calls[0]
+        self.assertIn("/openService/claims", call["url"])
+        params = parse_qs(call["content"])
+        self.assertEqual(params["app_num"], ["CN1"])
+        self.assertEqual(params["pat_type"], ["AUTH"])
+        self.assertNotIn("patType", params)
+        self.assertNotIn("appNum", params)
+
+    def test_download_wire_params_and_path(self):
+        fake = _FakeStreamClient()
+        with patch("sources.baiten_client.httpx.AsyncClient",
+                   return_value=fake):
+            client = BaitenClient("k", "s", "http://gw")
+            spool = asyncio.run(client.get_file("CN118000001A", "20240101"))
+            spool.close()
+        call = fake.calls[0]
+        self.assertIn("/openService/download", call["url"])
+        self.assertNotIn("/openService/file", call["url"])
+        params = parse_qs(call["content"])
+        self.assertEqual(params["pub_num"], ["CN118000001A"])
+        self.assertEqual(params["pub_date"], ["20240101"])
+
+
+class _FakeResponse:
+    def __init__(self, status=200, body=None, text=""):
+        self.status_code = status
+        self.text = text
+        self._body = body
+
+    def json(self):
+        return self._body
+
+
+class _FakeHttpClient:
+    """httpx.AsyncClient double recording POST calls (context-managed)."""
+
+    def __init__(self, status=200, body=None, text=""):
+        self.calls = []
+        self._status = status
+        self._body = body
+        self._text = text
+
+    async def post(self, url, content, headers):
+        self.calls.append({"url": url, "content": content, "headers": headers})
+        return _FakeResponse(self._status, self._body, self._text)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _FakeStreamResponse:
+    status_code = 200
+
+    def __init__(self, payload=b'{"fileByte": "AAEC"}'):
+        self._chunks = [payload]
+
+    async def aread(self):
+        return b""
+
+    async def aiter_bytes(self):
+        for chunk in self._chunks:
+            yield chunk
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _FakeStreamClient:
+    """httpx.AsyncClient double recording stream() calls (for get_file)."""
+
+    def __init__(self):
+        self.calls = []
+
+    def stream(self, method, url, content, headers):
+        # httpx's stream() is a plain method returning a context manager.
+        self.calls.append({"url": url, "content": content, "headers": headers})
+        return _FakeStreamResponse()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
 
 
 async def _achunks(payload, size):

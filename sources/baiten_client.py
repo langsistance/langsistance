@@ -41,6 +41,7 @@ Reference
 from __future__ import annotations
 
 import hashlib
+import re
 import tempfile
 from datetime import datetime, timezone, timedelta
 from typing import Any
@@ -72,16 +73,21 @@ _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 # Charset (from Constants.CHARSET_UTF8)
 _CHARSET = "UTF-8"
 
-# API method names (from SDK request classes; live-tested for law only)
-_API_METHOD_LAW = "/openService/law"
+# API method names (from SDK request classes; live-probed against the
+# gateway 2026-08-26 — a missing required param returns Spring "Required
+# ... parameter 'x' is not present" BEFORE auth, which is how the wire
+# contracts below were confirmed without a valid key).
+_API_METHOD_LAW = "/openService/law"           # verified: app_num, law_category
+_API_METHOD_SEARCH = "/openService/search"     # verified: query, level, page_index, page_size
+_API_METHOD_CLAIMS = "/openService/claims"     # verified: app_num, pat_type
+_API_METHOD_DOWNLOAD = "/openService/download"  # verified: pub_num, pub_date
 
-# ── 以下 5 个 method 路径为推测值（SDK 只给 Java 类名），
-#    待 APP_KEY 实测确认后调整（docs/technical/baiten-cn-search-proposal.md §八）──
-_API_METHOD_SEARCH = "/openService/search"     # CubeOpenSearchRequest
-_API_METHOD_GET_DOC = "/openService/getDoc"    # CubeOpenGetDocRequest
-_API_METHOD_CLAIMS = "/openService/claims"     # CubeOpenGetClaimsRequest
-_API_METHOD_SPEC = "/openService/spec"         # CubeOpenGetSpecRequest
-_API_METHOD_FILE = "/openService/file"         # CubeOpenFileRequest
+# ── 以下 2 个 method 路径在网关上返回 404（2026-08-26 实测），
+#    真实路径未知——SDK 类名（CubeOpenGetDocRequest/CubeOpenGetSpecRequest）
+#    与线上路径命名不一致。search 响应自带 an/pd 时 getDoc 可绕开；spec
+#    文本通道已延后（patent_detail 只渲染 pdf_url）。──
+_API_METHOD_GET_DOC = "/openService/getDoc"    # UNVERIFIED — 404 on gateway
+_API_METHOD_SPEC = "/openService/spec"         # UNVERIFIED — 404 on gateway
 
 # PDF base64 spool: keep this many bytes in memory before spilling to disk.
 # The server has <1GB RAM; a multi-page spec PDF (tens of MB, 1.33x base64)
@@ -123,14 +129,41 @@ class BaitenAPIError(BaitenError):
     """API returned a non-success response."""
 
 
+def _error_preview(text: str) -> str:
+    """Short, useful preview of a non-200 response body.
+
+    The gateway is Spring/Tomcat: a bad request returns an HTML error
+    page whose ``<b>Message</b>`` line names the missing/invalid request
+    parameter ("Required String parameter 'level' is not present") —
+    exactly the signal needed to fix the wire contract.  Extracting it
+    beats dumping 300 chars of HTML style blocks into logs/notes.
+    """
+    if not text:
+        return "(empty body)"
+    if "<" in text and ("<title>" in text or "<html" in text.lower()):
+        import html as _html
+        m = re.search(r"<b>Message</b>\s*(.*?)</p>", text,
+                      re.IGNORECASE | re.DOTALL)
+        if m:
+            msg = _html.unescape(re.sub(r"\s+", " ", m.group(1))).strip()
+            if msg:
+                return msg[:300]
+        m = re.search(r"<title>(.*?)</title>", text, re.IGNORECASE | re.DOTALL)
+        if m:
+            return _html.unescape(m.group(1)).strip()[:300]
+    return text[:300]
+
+
 def summarize_search_response(body: dict) -> dict:
     """Defensive summary of a Baiten search response for diagnostics.
 
     Distinguishes "gateway returned 0 records" from "records present but
-    the candidate mapping dropped them": ``rows`` counts the raw
-    ``fieldValues`` entries, ``total`` is the gateway's count field when
-    present, ``keys`` shows the top-level shape so a schema drift is
-    visible in a single log line.  Pure — never raises.
+    the candidate mapping dropped them": ``rows`` counts the raw hit
+    entries (``data.fieldValues`` per the SDK shape, ``grouped_hits``
+    per the live gateway error envelope), ``total`` is the gateway's
+    count field when present (``total_hits`` on the wire), ``keys``
+    shows the top-level shape so a schema drift is visible in a single
+    log line.  Pure — never raises.
     """
     if not isinstance(body, dict):
         return {"total": None, "rows": 0, "keys": []}
@@ -138,9 +171,13 @@ def summarize_search_response(body: dict) -> dict:
     rows = data.get("fieldValues") if isinstance(data, dict) else None
     if rows is None:
         rows = body.get("fieldValues")
+    if rows is None:
+        rows = body.get("grouped_hits")
     if not isinstance(rows, list):
         rows = []
     total = body.get("total")
+    if total is None:
+        total = body.get("total_hits")
     if total is None and isinstance(data, dict):
         total = data.get("total")
     return {
@@ -244,17 +281,22 @@ class BaitenClient:
     ) -> dict[str, Any]:
         """Basic full-text search (source=15 → China patent library).
 
-        Returns the gateway payload; the caller maps ``fieldValues``
-        {id, an, ad, pn, pd, ti, pa} into candidate structures.
+        Wire contract verified against the live gateway 2026-08-26:
+        ``query`` / ``level`` / ``page_index`` / ``page_size`` (NOT the
+        SDK-style queryString/apiLevel/page/pageSize — those get a Spring
+        400 "Required ... parameter is not present").  Returns the
+        gateway payload; the caller maps the hit rows (fieldValues /
+        grouped_hits — shape confirmed on first valid-key success) into
+        candidate structures.
         """
         body = await self._request_json(
             _API_METHOD_SEARCH,
             {
-                "queryString": query_string,
+                "query": query_string,
                 "source": source,
-                "page": page,
-                "pageSize": page_size,
-                "apiLevel": api_level,
+                "page_index": page,
+                "page_size": page_size,
+                "level": api_level,
             },
         )
         _logger.info(
@@ -279,11 +321,12 @@ class BaitenClient:
     ) -> dict[str, Any]:
         """Structured claims (patentClaimses[] hierarchy) for one patent.
 
+        Wire contract verified 2026-08-26: ``app_num`` / ``pat_type``.
         pat_type: "AUTH" (granted) or "APP" (application).
         """
         body = await self._request_json(
             _API_METHOD_CLAIMS,
-            {"appNum": app_num, "patType": pat_type},
+            {"app_num": app_num, "pat_type": pat_type},
         )
         _logger.info(f"baiten_get_claims — appNum={app_num}, patType={pat_type}")
         return body
@@ -301,6 +344,10 @@ class BaitenClient:
     ):
         """Download a patent PDF as a streaming spooled file.
 
+        Wire contract verified 2026-08-26: method path
+        ``/openService/download`` with ``pub_num`` / ``pub_date`` (the
+        SDK-style pubNum/pubDate names get a Spring 400).
+
         The gateway returns ``fileByte`` as a base64 JSON string that can
         reach tens of MB (1.33x expansion) — the response is streamed and
         base64-decoded chunk-by-chunk into a ``tempfile.SpooledTemporaryFile``
@@ -312,11 +359,11 @@ class BaitenClient:
             The caller owns it and must close it when done.
         """
         all_params = self._build_top_params(
-            _API_METHOD_FILE,
+            _API_METHOD_DOWNLOAD,
             {
-                "pubNum": pub_num,
-                "pubDate": pub_date,
-                "fileCategory": file_category,
+                "pub_num": pub_num,
+                "pub_date": pub_date,
+                "file_category": file_category,
             },
         )
         api_method = all_params.pop("method")
@@ -479,7 +526,7 @@ class BaitenClient:
         if response.status_code != 200:
             raise BaitenAPIError(
                 f"Baiten API HTTP {response.status_code}: "
-                f"{response.text[:300]}"
+                f"{_error_preview(response.text)}"
             )
 
         body = response.json()
