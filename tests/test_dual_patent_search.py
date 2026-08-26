@@ -359,11 +359,12 @@ class TestRunPatentSearch(unittest.TestCase):
             result = asyncio.run(_run_patent_search(
                 agent, {"query_string_us": "us-tight",
                         "query_string_cn": "ti:(散热)"}, "zh"))
-        # 首轮 tightest + 自动补跑（tightest 已记入 tried，补跑只执行载体词式）
+        # 首轮 tightest + 自动补跑（tightest 已记入 tried，补跑只执行载体词式；
+        # US 首轮 0 命中同样补跑 1 条——共享预算）
         self.assertEqual(cn_calls, ["ti:(散热)", "ti:(载体)"])
         self.assertIn("CN118000002A", result["text"])
         self.assertIn("已自动补跑中国专利阶梯式", result["text"])
-        self.assertEqual(agent._patent_auto_used, 1)
+        self.assertEqual(agent._patent_auto_used, 2)
         self.assertIn("ti:(载体)", agent._tried_queries)
         self.assertEqual(len(agent._pending_raw_items), 1)
 
@@ -394,17 +395,28 @@ class TestRunPatentSearch(unittest.TestCase):
         self.assertIn("Auto-ran 1 US ladder", result["text"])
         self.assertIn("19511555", result["text"])
 
-    def test_zh_us_zero_does_not_auto_run_us(self):
-        # 中文提问：US 0 命中不补跑 US 阶梯（预算留给 CN 侧重）。
+    def test_non_preferred_source_gets_fallback(self):
+        # zh 提问：CN 首轮 0 命中自动补跑后，US 首轮 0 命中也要补跑
+        # （用户要求中美都有结果——单个 404 不能饿死另一源）。
+        cn_calls = []
         us_calls = []
+
+        async def _cn(q, page=1, page_size=20, agent=None):
+            cn_calls.append(q)
+            if q == "ti:(载体)":
+                return [{"patent_id": "CN118000002A", "source": "baiten",
+                         "title": "载体词命中"}], "Baiten 1 hits"
+            return [], "Baiten 0 hits (gateway 0 records)"
 
         async def _us(q, page=1, page_size=20, agent=None):
             us_calls.append(q)
+            if q == "us-loose":
+                return [{"applicationNumberText": "19511555",
+                         "applicationMetaData": {
+                             "inventionTitle": "Cooling",
+                             "firstApplicantName": "Intel",
+                             "filingDate": "2024-01-01"}}], "USPTO 1 hits"
             return [], "USPTO 0 hits"
-
-        async def _cn(q, page=1, page_size=20, agent=None):
-            return [{"patent_id": "CN118000001A", "source": "baiten",
-                     "title": "散热装置"}], "Baiten 1 hits"
 
         with patch("sources.agents.react_tools._uspto_search_by_query", _us), \
              patch("sources.agents.react_tools._baiten_search_by_query", _cn):
@@ -412,8 +424,12 @@ class TestRunPatentSearch(unittest.TestCase):
             result = asyncio.run(_run_patent_search(
                 agent, {"query_string_us": "us-tight",
                         "query_string_cn": "ti:(散热)"}, "zh"))
-        self.assertEqual(us_calls, ["us-tight"])
-        self.assertIn("CN118000001A", result["text"])
+        # CN 首轮 tightest → CN 补跑载体词式 → US 首轮 tightest → US 补跑 loose
+        self.assertIn("CN118000002A", result["text"])
+        self.assertIn("19511555", result["text"])
+        self.assertEqual(len(agent._pending_raw_items), 2)
+        self.assertIn("ti:(载体)", cn_calls)
+        self.assertIn("us-loose", us_calls)
 
     def test_auto_ladder_respects_request_cap(self):
         cn_calls = []

@@ -2018,27 +2018,36 @@ async def _run_patent_search(agent, args, lang: str, dual: bool = True) -> dict:
     # (CN for zh, US for en — strategy parity, both sides share this
     # mechanism) returned nothing displayable, run untried ladder queries
     # system-side (prompt-level nudges do not work for weak models).
+    # The NON-preferred source gets the same fallback afterwards (shared
+    # per-request budget caps the total) — the user wants BOTH sides to
+    # return results, and a single first-round 404 must not starve the
+    # other source of its looser ladder forms.
     if not dual:
         preferred = "cn"
     elif lang == "zh":
         preferred = "cn"
     else:
         preferred = "us"
-    if preferred == "cn" and cn_q:
-        cn_cands = [c for c in merged
+
+    def _source_cands(source: str) -> list:
+        if source == "cn":
+            return [c for c in merged
                     if isinstance(c, dict) and c.get("source") == "baiten"]
-        if not cn_cands:
-            await _auto_run_patent_ladder(
-                agent, cn_ladder, _baiten, merged, notes, lang, "cn",
-                page, page_size)
-    elif preferred == "us" and us_q:
-        us_cands = [c for c in merged
-                    if not (isinstance(c, dict)
-                            and c.get("source") == "baiten")]
-        if not us_cands:
-            await _auto_run_patent_ladder(
-                agent, us_ladder, _uspto, merged, notes, lang, "us",
-                page, page_size)
+        return [c for c in merged
+                if not (isinstance(c, dict) and c.get("source") == "baiten")]
+
+    async def _run_for(source: str):
+        q = cn_q if source == "cn" else us_q
+        if not q or _source_cands(source):
+            return
+        ladder = cn_ladder if source == "cn" else us_ladder
+        fn = _baiten if source == "cn" else _uspto
+        await _auto_run_patent_ladder(
+            agent, ladder, fn, merged, notes, lang, source,
+            page, page_size)
+
+    await _run_for(preferred)
+    await _run_for("us" if preferred == "cn" else "cn")
 
     agent._pending_raw_items = merged
     if _glog is not None:

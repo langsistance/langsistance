@@ -1735,6 +1735,20 @@ Begin your response now:
                     f"search_interpretation — scheme={scheme}"
                     + (f" | players={players}" if players else "")
                 )
+        # Morph the rewrite ladder: USPTO's applications/search 404s most
+        # 3-concept AND combinations, so every query is expanded into its
+        # AND-drop chain (3-group → 2-group → single-concept OR) — the
+        # agent/auto-ladder then always has a form that can return hits.
+        try:
+            from sources.long_task.technical_interpretation import (
+                expand_rewrite_queries)
+            _rewrite_queries = (self._search_rewrite or {}).get("queries") or []
+            _expanded = expand_rewrite_queries(_rewrite_queries)
+            if _expanded:
+                self._search_rewrite = {
+                    **(self._search_rewrite or {}), "queries": _expanded}
+        except Exception:
+            pass  # ladder morphing is an enhancement, never a hard dep
         self.logger.info(
             f"search_rewrite — queries={self._search_rewrite.get('queries')} "
             f"| mode={self._query_mode}"

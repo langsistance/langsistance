@@ -71,6 +71,29 @@ class TestParseInterpretation(unittest.TestCase):
 
 
 class TestAndChainExpansion(unittest.TestCase):
+    def test_expand_rewrite_queries_flattens_chains(self):
+        queries = ['("a") AND ("b") AND ("c")', '("d" OR "e")']
+        expanded = ti.expand_rewrite_queries(queries)
+        # 3 组展开为 3/2/1 组链 + 单组原样，去重保序，紧到松
+        self.assertEqual(expanded, [
+            '("a") AND ("b") AND ("c")',
+            '("a") AND ("b")',
+            '("a")',
+            '("d" OR "e")',
+        ])
+
+    def test_expand_rewrite_queries_dedupes_and_caps(self):
+        queries = ['("a") AND ("b") AND ("c")', '("a") AND ("b") AND ("c")']
+        expanded = ti.expand_rewrite_queries(queries, limit=2)
+        self.assertEqual(expanded, [
+            '("a") AND ("b") AND ("c")',
+            '("a") AND ("b")',
+        ])
+
+    def test_expand_rewrite_queries_empty(self):
+        self.assertEqual(ti.expand_rewrite_queries([]), [])
+        self.assertEqual(ti.expand_rewrite_queries(None), [])
+
     def test_split_and_groups_top_level(self):
         self.assertEqual(
             ti._split_and_groups('("a" OR "b") AND ("c") AND ("d")'),

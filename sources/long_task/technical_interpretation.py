@@ -264,6 +264,26 @@ def expand_query_ladder(q: str) -> list:
     return chain
 
 
+def expand_rewrite_queries(queries: list, limit: int = 8) -> list:
+    """Expand every rewrite query into its AND-drop chain, flattened,
+    deduped, tightest-first, capped at *limit*.
+
+    USPTO's applications/search 404s most 3-concept AND combinations but
+    matches 2-group and single-concept forms reliably — the fallbacks
+    must be present in the ladder or the agent/auto-ladder can never
+    reach a form that returns hits (production: zh queries get CN
+    auto-ladder but US stays at the first 3-concept 404).
+    """
+    out: list = []
+    seen: set = set()
+    for q in queries or []:
+        for sub in expand_query_ladder(str(q)):
+            if sub and sub not in seen:
+                seen.add(sub)
+                out.append(sub)
+    return out[:limit]
+
+
 def _dimension_queries(interp: Optional[dict]) -> list:
     """Per-dimension ladder head, round-robin interleaved.
 
