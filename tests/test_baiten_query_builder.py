@@ -133,6 +133,11 @@ class TestPromptGenerality(unittest.TestCase):
         self.assertIn("中文为主", REWRITE_SYSTEM_PROMPT_CN)
         self.assertIn("通配符", REWRITE_SYSTEM_PROMPT_CN)
 
+    def test_explains_short_word_rule(self):
+        # 0-命中教训（2026-08-26 实测）：专利标题用短词，长表述必 0 命中。
+        self.assertIn("2-4 字短词", REWRITE_SYSTEM_PROMPT_CN)
+        self.assertIn("完整长表述", REWRITE_SYSTEM_PROMPT_CN)
+
 
 class TestFormatLadderGuidanceDual(unittest.TestCase):
     def test_cn_section_appended_with_field_semantics(self):
