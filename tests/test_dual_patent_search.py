@@ -131,9 +131,11 @@ class TestResolvePatentQueries(unittest.TestCase):
 class TestBaitenSearchByQueryNotes(unittest.TestCase):
     """The note must tell a real zero from a parse zero from a failure."""
 
-    async def _run(self, body, cfg=None):
+    async def _run(self, body, cfg=None, raise_exc=None):
         class _FakeClient:
             async def search(self, q, page=1, page_size=20):
+                if raise_exc is not None:
+                    raise raise_exc
                 return body
         effective_cfg = cfg if cfg is not None else {
             "app_key": "k", "app_secret": "s", "gateway_url": "http://x"}
@@ -147,6 +149,16 @@ class TestBaitenSearchByQueryNotes(unittest.TestCase):
         items, note = asyncio.run(self._run({"code": "200"}))
         self.assertEqual(items, [])
         self.assertEqual(note, "Baiten 0 hits (gateway 0 records)")
+
+    def test_gateway_error_note(self):
+        # _request_json raises (HTTP non-200 / gateway error code) → the
+        # note must say "failed" — never a misleading "0 hits".
+        from sources.baiten_client import BaitenAPIError
+        items, note = asyncio.run(self._run(
+            {}, raise_exc=BaitenAPIError("Baiten API error code=404: msg")))
+        self.assertEqual(items, [])
+        self.assertIn("Baiten failed", note)
+        self.assertIn("error code=404", note)
 
     def test_records_but_parse_zero_note(self):
         # Rows present but keyed differently than the mapping expects.

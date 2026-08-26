@@ -1825,6 +1825,8 @@ async def _baiten_search_by_query(
             )
         return items, f"Baiten {len(items)} hits"
     except Exception as exc:
+        if _glog is not None:
+            _glog.warning(f"baiten_search — failed: {exc}")
         return [], f"Baiten failed: {exc}"
 
 
@@ -2024,6 +2026,8 @@ async def _run_patent_search(agent, args, lang: str, dual: bool = True) -> dict:
         digest = ("No results from any source." if lang == "en"
                   else "两个数据源均未返回结果。")
     if notes:
+        if _glog is not None:
+            _glog.info("patent_search_notes — " + "; ".join(notes))
         digest += "\n\n" + ("status: " if lang == "en" else "状态：") \
             + "; ".join(notes)
     return {"kind": "observation", "text": digest}
