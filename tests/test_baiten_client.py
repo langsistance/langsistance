@@ -109,7 +109,7 @@ class TestRequestJson(unittest.TestCase):
         self.assertEqual(body["code"], "200")
         self.assertEqual(len(calls), 1)
         url, headers = calls[0]
-        self.assertIn("/extService/search", url)
+        self.assertIn("/openService/search", url)
         self.assertEqual(headers, _REQUEST_HEADERS)
 
 
@@ -237,36 +237,42 @@ class TestLiveWireParams(unittest.TestCase):
     download pub_num/pub_date — the SDK-style names get a Spring 400."""
 
     def test_search_wire_param_names(self):
-        # SDK-native surface: /extService/search with query/page_index/
-        # page_size/fields/client_sign — no level (the /openService alias
-        # requires it and gates on DATA_PAT_BASE_* product permission).
+        # Working surface (live-verified 2026-08-26): /openService/search
+        # with query/level/page_index/page_size; page_size clamped to 10
+        # (the gateway rejects anything larger).
         fake = _FakeHttpClient(status=200, body={"code": "200"})
         with patch("sources.baiten_client.httpx.AsyncClient",
                    return_value=fake):
             client = BaitenClient("k", "s", "http://gw")
             asyncio.run(client.search("ti:(散热)", page=2, page_size=30))
         call = fake.calls[0]
-        self.assertIn("/extService/search", call["url"])
+        self.assertIn("/openService/search", call["url"])
         params = parse_qs(call["content"])
         self.assertEqual(params["query"], ["ti:(散热)"])
+        self.assertEqual(params["level"], ["ONE"])
         self.assertEqual(params["page_index"], ["2"])
-        self.assertEqual(params["page_size"], ["30"])
+        self.assertEqual(params["page_size"], ["10"])  # clamped from 30
         self.assertEqual(params["source"], ["15"])
-        self.assertEqual(params["fields"], ["ti,pa,an,pn,pd,ad,ab"])
-        self.assertNotIn("level", params)
-        self.assertNotIn("apiLevel", params)
-        self.assertIn("client_sign", params)
-        self.assertEqual(len(params["client_sign"][0]), 32)  # MD5 hex
-        self.assertTrue(params["client_sign"][0].isupper())
+        self.assertNotIn("fields", params)
+        self.assertNotIn("client_sign", params)
 
-    def test_search_fields_override(self):
+    def test_search_api_level_override(self):
         fake = _FakeHttpClient(status=200, body={"code": "200"})
         with patch("sources.baiten_client.httpx.AsyncClient",
                    return_value=fake):
             client = BaitenClient("k", "s", "http://gw")
-            asyncio.run(client.search("ti:(散热)", fields="ti,pa"))
+            asyncio.run(client.search("ti:(散热)", api_level="TWO"))
         params = parse_qs(fake.calls[0]["content"])
-        self.assertEqual(params["fields"], ["ti,pa"])
+        self.assertEqual(params["level"], ["TWO"])
+
+    def test_search_keeps_page_size_within_limit(self):
+        fake = _FakeHttpClient(status=200, body={"code": "200"})
+        with patch("sources.baiten_client.httpx.AsyncClient",
+                   return_value=fake):
+            client = BaitenClient("k", "s", "http://gw")
+            asyncio.run(client.search("ti:(散热)", page_size=5))
+        params = parse_qs(fake.calls[0]["content"])
+        self.assertEqual(params["page_size"], ["5"])
 
     def test_claims_wire_param_names(self):
         fake = _FakeHttpClient(status=200, body={"code": "200"})

@@ -70,6 +70,28 @@ class TestBaitenResultsToCandidates(unittest.TestCase):
         self.assertEqual(cands[0]["patent_id"], "CN118000001A")
         self.assertEqual(cands[0]["title"], "散热装置")
 
+    def test_maps_live_field_values_shape_with_pa_list(self):
+        # Live-verified response (2026-08-26, real key): documents[] with
+        # field_values (snake_case) and multi-valued pa as a list.
+        body = {"qTime": 31, "total_hits": 864544, "grouped_hits": 0,
+                "documents": [
+                    {"field_values": {
+                        "an": "CN201610553976.0", "ad": "20160714",
+                        "pn": "CN107618459A", "pd": "20180123",
+                        "ti": "汽车后备箱开启方法",
+                        "pa": ["中山市澳多电子科技有限公司"],
+                        "id": "CN201610553976.0"},
+                     "hl_field_values": {"pa": ["中山市澳多电子科技有限公司"]}},
+                ]}
+        cands = _baiten_results_to_candidates(body)
+        self.assertEqual(len(cands), 1)
+        c = cands[0]
+        self.assertEqual(c["patent_id"], "CN107618459A")
+        self.assertEqual(c["title"], "汽车后备箱开启方法")
+        self.assertEqual(c["app_num"], "CN201610553976.0")
+        self.assertEqual(c["applicant"], "中山市澳多电子科技有限公司")
+        self.assertEqual(c["pub_date"], "20180123")
+
 
 class TestItemsDigestBaiten(unittest.TestCase):
     def test_renders_baiten_rows(self):
@@ -144,7 +166,8 @@ class TestBaitenSearchByQueryNotes(unittest.TestCase):
 
     async def _run(self, body, cfg=None, raise_exc=None):
         class _FakeClient:
-            async def search(self, q, page=1, page_size=20):
+            async def search(self, q, page=1, page_size=20,
+                             api_level="ONE"):
                 if raise_exc is not None:
                     raise raise_exc
                 return body
@@ -194,6 +217,44 @@ class TestBaitenSearchByQueryNotes(unittest.TestCase):
             "app_key": "", "app_secret": "", "gateway_url": "http://x"}))
         self.assertEqual(items, [])
         self.assertEqual(note, "Baiten not configured (BAITEN_APP_KEY/APP_SECRET)")
+
+    def test_api_level_from_config_reaches_client(self):
+        received = {}
+
+        class _FakeClient:
+            async def search(self, q, page=1, page_size=20,
+                             api_level="ONE"):
+                received["api_level"] = api_level
+                return {"code": "200"}
+
+        with patch("sources.baiten_client.BaitenClient",
+                   return_value=_FakeClient()), \
+             patch("sources.long_task.config.get_baiten_config",
+                   return_value={"app_key": "k", "app_secret": "s",
+                                 "gateway_url": "http://x",
+                                 "api_level": "TWO"}):
+            asyncio.run(_baiten_search_by_query("ti:(散热)", agent=_FakeAgent()))
+        self.assertEqual(received["api_level"], "TWO")
+
+
+class TestBaitenConfig(unittest.TestCase):
+    """api_level maps to the purchased data product (DATA_PAT_BASE_<LEVEL>);
+    level=ONE was live-verified for the production account 2026-08-26."""
+
+    def test_env_api_level_override(self):
+        from sources.long_task.config import get_baiten_config
+        with patch.dict("os.environ",
+                        {"BAITEN_APP_KEY": "k", "BAITEN_APP_SECRET": "s",
+                         "BAITEN_API_LEVEL": "TWO"}):
+            cfg = get_baiten_config("nonexistent.ini")
+        self.assertEqual(cfg["api_level"], "TWO")
+
+    def test_default_api_level(self):
+        from sources.long_task.config import get_baiten_config
+        with patch.dict("os.environ",
+                        {"BAITEN_APP_KEY": "k", "BAITEN_APP_SECRET": "s"}):
+            cfg = get_baiten_config("nonexistent.ini")
+        self.assertEqual(cfg["api_level"], "ONE")
 
 
 class TestRunPatentSearch(unittest.TestCase):

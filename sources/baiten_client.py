@@ -79,19 +79,22 @@ _CHARSET = "UTF-8"
 # contracts below were confirmed without a valid key).
 #
 # Two gateway surfaces exist: /openService/* (newer aliases, level-based
-# permission: "no access for this api: DATA_PAT_BASE_<LEVEL>") and
-# /extService/* (the SDK's native paths — no level, needs client_sign).
-# We follow the SDK surface: /extService/* (user decision 2026-08-26).
+# permission DATA_PAT_BASE_<LEVEL>) and /extService/* (the SDK's native
+# paths — no level, needs client_sign, but returns "system error" for
+# every data service with a real key 2026-08-26).  The WORKING surface is
+# /openService/* with level=ONE and page_size <= 10 — live-verified with
+# the real key: total_hits + documents[] returned.  (The level value maps
+# to the purchased data product; level=ONE passed for this account.)
 _API_METHOD_LAW = "/openService/law"           # verified: app_num, law_category
-_API_METHOD_SEARCH = "/extService/search"      # verified: query, page_index, page_size, fields, client_sign
+_API_METHOD_SEARCH = "/openService/search"     # verified: query, level, page_index, page_size(<=10)
 _API_METHOD_CLAIMS = "/openService/claims"     # verified: app_num, pat_type
 _API_METHOD_DOWNLOAD = "/openService/download"  # verified: pub_num, pub_date
-_API_METHOD_GET_DOC = "/extService/get"        # verified: doc_id, client_sign
-_API_METHOD_SPEC = "/extService/get_spec"      # verified: doc_id, client_sign
+_API_METHOD_GET_DOC = "/extService/get"        # verified: doc_id, client_sign (system error — detail flow blocked)
+_API_METHOD_SPEC = "/extService/get_spec"      # verified: doc_id, client_sign (system error — detail flow blocked)
 
-# Default search fields (PatField codes from the SDK enum; the candidate
-# structure needs pn/ti/pa/an/pd/ad; ab adds abstract coverage).
-_DEFAULT_SEARCH_FIELDS = "ti,pa,an,pn,pd,ad,ab"
+# The gateway rejects page_size > 10 on /openService/search
+# ("pageSize 不能大于10").
+_BAITEN_MAX_PAGE_SIZE = 10
 
 # PDF base64 spool: keep this many bytes in memory before spilling to disk.
 # The server has <1GB RAM; a multi-page spec PDF (tens of MB, 1.33x base64)
@@ -307,19 +310,22 @@ class BaitenClient:
 
     async def search(
         self, query_string: str, source: str = "15", page: int = 1,
-        page_size: int = 20, fields: str = _DEFAULT_SEARCH_FIELDS,
+        page_size: int = 10, api_level: str = "ONE",
     ) -> dict[str, Any]:
         """Basic full-text search (source=15 → China patent library).
 
-        SDK-native wire contract (verified against the live gateway
-        2026-08-26): ``/extService/search`` with ``query`` /
-        ``page_index`` / ``page_size`` / ``fields`` / ``client_sign`` —
-        no ``level`` (the /openService alias requires it and gates on a
-        DATA_PAT_BASE_* product the account lacks).  ``client_sign`` is
-        computed exactly like the SDK's DefaultCubeClient.doPost.  The
-        caller maps the hit rows (documents[] wrapping fieldValues, per
-        the 2023 API docs) into candidate structures.
+        Wire contract verified against the live gateway with the real key
+        2026-08-26: ``/openService/search`` with ``query`` / ``level`` /
+        ``page_index`` / ``page_size``.  The ``level`` value maps to the
+        purchased data product (DATA_PAT_BASE_<LEVEL>); the gateway
+        answers "no access for this api: DATA_PAT_BASE_ONE" when the
+        account lacks that product.  ``page_size`` is clamped to 10 —
+        the gateway rejects anything larger ("pageSize 不能大于10").
+
+        The success payload carries ``total_hits`` and ``documents[]``,
+        each item wrapping ``field_values`` {an, pn, pd, ti, pa[], ...}.
         """
+        page_size = max(1, min(int(page_size), _BAITEN_MAX_PAGE_SIZE))
         body = await self._request_json(
             _API_METHOD_SEARCH,
             {
@@ -327,9 +333,7 @@ class BaitenClient:
                 "source": source,
                 "page_index": page,
                 "page_size": page_size,
-                "fields": fields,
-                "client_sign": _compute_client_sign(
-                    query_string, self._app_secret),
+                "level": api_level,
             },
         )
         _logger.info(

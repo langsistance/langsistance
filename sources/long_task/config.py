@@ -145,13 +145,17 @@ def get_sipop_config(config_path: str = 'config.ini') -> dict:
 DEFAULT_BAITEN_APP_KEY = ''
 DEFAULT_BAITEN_APP_SECRET = ''
 DEFAULT_BAITEN_GATEWAY_URL = 'https://open.patexplorer.com/api/gateway'
+DEFAULT_BAITEN_API_LEVEL = 'ONE'
 
 
 def get_baiten_config(config_path: str = 'config.ini') -> dict:
     """Read [BAITEN] section from config file, with env var overrides.
 
     Returns:
-        dict with keys: app_key (str), app_secret (str), gateway_url (str)
+        dict with keys: app_key (str), app_secret (str), gateway_url (str),
+        api_level (str) — the search ``level`` wire param; maps to the
+        purchased data product (DATA_PAT_BASE_<LEVEL>).  Verified with the
+        real key 2026-08-26: level=ONE passes for this account.
     """
     import os as _os
     cfg = _read_config(config_path)
@@ -159,6 +163,7 @@ def get_baiten_config(config_path: str = 'config.ini') -> dict:
     app_key = _os.getenv('BAITEN_APP_KEY', '')
     app_secret = _os.getenv('BAITEN_APP_SECRET', '')
     gateway_url = _os.getenv('BAITEN_GATEWAY_URL', DEFAULT_BAITEN_GATEWAY_URL)
+    api_level = _os.getenv('BAITEN_API_LEVEL', DEFAULT_BAITEN_API_LEVEL)
 
     if not app_key and cfg.has_section('BAITEN'):
         app_key = cfg.get('BAITEN', 'app_key', fallback=DEFAULT_BAITEN_APP_KEY)
@@ -166,11 +171,13 @@ def get_baiten_config(config_path: str = 'config.ini') -> dict:
         app_secret = cfg.get('BAITEN', 'app_secret', fallback=DEFAULT_BAITEN_APP_SECRET)
     if cfg.has_section('BAITEN'):
         gateway_url = cfg.get('BAITEN', 'gateway_url', fallback=gateway_url)
+        api_level = cfg.get('BAITEN', 'api_level', fallback=api_level)
 
     return {
         'app_key': app_key.strip(),
         'app_secret': app_secret.strip(),
         'gateway_url': gateway_url.strip(),
+        'api_level': api_level.strip(),
     }
 
 

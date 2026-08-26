@@ -1705,14 +1705,32 @@ async def _maybe_rewrite_search_query(agent, tool_info, args) -> dict:
     return out
 
 
-def _baiten_results_to_candidates(body: dict) -> list:
-    """Map Baiten search fieldValues rows into candidate structures.
+def _baiten_first_str(value) -> str:
+    """First non-empty string from a scalar or list field value.
 
-    Expected row shape (from the SDK): {id, an, ad, pn, pd, ti, pa} —
-    ``patent_id`` is the CN publication number (pn, e.g. CN112345678A),
-    which the existing candidate consumers (_extract_patent_ids_from_items
-    via patentNumber) handle natively.  Unknown shapes are skipped;
-    never raises.
+    The live gateway returns multi-valued fields (pa, in, ...) as lists
+    (``["中山市澳多电子科技有限公司"]``) and scalars otherwise.
+    """
+    if isinstance(value, list):
+        for item in value:
+            text = str(item or "").strip()
+            if text:
+                return text
+        return ""
+    return str(value or "").strip()
+
+
+def _baiten_results_to_candidates(body: dict) -> list:
+    """Map Baiten search hit rows into candidate structures.
+
+    Live-verified response shape (2026-08-26, real key):
+    ``{total_hits, documents: [{field_values: {an, pn, pd, ti, pa[], ...},
+    hl_field_values: {...}}]}``.  ``patent_id`` is the CN publication
+    number (pn, e.g. CN112345678A), which the existing candidate
+    consumers (_extract_patent_ids_from_items via patentNumber) handle
+    natively.  The older SDK shapes (top-level fieldValues, camelCase
+    fieldValues wrappers) are also tolerated.  Unknown shapes are
+    skipped; never raises.
     """
     data = body.get("data")
     rows = None
@@ -1721,26 +1739,27 @@ def _baiten_results_to_candidates(body: dict) -> list:
     if rows is None:
         rows = body.get("fieldValues")
     if rows is None:
-        # Documented success shape (2023 API docs): documents[] where each
-        # item wraps a flat fieldValues map {an, pn, pd, ti, pa, ...}.
         rows = body.get("documents")
     candidates = []
     for row in rows or []:
         if not isinstance(row, dict):
             continue
-        if "fieldValues" in row and isinstance(row.get("fieldValues"), dict):
-            row = row["fieldValues"]
-        pn = str(row.get("pn") or "").strip()
+        for wrap_key in ("field_values", "fieldValues"):
+            wrapped = row.get(wrap_key)
+            if isinstance(wrapped, dict):
+                row = wrapped
+                break
+        pn = _baiten_first_str(row.get("pn"))
         if not pn:
             continue
         candidates.append({
             "patent_id": pn,
             "source": "baiten",
-            "title": str(row.get("ti") or "").strip(),
-            "pub_date": str(row.get("pd") or "").strip(),
-            "app_num": str(row.get("an") or "").strip(),
-            "apply_date": str(row.get("ad") or "").strip(),
-            "applicant": str(row.get("pa") or "").strip(),
+            "title": _baiten_first_str(row.get("ti")),
+            "pub_date": _baiten_first_str(row.get("pd")),
+            "app_num": _baiten_first_str(row.get("an")),
+            "apply_date": _baiten_first_str(row.get("ad")),
+            "applicant": _baiten_first_str(row.get("pa")),
             "status": "",
             "grant_date": "",
             "patent_number": pn,
@@ -1815,7 +1834,9 @@ async def _baiten_search_by_query(
             return [], "Baiten not configured (BAITEN_APP_KEY/APP_SECRET)"
         client = BaitenClient(
             cfg["app_key"], cfg["app_secret"], cfg["gateway_url"])
-        body = await client.search(q, page=page, page_size=page_size)
+        body = await client.search(
+            q, page=page, page_size=page_size,
+            api_level=cfg.get("api_level", "ONE"))
         summary = summarize_search_response(body)
         items = _baiten_results_to_candidates(body)
         if _glog is not None:
