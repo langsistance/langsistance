@@ -165,19 +165,20 @@ class TestSummarizeSearchResponse(unittest.TestCase):
 
 class TestComputeClientSign(unittest.TestCase):
     """Known-vector regression for the SDK DefaultCubeClient.doPost
-    algorithm (bytecode-reverse-engineered 2026-08-26):
-    MD5(dateStr + str(len(query.strip())) + appSecret), dateStr =
-    "yyyy-MM-dd HH:mm:ss" GMT+8, uppercase hex."""
+    algorithm (bytecode-reverse-engineered 2026-08-26, live-verified):
+    MD5(fmt.format(new Date()) + str(len(query.strip())) + appSecret)
+    where fmt = SimpleDateFormat("yyyy") — the date segment is ONLY the
+    four-digit year.  Uppercase hex."""
 
     def test_known_vector(self):
         import hashlib
         from datetime import datetime, timezone, timedelta
         now = datetime(2026, 8, 26, 5, 30, 0,
                        tzinfo=timezone(timedelta(hours=8)))
-        # len("ti:(散热)") = 7（t i : ( 散 热 )）
+        # len("ti:(散热)") = 7（t i : ( 散 热 )）；日期段只取年份 "2026"
         sign = _compute_client_sign("ti:(散热)", "secret123", now=now)
         expected = hashlib.md5(
-            ("2026-08-26 05:30:00" + "7" + "secret123").encode("UTF-8"),
+            ("2026" + "7" + "secret123").encode("UTF-8"),
         ).hexdigest().upper()
         self.assertEqual(sign, expected)
 
@@ -189,9 +190,19 @@ class TestComputeClientSign(unittest.TestCase):
         sign = _compute_client_sign("  ti:(散热)  ", "s", now=now)
         import hashlib
         expected = hashlib.md5(
-            ("2026-08-26 05:30:00" + "7" + "s").encode("UTF-8"),
+            ("2026" + "7" + "s").encode("UTF-8"),
         ).hexdigest().upper()
         self.assertEqual(sign, expected)
+
+    def test_ignores_month_day_hour(self):
+        # 时间部分只有年份——同一年内任意时刻签名相同
+        from datetime import datetime, timezone, timedelta
+        tz = timezone(timedelta(hours=8))
+        sign_jan = _compute_client_sign("ti:汽车", "s",
+                                        now=datetime(2026, 1, 1, 0, 0, 0, tzinfo=tz))
+        sign_dec = _compute_client_sign("ti:汽车", "s",
+                                        now=datetime(2026, 12, 31, 23, 59, 59, tzinfo=tz))
+        self.assertEqual(sign_jan, sign_dec)
 
 
 class TestErrorPreview(unittest.TestCase):

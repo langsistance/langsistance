@@ -161,17 +161,20 @@ def _error_preview(text: str) -> str:
 def _compute_client_sign(query: str, app_secret: str,
                          now: datetime | None = None) -> str:
     """SDK client_sign algorithm (DefaultCubeClient.doPost, bytecode
-    reverse-engineered 2026-08-26).
+    reverse-engineered 2026-08-26, verified against the live gateway
+    with the real key 2026-08-26: passing it turns the gateway error
+    from "client sign invalidate" into the next-stage response).
 
     ``client_sign = MD5(fmt.format(new Date()) + v + appSecret)`` where
     *v* is ``str(len(query.trim()))`` for a search request (app_num /
-    pub_num / doc_id pass their raw value instead).  Date format is
-    ``yyyy-MM-dd HH:mm:ss`` in GMT+8 (Constants.DATE_TIME_FORMAT /
-    DATE_TIMEZONE), uppercase hex — same conventions as the TOP ``sign``
-    in this client.
+    pub_num / doc_id pass their raw value instead).  ``fmt`` is
+    ``new SimpleDateFormat("yyyy")`` — the date segment is ONLY the
+    four-digit year (the constant pool holds no longer pattern and there
+    is no reference to Constants.DATE_TIME_FORMAT).  Uppercase hex, same
+    conventions as the TOP ``sign`` in this client.
     """
     now = now or datetime.now(timezone(timedelta(hours=8)))
-    date_str = now.strftime(_DATE_FORMAT)
+    date_str = now.strftime("%Y")
     v = str(len(query.strip()))
     raw = f"{date_str}{v}{app_secret}"
     return hashlib.md5(raw.encode(_CHARSET)).hexdigest().upper()
