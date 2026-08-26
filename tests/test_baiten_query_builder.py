@@ -154,6 +154,18 @@ class TestFormatLadderGuidanceDual(unittest.TestCase):
         text = format_ladder_guidance(us, "zh", cn_rewrite=None)
         self.assertEqual(text.count("ab:(cool)"), 1)
 
+    def test_zh_renders_cn_ladder_first(self):
+        us = {"concepts": [], "queries": ["ab:(cool)"]}
+        cn = {"concepts": [], "queries": ["ti:(散热)"]}
+        text = format_ladder_guidance(us, "zh", cn_rewrite=cn)
+        self.assertLess(text.index("ti:(散热)"), text.index("ab:(cool)"))
+
+    def test_en_keeps_us_ladder_first(self):
+        us = {"concepts": [], "queries": ["ab:(cool)"]}
+        cn = {"concepts": [], "queries": ["ti:(散热)"]}
+        text = format_ladder_guidance(us, "en", cn_rewrite=cn)
+        self.assertLess(text.index("ab:(cool)"), text.index("ti:(散热)"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,7 @@ from sources.baiten_client import (
     _API_METHOD_LAW,
     _API_METHOD_SEARCH,
     _SPOOL_MAX_MEMORY,
+    summarize_search_response,
 )
 
 
@@ -64,6 +65,37 @@ class TestBuildTopParams(unittest.TestCase):
         params = client._build_top_params(
             _API_METHOD_LAW, {"app_num": "CN1", "law_category": "FSWX"})
         self.assertEqual(params["law_category"], "FSWX")
+
+
+class TestSummarizeSearchResponse(unittest.TestCase):
+    """Response summary must distinguish 0 records from unparseable ones."""
+
+    def test_data_wrapper_counts_rows_and_total(self):
+        summary = summarize_search_response({
+            "code": "200",
+            "data": {"total": 37, "fieldValues": [
+                {"pn": "CN1"}, {"pn": "CN2"}, {"pn": "CN3"},
+            ]},
+        })
+        self.assertEqual(summary["total"], 37)
+        self.assertEqual(summary["rows"], 3)
+        self.assertIn("data", summary["keys"])
+
+    def test_top_level_field_values(self):
+        summary = summarize_search_response({
+            "code": "200",
+            "fieldValues": [{"pn": "CN1"}],
+        })
+        self.assertEqual(summary["total"], None)
+        self.assertEqual(summary["rows"], 1)
+
+    def test_empty_and_non_dict_bodies(self):
+        self.assertEqual(summarize_search_response({"code": "200"}),
+                         {"total": None, "rows": 0, "keys": ["code"]})
+        self.assertEqual(summarize_search_response(None),
+                         {"total": None, "rows": 0, "keys": []})
+        self.assertEqual(summarize_search_response("junk"),
+                         {"total": None, "rows": 0, "keys": []})
 
 
 async def _achunks(payload, size):

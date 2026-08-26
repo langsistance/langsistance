@@ -216,9 +216,10 @@ def format_ladder_guidance(rewrite: dict, lang: str = "zh",
 
     Queries are listed tightest-first so the LLM can pick a variant or
     adjust from it.  When *cn_rewrite* is given (dual-source / CN mode),
-    the Baiten ladder is appended with its field-prefix semantics
-    (ti=标题 ab=摘要 clm=权利要求).  Returns "" when there is nothing to
-    show.
+    the Baiten ladder is rendered with its field-prefix semantics
+    (ti=标题 ab=摘要 clm=权利要求); for Chinese questions it comes FIRST
+    — the user's language sets the focus source (中文提问侧重中国专利).
+    Returns "" when there is nothing to show.
     """
     us_text = _render_ladder_guidance(rewrite, lang, cn=False)
     if not cn_rewrite or not (cn_rewrite.get("queries") or []):
@@ -226,6 +227,8 @@ def format_ladder_guidance(rewrite: dict, lang: str = "zh",
     cn_text = _render_ladder_guidance(cn_rewrite, lang, cn=True)
     if not us_text:
         return cn_text
+    if lang == "zh":
+        return cn_text + "\n\n" + us_text
     return us_text + "\n\n" + cn_text
 
 

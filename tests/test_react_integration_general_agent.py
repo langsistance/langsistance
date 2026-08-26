@@ -76,6 +76,7 @@ class TestCreateAgentWiring(unittest.TestCase):
         agent._missing_dir_queries = ["stale query"]
         agent._auto_round_done = True
         agent._auto_ladder_used = 5
+        agent._patent_auto_used = 2
         agent._tried_queries = ["stale tried query"]
         agent._cpc_hints = [{"code": "STALE", "title": "stale hint"}]
         agent._feedback_done = True
@@ -95,6 +96,7 @@ class TestCreateAgentWiring(unittest.TestCase):
         self.assertIsNone(getattr(agent, "_missing_dir_queries", "unset"))
         self.assertFalse(getattr(agent, "_auto_round_done", True))
         self.assertEqual(getattr(agent, "_auto_ladder_used", "unset"), 0)
+        self.assertEqual(getattr(agent, "_patent_auto_used", "unset"), 0)
         self.assertEqual(getattr(agent, "_tried_queries", "unset"), [])
         self.assertIsNone(getattr(agent, "_cpc_hints", "unset"))
         self.assertFalse(getattr(agent, "_feedback_done", True))

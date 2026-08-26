@@ -385,7 +385,10 @@ async def build_tool_set(
                 "(Baiten) in one call. Pass the English ladder query as "
                 "query_string_us and the Chinese ladder query as "
                 "query_string_cn. One source failing returns only the "
-                "other source's results."
+                "other source's results. When the user asks in Chinese "
+                "without naming a country, Chinese patents are the "
+                "primary target — query_string_cn is required (use the "
+                "Chinese ladder query)."
             )
         else:
             search_name = CN_PATENT_SEARCH_TOOL_NAME
@@ -1623,6 +1626,18 @@ async def _run_search_knowledge(agent, registry, user_id, args, push_filter) -> 
     return {"kind": "observation", "text": text, "mount_tools": mount_tools}
 
 
+def _is_session_sentinel(value, agent) -> bool:
+    """True when the LLM pasted a session ID (user_id / query_id) into
+    the query slot instead of a search expression — observed in
+    production logs (q filled with the user_id)."""
+    text = str(value or "").strip()
+    if not text:
+        return False
+    uid = str(getattr(agent, "_last_user_id", "") or "")
+    qid = str(getattr(agent, "_last_query_id", "") or "")
+    return text == uid or text == qid
+
+
 async def _maybe_rewrite_search_query(agent, tool_info, args) -> dict:
     """Inject the tightest ladder query ONLY when the q slot is absent.
 
@@ -1651,19 +1666,8 @@ async def _maybe_rewrite_search_query(agent, tool_info, args) -> dict:
     tightest = queries[0]
     out = dict(args or {})
 
-    def _is_session_sentinel(value) -> bool:
-        """True when the LLM pasted a session ID (user_id / query_id) into
-        the query slot instead of a search expression — observed in
-        production logs (q filled with the user_id)."""
-        text = str(value or "").strip()
-        if not text:
-            return False
-        uid = str(getattr(agent, "_last_user_id", "") or "")
-        qid = str(getattr(agent, "_last_query_id", "") or "")
-        return text == uid or text == qid
-
     def _blank(value) -> bool:
-        return not str(value or "").strip() or _is_session_sentinel(value)
+        return not str(value or "").strip() or _is_session_sentinel(value, agent)
 
     if "q" in out:
         if _blank(out.get("q")):
@@ -1777,41 +1781,160 @@ async def _uspto_search_by_query(
 
 
 async def _baiten_search_by_query(
-    q: str, page: int = 1, page_size: int = 20,
+    q: str, page: int = 1, page_size: int = 20, agent=None,
 ) -> tuple[list, str]:
     """BaitenClient.search(source=15); returns (candidates, note).
 
     Any failure — missing key, wrong method path (unverified until the
     live gateway is smoke-tested), network error — degrades to an empty
-    list so the parallel USPTO source is never blocked.
+    list so the parallel USPTO source is never blocked.  The note
+    distinguishes a real zero (gateway returned no records) from a parse
+    zero (records present but the candidate mapping dropped them), so a
+    schema drift is never mistaken for an empty result set.
     """
+    _glog = getattr(agent, "logger", None)
     try:
-        from sources.baiten_client import BaitenClient
+        from sources.baiten_client import (
+            BaitenClient, summarize_search_response,
+        )
         from sources.long_task.config import get_baiten_config
 
         cfg = get_baiten_config()
         if not cfg["app_key"] or not cfg["app_secret"]:
+            if _glog is not None:
+                _glog.warning(
+                    "baiten_search — not configured "
+                    "(BAITEN_APP_KEY/APP_SECRET)")
             return [], "Baiten not configured (BAITEN_APP_KEY/APP_SECRET)"
         client = BaitenClient(
             cfg["app_key"], cfg["app_secret"], cfg["gateway_url"])
         body = await client.search(q, page=page, page_size=page_size)
+        summary = summarize_search_response(body)
         items = _baiten_results_to_candidates(body)
+        if _glog is not None:
+            _glog.info(
+                f"baiten_search_map — query={q[:60]!r} "
+                f"rows={summary['rows']} candidates={len(items)}"
+            )
+        if summary["rows"] == 0:
+            return items, "Baiten 0 hits (gateway 0 records)"
+        if not items:
+            return [], (
+                f"Baiten 0 candidates (parsed from "
+                f"{summary['rows']} records)"
+            )
         return items, f"Baiten {len(items)} hits"
     except Exception as exc:
         return [], f"Baiten failed: {exc}"
 
 
-async def _run_patent_search(agent, args, lang: str) -> dict:
+# ── Dual-source query resolution + preferred-source auto-ladder ─────────────
+
+PATENT_AUTO_LADDER_BATCH = 2  # untried ladder queries auto-run per call
+REACT_PATENT_AUTO_LADDER_MAX = int(os.getenv(
+    "REACT_PATENT_AUTO_LADDER_MAX", "4"))
+
+
+def _resolve_patent_queries(args, us_ladder, cn_ladder, agent,
+                            dual: bool) -> tuple[str, str]:
+    """Resolve the effective US/CN queries for one patent_search call.
+
+    An explicit non-empty query the LLM passed is always respected; an
+    absent, blank, or session-sentinel slot is auto-filled with the
+    ladder's tightest query, so a dual-source call can never silently
+    drop a source.  *dual* True fills both legs, False (CN-only tool)
+    fills only the CN leg — US never runs unless the dual tool asked.
+    Returns (us_q, cn_q); an empty ladder leaves its slot empty.
+    """
+    raw_us = str((args or {}).get("query_string_us") or "").strip()
+    raw_cn = str((args or {}).get("query_string_cn") or "").strip()
+    us_ladder = us_ladder or []
+    cn_ladder = cn_ladder or []
+    us_q = "" if not raw_us or _is_session_sentinel(raw_us, agent) else raw_us
+    cn_q = "" if not raw_cn or _is_session_sentinel(raw_cn, agent) else raw_cn
+    if not us_q and dual and us_ladder:
+        us_q = us_ladder[0]
+    if not cn_q and cn_ladder:
+        cn_q = cn_ladder[0]
+    return us_q, cn_q
+
+
+async def _auto_run_patent_ladder(agent, ladder: list, search_fn, merged: list,
+                                  notes: list, lang: str, source: str,
+                                  page: int, page_size: int) -> int:
+    """System-run untried ladder queries for one patent source.
+
+    Triggered when the preferred source returned nothing displayable;
+    bounded (PATENT_AUTO_LADDER_BATCH per call, REACT_PATENT_AUTO_LADDER_MAX
+    per request).  Executed queries are recorded as tried so the zero-hit
+    nudge stays accurate.  Returns the number of candidates gained.
+    """
+    tried = getattr(agent, "_tried_queries", None)
+    if tried is None:
+        tried = agent._tried_queries = []
+    untried = [q for q in ladder if q not in tried]
+    if not untried:
+        return 0
+    used = getattr(agent, "_patent_auto_used", 0) or 0
+    take = untried[:min(PATENT_AUTO_LADDER_BATCH,
+                        REACT_PATENT_AUTO_LADDER_MAX - used)]
+    if not take:
+        return 0
+    gained = 0
+    executed: list = []
+    for q in take:
+        agent._patent_auto_used = used + 1
+        used += 1
+        try:
+            items, note = await search_fn(q, page=page, page_size=page_size)
+        except Exception as exc:
+            notes.append(f"{source}: {exc}")
+            continue
+        executed.append(q)
+        if q not in tried:
+            tried.append(q)
+        gained += len(items)
+        merged.extend(items)
+        if note:
+            notes.append(note)
+    if executed:
+        _glog = getattr(agent, "logger", None)
+        if _glog is not None:
+            _glog.info(
+                f"patent_search_auto_ladder — source={source} "
+                f"queries={[q[:40] for q in executed]} gained={gained}"
+            )
+        label = "中国" if source == "cn" else "美国"
+        notes.append(
+            f"已自动补跑{label}专利阶梯式 {len(executed)} 条"
+            f"（并入 {gained} 条候选）" if lang == "zh"
+            else f"Auto-ran {len(executed)} {source.upper()} ladder "
+                 f"queries ({gained} candidates merged)"
+        )
+    return gained
+
+
+async def _run_patent_search(agent, args, lang: str, dual: bool = True) -> dict:
     """Built-in dual/single-source patent search for the loop.
 
     Runs the requested sources in parallel (``asyncio.gather`` with
     ``return_exceptions=True``): one source failing never blocks the
-    other.  Merged candidates land on ``agent._pending_raw_items`` (the
-    same channel the dynamic search tools use) so the pool, patent-id
-    extraction and result-page artifact paths all work unchanged.
+    other.  Missing query slots are auto-filled from the deterministic
+    ladders (``_search_rewrite`` / ``_search_rewrite_cn``) so a
+    dual-source call always runs BOTH legs.  When the preferred source
+    (CN for Chinese questions, US for English — same strategy both
+    sides) returns nothing, untried ladder queries are run system-side
+    instead of leaving the outcome to the LLM's discretion.  Merged
+    candidates land on ``agent._pending_raw_items`` (the same channel
+    the dynamic search tools use) so the pool, patent-id extraction and
+    result-page artifact paths all work unchanged.
     """
-    us_q = str((args or {}).get("query_string_us") or "").strip()
-    cn_q = str((args or {}).get("query_string_cn") or "").strip()
+    us_ladder = ((getattr(agent, "_search_rewrite", None) or {})
+                 .get("queries") or [])
+    cn_ladder = ((getattr(agent, "_search_rewrite_cn", None) or {})
+                 .get("queries") or [])
+    us_q, cn_q = _resolve_patent_queries(
+        args, us_ladder, cn_ladder, agent, dual=dual)
     if not us_q and not cn_q:
         return {"kind": "observation",
                 "text": ("Error: provide at least query_string_us or "
@@ -1820,12 +1943,35 @@ async def _run_patent_search(agent, args, lang: str) -> dict:
 
     page = int((args or {}).get("page") or 1)
     page_size = int((args or {}).get("page_size") or 20)
+    _glog = getattr(agent, "logger", None)
+    if _glog is not None:
+        _glog.info(
+            f"patent_search_dual — lang={lang} dual={dual} "
+            f"us_q={us_q[:60]!r} cn_q={cn_q[:60]!r}"
+        )
+
+    async def _uspto(q, page=1, page_size=20):
+        return await _uspto_search_by_query(q, page=page, page_size=page_size)
+
+    async def _baiten(q, page=1, page_size=20):
+        return await _baiten_search_by_query(
+            q, page=page, page_size=page_size, agent=agent)
+
     tasks = []
     if us_q:
-        tasks.append(_uspto_search_by_query(us_q, page=page, page_size=page_size))
+        tasks.append(_uspto(us_q, page=page, page_size=page_size))
     if cn_q:
-        tasks.append(_baiten_search_by_query(cn_q, page=page, page_size=page_size))
+        tasks.append(_baiten(cn_q, page=page, page_size=page_size))
     results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Record the first-round queries as tried so the auto-ladder never
+    # re-runs them and the zero-hit nudge lists only the untried ladder.
+    tried = getattr(agent, "_tried_queries", None)
+    if tried is None:
+        tried = agent._tried_queries = []
+    for q in (us_q, cn_q):
+        if q and q not in tried:
+            tried.append(q)
 
     merged: list = []
     notes: list = []
@@ -1837,7 +1983,41 @@ async def _run_patent_search(agent, args, lang: str) -> dict:
         merged.extend(items)
         if note:
             notes.append(note)
+
+    # Preferred source auto-ladder: when the source the language favours
+    # (CN for zh, US for en — strategy parity, both sides share this
+    # mechanism) returned nothing displayable, run untried ladder queries
+    # system-side (prompt-level nudges do not work for weak models).
+    if not dual:
+        preferred = "cn"
+    elif lang == "zh":
+        preferred = "cn"
+    else:
+        preferred = "us"
+    if preferred == "cn" and cn_q:
+        cn_cands = [c for c in merged
+                    if isinstance(c, dict) and c.get("source") == "baiten"]
+        if not cn_cands:
+            await _auto_run_patent_ladder(
+                agent, cn_ladder, _baiten, merged, notes, lang, "cn",
+                page, page_size)
+    elif preferred == "us" and us_q:
+        us_cands = [c for c in merged
+                    if not (isinstance(c, dict)
+                            and c.get("source") == "baiten")]
+        if not us_cands:
+            await _auto_run_patent_ladder(
+                agent, us_ladder, _uspto, merged, notes, lang, "us",
+                page, page_size)
+
     agent._pending_raw_items = merged
+    if _glog is not None:
+        cn_hits = len([c for c in merged
+                       if isinstance(c, dict) and c.get("source") == "baiten"])
+        _glog.info(
+            f"patent_search_result — us_hits={len(merged) - cn_hits} "
+            f"cn_hits={cn_hits} total={len(merged)}"
+        )
 
     digest = _items_digest(merged, lang=lang)
     if not digest:
@@ -1891,7 +2071,9 @@ async def make_action_executor(agent, registry, push_filter=None):
             return await _run_patent_spec(agent, args, lang)
 
         if entry.kind == "patent_search":
-            return await _run_patent_search(agent, args, lang)
+            return await _run_patent_search(
+                agent, args, lang,
+                dual=(entry.name == DUAL_PATENT_SEARCH_TOOL_NAME))
 
         if entry.kind == "search":
             return await _run_search_knowledge(agent, registry, user_id, args, push_filter)

@@ -123,6 +123,33 @@ class BaitenAPIError(BaitenError):
     """API returned a non-success response."""
 
 
+def summarize_search_response(body: dict) -> dict:
+    """Defensive summary of a Baiten search response for diagnostics.
+
+    Distinguishes "gateway returned 0 records" from "records present but
+    the candidate mapping dropped them": ``rows`` counts the raw
+    ``fieldValues`` entries, ``total`` is the gateway's count field when
+    present, ``keys`` shows the top-level shape so a schema drift is
+    visible in a single log line.  Pure — never raises.
+    """
+    if not isinstance(body, dict):
+        return {"total": None, "rows": 0, "keys": []}
+    data = body.get("data")
+    rows = data.get("fieldValues") if isinstance(data, dict) else None
+    if rows is None:
+        rows = body.get("fieldValues")
+    if not isinstance(rows, list):
+        rows = []
+    total = body.get("total")
+    if total is None and isinstance(data, dict):
+        total = data.get("total")
+    return {
+        "total": total,
+        "rows": len(rows),
+        "keys": list(body.keys())[:8],
+    }
+
+
 # ── Client ──────────────────────────────────────────────────────────────────────
 
 
@@ -233,6 +260,9 @@ class BaitenClient:
         _logger.info(
             f"baiten_search — query={query_string[:80]}, source={source}, "
             f"page={page}"
+        )
+        _logger.info(
+            f"baiten_search_response — {summarize_search_response(body)}"
         )
         return body
 
