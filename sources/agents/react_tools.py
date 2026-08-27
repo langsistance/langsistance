@@ -2017,6 +2017,57 @@ def _order_pending_for_lang(items: list, lang: str) -> list:
     return cn + others
 
 
+def _cn_item_to_pool_candidate(item: dict) -> dict:
+    """Map a flat Baiten candidate to the relevance-pool candidate shape.
+
+    The pool consumes patent_id/title/applicant/status/filing_date/
+    patent_number/type_code/cpc_codes/_raw; Baiten candidates carry most
+    of these natively — filing_date derives from apply_date/pub_date.
+    """
+    return {
+        "patent_id": str(item.get("patent_id") or ""),
+        "title": str(item.get("title") or ""),
+        "applicant": str(item.get("applicant") or ""),
+        "status": str(item.get("status") or ""),
+        "filing_date": str(item.get("apply_date")
+                          or item.get("pub_date") or ""),
+        "patent_number": str(item.get("patent_number") or ""),
+        "type_code": str(item.get("type_code") or ""),
+        "cpc_codes": item.get("cpc_codes") or [],
+        "_raw": item,
+    }
+
+
+async def _rank_builtin_patent_pool(agent, items: list, lang: str) -> list:
+    """Run built-in patent-search candidates through the relevance pool.
+
+    The USPTO dynamic tools get Flash relevance scoring, semantic rerank,
+    dead/design filtering and family dedupe via SearchPool; the built-in
+    dual/single-source tool used to bypass the pipeline entirely, so CN
+    patents surfaced in gateway order with no filtering (the observed
+    precision gap vs USPTO, 2026-08-27).  Both sources are converted to
+    pool candidates and ranked the same way.  Any failure degrades to the
+    unranked list — ranking is an enhancement, never a hard dependency.
+    """
+    try:
+        candidates: list = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if item.get("source") == "baiten":
+                candidates.append(_cn_item_to_pool_candidate(item))
+            elif item.get("applicationNumberText"):
+                candidates.extend(build_candidates([item]))
+        if not candidates:
+            return items
+        ranked, _note = await _rank_pending_pool(agent, candidates, lang)
+        raw = [c.get("_raw") for c in ranked]
+        kept = [c for c in raw if c is not None]
+        return kept or items
+    except Exception:
+        return items
+
+
 async def _auto_run_patent_ladder(agent, ladder: list, search_fn, merged: list,
                                   notes: list, lang: str, source: str,
                                   page: int, page_size: int) -> int:
@@ -2180,12 +2231,15 @@ async def _run_patent_search(agent, args, lang: str, dual: bool = True) -> dict:
     # Merge with anything already pending from earlier patent_search calls
     # in this request — a later narrower call (one source 404 with the
     # auto-ladder budget spent) must never discard the earlier complete
-    # dual-source result (production incident 2026-08-27).  Chinese
-    # questions list CN patents first, matching the CN-first ladder.
-    agent._pending_raw_items = _order_pending_for_lang(
-        _merge_pending_items(
-            getattr(agent, "_pending_raw_items", None), merged),
-        lang)
+    # dual-source result (production incident 2026-08-27).  The merged
+    # pool then rides the same relevance pipeline as the USPTO dynamic
+    # tools (scoring / rerank / dead+design filter / family dedupe);
+    # Chinese questions still list CN patents first, now relevance-ranked
+    # within each group.
+    pending = _merge_pending_items(
+        getattr(agent, "_pending_raw_items", None), merged)
+    ranked_pending = await _rank_builtin_patent_pool(agent, pending, lang)
+    agent._pending_raw_items = _order_pending_for_lang(ranked_pending, lang)
     if _glog is not None:
         cn_hits = len([c for c in merged
                        if isinstance(c, dict) and c.get("source") == "baiten"])

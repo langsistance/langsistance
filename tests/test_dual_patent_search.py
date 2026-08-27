@@ -6,10 +6,12 @@ from unittest.mock import patch
 from sources.agents.react_tools import (
     _baiten_results_to_candidates,
     _baiten_search_by_query,
+    _cn_item_to_pool_candidate,
     _enrich_baiten_law_status,
     _items_digest,
     _normalize_uspto_items,
     _order_pending_for_lang,
+    _rank_builtin_patent_pool,
     _resolve_patent_queries,
     _run_patent_search,
     build_tool_set,
@@ -35,6 +37,60 @@ class _FakeAgent:
         self._tried_queries = []
         self._patent_auto_used = 0
         self.logger = None
+
+
+class TestCnItemToPoolCandidate(unittest.TestCase):
+    def test_maps_flat_baiten_fields(self):
+        item = {
+            "patent_id": "CN118000001A", "source": "baiten",
+            "title": "散热装置", "applicant": "华为",
+            "status": "专利权维持", "pub_date": "2024-02-02",
+            "apply_date": "2023-11-03", "patent_number": "CN118000001A",
+            "type_code": "", "cpc_codes": [],
+        }
+        c = _cn_item_to_pool_candidate(item)
+        self.assertEqual(c["patent_id"], "CN118000001A")
+        self.assertEqual(c["title"], "散热装置")
+        self.assertEqual(c["applicant"], "华为")
+        self.assertEqual(c["status"], "专利权维持")
+        self.assertEqual(c["filing_date"], "2023-11-03")  # apply_date wins
+        self.assertIs(c["_raw"], item)
+
+    def test_filing_date_falls_back_to_pub_date(self):
+        c = _cn_item_to_pool_candidate(
+            {"patent_id": "CN118000001A", "pub_date": "2024-02-02"})
+        self.assertEqual(c["filing_date"], "2024-02-02")
+
+
+class TestRankBuiltinPatentPool(unittest.TestCase):
+    async def _run(self, agent, items, lang="zh"):
+        return await _rank_builtin_patent_pool(agent, items, lang)
+
+    def test_returns_ranked_raw_items(self):
+        # Both sources converted; the pool ranking (mocked here) decides
+        # the display order, and _raw round-trips the original items.
+        from unittest.mock import patch
+        cn = [{"patent_id": "CN118000001A", "source": "baiten",
+               "title": "散热装置"}]
+        us = [{"applicationNumberText": "19511555",
+               "applicationMetaData": {"inventionTitle": "Cooling"}}]
+        ranked = [
+            {"patent_id": "CN118000001A", "title": "散热装置", "_raw": cn[0]},
+            {"patent_id": "19511555", "title": "Cooling", "_raw": us[0]},
+        ]
+        with patch("sources.agents.react_tools._rank_pending_pool",
+                   new=lambda a, c, l: (ranked, "note")):
+            out = asyncio.run(self._run(_FakeAgent(), cn + us))
+        self.assertEqual(out, [cn[0], us[0]])
+
+    def test_failure_degrades_to_unranked_items(self):
+        from unittest.mock import patch
+        cn = [{"patent_id": "CN118000001A", "source": "baiten",
+               "title": "散热装置"}]
+        with patch("sources.agents.react_tools._rank_pending_pool",
+                   side_effect=RuntimeError("boom")):
+            out = asyncio.run(self._run(_FakeAgent(), cn))
+        self.assertEqual(out, cn)
 
 
 class TestOrderPendingForLang(unittest.TestCase):
