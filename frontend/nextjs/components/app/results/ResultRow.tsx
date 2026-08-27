@@ -8,6 +8,7 @@ interface RowModel {
   meta: Array<{ label: string; value: string }>
   patentId: string
   applicationNumber: string
+  pubDate?: string
   url: string
   source: string
   isDocument: boolean
