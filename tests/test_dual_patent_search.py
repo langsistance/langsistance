@@ -272,6 +272,56 @@ class TestRunPatentSearch(unittest.TestCase):
             result = await _run_patent_search(agent, args, lang)
             return agent, result
 
+    def test_second_call_merges_instead_of_overwriting(self):
+        # Production incident (2026-08-27): the LLM called patent_search_dual
+        # four times per the ladder prompt.  The first two calls returned
+        # US + CN candidates; the later calls hit US 404 with the auto-ladder
+        # budget exhausted, and each call unconditionally overwrote
+        # _pending_raw_items — the final CN-only result silently dropped the
+        # earlier US candidates from the result list.  A later, narrower
+        # call must MERGE into the pending pool, never discard it.
+        us_items = [{"applicationNumberText": "19511555", "applicationMetaData": {
+            "inventionTitle": "Cooling device", "firstApplicantName": "Intel",
+            "filingDate": "2024-01-01"}}]
+        cn_items = [{"patent_id": "CN118000001A", "source": "baiten",
+                     "title": "散热装置"}]
+        agent = _FakeAgent()
+        agent, result = asyncio.run(self._run(
+            {"query_string_us": "ab:(cool)", "query_string_cn": "ti:(散热)"},
+            us_result=(us_items, "USPTO 1 hits"),
+            cn_result=(cn_items, "Baiten 1 hits"), agent=agent))
+        self.assertEqual(len(agent._pending_raw_items), 2)
+        # Second call: US 404 (auto-ladder budget already spent), CN returns
+        # a new patent.  The US candidate from the first call must survive.
+        cn_items2 = [{"patent_id": "CN118000002A", "source": "baiten",
+                      "title": "除湿装置"}]
+        agent, result = asyncio.run(self._run(
+            {"query_string_us": "ab:(cool)", "query_string_cn": "ti:(除湿)"},
+            us_result=([], "USPTO HTTP 404"),
+            cn_result=(cn_items2, "Baiten 1 hits"), agent=agent))
+        ids = [c.get("patent_id") or c.get("applicationNumberText")
+               for c in agent._pending_raw_items]
+        self.assertEqual(len(agent._pending_raw_items), 3)
+        self.assertIn("19511555", ids)  # first call's US candidate kept
+        self.assertIn("CN118000001A", ids)
+        self.assertIn("CN118000002A", ids)
+
+    def test_merge_dedupes_repeated_patents(self):
+        # The same CN patent surfaced by two ladder queries appears once in
+        # the pending pool (first occurrence wins).
+        cn_items = [{"patent_id": "CN118000001A", "source": "baiten",
+                     "title": "散热装置"}]
+        agent = _FakeAgent()
+        agent, _ = asyncio.run(self._run(
+            {"query_string_us": "ab:(cool)", "query_string_cn": "ti:(散热)"},
+            us_result=([], "USPTO HTTP 404"),
+            cn_result=(cn_items, "Baiten 1 hits"), agent=agent))
+        agent, _ = asyncio.run(self._run(
+            {"query_string_us": "ab:(cool)", "query_string_cn": "ti:(干燥)"},
+            us_result=([], "USPTO HTTP 404"),
+            cn_result=(cn_items, "Baiten 1 hits"), agent=agent))
+        self.assertEqual(len(agent._pending_raw_items), 1)
+
     def test_dual_parallel_and_mapping(self):
         us_items = [{"applicationNumberText": "19511555", "applicationMetaData": {
             "inventionTitle": "Cooling device", "firstApplicantName": "Intel",

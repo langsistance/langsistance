@@ -1889,6 +1889,51 @@ def _resolve_patent_queries(args, us_ladder, cn_ladder, agent,
     return us_q, cn_q
 
 
+def _item_patent_id(item) -> str:
+    """Patent identifier used for cross-call dedup of pending raw items.
+
+    Baiten candidates carry a flat ``patent_id`` (CN publication number);
+    USPTO rows carry ``applicationNumberText`` top-level or nested under
+    applicationMetaData.  Anything else returns "" and is kept as-is.
+    """
+    if not isinstance(item, dict):
+        return ""
+    for key in ("patent_id", "applicationNumberText"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    meta = item.get("applicationMetaData")
+    if isinstance(meta, dict):
+        for key in ("applicationNumberText", "patentNumber"):
+            value = meta.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+def _merge_pending_items(existing, new_items) -> list:
+    """Merge new patent candidates into the pending display list.
+
+    The loop may call the built-in patent search several times per request
+    (the ladder prompt walks the LLM down level by level).  A later call
+    whose one source came back empty (404 with the auto-ladder budget
+    exhausted) used to unconditionally overwrite ``_pending_raw_items`` and
+    silently drop the earlier dual-source result.  Merging by patent id
+    keeps every candidate the request has found — first occurrence wins,
+    new items append.
+    """
+    merged = list(existing or [])
+    seen = {_item_patent_id(item) for item in merged if _item_patent_id(item)}
+    for item in new_items or []:
+        pid = _item_patent_id(item)
+        if pid:
+            if pid in seen:
+                continue
+            seen.add(pid)
+        merged.append(item)
+    return merged
+
+
 async def _auto_run_patent_ladder(agent, ladder: list, search_fn, merged: list,
                                   notes: list, lang: str, source: str,
                                   page: int, page_size: int) -> int:
@@ -2049,7 +2094,12 @@ async def _run_patent_search(agent, args, lang: str, dual: bool = True) -> dict:
     await _run_for(preferred)
     await _run_for("us" if preferred == "cn" else "cn")
 
-    agent._pending_raw_items = merged
+    # Merge with anything already pending from earlier patent_search calls
+    # in this request — a later narrower call (one source 404 with the
+    # auto-ladder budget spent) must never discard the earlier complete
+    # dual-source result (production incident 2026-08-27).
+    agent._pending_raw_items = _merge_pending_items(
+        getattr(agent, "_pending_raw_items", None), merged)
     if _glog is not None:
         cn_hits = len([c for c in merged
                        if isinstance(c, dict) and c.get("source") == "baiten"])
