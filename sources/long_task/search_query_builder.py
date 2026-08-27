@@ -522,9 +522,12 @@ def _baiten_query_with_budget(groups: list[list[str]], field: str) -> str:
 def _assemble_baiten_ladder(groups: list[list[str]]) -> list[str]:
     """Assemble the tight-to-loose CN query ladder, deterministically.
 
-    Level 1-3 hold every concept, sweeping the fields tightest-first
-    (ti → ab → clm); each further level drops the weakest (last) concept
-    and cycles through the fields again.  Deduplicates and caps at 6.
+    One field per concept count (ti → ab → clm → ti → …): with 4 concepts
+    the old shape spent every slot in the 6-query cap on 4-concept ANDs
+    and the looser (3/2/1-concept) levels never appeared — every ladder
+    query then returned 0 hits (observed 2026-08-27: 4-group ANDs across
+    CN titles/abstracts).  Each concept-count level now lands inside the
+    cap, so the LLM and the auto-ladder always see a loosenable variant.
     """
     cleaned: list[list[str]] = []
     for group in groups:
@@ -538,13 +541,9 @@ def _assemble_baiten_ladder(groups: list[list[str]]) -> list[str]:
     if not cleaned:
         return []
     queries: list[str] = []
-    for level, field in enumerate(_BAITEN_FIELDS):
-        q = _baiten_query_with_budget(cleaned, field)
-        if q and (not queries or q != queries[-1]):
-            queries.append(q)
-    for drop in range(1, len(cleaned)):
-        subset = cleaned[:-drop]
-        field = _BAITEN_FIELDS[(drop + 2) % len(_BAITEN_FIELDS)]
+    for n in range(len(cleaned), 0, -1):
+        subset = cleaned[:n]
+        field = _BAITEN_FIELDS[(len(cleaned) - n) % len(_BAITEN_FIELDS)]
         q = _baiten_query_with_budget(subset, field)
         if q and (not queries or q != queries[-1]):
             queries.append(q)
@@ -557,11 +556,13 @@ REWRITE_SYSTEM_PROMPT_CN = (
     "你无需输出检索式。本工具面向所有技术领域，不得为特定领域预设"
     "关键词。\n\n"
     "步骤：\n"
-    "1. 从用户问题中抽取 2-4 个核心技术概念（忽略语气词和通用词），"
+    "1. 从用户问题中抽取 2-3 个核心技术概念（忽略语气词和通用词），"
     "概念按重要性排序（最重要的放最前）——代码将按此顺序组装由紧到松"
     "的检索式阶梯。概念必须与提问中的独立技术要素一一对应，禁止把两"
     "个技术要素合并成一个概念——合并会丢失概念组合的检索结构，导致"
-    "检索域漂移\n"
+    "检索域漂移。**概念数上限 3 个**：三概念 AND 组合在中文专利标题上"
+    "已经经常 0 命中，4 个概念组 AND 几乎必然 0 命中；宁可把关联技术"
+    "要素合并进概念关键词（OR 连接），也不要新增第 4 个概念组\n"
     "2. 每个概念给出 3-8 个同义/近义检索关键词，**以中文为主**（含"
     "全称/简称、上位/下位词、俗名/别称），可以允许少量英文术语（中国"
     "专利文献常见中英混用）。关键词按重要性排序（最重要的放最前，"

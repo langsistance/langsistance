@@ -68,17 +68,23 @@ class TestAssembleBaitenQuery(unittest.TestCase):
 
 class TestAssembleBaitenLadder(unittest.TestCase):
     def test_fields_sweep_tightest_first(self):
+        # One field per concept count (ti → ab → clm → ti …): every level
+        # of the ladder must carry FEWER concept groups, so the looser
+        # variants are never truncated out of the 6-query cap (the 4-group
+        # AND zero-hit incident, 2026-08-27).
         ladder = _assemble_baiten_ladder([["散热", "冷却"], ["风扇"], ["静音"]])
         self.assertTrue(ladder[0].startswith("ti:("))
+        self.assertTrue("风扇" in ladder[0])
         self.assertTrue(ladder[1].startswith("ab:("))
+        self.assertNotIn("静音", ladder[1])  # weakest concept dropped
         self.assertTrue(ladder[2].startswith("clm:("))
-        # Dropping the weakest concept cycles fields again.
-        self.assertGreater(len(ladder), 3)
+        self.assertNotIn("风扇", ladder[2])
+        self.assertEqual(len(ladder), 3)
 
     def test_drops_weakest_concept(self):
         ladder = _assemble_baiten_ladder([["甲"], ["乙"]])
-        # Level 4 (after ti/ab/clm full-concept) keeps only the strongest.
-        self.assertTrue(any("甲" in q and "乙" not in q for q in ladder[3:]))
+        # Second level (ab) keeps only the strongest concept.
+        self.assertTrue(any("甲" in q and "乙" not in q for q in ladder[1:]))
 
     def test_length_budget_respected(self):
         long_groups = [[f"关键词{i}超长扩展词" * 5 for i in range(8)], ["第二组"]]
