@@ -453,12 +453,40 @@ class BaitenClient:
                             f"Baiten API HTTP {response.status_code}: "
                             f"{preview!r}"
                         )
+                    chunks = response.aiter_bytes()
+                    first = await chunks.__anext__()
+                    # The gateway wraps business errors in HTTP 200 +
+                    # {"code":"500","msg":"..."} (e.g. missing product
+                    # permission DATA_PAT_PDFFULLTEXT_ONE) — a tiny JSON
+                    # that fits the first chunk.  Surface the real message
+                    # instead of a misleading "no fileByte field".
+                    if b'"code"' in first and len(first) < 8192:
+                        try:
+                            import json as _json
+                            err = _json.loads(first.decode("utf-8", "ignore"))
+                            code = err.get("code") or err.get("errorCode")
+                            if str(code) != "200":
+                                raise BaitenAPIError(
+                                    f"Baiten API error code={code}: "
+                                    f"{err.get('msg') or err.get('message')}"
+                                )
+                        except BaitenAPIError:
+                            raise
+                        except Exception:
+                            pass  # not a JSON error envelope — treat as data
+                    async def _prepend_first():
+                        yield first
+                        async for chunk in chunks:
+                            yield chunk
+
                     found = await self._stream_base64_field(
-                        response.aiter_bytes(), b'"fileByte"', spool,
+                        _prepend_first(),
+                        (b'"contentInBytes"', b'"fileByte"'), spool,
                     )
             if not found:
                 raise BaitenAPIError(
-                    f"Baiten file response carries no fileByte field "
+                    f"Baiten file response carries no fileByte/"
+                    f"contentInBytes field "
                     f"(pubNum={pub_num}, pubDate={pub_date})"
                 )
         except Exception:
@@ -612,38 +640,59 @@ class BaitenClient:
 
     @staticmethod
     async def _stream_base64_field(
-        chunks, field: bytes, out,
-    ) -> bool:
+        chunks, fields, out,
+    ) -> bytes:
         """Stream-scan a JSON response for a base64 string field.
 
-        Decodes the field's base64 content chunk-by-chunk into *out*
-        (a binary file-like), keeping at most 4 undecoded bytes in memory
-        and the rest written straight through.  The base64 alphabet
+        Decodes the matched field's base64 content chunk-by-chunk into
+        *out* (a binary file-like), keeping at most 4 undecoded bytes in
+        memory and the rest written straight through.  The base64 alphabet
         (A-Za-z0-9+/=) contains neither ``"`` nor ``\\``, so the first
         unescaped quote after the opening one terminates the value —
         no full JSON parse is needed, and peak memory stays O(chunk).
 
-        Returns True when the field was found and decoded; False when the
-        stream ended without it (e.g. an error JSON with no fileByte).
+        *fields* is an iterable of candidate JSON key patterns (with the
+        surrounding quotes, e.g. ``b'"contentInBytes"'``) — the download
+        gateway returns the PDF under contentInBytes per the platform doc,
+        older shapes used fileByte; the first one found wins.
+
+        Returns the matched field pattern (or b'' when the stream ended
+        without any candidate, e.g. an error JSON carrying neither).
         """
         import base64 as _b64
         import binascii as _binascii
 
+        if isinstance(fields, (bytes, bytearray)):
+            fields = [fields]
+        else:
+            fields = list(fields or ())
+        if not fields:
+            return b""
         b64_buf = bytearray()
         tail = bytearray()  # carry the half-split field marker across chunks
         state = "scan"      # scan → value_start → collect → done
-        value = False
+        value = b""
 
         async for chunk in chunks:
             data = bytes(tail) + chunk
             del tail[:]
             if state == "scan":
-                idx = data.find(field)
-                if idx < 0:
-                    tail.extend(data[-len(field) + 1:])
+                found_idx = -1
+                found_field = b""
+                for field in fields:
+                    idx = data.find(field)
+                    if idx >= 0 and (found_idx < 0 or idx < found_idx):
+                        found_idx = idx
+                        found_field = field
+                if found_field:
+                    data = data[found_idx + len(found_field):]
+                    state = "value_start"
+                else:
+                    # keep enough tail so any candidate split across
+                    # chunks still matches
+                    keep = max(len(f) for f in fields) - 1
+                    tail.extend(data[-keep:])
                     continue
-                data = data[idx + len(field):]
-                state = "value_start"
             if state == "value_start":
                 data = data.lstrip(b" \t\r\n:")  # colon/whitespace after key
                 if not data:
@@ -669,7 +718,7 @@ class BaitenClient:
                         out.write(bytes(b64_buf[:n]))
                     del b64_buf[:n]
                 if state == "done":
-                    value = True
+                    value = found_field
                     break
         return value
 
