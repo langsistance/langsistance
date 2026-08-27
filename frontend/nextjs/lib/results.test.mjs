@@ -104,10 +104,11 @@ test('mixed CN-first column order: each row reads its own identifier column', ()
     { key: 'applicationNumberText', label: '申请号', role: 'application_number' },
     { key: 'applicationMetaData.patentNumber', label: '专利号', role: 'patent_id' },
     { key: 'applicationMetaData.inventionTitle', label: '标题', role: 'title' },
+    { key: 'pub_date', label: '公开日', role: 'publication_date' },
   ]
   const cnRow = {
     patent_id: 'CN118000001A', app_num: 'CN202311458694.9',
-    title: '散热装置', source: 'baiten',
+    title: '散热装置', source: 'baiten', pub_date: '20240202',
   }
   const usRow = {
     applicationNumberText: '19511555',
@@ -119,6 +120,7 @@ test('mixed CN-first column order: each row reads its own identifier column', ()
   assert.equal(cnModel.applicationNumber, 'CN202311458694.9')
   assert.equal(cnModel.source, 'baiten')
   assert.equal(cnModel.title, '散热装置')
+  assert.equal(cnModel.pubDate, '20240202')
 
   const usModel = buildRowModel(usRow, mixedColumns, 'uspto')
   assert.equal(usModel.patentId, 'US12000123B2')

@@ -13,14 +13,15 @@ export default function SpecTab({ row }: { row: any }) {
   useEffect(() => {
     let cancelled = false
     setState('loading')
-    // Application number first — see ClaimsTab: CN rows carry the Baiten
-    // app_num, USPTO rows carry applicationNumberText natively.
-    const identifier = row.applicationNumber || row.patentId
+    // Publication number first for spec: the Baiten PDF proxy needs
+    // pub_num + pub_date (both ride on CN candidates), USPTO rows carry
+    // patentNumber/applicationNumberText natively.
+    const identifier = row.patentId || row.applicationNumber
     if (!identifier) {
       setState('error')
       return
     }
-    fetchPatentSpec(row.source, identifier)
+    fetchPatentSpec(row.source, identifier, row.pubDate)
       .then((payload) => {
         if (cancelled) return
         setData(payload)

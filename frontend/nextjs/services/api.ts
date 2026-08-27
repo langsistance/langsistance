@@ -330,9 +330,11 @@ export interface SubmitLongTaskResponse {
 export async function fetchPatentSpec(
   source: string,
   patentId: string,
+  pubDate?: string,
 ): Promise<PatentSpecResponse> {
+  const query = pubDate ? `?pub_date=${encodeURIComponent(pubDate)}` : ''
   return get<PatentSpecResponse & { success: boolean }>(
-    `/patent/${encodeURIComponent(source)}/${encodeURIComponent(patentId)}/spec`,
+    `/patent/${encodeURIComponent(source)}/${encodeURIComponent(patentId)}/spec${query}`,
   )
 }
 

@@ -459,15 +459,22 @@ def _flatten_baiten_claims(body: dict) -> list[str]:
     return texts
 
 
-async def _fetch_baiten_spec(patent_id: str) -> dict:
+async def _fetch_baiten_spec(patent_id: str, pub_date: str = "") -> dict:
     """Resolve a CN patent spec PDF proxy URL via Baiten.
 
-    getDoc fills pubDate (needed by the file API), then the PDF is
-    streamed through ``/baiten/download`` so the frontend inline viewer
-    keeps working unchanged.  (getSpec text is deferred: the spec tab
-    renders pdf_url only, and a text channel would need frontend work.)
+    The frontend sends the publication number AND its publication date
+    (both ride on the search candidate), so the broken extService getDoc
+    hop is skipped and the PDF streams straight through
+    ``/openService/download`` (patent_category required, verified via the
+    SDK constant pool 2026-08-27).  The getDoc path survives only as a
+    fallback for callers without a pub_date.
     """
     from sources.baiten_client import BaitenError
+
+    pub_date = _normalize_baiten_date(pub_date)
+    if pub_date:
+        return {"success": True,
+                "pdf_url": _build_baiten_download_url(patent_id, pub_date)}
 
     try:
         client = _get_baiten_client()
@@ -544,7 +551,8 @@ async def _fetch_baiten_claims(patent_id: str) -> dict:
         f"No claims available for Baiten patent {patent_id}")
 
 
-async def _fetch_spec_pdf(source: str, patent_id: str) -> dict:
+async def _fetch_spec_pdf(source: str, patent_id: str,
+                          pub_date: str = "") -> dict:
     """Resolve the specification PDF and return its proxy URL.
 
     The URL points at the lazy-download proxy (``/uspto/download`` for
@@ -553,7 +561,7 @@ async def _fetch_spec_pdf(source: str, patent_id: str) -> dict:
     API key — the same mechanism patent document rows already use.
     """
     if source == "baiten":
-        return await _fetch_baiten_spec(patent_id)
+        return await _fetch_baiten_spec(patent_id, pub_date)
     from sources import uspto_download
     from sources import uspto_download
     from sources.dynamic_tool_params import _build_uspto_download_proxy_url
@@ -689,14 +697,15 @@ def register_patent_detail_routes(logger, config):
     router = APIRouter()
 
     @router.get("/patent/{source}/{patent_id}/spec")
-    async def patent_spec(source: str, patent_id: str, http_request: Request):
+    async def patent_spec(source: str, patent_id: str, http_request: Request,
+                          pub_date: str = ""):
         verify_firebase_token(http_request.headers.get("Authorization"))
         if source not in VALID_SOURCES:
             raise HTTPException(status_code=400, detail="Unsupported source")
         if not patent_id or len(patent_id) > 40:
             raise HTTPException(status_code=400, detail="Invalid patent_id")
         try:
-            payload = await _fetch_spec_pdf(source, patent_id)
+            payload = await _fetch_spec_pdf(source, patent_id, pub_date)
         except PatentDetailError as exc:
             logger.error(f"spec fetch failed — source={source}, id={patent_id}: {exc}")
             # Expected upstream misses are data conditions, not server

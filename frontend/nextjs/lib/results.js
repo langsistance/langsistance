@@ -74,6 +74,9 @@ export function buildRowModel(row, columns, source) {
   // each row must read ITS OWN identifier column.
   const patentId = firstColumnValueForRole(row, list, 'patent_id')
   const applicationNumber = firstColumnValueForRole(row, list, 'application_number')
+  // Publication date rides with CN candidates (pub_date) — the Baiten
+  // spec proxy needs it alongside the publication number.
+  const pubDate = firstColumnValueForRole(row, list, 'publication_date')
 
   return {
     id: String(patentId || title || fields[0]?.[1] || 'row'),
@@ -81,6 +84,7 @@ export function buildRowModel(row, columns, source) {
     meta,
     patentId,
     applicationNumber,
+    pubDate,
     url: columnValue(row, urlCol),
     source: rowSource,
     isDocument,

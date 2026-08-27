@@ -402,12 +402,16 @@ class BaitenClient:
 
     async def get_file(
         self, pub_num: str, pub_date: str, file_category: str = "PDF",
+        patent_category: str = "APP",
     ):
         """Download a patent PDF as a streaming spooled file.
 
-        Wire contract verified 2026-08-26: method path
-        ``/openService/download`` with ``pub_num`` / ``pub_date`` (the
-        SDK-style pubNum/pubDate names get a Spring 400).
+        Wire contract (SDK CubeOpenFileRequest constant pool, 2026-08-27):
+        method path ``/openService/download`` with ``pub_num`` /
+        ``pub_date`` / ``file_category`` / ``patent_category`` — the last
+        one is REQUIRED by Spring validation (a 400 "file_category is not
+        present" cascade hides it; the SDK-style pubNum/pubDate names also
+        get a Spring 400).
 
         The gateway returns ``fileByte`` as a base64 JSON string that can
         reach tens of MB (1.33x expansion) — the response is streamed and
@@ -425,6 +429,7 @@ class BaitenClient:
                 "pub_num": pub_num,
                 "pub_date": pub_date,
                 "file_category": file_category,
+                "patent_category": patent_category,
             },
         )
         api_method = all_params.pop("method")

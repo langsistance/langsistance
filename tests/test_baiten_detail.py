@@ -172,6 +172,22 @@ class TestFetchBaitenSpec(unittest.TestCase):
             payload["pdf_url"],
             "/baiten/download?pub_num=CN118000001A&pub_date=20240105")
 
+    def test_pub_date_param_skips_get_doc(self):
+        # Frontend sends pub_num + pub_date from the search candidate, so
+        # the broken extService getDoc hop must not run (2026-08-27: the
+        # data service reports system error even with a valid signature).
+        import asyncio
+        client = _FakeBaitenClient()
+        from api_routes import patent_detail as pd
+        pd._get_baiten_client = lambda: client
+        payload = asyncio.run(
+            pd._fetch_baiten_spec("CN118000001A", "2024-01-05"))
+        self.assertTrue(payload["success"])
+        self.assertEqual(client.calls, [])  # no get_doc
+        self.assertEqual(
+            payload["pdf_url"],
+            "/baiten/download?pub_num=CN118000001A&pub_date=20240105")
+
     def test_missing_pub_date_raises(self):
         import asyncio
         client = _FakeBaitenClient(doc={"data": {}})
