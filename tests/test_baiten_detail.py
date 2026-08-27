@@ -30,8 +30,11 @@ class TestNormalizeBaitenDate(unittest.TestCase):
 class TestBuildBaitenDownloadUrl(unittest.TestCase):
     def test_joins_pub_num_and_normalized_date(self):
         url = _build_baiten_download_url("CN118000001A", "2024-01-05")
-        self.assertEqual(
-            url, "/baiten/download?pub_num=CN118000001A&pub_date=20240105")
+        self.assertTrue(url.startswith("http"), url)
+        self.assertTrue(
+            url.endswith(
+                "/baiten/download?pub_num=CN118000001A&pub_date=20240105"),
+            url)
 
 
 class TestFlattenBaitenClaims(unittest.TestCase):
@@ -160,6 +163,17 @@ class TestFetchBaitenClaims(unittest.TestCase):
             asyncio.run(pd._fetch_baiten_claims("CN118000001A"))
 
 
+def _assert_baiten_pdf_url(self, url: str) -> None:
+    # Absolute API URL (the iframe must load the API origin, not resolve
+    # a relative path against the frontend host — see
+    # _build_baiten_download_url).
+    self.assertTrue(url.startswith("http"), url)
+    self.assertTrue(
+        url.endswith(
+            "/baiten/download?pub_num=CN118000001A&pub_date=20240105"),
+        url)
+
+
 class TestFetchBaitenSpec(unittest.TestCase):
     def test_returns_pdf_proxy_url(self):
         import asyncio
@@ -168,9 +182,7 @@ class TestFetchBaitenSpec(unittest.TestCase):
         pd._get_baiten_client = lambda: client
         payload = asyncio.run(pd._fetch_baiten_spec("CN118000001A"))
         self.assertTrue(payload["success"])
-        self.assertEqual(
-            payload["pdf_url"],
-            "/baiten/download?pub_num=CN118000001A&pub_date=20240105")
+        _assert_baiten_pdf_url(self, payload["pdf_url"])
 
     def test_pub_date_param_skips_get_doc(self):
         # Frontend sends pub_num + pub_date from the search candidate, so
@@ -184,9 +196,7 @@ class TestFetchBaitenSpec(unittest.TestCase):
             pd._fetch_baiten_spec("CN118000001A", "2024-01-05"))
         self.assertTrue(payload["success"])
         self.assertEqual(client.calls, [])  # no get_doc
-        self.assertEqual(
-            payload["pdf_url"],
-            "/baiten/download?pub_num=CN118000001A&pub_date=20240105")
+        _assert_baiten_pdf_url(self, payload["pdf_url"])
 
     def test_missing_pub_date_raises(self):
         import asyncio

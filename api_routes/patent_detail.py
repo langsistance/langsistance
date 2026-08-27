@@ -418,7 +418,16 @@ def _normalize_baiten_date(value: str) -> str:
 
 
 def _build_baiten_download_url(pub_num: str, pub_date: str) -> str:
-    return (f"/baiten/download?pub_num={pub_num}"
+    """Absolute API URL (same contract as the USPTO proxy URL).
+
+    A relative path here resolves against the FRONTEND origin inside the
+    results iframe — the frontend host has no /baiten/download route and
+    its Cloudflare headers (X-Frame-Options: SAMEORIGIN) block the frame
+    with "This content is blocked" (observed 2026-08-27, CN spec tab).
+    """
+    from sources.dynamic_tool_params import _get_copiioai_api_base_url
+    base = _get_copiioai_api_base_url()
+    return (f"{base}/baiten/download?pub_num={pub_num}"
             f"&pub_date={_normalize_baiten_date(pub_date)}")
 
 
