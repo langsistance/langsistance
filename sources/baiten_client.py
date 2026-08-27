@@ -481,7 +481,8 @@ class BaitenClient:
 
                     found = await self._stream_base64_field(
                         _prepend_first(),
-                        (b'"contentInBytes"', b'"fileByte"'), spool,
+                        (b'"file_inputStream"', b'"contentInBytes"',
+                         b'"fileByte"'), spool,
                     )
             if not found:
                 raise BaitenAPIError(
@@ -642,19 +643,23 @@ class BaitenClient:
     async def _stream_base64_field(
         chunks, fields, out,
     ) -> bytes:
-        """Stream-scan a JSON response for a base64 string field.
+        """Stream-scan a JSON response for a binary payload field.
 
-        Decodes the matched field's base64 content chunk-by-chunk into
-        *out* (a binary file-like), keeping at most 4 undecoded bytes in
-        memory and the rest written straight through.  The base64 alphabet
-        (A-Za-z0-9+/=) contains neither ``"`` nor ``\\``, so the first
-        unescaped quote after the opening one terminates the value —
-        no full JSON parse is needed, and peak memory stays O(chunk).
+        Decodes the matched field's content chunk-by-chunk into *out*
+        (a binary file-like), keeping only a bounded buffer in memory and
+        writing the rest straight through, so peak memory stays O(chunk).
+
+        Two value encodings are handled:
+        - base64 string (``"..."``) — old fileByte / documented
+          contentInBytes shapes; the base64 alphabet contains neither
+          ``"`` nor ``\\``, so the first unescaped quote terminates it;
+        - signed byte array (``[37,80,68,...]``) — the live
+          ``file_inputStream`` shape (Java byte[] JSON serialization,
+          values & 0xFF on write).
 
         *fields* is an iterable of candidate JSON key patterns (with the
-        surrounding quotes, e.g. ``b'"contentInBytes"'``) — the download
-        gateway returns the PDF under contentInBytes per the platform doc,
-        older shapes used fileByte; the first one found wins.
+        surrounding quotes, e.g. ``b'"file_inputStream"'``); the first
+        one found wins.
 
         Returns the matched field pattern (or b'' when the stream ended
         without any candidate, e.g. an error JSON carrying neither).
@@ -669,9 +674,11 @@ class BaitenClient:
         if not fields:
             return b""
         b64_buf = bytearray()
+        int_buf = bytearray()
         tail = bytearray()  # carry the half-split field marker across chunks
         state = "scan"      # scan → value_start → collect → done
         value = b""
+        array_mode = False
 
         async for chunk in chunks:
             data = bytes(tail) + chunk
@@ -697,26 +704,56 @@ class BaitenClient:
                 data = data.lstrip(b" \t\r\n:")  # colon/whitespace after key
                 if not data:
                     continue
-                if data[0] != 34:  # 34 = '"' — null/absent value
-                    return False
-                data = data[1:]
-                state = "collect"
+                if data[0] == 34:  # 34 = '"' — base64 string value
+                    data = data[1:]
+                    state = "collect"
+                elif data[0] == 91:  # 91 = '[' — signed byte array value
+                    array_mode = True
+                    data = data[1:]
+                    state = "collect"
+                else:  # null/absent value
+                    return b""
             if state == "collect":
-                end = data.find(b'"')
-                if end < 0:
-                    b64_buf.extend(data)
+                if array_mode:
+                    end = data.find(b"]")
+                    if end < 0:
+                        int_buf.extend(data)
+                        last_comma = int_buf.rfind(b",")
+                        if last_comma >= 0:
+                            nums = [
+                                int(x) & 0xFF
+                                for x in int_buf[:last_comma].split(b",")
+                                if x.strip()
+                            ]
+                            if nums:
+                                out.write(bytes(nums))
+                            del int_buf[:last_comma + 1]
+                    else:
+                        int_buf.extend(data[:end])
+                        nums = [
+                            int(x) & 0xFF
+                            for x in int_buf.split(b",")
+                            if x.strip()
+                        ]
+                        if nums:
+                            out.write(bytes(nums))
+                        state = "done"
                 else:
-                    b64_buf.extend(data[:end])
-                    state = "done"
-                # decode aligned runs, keep <4-byte remainder for next chunk
-                n = len(b64_buf) - (len(b64_buf) % 4)
-                if n:
-                    try:
-                        out.write(_b64.b64decode(bytes(b64_buf[:n]),
-                                                 validate=False))
-                    except (_binascii.Error, ValueError):
-                        out.write(bytes(b64_buf[:n]))
-                    del b64_buf[:n]
+                    end = data.find(b'"')
+                    if end < 0:
+                        b64_buf.extend(data)
+                    else:
+                        b64_buf.extend(data[:end])
+                        state = "done"
+                    # decode aligned runs, keep <4-byte remainder
+                    n = len(b64_buf) - (len(b64_buf) % 4)
+                    if n:
+                        try:
+                            out.write(_b64.b64decode(
+                                bytes(b64_buf[:n]), validate=False))
+                        except (_binascii.Error, ValueError):
+                            out.write(bytes(b64_buf[:n]))
+                        del b64_buf[:n]
                 if state == "done":
                     value = found_field
                     break

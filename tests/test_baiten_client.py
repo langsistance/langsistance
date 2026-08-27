@@ -422,6 +422,25 @@ class TestStreamBase64Field(unittest.TestCase):
             self.assertTrue(found, f"size={size}")
             self.assertEqual(data, raw, f"size={size}")
 
+    def test_decodes_signed_byte_array_across_chunk_sizes(self):
+        # Live shape after the PDF product permission was granted
+        # (2026-08-27): {"file_inputStream":[37,80,68,70,...]} — a signed
+        # Java byte[] array, not base64.  37,80,68,70 = "%PDF".
+        raw = bytes((i % 251) for i in range(50_000))
+        signed = [b if b < 128 else b - 256 for b in raw]
+        payload = (b'{"file_inputStream":[' +
+                   ",".join(str(b) for b in signed).encode() + b"]}")
+        for size in (1, 3, 5, 7, 1024, 4097):
+            out = tempfile.SpooledTemporaryFile(max_size=_SPOOL_MAX_MEMORY)
+            found = asyncio.run(BaitenClient._stream_base64_field(
+                _achunks(payload, size),
+                (b'"file_inputStream"', b'"fileByte"'), out))
+            out.seek(0)
+            data = out.read()
+            out.close()
+            self.assertTrue(found, f"size={size}")
+            self.assertEqual(data, raw, f"size={size}")
+
     def test_returns_false_when_field_absent(self):
         found, data = self._decode(b'{"code":"500","msg":"boom"}')
         self.assertFalse(found)
