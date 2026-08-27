@@ -51,6 +51,23 @@ class TestFlattenBaitenClaims(unittest.TestCase):
         self.assertEqual(_flatten_baiten_claims(body), ["X"])
         self.assertEqual(_flatten_baiten_claims({}), [])
 
+    def test_live_snake_case_container_strips_html(self):
+        # Live-verified shape (2026-08-27, real key): patent_claims_list
+        # with claims_num/claims_parentNum and <p>-wrapped claim text.
+        body = {"patent_claims_list": [
+            {"claims_num": "1", "claims_parentNum": "0",
+             "claim": "<p>1.一种智能旋转式湿度控制装置，其特征在于，"
+                      "包括外壳(1)、安装于所述外壳(1)内的固定隔板(52)</p>"},
+            {"claims_num": "2", "claims_parentNum": "1",
+             "claim": "<p>2.如权利要求1所述的装置，其特征在于，"
+                      "还包括密封隔板(6)</p>"},
+        ]}
+        texts = _flatten_baiten_claims(body)
+        self.assertEqual(len(texts), 2)
+        self.assertTrue(texts[0].startswith("1.一种智能旋转式"))
+        self.assertNotIn("<p>", texts[0])
+        self.assertNotIn("</p>", texts[0])
+
 
 class _FakeBaitenClient:
     """Records calls; scriptable get_doc / get_claims responses."""

@@ -423,17 +423,23 @@ def _build_baiten_download_url(pub_num: str, pub_date: str) -> str:
 
 
 def _flatten_baiten_claims(body: dict) -> list[str]:
-    """Flatten Baiten patentClaimses[] into claim texts.
+    """Flatten Baiten claim rows into claim texts.
 
-    Rows are {claim, claimsNum, claimsParentNum}; only the claim text is
-    needed here — independence is re-derived from the opener by the
-    existing build_claims_payload rules (如权利要求1所述 …).
+    Live-verified row shape (2026-08-27, real key): the container is
+    ``patent_claims_list`` (snake_case) with rows
+    ``{claims_num, claims_parentNum, claim}`` — the ``claim`` text is
+    wrapped in ``<p>…</p>`` by the gateway.  The older SDK camelCase
+    container ``patentClaimses`` (rows {claim, claimsNum,
+    claimsParentNum}) is also tolerated.  Only the claim text is needed
+    here — independence is re-derived from the opener by the existing
+    build_claims_payload rules (如权利要求1所述 …).
     """
     data = body.get("data") if isinstance(body.get("data"), dict) else body
     rows = None
     for container in (data, body):
         if isinstance(container, dict):
-            rows = container.get("patentClaimses")
+            rows = (container.get("patent_claims_list")
+                    or container.get("patentClaimses"))
             if rows:
                 break
     texts: list[str] = []
@@ -441,6 +447,10 @@ def _flatten_baiten_claims(body: dict) -> list[str]:
         if not isinstance(row, dict):
             continue
         text = str(row.get("claim") or "").strip()
+        if not text:
+            continue
+        # The gateway wraps claim text in <p>…</p> — strip tags.
+        text = re.sub(r"<[^>]+>", "", text).strip()
         if text and text not in texts:
             texts.append(text)
     return texts
