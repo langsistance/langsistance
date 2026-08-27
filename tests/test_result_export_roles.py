@@ -1,6 +1,9 @@
 """Tests for result_export column-role inference and JSON artifact."""
+import io
 import json
+import re
 import unittest
+import zipfile
 
 from sources.result_export import (
     build_result_artifacts,
@@ -44,6 +47,14 @@ class TestInferColumnRole(unittest.TestCase):
             "pdfUrl": "url",
             "download_url": "url",
             "url": "url",
+            # Baiten CN candidate field names (snake_case) — the frontend
+            # needs patentId/applicationNumber per row to open detail tabs.
+            "patent_id": "patent_id",
+            "patent_number": "patent_id",
+            "app_num": "application_number",
+            "appnum": "application_number",
+            "pub_date": "publication_date",
+            "apply_date": "filing_date",
         }
         for key, expected in cases.items():
             with self.subTest(key=key):
@@ -129,6 +140,42 @@ class TestBuildResultArtifactsJson(unittest.TestCase):
                 {"mimeType": "application/pdf", "downloadUrl": download_url}
             ]
         return item
+
+    def test_xlsx_splits_cn_and_us_into_separate_sheets(self):
+        # Dual-source results must not be dumped into one Excel sheet —
+        # CN (source=baiten) and USPTO rows land in their own sheets.
+        items = [
+            {"patent_id": "CN118000001A", "source": "baiten",
+             "title": "散热装置", "app_num": "CN202311458694.9"},
+            {"patentTitle": "Cooling device",
+             "applicationNumberText": "19511555"},
+        ] * 6
+        artifacts = build_result_artifacts(items, source="uspto", lang="zh")
+        xlsx = next(a for a in artifacts if a["format"] == "xlsx")
+        with zipfile.ZipFile(io.BytesIO(xlsx["content"])) as archive:
+            workbook = archive.read("xl/workbook.xml").decode("utf-8")
+            cn_sheet = archive.read("xl/worksheets/sheet2.xml").decode("utf-8")
+            us_sheet = archive.read("xl/worksheets/sheet3.xml").decode("utf-8")
+        names = re.findall(r'<sheet name="([^"]+)"', workbook)
+        self.assertIn("中国专利", names)
+        self.assertIn("美国专利", names)
+        self.assertIn("CN118000001A", cn_sheet)
+        self.assertNotIn("19511555", cn_sheet)
+        self.assertIn("19511555", us_sheet)
+        self.assertNotIn("CN118000001A", us_sheet)
+
+    def test_xlsx_single_source_keeps_one_result_sheet(self):
+        items = [
+            {"patentTitle": "Cooling device",
+             "applicationNumberText": "19511555"},
+        ] * 6
+        artifacts = build_result_artifacts(items, source="uspto", lang="zh")
+        xlsx = next(a for a in artifacts if a["format"] == "xlsx")
+        with zipfile.ZipFile(io.BytesIO(xlsx["content"])) as archive:
+            workbook = archive.read("xl/workbook.xml").decode("utf-8")
+        names = re.findall(r'<sheet name="([^"]+)"', workbook)
+        self.assertIn("美国专利", names)
+        self.assertNotIn("中国专利", names)
 
     def test_raw_internal_field_never_leaks_into_artifact(self):
         # Baiten candidates carry the full source row under ``_raw``; it

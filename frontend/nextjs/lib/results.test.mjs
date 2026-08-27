@@ -68,6 +68,28 @@ test('buildRowModel tolerates empty rows', () => {
   assert.equal(model.fields.length, 0)
 })
 
+test('buildRowModel uses per-row source over the payload source', () => {
+  // A dual-source payload carries CN (source=baiten) and USPTO rows
+  // together; detail actions must hit the right backend branch.
+  const cnColumns = [
+    { key: 'patent_id', label: '专利号', role: 'patent_id' },
+    { key: 'title', label: '标题', role: 'title' },
+    { key: 'source', label: '来源', role: 'text' },
+  ]
+  const cnRow = { patent_id: 'CN118000001A', title: '散热装置', source: 'baiten' }
+  const model = buildRowModel(cnRow, cnColumns, 'uspto')
+  assert.equal(model.source, 'baiten')
+  assert.equal(model.patentId, 'CN118000001A')
+  assert.equal(model.applicationNumber, '')
+})
+
+test('buildRowModel falls back to payload source without a source column', () => {
+  const usRow = { patentTitle: 'Cooling device', applicationNumberText: '19511555' }
+  const model = buildRowModel(usRow, COLUMNS, 'uspto')
+  assert.equal(model.source, 'uspto')
+  assert.equal(model.applicationNumber, '19511555')
+})
+
 test('pruneResultsForPersistence truncates abstracts and caps rows', () => {
   const longAbstract = '字'.repeat(1200)
   const rows = Array.from({ length: 60 }, (_, i) => ({

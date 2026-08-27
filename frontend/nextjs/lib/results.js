@@ -47,6 +47,12 @@ export function buildRowModel(row, columns, source) {
   const appNumCol = findRoleColumn(list, 'application_number')
   const urlCol = findRoleColumn(list, 'url')
 
+  // Per-row source wins over the payload-wide source: a dual-source set
+  // carries CN rows (source=baiten) and USPTO rows in one payload, and
+  // detail actions (claims/spec) must hit the right backend branch.
+  const sourceCol = list.find((col) => col && col.key === 'source')
+  const rowSource = (sourceCol && columnValue(row, sourceCol)) || source
+
   return {
     id: String(columnValue(row, patentIdCol) || title || fields[0]?.[1] || 'row'),
     title,
@@ -54,7 +60,7 @@ export function buildRowModel(row, columns, source) {
     patentId: columnValue(row, patentIdCol),
     applicationNumber: columnValue(row, appNumCol),
     url: columnValue(row, urlCol),
-    source,
+    source: rowSource,
     isDocument,
     fields,
   }

@@ -52,8 +52,12 @@ _ROLE_SUFFIXES: list[tuple[str, str]] = [
     ("application_number", "applicationnumbertext"),
     ("application_number", "applicationnumber"),
     ("application_number", "application_number"),
+    ("application_number", "app_num"),
+    ("application_number", "appnum"),
     ("patent_id", "patentnumber"),
     ("patent_id", "publicationnumber"),
+    ("patent_id", "patent_id"),
+    ("patent_id", "patent_number"),
     ("assignee", "assigneeentityname"),
     ("assignee", "assignee"),
     ("assignee", "applicant"),
@@ -61,8 +65,10 @@ _ROLE_SUFFIXES: list[tuple[str, str]] = [
     ("inventors", "inventors"),
     ("filing_date", "filingdate"),
     ("filing_date", "applicationdate"),
+    ("filing_date", "apply_date"),
     ("publication_date", "publicationdate"),
     ("publication_date", "grantdate"),
+    ("publication_date", "pub_date"),
     ("ipc", "ipcclass"),
     ("ipc", "cpcclass"),
     ("ipc", "ipc"),
@@ -405,22 +411,21 @@ def _instructions_sheet_xml(lang: str) -> str:
 
 # ── Main XLSX builder ─────────────────────────────────────────────────
 def build_xlsx_bytes(
-    columns: list[str],
-    rows: list[dict[str, str]],
+    sheets: list[tuple[str, list[str], list[dict[str, str]]]],
     metadata: dict[str, Any] | None = None,
     *,
     lang: str = "zh",
 ) -> bytes:
     """Build an XLSX workbook as raw bytes (hand-written OOXML, no dependencies).
 
-    The workbook contains three sheets in order:
+    The workbook contains ``len(sheets) + 2`` sheets in order:
     1. **Instructions** (localized usage guide)
-    2. **Results** (the patent data with localized headers)
+    2. one **results** sheet per ``sheets`` entry — the caller names them,
+       so dual-source searches split CN and US patents into separate sheets
     3. **Metadata** (query statistics with localized labels)
 
     Args:
-        columns: Raw API field paths for the Results sheet.
-        rows: Data rows keyed by *columns*.
+        sheets: List of ``(sheet_name, columns, rows)`` result groups.
         metadata: Optional dict of query metadata.
         lang: ``"zh"`` or ``"en"`` — controls header labels, instructions,
             and metadata captions.
@@ -429,6 +434,14 @@ def build_xlsx_bytes(
     lang = lang.split("-")[0].lower() if lang else "zh"
     if lang not in ("zh", "en"):
         lang = "zh"
+
+    result_sheets = [(str(name), cols, rws)
+                     for name, cols, rws in (sheets or [])]
+    n_results = len(result_sheets)
+    # Sheet numbering: 1 = Instructions, 2..n+1 = result sheets, n+2 = Metadata
+    instr_sheet_id = 1
+    meta_sheet_id = 2 + n_results
+    result_sheet_ids = list(range(2, meta_sheet_id))
 
     # Localized metadata column names
     md_key_col = "字段" if lang == "zh" else "Key"
@@ -440,24 +453,27 @@ def build_xlsx_bytes(
         m_label = _METADATA_LABELS.get(key, {}).get(lang, key)
         metadata_rows.append({md_key_col: m_label, md_val_col: _stringify_cell(value)})
 
+    instr_sheet_name = "使用说明" if lang == "zh" else "Instructions"
+    meta_sheet_name = "元数据" if lang == "zh" else "Metadata"
+
     # ── Content Types ─────────────────────────────────────────────────
-    content_types = (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
-        '<Default Extension="xml" ContentType="application/xml"/>'
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
+        '<Default Extension="xml" ContentType="application/xml"/>',
         '<Override PartName="/xl/workbook.xml" '
-        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
         '<Override PartName="/xl/styles.xml" '
-        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
-        '<Override PartName="/xl/worksheets/sheet1.xml" '
-        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
-        '<Override PartName="/xl/worksheets/sheet2.xml" '
-        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
-        '<Override PartName="/xl/worksheets/sheet3.xml" '
-        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
-        '</Types>'
-    )
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>',
+    ]
+    for sheet_no in range(1, meta_sheet_id + 1):
+        parts.append(
+            f'<Override PartName="/xl/worksheets/sheet{sheet_no}.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        )
+    parts.append('</Types>')
+    content_types = "".join(parts)
 
     # ── Root relationships ────────────────────────────────────────────
     root_rels = (
@@ -469,36 +485,46 @@ def build_xlsx_bytes(
         '</Relationships>'
     )
 
-    # ── Workbook (sheets ordered: Instructions → Results → Metadata) ──
-    instr_sheet_name = "使用说明" if lang == "zh" else "Instructions"
+    # ── Workbook (sheets ordered: Instructions → result sheets → Metadata) ──
+    sheets_xml = [
+        f'<sheet name="{escape(instr_sheet_name)}" '
+        f'sheetId="{instr_sheet_id}" r:id="rId{instr_sheet_id}"/>',
+    ]
+    for index, (name, _, _) in enumerate(result_sheets):
+        sheets_xml.append(
+            f'<sheet name="{escape(name)}" '
+            f'sheetId="{result_sheet_ids[index]}" r:id="rId{result_sheet_ids[index]}"/>'
+        )
+    sheets_xml.append(
+        f'<sheet name="{escape(meta_sheet_name)}" '
+        f'sheetId="{meta_sheet_id}" r:id="rId{meta_sheet_id}"/>'
+    )
     workbook = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
         'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-        '<sheets>'
-        f'<sheet name="{instr_sheet_name}" sheetId="3" r:id="rId3"/>'
-        '<sheet name="Results" sheetId="1" r:id="rId1"/>'
-        '<sheet name="Metadata" sheetId="2" r:id="rId2"/>'
-        '</sheets>'
+        '<sheets>' + "".join(sheets_xml) + '</sheets>'
         '</workbook>'
     )
 
     # ── Workbook relationships ────────────────────────────────────────
+    rels = []
+    for sheet_no in range(1, meta_sheet_id + 1):
+        rels.append(
+            f'<Relationship Id="rId{sheet_no}" '
+            'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+            f'Target="worksheets/sheet{sheet_no}.xml"/>'
+        )
+    styles_rid = meta_sheet_id + 1
+    rels.append(
+        f'<Relationship Id="rId{styles_rid}" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" '
+        'Target="styles.xml"/>'
+    )
     workbook_rels = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-        '<Relationship Id="rId1" '
-        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
-        'Target="worksheets/sheet1.xml"/>'
-        '<Relationship Id="rId2" '
-        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
-        'Target="worksheets/sheet2.xml"/>'
-        '<Relationship Id="rId3" '
-        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
-        'Target="worksheets/sheet3.xml"/>'
-        '<Relationship Id="rId4" '
-        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" '
-        'Target="styles.xml"/>'
+        + "".join(rels) +
         '</Relationships>'
     )
 
@@ -511,23 +537,30 @@ def build_xlsx_bytes(
         archive.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
         archive.writestr("xl/styles.xml", _styles_xml())
 
-        # Sheet 1 — Results (with localized headers + formatting)
+        # Sheet 1 — Instructions
         archive.writestr(
-            "xl/worksheets/sheet1.xml",
-            _worksheet_xml(
-                columns,
-                rows,
-                lang=lang,
-                header_style_id=1,
-                freeze_header=True,
-                column_width=_DEFAULT_COL_WIDTH,
-                localize_headers=True,
-            ),
+            f"xl/worksheets/sheet{instr_sheet_id}.xml",
+            _instructions_sheet_xml(lang),
         )
 
-        # Sheet 2 — Metadata (no header formatting, no localization beyond labels)
+        # Result sheets (with localized headers + formatting)
+        for index, (_, columns, rows) in enumerate(result_sheets):
+            archive.writestr(
+                f"xl/worksheets/sheet{result_sheet_ids[index]}.xml",
+                _worksheet_xml(
+                    columns,
+                    rows,
+                    lang=lang,
+                    header_style_id=1,
+                    freeze_header=True,
+                    column_width=_DEFAULT_COL_WIDTH,
+                    localize_headers=True,
+                ),
+            )
+
+        # Metadata (no header formatting, no localization beyond labels)
         archive.writestr(
-            "xl/worksheets/sheet2.xml",
+            f"xl/worksheets/sheet{meta_sheet_id}.xml",
             _worksheet_xml(
                 [md_key_col, md_val_col],
                 metadata_rows,
@@ -538,9 +571,6 @@ def build_xlsx_bytes(
                 localize_headers=False,  # column names already localized
             ),
         )
-
-        # Sheet 3 — Instructions (listed first in workbook order)
-        archive.writestr("xl/worksheets/sheet3.xml", _instructions_sheet_xml(lang))
 
     return buffer.getvalue()
 
@@ -599,7 +629,27 @@ def build_result_artifacts(
     }
 
     csv_content = build_csv_bytes(columns, rows)
-    xlsx_content = build_xlsx_bytes(columns, rows, metadata, lang=lang)
+
+    # Split CN (baiten) and other (USPTO) rows into separate workbook
+    # sheets — a dual-source result set must not be dumped into one sheet.
+    cn_rows = [r for r in rows
+               if str(r.get("source", "")).strip().lower() == "baiten"]
+    other_rows = [r for r in rows
+                  if str(r.get("source", "")).strip().lower() != "baiten"]
+    if lang == "zh":
+        cn_name, us_name = "中国专利", "美国专利"
+    else:
+        cn_name, us_name = "CN Patents", "US Patents"
+    if cn_rows and other_rows:
+        xlsx_sheets = [(cn_name, columns, cn_rows),
+                       (us_name, columns, other_rows)]
+    elif cn_rows:
+        xlsx_sheets = [(cn_name, columns, rows)]
+    elif other_rows:
+        xlsx_sheets = [(us_name, columns, rows)]
+    else:
+        xlsx_sheets = [("Results", columns, rows)]
+    xlsx_content = build_xlsx_bytes(xlsx_sheets, metadata, lang=lang)
 
     json_payload = {
         "source": source,
