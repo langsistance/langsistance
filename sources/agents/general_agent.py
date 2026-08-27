@@ -174,9 +174,13 @@ def _extract_patent_ids_from_items(items: list) -> list:
         if app_num and app_num.isdigit() and 7 <= len(app_num) <= 12:
             patent_ids.append(app_num)
             continue
-        # CNIPA / other sources: check common patent ID field names
-        for key in ('applicationNumber', 'patentApplicationNumber',
-                     'apc', 'patentNumber', '专利申请号'):
+        # CNIPA / other sources: check common patent ID field names —
+        # Baiten flat candidates carry patent_id (publication number) /
+        # patent_number / app_num, none of which matched before, so CN
+        # patents never reached the conversation_refs channel.
+        for key in ('patent_id', 'patent_number', 'app_num',
+                    'applicationNumber', 'patentApplicationNumber',
+                    'apc', 'patentNumber', '专利申请号'):
             val = str(item.get(key, '')).strip()
             if val and len(val) >= 8:
                 patent_ids.append(val)
