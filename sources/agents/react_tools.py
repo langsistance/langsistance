@@ -1770,6 +1770,39 @@ def _baiten_results_to_candidates(body: dict) -> list:
     return candidates
 
 
+def _normalize_uspto_items(items: list) -> list:
+    """Lift the patent title to a top-level ``title`` key on USPTO items.
+
+    The applications/search endpoint has returned the title under
+    different names and locations across schema versions (inventionTitle
+    vs titleOfInvention, top-level vs inside applicationMetaData —
+    observed 2026-08-27: the artifact rows showed a blank title column
+    while the data clearly carried titles).  The export/artifact pipeline
+    maps a fixed ``title`` role, so normalize here instead of chasing the
+    API's current shape.  Items already carrying a top-level title (or
+    with no recognizable title field) pass through unchanged.
+    """
+    out = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            out.append(item)
+            continue
+        if any(isinstance(item.get(k), str) and item.get(k).strip()
+               for k in ("title", "inventionTitle", "titleOfInvention")):
+            out.append(item)
+            continue
+        normalized = dict(item)
+        meta = item.get("applicationMetaData")
+        if isinstance(meta, dict):
+            for key in ("inventionTitle", "titleOfInvention"):
+                value = meta.get(key)
+                if isinstance(value, str) and value.strip():
+                    normalized["title"] = value.strip()
+                    break
+        out.append(normalized)
+    return out
+
+
 async def _uspto_search_by_query(
     q: str, page: int = 1, page_size: int = 20,
 ) -> tuple[list, str]:
@@ -1800,7 +1833,8 @@ async def _uspto_search_by_query(
         if getattr(response, "status_code", 0) != 200:
             return [], f"USPTO HTTP {response.status_code}"
         data = response.json()
-        items = data.get("patentFileWrapperDataBag") or []
+        items = _normalize_uspto_items(
+            data.get("patentFileWrapperDataBag") or [])
         return items, f"USPTO {len(items)} hits"
     except Exception as exc:
         return [], f"USPTO failed: {exc}"

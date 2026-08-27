@@ -7,6 +7,7 @@ from sources.agents.react_tools import (
     _baiten_results_to_candidates,
     _baiten_search_by_query,
     _items_digest,
+    _normalize_uspto_items,
     _resolve_patent_queries,
     _run_patent_search,
     build_tool_set,
@@ -32,6 +33,37 @@ class _FakeAgent:
         self._tried_queries = []
         self._patent_auto_used = 0
         self.logger = None
+
+
+class TestNormalizeUsptoItems(unittest.TestCase):
+    def test_lifts_title_from_meta_invention_title(self):
+        items = [{"applicationNumberText": "19511555", "applicationMetaData": {
+            "inventionTitle": "Air dryer", "filingDate": "2024-01-01"}}]
+        out = _normalize_uspto_items(items)
+        self.assertEqual(out[0]["title"], "Air dryer")
+        self.assertEqual(out[0]["applicationMetaData"]["inventionTitle"],
+                         "Air dryer")
+
+    def test_lifts_title_from_meta_title_of_invention(self):
+        # Schema drift observed 2026-08-27: real responses carried the
+        # title under titleOfInvention, artifact rows showed blank titles.
+        items = [{"applicationNumberText": "19511555", "applicationMetaData": {
+            "titleOfInvention": "Cooling device"}}]
+        out = _normalize_uspto_items(items)
+        self.assertEqual(out[0]["title"], "Cooling device")
+
+    def test_keeps_existing_top_level_title(self):
+        items = [{"applicationNumberText": "19511555", "title": "Already"}]
+        out = _normalize_uspto_items(items)
+        self.assertEqual(out[0]["title"], "Already")
+        self.assertIs(out[0], items[0])
+
+    def test_no_title_passes_through(self):
+        items = [{"applicationNumberText": "19511555",
+                  "applicationMetaData": {"filingDate": "2024-01-01"}}]
+        out = _normalize_uspto_items(items)
+        self.assertNotIn("title", out[0])
+        self.assertEqual(len(out), 1)
 
 
 class TestBaitenResultsToCandidates(unittest.TestCase):

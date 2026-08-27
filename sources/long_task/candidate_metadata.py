@@ -143,7 +143,12 @@ def build_candidates(raw_items: list) -> list[dict]:
             continue
         candidates.append({
             "patent_id": pid,
-            "title": _first_str(m, "inventionTitle"),
+            # Title may ride top-level (title / titleOfInvention, after
+            # _normalize_uspto_items lifting) or nested in applicationMetaData
+            # (inventionTitle / titleOfInvention — schema varies by version).
+            "title": (_first_str(item, "title", "inventionTitle",
+                                 "titleOfInvention")
+                      or _first_str(m, "inventionTitle", "titleOfInvention")),
             "applicant": _first_str(m, "firstApplicantName"),
             "status": _first_str(m, "applicationStatusDescriptionText"),
             "filing_date": _first_str(m, "filingDate"),

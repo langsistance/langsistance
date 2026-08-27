@@ -77,6 +77,22 @@ class TestBuildCandidates(unittest.TestCase):
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["patent_id"], "19511555")
 
+    def test_extracts_title_of_invention_and_top_level_title(self):
+        # Schema drift observed 2026-08-27: some API versions name the
+        # title titleOfInvention (nested), or carry a lifted top-level
+        # title after _normalize_uspto_items.
+        items = [
+            {"applicationNumberText": "19511555", "applicationMetaData": {
+                "titleOfInvention": "Nested variant"}},
+            {"applicationNumberText": "19511556",
+             "applicationMetaData": {"filingDate": "2024-01-15"},
+             "title": "Lifted variant"},
+        ]
+        candidates = build_candidates(items)
+        titles = {c["patent_id"]: c["title"] for c in candidates}
+        self.assertEqual(titles["19511555"], "Nested variant")
+        self.assertEqual(titles["19511556"], "Lifted variant")
+
 
 class TestEnsureSearchFields(unittest.TestCase):
     def test_adds_missing_fields_without_mutating_input(self):
