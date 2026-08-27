@@ -139,8 +139,8 @@ export default {
     landing: {
       slogan: '专利情报，一问即得',
       sectionTitle: '当前可用能力',
-      cap1Title: '美国专利检索',
-      cap1Desc: '直达 USPTO，按专利号、申请人、技术关键词精准检索美国专利',
+      cap1Title: '中国和美国专利检索',
+      cap1Desc: '中美专利双库并行检索，按专利号、申请人、技术关键词精准定位中国与美国专利',
       cap2Title: '自然语言检索',
       cap2Desc: '用大白话提问，AI 自动理解技术方案，无需检索式、无需 IPC 分类号',
       cap3Title: '审查历史分析',

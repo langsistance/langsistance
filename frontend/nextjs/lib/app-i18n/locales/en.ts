@@ -139,8 +139,8 @@ export default {
     landing: {
       slogan: 'Patent intelligence, just ask.',
       sectionTitle: 'Currently available',
-      cap1Title: 'US Patent Search',
-      cap1Desc: 'Search USPTO by patent number, assignee, or keywords',
+      cap1Title: 'China & US Patent Search',
+      cap1Desc: 'Search China and US patents by patent number, assignee, or keywords',
       cap2Title: 'Natural Language Search',
       cap2Desc: 'Ask in plain language — no query syntax or IPC needed',
       cap3Title: 'Prosecution History Analysis',
