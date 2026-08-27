@@ -160,7 +160,11 @@ def normalize_result_rows(items: list[Any]) -> tuple[list[str], list[dict[str, s
     for item in items:
         row: dict[str, str] = {}
         if isinstance(item, dict):
-            _flatten_value("", _lift_download_url(item), row)
+            # ``_raw`` is an internal field (the full source row carried for
+            # family/dedupe logic); it must never leak into user-facing
+            # exports or the frontend artifact.
+            export_item = {k: v for k, v in item.items() if k != "_raw"}
+            _flatten_value("", _lift_download_url(export_item), row)
         else:
             row["value"] = _stringify_cell(item)
 

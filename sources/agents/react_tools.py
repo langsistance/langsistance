@@ -1840,6 +1840,36 @@ async def _uspto_search_by_query(
         return [], f"USPTO failed: {exc}"
 
 
+async def _enrich_baiten_law_status(client, candidates: list, glog) -> None:
+    """Fill Baiten candidate ``status`` from the /openService/law gateway.
+
+    One FLZT (法律状态) call per candidate, fired concurrently with a short
+    per-call timeout so a slow gateway never blocks the result list; any
+    failure degrades to the empty status the candidate already carries.
+    Pure enrichment — never raises.
+    """
+    if not candidates:
+        return
+
+    async def _one(c: dict) -> None:
+        app_num = str(c.get("app_num") or "").strip()
+        if not app_num:
+            return
+        try:
+            state = await asyncio.wait_for(
+                client.query_law_state(app_num), timeout=5)
+        except Exception as exc:
+            if glog is not None:
+                glog.warning(
+                    f"baiten law status failed for {app_num}: {exc}")
+            return
+        law = str((state or {}).get("lawStatus") or "").strip()
+        if law:
+            c["status"] = law
+
+    await asyncio.gather(*[_one(c) for c in candidates])
+
+
 async def _baiten_search_by_query(
     q: str, page: int = 1, page_size: int = 20, agent=None,
 ) -> tuple[list, str]:
@@ -1873,6 +1903,8 @@ async def _baiten_search_by_query(
             api_level=cfg.get("api_level", "ONE"))
         summary = summarize_search_response(body)
         items = _baiten_results_to_candidates(body)
+        if items:
+            await _enrich_baiten_law_status(client, items, _glog)
         if _glog is not None:
             _glog.info(
                 f"baiten_search_map — query={q[:60]!r} "

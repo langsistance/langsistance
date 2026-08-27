@@ -130,6 +130,29 @@ class TestBuildResultArtifactsJson(unittest.TestCase):
             ]
         return item
 
+    def test_raw_internal_field_never_leaks_into_artifact(self):
+        # Baiten candidates carry the full source row under ``_raw``; it
+        # is internal bookkeeping and must not surface in the Excel/CSV
+        # export or the frontend JSON artifact.
+        items = [
+            {
+                "patent_id": "CN118000001A",
+                "source": "baiten",
+                "title": "散热装置",
+                "_raw": {"an": "CN2023XXX", "ti": "散热装置",
+                         "secret_internal": True},
+            },
+        ] * 6
+        artifacts = build_result_artifacts(items, source="uspto")
+        json_artifact = next(a for a in artifacts if a["format"] == "json")
+        payload = json.loads(json_artifact["content"].decode("utf-8"))
+        keys = set(payload["rows"][0].keys())
+        self.assertNotIn("_raw", keys)
+        self.assertNotIn("_raw.an", keys)
+        self.assertIn("patent_id", keys)
+        self.assertIn("title", keys)
+        self.assertEqual(payload["rows"][0]["title"], "散热装置")
+
     def test_document_items_lift_download_url_into_url_column(self):
         # Document rows carry their download URL inside the nested
         # downloadOptionBag list — it must surface as a top-level

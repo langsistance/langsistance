@@ -6,6 +6,7 @@ from unittest.mock import patch
 from sources.agents.react_tools import (
     _baiten_results_to_candidates,
     _baiten_search_by_query,
+    _enrich_baiten_law_status,
     _items_digest,
     _normalize_uspto_items,
     _resolve_patent_queries,
@@ -33,6 +34,35 @@ class _FakeAgent:
         self._tried_queries = []
         self._patent_auto_used = 0
         self.logger = None
+
+
+class TestEnrichBaitenLawStatus(unittest.TestCase):
+    async def _run(self, candidates, state=None, fail=False):
+        class _Client:
+            async def query_law_state(self, app_num):
+                if fail:
+                    raise RuntimeError("gateway down")
+                return state or {}
+
+        await _enrich_baiten_law_status(_Client(), candidates, None)
+
+    def test_fills_status_from_law_state(self):
+        candidates = [{"patent_id": "CN118000001A", "app_num": "CN2023XXX",
+                       "status": ""}]
+        asyncio.run(self._run(
+            candidates, state={"lawStatus": "专利权维持"}))
+        self.assertEqual(candidates[0]["status"], "专利权维持")
+
+    def test_failure_degrades_to_empty_status(self):
+        candidates = [{"patent_id": "CN118000001A", "app_num": "CN2023XXX",
+                       "status": ""}]
+        asyncio.run(self._run(candidates, fail=True))
+        self.assertEqual(candidates[0]["status"], "")
+
+    def test_skips_candidates_without_app_num(self):
+        candidates = [{"patent_id": "CN118000001A", "status": ""}]
+        asyncio.run(self._run(candidates, state={"lawStatus": "X"}))
+        self.assertEqual(candidates[0]["status"], "")
 
 
 class TestNormalizeUsptoItems(unittest.TestCase):
