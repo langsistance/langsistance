@@ -186,6 +186,21 @@ lt_router = long_task_routes.register_long_task_routes(logger, config)
 api.include_router(lt_router, tags=["long_task"])
 # Note: query router is not included as it contained conflicting endpoints and is now empty
 
+# Startup route audit — a missing include (e.g. /baiten/download 404 while
+# the code has the route) is visible in the very first startup log line.
+try:
+    _route_paths = sorted({
+        getattr(route, "path", "")
+        for route in api.routes
+        if getattr(route, "path", "")
+    })
+    logger.info(
+        f"registered routes ({len(_route_paths)}): "
+        + ", ".join(_route_paths)
+    )
+except Exception as _route_exc:
+    logger.warning(f"route audit failed: {_route_exc}")
+
 if __name__ == "__main__":
     # Print startup info
     if is_running_in_docker():
