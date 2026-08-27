@@ -9,6 +9,7 @@ from sources.agents.react_tools import (
     _enrich_baiten_law_status,
     _items_digest,
     _normalize_uspto_items,
+    _order_pending_for_lang,
     _resolve_patent_queries,
     _run_patent_search,
     build_tool_set,
@@ -34,6 +35,22 @@ class _FakeAgent:
         self._tried_queries = []
         self._patent_auto_used = 0
         self.logger = None
+
+
+class TestOrderPendingForLang(unittest.TestCase):
+    def test_zh_groups_cn_first(self):
+        us = [{"applicationNumberText": "19511555"}, {"applicationNumberText": "19511556"}]
+        cn = [{"patent_id": "CN118000001A", "source": "baiten"}]
+        ordered = _order_pending_for_lang(us + cn, "zh")
+        self.assertEqual(ordered[0]["patent_id"], "CN118000001A")
+        self.assertEqual([c["applicationNumberText"] for c in ordered[1:]],
+                         ["19511555", "19511556"])
+
+    def test_non_zh_keeps_source_order(self):
+        us = [{"applicationNumberText": "19511555"}]
+        cn = [{"patent_id": "CN118000001A", "source": "baiten"}]
+        ordered = _order_pending_for_lang(us + cn, "en")
+        self.assertEqual(ordered, us + cn)
 
 
 class TestEnrichBaitenLawStatus(unittest.TestCase):

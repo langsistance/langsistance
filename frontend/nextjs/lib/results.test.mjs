@@ -103,6 +103,7 @@ test('mixed CN-first column order: each row reads its own identifier column', ()
     { key: 'source', label: '来源', role: 'text' },
     { key: 'applicationNumberText', label: '申请号', role: 'application_number' },
     { key: 'applicationMetaData.patentNumber', label: '专利号', role: 'patent_id' },
+    { key: 'applicationMetaData.inventionTitle', label: '标题', role: 'title' },
   ]
   const cnRow = {
     patent_id: 'CN118000001A', app_num: 'CN202311458694.9',
@@ -111,16 +112,19 @@ test('mixed CN-first column order: each row reads its own identifier column', ()
   const usRow = {
     applicationNumberText: '19511555',
     'applicationMetaData.patentNumber': 'US12000123B2',
+    'applicationMetaData.inventionTitle': 'Cooling device',
   }
   const cnModel = buildRowModel(cnRow, mixedColumns, 'uspto')
   assert.equal(cnModel.patentId, 'CN118000001A')
   assert.equal(cnModel.applicationNumber, 'CN202311458694.9')
   assert.equal(cnModel.source, 'baiten')
+  assert.equal(cnModel.title, '散热装置')
 
   const usModel = buildRowModel(usRow, mixedColumns, 'uspto')
   assert.equal(usModel.patentId, 'US12000123B2')
   assert.equal(usModel.applicationNumber, '19511555')
   assert.equal(usModel.source, 'uspto')
+  assert.equal(usModel.title, 'Cooling device')
 })
 
 test('firstColumnValueForRole takes the first populated column of the role', () => {

@@ -38,8 +38,12 @@ export function buildRowModel(row, columns, source) {
   const docTitleCol = findRoleColumn(list, 'document_title')
   const isDocument = Boolean(docTitleCol)
 
-  const titleCol = isDocument ? docTitleCol : findRoleColumn(list, 'title')
-  const title = columnValue(row, titleCol)
+  // Same first-populated-column rule as patentId/applicationNumber: in a
+  // mixed CN/US set the USPTO title column may register first, and CN
+  // rows must still read their own `title` column.
+  const title = isDocument
+    ? columnValue(row, docTitleCol)
+    : firstColumnValueForRole(row, list, 'title')
 
   const meta = []
   for (const role of META_ROLES) {

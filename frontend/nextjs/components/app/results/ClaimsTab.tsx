@@ -77,11 +77,9 @@ export default function ClaimsTab({ row }: { row: any }) {
         >
           <div className="results-claim-header">
             <span>
-              {claim.status === 'canceled'
-                ? `#${claim.number} · ${t('results.claimCanceled')}`
-                : claim.independent
-                  ? t('results.claimIndependent')
-                  : `#${claim.number}`}
+              {`#${claim.number}`}
+              {claim.status === 'canceled' && ` · ${t('results.claimCanceled')}`}
+              {claim.status !== 'canceled' && claim.independent && ` · ${t('results.claimIndependent')}`}
             </span>
             {claim.text && (
               <button onClick={() => handleCopy(claim.number, claim.text)}>

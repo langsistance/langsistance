@@ -449,8 +449,11 @@ def _flatten_baiten_claims(body: dict) -> list[str]:
         text = str(row.get("claim") or "").strip()
         if not text:
             continue
-        # The gateway wraps claim text in <p>…</p> — strip tags.
-        text = re.sub(r"<[^>]+>", "", text).strip()
+        # The gateway wraps claim text in <p>…</p> — strip tags, then
+        # collapse the whitespace the markup leaves behind (line breaks
+        # inside <p> become stray spaces mid-sentence).
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
         if text and text not in texts:
             texts.append(text)
     return texts

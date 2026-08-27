@@ -68,6 +68,19 @@ class TestFlattenBaitenClaims(unittest.TestCase):
         self.assertNotIn("<p>", texts[0])
         self.assertNotIn("</p>", texts[0])
 
+    def test_collapses_markup_whitespace(self):
+        # Line breaks inside <p> become stray spaces mid-sentence after
+        # tag stripping — collapse them so claims read cleanly.
+        body = {"patent_claims_list": [
+            {"claim": "<p>该载气源\n    经分流阀后分为两路，\n"
+                      "第一路依次经电磁阀流量控制器I</p>"},
+        ]}
+        texts = _flatten_baiten_claims(body)
+        self.assertEqual(
+            texts[0],
+            "该载气源 经分流阀后分为两路， 第一路依次经电磁阀流量控制器I")
+        self.assertNotIn("\n", texts[0])
+
 
 class _FakeBaitenClient:
     """Records calls; scriptable get_doc / get_claims responses."""

@@ -2000,6 +2000,23 @@ def _merge_pending_items(existing, new_items) -> list:
     return merged
 
 
+def _order_pending_for_lang(items: list, lang: str) -> list:
+    """Group pending candidates CN-first for Chinese questions.
+
+    The ladder guidance already puts the CN ladder first for zh users
+    (strategy parity); the merged display list must match, so Chinese
+    questions list Baiten patents before USPTO ones.  Stable within each
+    group; other languages keep source order.
+    """
+    if lang != "zh":
+        return items
+    cn = [c for c in items
+          if isinstance(c, dict) and c.get("source") == "baiten"]
+    others = [c for c in items
+              if not (isinstance(c, dict) and c.get("source") == "baiten")]
+    return cn + others
+
+
 async def _auto_run_patent_ladder(agent, ladder: list, search_fn, merged: list,
                                   notes: list, lang: str, source: str,
                                   page: int, page_size: int) -> int:
@@ -2163,9 +2180,12 @@ async def _run_patent_search(agent, args, lang: str, dual: bool = True) -> dict:
     # Merge with anything already pending from earlier patent_search calls
     # in this request — a later narrower call (one source 404 with the
     # auto-ladder budget spent) must never discard the earlier complete
-    # dual-source result (production incident 2026-08-27).
-    agent._pending_raw_items = _merge_pending_items(
-        getattr(agent, "_pending_raw_items", None), merged)
+    # dual-source result (production incident 2026-08-27).  Chinese
+    # questions list CN patents first, matching the CN-first ladder.
+    agent._pending_raw_items = _order_pending_for_lang(
+        _merge_pending_items(
+            getattr(agent, "_pending_raw_items", None), merged),
+        lang)
     if _glog is not None:
         cn_hits = len([c for c in merged
                        if isinstance(c, dict) and c.get("source") == "baiten"])
