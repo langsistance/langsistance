@@ -93,6 +93,25 @@ class TestFetchBaitenClaims(unittest.TestCase):
              ("get_claims", "CN202310123456", "AUTH"),
              ("get_claims", "CN202310123456", "APP")])
 
+    def test_app_num_passes_through_without_get_doc(self):
+        # The frontend sends the CN application number; the broken
+        # extService getDoc hop must be skipped entirely (2026-08-27:
+        # signature gate passes, data service reports system error).
+        import asyncio
+        client = _FakeBaitenClient(claims_map={
+            "APP": {"data": {"patentClaimses": [
+                {"claim": "一种干燥装置", "claimsNum": 1,
+                 "claimsParentNum": None}]}},
+        })
+        from api_routes import patent_detail as pd
+        pd._get_baiten_client = lambda: client
+        payload = asyncio.run(pd._fetch_baiten_claims("CN202311458694.9"))
+        self.assertTrue(payload["success"])
+        self.assertEqual(
+            client.calls,
+            [("get_claims", "CN202311458694.9", "AUTH"),
+             ("get_claims", "CN202311458694.9", "APP")])
+
     def test_no_claims_falls_back_to_pdf_proxy(self):
         import asyncio
         client = _FakeBaitenClient(claims_map={})  # both AUTH/APP empty

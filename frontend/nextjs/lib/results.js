@@ -17,6 +17,20 @@ export function columnValue(row, column) {
   return value === undefined || value === null ? '' : String(value)
 }
 
+// A mixed CN/US payload registers columns in merge order: when the first
+// call round returned only CN patents (US 404), the CN columns (patent_id /
+// app_num) land before the USPTO ones.  findRoleColumn's "first match"
+// would then hand US rows an empty CN column.  Take the first column of
+// the role that actually carries a value for THIS row instead.
+export function firstColumnValueForRole(row, list, role) {
+  for (const col of list) {
+    if (!col || col.role !== role) continue
+    const value = columnValue(row, col)
+    if (value) return value
+  }
+  return ''
+}
+
 const META_ROLES = ['patent_id', 'application_number', 'publication_number', 'assignee', 'publication_date']
 
 export function buildRowModel(row, columns, source) {
@@ -43,8 +57,6 @@ export function buildRowModel(row, columns, source) {
     fields.push([col.label || col.key, value])
   }
 
-  const patentIdCol = findRoleColumn(list, 'patent_id')
-  const appNumCol = findRoleColumn(list, 'application_number')
   const urlCol = findRoleColumn(list, 'url')
 
   // Per-row source wins over the payload-wide source: a dual-source set
@@ -53,12 +65,18 @@ export function buildRowModel(row, columns, source) {
   const sourceCol = list.find((col) => col && col.key === 'source')
   const rowSource = (sourceCol && columnValue(row, sourceCol)) || source
 
+  // Per-row first-value lookup (not findRoleColumn's first-match): in a
+  // mixed set the CN columns may be registered before the USPTO ones, and
+  // each row must read ITS OWN identifier column.
+  const patentId = firstColumnValueForRole(row, list, 'patent_id')
+  const applicationNumber = firstColumnValueForRole(row, list, 'application_number')
+
   return {
-    id: String(columnValue(row, patentIdCol) || title || fields[0]?.[1] || 'row'),
+    id: String(patentId || title || fields[0]?.[1] || 'row'),
     title,
     meta,
-    patentId: columnValue(row, patentIdCol),
-    applicationNumber: columnValue(row, appNumCol),
+    patentId,
+    applicationNumber,
     url: columnValue(row, urlCol),
     source: rowSource,
     isDocument,

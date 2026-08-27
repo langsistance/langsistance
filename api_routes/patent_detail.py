@@ -469,24 +469,40 @@ async def _fetch_baiten_spec(patent_id: str) -> dict:
             "pdf_url": _build_baiten_download_url(patent_id, pub_date)}
 
 
+def _looks_like_baiten_app_num(value: str) -> bool:
+    """True when *value* is a CN application number (ends with the check
+    digit ``.X``) rather than a publication number (ends with a kind-code
+    letter like A/B/U/S).
+    """
+    return bool(re.search(r"\.\d$", (value or "").strip()))
+
+
 async def _fetch_baiten_claims(patent_id: str) -> dict:
     """Fetch structured CN claims via Baiten.
 
-    getDoc fills appNum → getClaims(AUTH) with APP fallback → flattened
-    into the existing {number, text, status, independent} payload.
-    Scanned-only patents fall back to the PDF proxy URL.
+    The frontend now sends the application number when it has one, so the
+    broken extService getDoc hop (signature gate passes but the data
+    service reports system error, 2026-08-27) is skipped entirely.
+    Publication numbers still resolve through getDoc.  Claims are fetched
+    AUTH then APP and flattened into the existing {number, text, status,
+    independent} payload.  Scanned-only patents fall back to the PDF
+    proxy URL (publication number only).
     """
     from sources.baiten_client import BaitenError
 
-    try:
-        client = _get_baiten_client()
-        doc = await client.get_doc(patent_id)
-    except BaitenError as exc:
-        raise PatentDetailError(str(exc)) from exc
-    app_num = _extract_doc_field(doc, "an", "appNum", "applicationNumber")
-    if not app_num:
-        raise PatentDetailError(
-            f"No application number for Baiten patent {patent_id}")
+    client = _get_baiten_client()
+    if _looks_like_baiten_app_num(patent_id):
+        app_num = patent_id
+        doc = None
+    else:
+        try:
+            doc = await client.get_doc(patent_id)
+        except BaitenError as exc:
+            raise PatentDetailError(str(exc)) from exc
+        app_num = _extract_doc_field(doc, "an", "appNum", "applicationNumber")
+        if not app_num:
+            raise PatentDetailError(
+                f"No application number for Baiten patent {patent_id}")
 
     claim_texts: list[str] = []
     for pat_type in ("AUTH", "APP"):
@@ -502,10 +518,15 @@ async def _fetch_baiten_claims(patent_id: str) -> dict:
         return build_claims_payload(claim_texts)
 
     # No structured claims (scanned original) — inline viewer fallback.
-    pub_date = _normalize_baiten_date(_extract_doc_field(doc, "pd", "pubDate"))
-    if pub_date:
-        return {"success": True,
-                "pdf_url": _build_baiten_download_url(patent_id, pub_date)}
+    # The download proxy needs the publication number, which the app-num
+    # path does not carry; honest degrade instead of a wrong URL.
+    if doc is not None:
+        pub_date = _normalize_baiten_date(
+            _extract_doc_field(doc, "pd", "pubDate"))
+        if pub_date:
+            return {"success": True,
+                    "pdf_url": _build_baiten_download_url(
+                        patent_id, pub_date)}
     raise PatentDetailError(
         f"No claims available for Baiten patent {patent_id}")
 

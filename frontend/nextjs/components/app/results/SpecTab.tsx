@@ -13,7 +13,9 @@ export default function SpecTab({ row }: { row: any }) {
   useEffect(() => {
     let cancelled = false
     setState('loading')
-    const identifier = row.patentId || row.applicationNumber
+    // Application number first — see ClaimsTab: CN rows carry the Baiten
+    // app_num, USPTO rows carry applicationNumberText natively.
+    const identifier = row.applicationNumber || row.patentId
     if (!identifier) {
       setState('error')
       return

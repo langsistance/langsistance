@@ -5,6 +5,7 @@ import {
   buildRowModel,
   findQueryForResultsMessage,
   findRoleColumn,
+  firstColumnValueForRole,
   pruneResultsForPersistence,
   resolveActiveResultsMessage,
 } from './results.js'
@@ -88,6 +89,48 @@ test('buildRowModel falls back to payload source without a source column', () =>
   const model = buildRowModel(usRow, COLUMNS, 'uspto')
   assert.equal(model.source, 'uspto')
   assert.equal(model.applicationNumber, '19511555')
+})
+
+test('mixed CN-first column order: each row reads its own identifier column', () => {
+  // When the first search round returned only CN patents (US 404), the
+  // CN columns register first; findRoleColumn's first-match would hand
+  // US rows an empty CN column.  Each row must take the first column of
+  // the role that carries a value FOR THAT ROW.
+  const mixedColumns = [
+    { key: 'patent_id', label: '专利号', role: 'patent_id' },
+    { key: 'app_num', label: '申请号', role: 'application_number' },
+    { key: 'title', label: '标题', role: 'title' },
+    { key: 'source', label: '来源', role: 'text' },
+    { key: 'applicationNumberText', label: '申请号', role: 'application_number' },
+    { key: 'applicationMetaData.patentNumber', label: '专利号', role: 'patent_id' },
+  ]
+  const cnRow = {
+    patent_id: 'CN118000001A', app_num: 'CN202311458694.9',
+    title: '散热装置', source: 'baiten',
+  }
+  const usRow = {
+    applicationNumberText: '19511555',
+    'applicationMetaData.patentNumber': 'US12000123B2',
+  }
+  const cnModel = buildRowModel(cnRow, mixedColumns, 'uspto')
+  assert.equal(cnModel.patentId, 'CN118000001A')
+  assert.equal(cnModel.applicationNumber, 'CN202311458694.9')
+  assert.equal(cnModel.source, 'baiten')
+
+  const usModel = buildRowModel(usRow, mixedColumns, 'uspto')
+  assert.equal(usModel.patentId, 'US12000123B2')
+  assert.equal(usModel.applicationNumber, '19511555')
+  assert.equal(usModel.source, 'uspto')
+})
+
+test('firstColumnValueForRole takes the first populated column of the role', () => {
+  const list = [
+    { key: 'patent_id', label: 'p', role: 'patent_id' },
+    { key: 'applicationMetaData.patentNumber', label: 'n', role: 'patent_id' },
+  ]
+  assert.equal(firstColumnValueForRole(
+    { patent_id: '', 'applicationMetaData.patentNumber': 'US1' }, list, 'patent_id'), 'US1')
+  assert.equal(firstColumnValueForRole({}, list, 'patent_id'), '')
 })
 
 test('pruneResultsForPersistence truncates abstracts and caps rows', () => {

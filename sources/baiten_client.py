@@ -162,15 +162,19 @@ def _error_preview(text: str) -> str:
 
 
 def _compute_client_sign(query: str, app_secret: str,
-                         now: datetime | None = None) -> str:
+                         now: datetime | None = None,
+                         raw: bool = False) -> str:
     """SDK client_sign algorithm (DefaultCubeClient.doPost, bytecode
     reverse-engineered 2026-08-26, verified against the live gateway
     with the real key 2026-08-26: passing it turns the gateway error
     from "client sign invalidate" into the next-stage response).
 
     ``client_sign = MD5(fmt.format(new Date()) + v + appSecret)`` where
-    *v* is ``str(len(query.trim()))`` for a search request (app_num /
-    pub_num / doc_id pass their raw value instead).  ``fmt`` is
+    *v* is ``str(len(query.trim()))`` for a search request; app_num /
+    pub_num / doc_id pass their raw value instead (``raw=True`` — live
+    verified 2026-08-27 on /openService/claims and /extService/get: the
+    len-of-id variant is rejected with "client sign invalidate", the raw
+    variant passes the signature gate).  ``fmt`` is
     ``new SimpleDateFormat("yyyy")`` — the date segment is ONLY the
     four-digit year (the constant pool holds no longer pattern and there
     is no reference to Constants.DATE_TIME_FORMAT).  Uppercase hex, same
@@ -178,9 +182,9 @@ def _compute_client_sign(query: str, app_secret: str,
     """
     now = now or datetime.now(timezone(timedelta(hours=8)))
     date_str = now.strftime("%Y")
-    v = str(len(query.strip()))
-    raw = f"{date_str}{v}{app_secret}"
-    return hashlib.md5(raw.encode(_CHARSET)).hexdigest().upper()
+    v = query.strip() if raw else str(len(query.strip()))
+    raw_value = f"{date_str}{v}{app_secret}"
+    return hashlib.md5(raw_value.encode(_CHARSET)).hexdigest().upper()
 
 
 def summarize_search_response(body: dict) -> dict:
@@ -345,15 +349,20 @@ class BaitenClient:
         )
         return body
 
-    async def get_doc(self, doc_id: str, client_sign: str = "") -> dict[str, Any]:
+    async def get_doc(self, doc_id: str, client_sign: str | None = None) -> dict[str, Any]:
         """Full bibliographic record for one patent (doc_id = pn or id).
 
         Wire contract verified 2026-08-26: path ``/extService/get`` with
-        ``doc_id`` + ``client_sign`` (both required by the gateway).
-        *client_sign*'s value algorithm is unverified — any present value
-        passes Spring validation; the server-side check happens after
-        auth.
+        ``doc_id`` + ``client_sign``.  *client_sign* must be the raw-id
+        variant (MD5(yyyy + doc_id + secret)) — live verified 2026-08-27:
+        an absent key gets HTTP 400, an empty string or the len-variant is
+        rejected with "client sign invalidate", the raw variant passes the
+        signature gate (the extService data service then reports its own
+        system error — tracked separately).
         """
+        if not client_sign:
+            client_sign = _compute_client_sign(
+                doc_id, self._app_secret, raw=True)
         body = await self._request_json(
             _API_METHOD_GET_DOC, {"doc_id": doc_id, "client_sign": client_sign},
         )
@@ -375,12 +384,16 @@ class BaitenClient:
         _logger.info(f"baiten_get_claims — appNum={app_num}, patType={pat_type}")
         return body
 
-    async def get_spec(self, doc_id: str, client_sign: str = "") -> dict[str, Any]:
+    async def get_spec(self, doc_id: str, client_sign: str | None = None) -> dict[str, Any]:
         """Specification text (doc_id = CN application number).
 
         Wire contract verified 2026-08-26: path ``/extService/get_spec``
-        with ``doc_id`` + ``client_sign`` (both required by the gateway).
+        with ``doc_id`` + ``client_sign`` — raw-id client_sign variant,
+        same verification as :meth:`get_doc`.
         """
+        if not client_sign:
+            client_sign = _compute_client_sign(
+                doc_id, self._app_secret, raw=True)
         body = await self._request_json(
             _API_METHOD_SPEC, {"doc_id": doc_id, "client_sign": client_sign},
         )

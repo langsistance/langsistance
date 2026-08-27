@@ -194,6 +194,20 @@ class TestComputeClientSign(unittest.TestCase):
         ).hexdigest().upper()
         self.assertEqual(sign, expected)
 
+    def test_raw_mode_uses_id_value_not_length(self):
+        # app_num/pub_num/doc_id pass their raw value as v — live verified
+        # 2026-08-27 on /openService/claims and /extService/get: the
+        # len-of-id variant is rejected ("client sign invalidate").
+        import hashlib
+        from datetime import datetime, timezone, timedelta
+        now = datetime(2026, 8, 27, 5, 30, 0,
+                       tzinfo=timezone(timedelta(hours=8)))
+        sign = _compute_client_sign("CN202311458694.9", "s", now=now, raw=True)
+        expected = hashlib.md5(
+            ("2026" + "CN202311458694.9" + "s").encode("UTF-8"),
+        ).hexdigest().upper()
+        self.assertEqual(sign, expected)
+
     def test_ignores_month_day_hour(self):
         # 时间部分只有年份——同一年内任意时刻签名相同
         from datetime import datetime, timezone, timedelta
