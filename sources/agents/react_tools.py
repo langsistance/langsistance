@@ -2075,8 +2075,14 @@ async def _auto_run_patent_ladder(agent, ladder: list, search_fn, merged: list,
 
     Triggered when the preferred source returned nothing displayable;
     bounded (PATENT_AUTO_LADDER_BATCH per call, REACT_PATENT_AUTO_LADDER_MAX
-    per request).  Executed queries are recorded as tried so the zero-hit
-    nudge stays accurate.  Returns the number of candidates gained.
+    per source).  The budget is tracked per source (``_patent_auto_used``
+    is a {source: used} map) so the non-preferred source's auto-runs can
+    never exhaust the budget the preferred source needs when IT hits zero
+    (production incident 2026-08-29: US auto-runs in two earlier calls
+    spent the shared per-request budget, so the CN preferred-source zero
+    silently got no ladder and the call returned total=0).  Executed
+    queries are recorded as tried so the zero-hit nudge stays accurate.
+    Returns the number of candidates gained.
     """
     tried = getattr(agent, "_tried_queries", None)
     if tried is None:
@@ -2084,16 +2090,28 @@ async def _auto_run_patent_ladder(agent, ladder: list, search_fn, merged: list,
     untried = [q for q in ladder if q not in tried]
     if not untried:
         return 0
-    used = getattr(agent, "_patent_auto_used", 0) or 0
+    used_map = getattr(agent, "_patent_auto_used", None)
+    if not isinstance(used_map, dict):
+        used_map = {}
+    used = used_map.get(source, 0)
     take = untried[:min(PATENT_AUTO_LADDER_BATCH,
                         REACT_PATENT_AUTO_LADDER_MAX - used)]
     if not take:
+        _glog = getattr(agent, "logger", None)
+        if _glog is not None:
+            _glog.warning(
+                f"patent_search_auto_ladder — source={source} auto-ladder "
+                f"budget exhausted (used={used}/"
+                f"{REACT_PATENT_AUTO_LADDER_MAX}), {len(untried)} untried "
+                f"ladder queries skipped"
+            )
         return 0
     gained = 0
     executed: list = []
     for q in take:
-        agent._patent_auto_used = used + 1
+        used_map[source] = used + 1
         used += 1
+        agent._patent_auto_used = used_map
         try:
             items, note = await search_fn(q, page=page, page_size=page_size)
         except Exception as exc:

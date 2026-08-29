@@ -1605,7 +1605,7 @@ Begin your response now:
         self._missing_dir_queries = None  # inferred supplementary queries, per request
         self._auto_round_done = False  # system-driven second round fired, per request
         self._auto_ladder_used = 0  # auto-executed ladder queries, per request
-        self._patent_auto_used = 0  # built-in patent tool auto-ladder, per request
+        self._patent_auto_used = {"us": 0, "cn": 0}  # built-in patent tool auto-ladder, per source per request
         self._recall_done = False  # recall expansion (family/CPC) fired, per request
         self._tried_queries = []  # queries already sent to the search tool, per request
         self._cpc_hints = None  # matched CPC codes for the question, per request

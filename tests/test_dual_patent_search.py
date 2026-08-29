@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from sources.agents.react_tools import (
+    _auto_run_patent_ladder,
     _baiten_results_to_candidates,
     _baiten_search_by_query,
     _cn_item_to_pool_candidate,
@@ -35,7 +36,7 @@ class _FakeAgent:
         self._search_rewrite = {"queries": list(us_ladder)}
         self._search_rewrite_cn = {"queries": list(cn_ladder)}
         self._tried_queries = []
-        self._patent_auto_used = 0
+        self._patent_auto_used = {"us": 0, "cn": 0}
         self.logger = None
 
 
@@ -549,7 +550,7 @@ class TestRunPatentSearch(unittest.TestCase):
         self.assertEqual(cn_calls, ["ti:(散热)", "ti:(载体)"])
         self.assertIn("CN118000002A", result["text"])
         self.assertIn("已自动补跑中国专利阶梯式", result["text"])
-        self.assertEqual(agent._patent_auto_used, 2)
+        self.assertEqual(agent._patent_auto_used, {"us": 1, "cn": 1})
         self.assertIn("ti:(载体)", agent._tried_queries)
         self.assertEqual(len(agent._pending_raw_items), 1)
 
@@ -616,7 +617,8 @@ class TestRunPatentSearch(unittest.TestCase):
         self.assertIn("ti:(载体)", cn_calls)
         self.assertIn("us-loose", us_calls)
 
-    def test_auto_ladder_respects_request_cap(self):
+    def test_auto_ladder_respects_per_source_cap(self):
+        # 预算按源独立:CN 已用 3/4,补跑只能再执行 1 条(US 侧另有自己的 4 条)。
         cn_calls = []
 
         async def _cn(q, page=1, page_size=20, agent=None):
@@ -629,12 +631,68 @@ class TestRunPatentSearch(unittest.TestCase):
         with patch("sources.agents.react_tools._uspto_search_by_query", _us), \
              patch("sources.agents.react_tools._baiten_search_by_query", _cn):
             agent = _FakeAgent()
-            agent._patent_auto_used = 3  # 距 REACT_PATENT_AUTO_LADDER_MAX=4 只剩 1
+            agent._patent_auto_used = {"us": 0, "cn": 3}  # CN 距上限只剩 1
             result = asyncio.run(_run_patent_search(
                 agent, {"query_string_us": "us-tight",
                         "query_string_cn": "ti:(散热)"}, "zh"))
         self.assertEqual(cn_calls, ["ti:(散热)", "ti:(载体)"])
-        self.assertEqual(agent._patent_auto_used, 4)
+        self.assertEqual(agent._patent_auto_used, {"us": 1, "cn": 4})
+
+    def test_cn_ladder_not_starved_by_us_budget_exhaustion(self):
+        # 生产事故 (2026-08-29): zh 提问首选源 CN 0 命中时,CN 自动阶梯因
+        # US 侧先用光共享预算(每请求 4 条)而静默跳过,结果 us=0 cn=0 total=0。
+        # 预算按源独立后,US 用尽不再影响 CN 兜底。
+        cn_calls = []
+
+        async def _cn(q, page=1, page_size=20, agent=None):
+            cn_calls.append(q)
+            if q == "ti:(载体)":
+                return [{"patent_id": "CN118000002A", "source": "baiten",
+                         "title": "载体词命中"}], "Baiten 1 hits"
+            return [], "Baiten 0 hits (gateway 0 records)"
+
+        async def _us(q, page=1, page_size=20, agent=None):
+            return [], "USPTO 0 hits"
+
+        with patch("sources.agents.react_tools._uspto_search_by_query", _us), \
+             patch("sources.agents.react_tools._baiten_search_by_query", _cn):
+            agent = _FakeAgent()
+            agent._patent_auto_used = {"us": 4, "cn": 0}  # US 已用尽(前两轮补跑)
+            result = asyncio.run(_run_patent_search(
+                agent, {"query_string_us": "us-tight",
+                        "query_string_cn": "ti:(散热)"}, "zh"))
+        # CN 兜底不受 US 预算耗尽影响;US 侧 0 命中但预算尽,静默降级
+        self.assertEqual(cn_calls, ["ti:(散热)", "ti:(载体)"])
+        self.assertIn("CN118000002A", result["text"])
+        self.assertIn("已自动补跑中国专利阶梯式", result["text"])
+        self.assertEqual(agent._patent_auto_used, {"us": 4, "cn": 1})
+        self.assertEqual(len(agent._pending_raw_items), 1)
+
+    def test_budget_exhausted_logs_warning(self):
+        # 预算耗尽必须打 warning——之前静默 return 0,日志里没有任何痕迹,
+        # 线上 total=0 无从排查(2026-08-29 事故)。
+        calls = []
+
+        class _Logger:
+            def info(self, *a, **k):
+                calls.append(("info", a[0]))
+
+            def warning(self, *a, **k):
+                calls.append(("warning", a[0]))
+
+        async def _search(q, page=1, page_size=20):
+            return [], "USPTO 0 hits"
+
+        agent = _FakeAgent()
+        agent.logger = _Logger()
+        agent._patent_auto_used = {"us": 4, "cn": 0}
+        result = asyncio.run(_auto_run_patent_ladder(
+            agent, ["us-loose"], _search, [], [], "zh", "us", 1, 20))
+        self.assertEqual(result, 0)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "warning")
+        self.assertIn("budget exhausted", calls[0][1])
+        self.assertIn("1 untried", calls[0][1])
 
 
 class TestSourceRouting(unittest.TestCase):
