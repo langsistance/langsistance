@@ -102,7 +102,14 @@ export function pruneResultsForPersistence(
   if (!results || !Array.isArray(results.rows)) return results
   const columns = Array.isArray(results.columns) ? results.columns : []
   const abstractCols = columns.filter((col) => col && col.role === 'abstract')
-  const displayCols = columns.filter((col) => col && col.role !== 'text')
+  // The source column is role="text" but must survive persistence: it is
+  // the per-row data-source route for detail actions (claims/spec), and
+  // dropping it makes restored rows fall back to the payload-wide source
+  // — CN rows then hit the USPTO spec endpoint and fail (incident
+  // 2026-08-29: /patent/uspto/CN213905456U/spec).
+  const displayCols = columns.filter(
+    (col) => col && (col.role !== 'text' || col.key === 'source'),
+  )
   const displayKeys = new Set(displayCols.map((col) => col.key))
 
   const rows = results.rows.slice(0, maxRows).map((row) => {

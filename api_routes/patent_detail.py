@@ -506,6 +506,20 @@ def _looks_like_baiten_app_num(value: str) -> bool:
     return bool(re.search(r"\.\d$", (value or "").strip()))
 
 
+def _is_cn_patent_id(value: str) -> bool:
+    """True for CN patent identifiers (publication numbers like
+    CN213905456U, application numbers like CN202022899373.0).
+
+    The spec/claims endpoints must route CN identifiers to the Baiten
+    branch even when the caller mislabels the source (frontend incident
+    2026-08-29: a persisted result set lost its per-row source column,
+    so CN rows requested ``/patent/uspto/CN213905456U/spec`` and the CN
+    number was resolved as a USPTO application — 403/404, spec failed).
+    US patent/application ids are digits or US-prefixed and never match.
+    """
+    return bool(re.match(r"^CN\d{6,12}(?:\.\d)?[A-Z]?$", (value or "").strip()))
+
+
 async def _fetch_baiten_claims(patent_id: str) -> dict:
     """Fetch structured CN claims via Baiten.
 
@@ -569,7 +583,7 @@ async def _fetch_spec_pdf(source: str, patent_id: str,
     the original PDF in an inline viewer without exposing the upstream
     API key — the same mechanism patent document rows already use.
     """
-    if source == "baiten":
+    if source == "baiten" or _is_cn_patent_id(patent_id):
         return await _fetch_baiten_spec(patent_id, pub_date)
     from sources import uspto_download
     from sources import uspto_download
@@ -622,7 +636,7 @@ async def _fetch_claims(source: str, patent_id: str) -> dict:
        frontend show the original PDF in the inline viewer (scanned
        documents never get OCR'd).
     """
-    if source == "baiten":
+    if source == "baiten" or _is_cn_patent_id(patent_id):
         return await _fetch_baiten_claims(patent_id)
     from sources import uspto_download
     from sources.dynamic_tool_params import _build_uspto_download_proxy_url

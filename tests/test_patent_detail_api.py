@@ -17,6 +17,7 @@ from api_routes.patent_detail import (
     split_claims_text,
     _find_claims_document,
     _find_spec_document,
+    _is_cn_patent_id,
     _parse_claims_xml,
     _strip_claim_status_markers,
     _strip_document_noise,
@@ -444,7 +445,96 @@ class TestDocumentSelection(unittest.TestCase):
         self.assertIsNone(_find_claims_document([]))
 
 
+class TestIsCnPatentId(unittest.TestCase):
+    def test_publication_numbers(self):
+        self.assertTrue(_is_cn_patent_id("CN213905456U"))
+        self.assertTrue(_is_cn_patent_id("CN112345678A"))
+        self.assertTrue(_is_cn_patent_id("CN109830778B"))
+
+    def test_application_numbers(self):
+        self.assertTrue(_is_cn_patent_id("CN202022899373.0"))
+
+    def test_non_cn_ids_are_false(self):
+        self.assertFalse(_is_cn_patent_id("18893954"))
+        self.assertFalse(_is_cn_patent_id("US12000123B2"))
+        self.assertFalse(_is_cn_patent_id(""))
+        self.assertFalse(_is_cn_patent_id("CN"))
+
+
 class TestSpecHandlerLogic(unittest.IsolatedAsyncioTestCase):
+    async def test_cn_patent_id_routes_to_baiten_spec(self):
+        # 事故 (2026-08-29): 前端持久化丢 source 列后,CN 专利说明书请求
+        # 打到 /patent/uspto/CN213905456U/spec,CN 号被当成美国申请号解析
+        # (403/404)而失败。CN 专利号必须无条件走佰腾下载,不依赖调用方
+        # 声称的 source。
+        from api_routes.patent_detail import _fetch_spec_pdf
+
+        with patch(
+            "api_routes.patent_detail._fetch_baiten_spec",
+            new=AsyncMock(return_value={
+                "pdf_url": ("https://api-test.copiioai.com/baiten/download"
+                            "?pub_num=CN213905456U&pub_date=20210806"),
+            }),
+        ) as mock_baiten, patch(
+            "sources.uspto_download.resolve_application_number",
+            new=AsyncMock(return_value="213905456"),
+        ) as mock_resolve:
+            result = await _fetch_spec_pdf(
+                "uspto", "CN213905456U", "20210806")
+        self.assertEqual(
+            result["pdf_url"],
+            "https://api-test.copiioai.com/baiten/download"
+            "?pub_num=CN213905456U&pub_date=20210806",
+        )
+        mock_baiten.assert_awaited_once()
+        mock_resolve.assert_not_awaited()  # 绝不打 USPTO
+
+    async def test_cn_patent_id_routes_to_baiten_claims(self):
+        from api_routes.patent_detail import _fetch_claims
+
+        with patch(
+            "api_routes.patent_detail._fetch_baiten_claims",
+            new=AsyncMock(return_value={
+                "success": True,
+                "claims": [{"number": 1, "text": "一种电池冷却板。",
+                            "status": "active", "independent": True}],
+            }),
+        ) as mock_baiten, patch(
+            "sources.uspto_download.resolve_application_number",
+            new=AsyncMock(return_value="213905456"),
+        ) as mock_resolve:
+            result = await _fetch_claims("uspto", "CN213905456U")
+        self.assertTrue(result["success"])
+        mock_baiten.assert_awaited_once()
+        mock_resolve.assert_not_awaited()
+
+    async def test_us_patent_id_keeps_uspto_route(self):
+        # 防呆不能误伤 US 专利:纯数字/美国号仍走 USPTO 解析。
+        from api_routes.patent_detail import _fetch_spec_pdf
+
+        with patch(
+            "api_routes.patent_detail._fetch_baiten_spec",
+            new=AsyncMock(return_value={"pdf_url": "baiten"}),
+        ) as mock_baiten, patch(
+            "sources.uspto_download.resolve_application_number",
+            new=AsyncMock(return_value="18893954"),
+        ) as mock_resolve, patch(
+            "sources.uspto_download.fetch_document_bag",
+            new=AsyncMock(return_value=[
+                {"documentCode": "SPEC",
+                 "documentCodeDescriptionText": "Specification"},
+            ]),
+        ), patch(
+            "sources.long_task.text_extractor.get_download_url_from_doc",
+            return_value="https://api.uspto.gov/api/v1/download/spec.pdf",
+        ), patch(
+            "sources.dynamic_tool_params._build_uspto_download_proxy_url",
+            return_value="https://api-test.copiioai.com/uspto/download?url=encoded",
+        ):
+            result = await _fetch_spec_pdf("uspto", "18893954")
+        self.assertIn("/uspto/download", result["pdf_url"])
+        mock_baiten.assert_not_awaited()
+        mock_resolve.assert_awaited_once()
     async def test_spec_returns_proxy_pdf_url(self):
         from api_routes.patent_detail import _fetch_spec_pdf
 
