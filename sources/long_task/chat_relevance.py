@@ -19,6 +19,7 @@ from sources.long_task.candidate_metadata import (
     dedupe_candidates,
     is_dead_status,
     is_design_patent,
+    is_provisional_application,
 )
 from sources.long_task.relevance_gate import score_candidates
 
@@ -145,6 +146,7 @@ class SearchPool:
             c for c in self._by_id.values()
             if not is_dead_status(c.get("status"))
             and not is_design_patent(c)
+            and not is_provisional_application(c)
         ]
         if min_score > 0:
             live = [c for c in live

@@ -218,6 +218,17 @@ def is_design_patent(c: dict) -> bool:
     return pn.startswith("D") or code == "DES"
 
 
+def is_provisional_application(c: dict) -> bool:
+    """True when the candidate is a US PROVISIONAL application
+    (applicationTypeCode P) — provisional applications expire after one
+    year without examination and are never patents.  They dominate
+    applications/search phrase hits (loose provisional titles match
+    broad queries; observed 2026-09-01: 20/20 US hits for an RGB
+    question were 'Provisional Application Expired') and must never
+    reach display."""
+    return str(c.get("type_code") or "").strip().upper() == "P"
+
+
 def _sort_key(c: dict) -> tuple:
     alive = 0 if is_dead_status(c.get("status")) else 1
     utility = 0 if is_design_patent(c) else 1

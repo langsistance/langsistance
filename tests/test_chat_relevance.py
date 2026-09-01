@@ -400,3 +400,29 @@ class TestSemanticScoreOrdering(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestProvisionalExclusion(unittest.TestCase):
+    """2026-09-01: US provisional applications (type_code P) are never
+    patents — they expire after one year unexamined and must not reach
+    display (diagnosed via dead_filter_diag: 20/20 US hits were
+    'Provisional Application Expired')."""
+
+    def test_ranked_excludes_provisional_application(self):
+        from sources.long_task.chat_relevance import SearchPool
+        pool = SearchPool("测试问题")
+        prov = _usp_raw_item("19511555", "RGB LED driver idea")
+        prov["applicationMetaData"]["applicationTypeCode"] = "P"
+        pool.add([prov, _usp_raw_item("18184836", "Real utility")])
+        pool._by_id["19511555"]["relevance_score"] = 5
+        ranked = pool.ranked(10)
+        self.assertEqual([c["patent_id"] for c in ranked], ["18184836"])
+
+    def test_utility_application_kept(self):
+        from sources.long_task.chat_relevance import SearchPool
+        pool = SearchPool("测试问题")
+        util = _usp_raw_item("19511555", "RGB LED driver")
+        util["applicationMetaData"]["applicationTypeCode"] = "U"
+        pool.add([util])
+        ranked = pool.ranked(10)
+        self.assertEqual([c["patent_id"] for c in ranked], ["19511555"])

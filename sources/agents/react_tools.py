@@ -26,6 +26,7 @@ from sources.long_task.candidate_metadata import (
     ensure_search_fields,
     is_dead_status,
     is_documents_tool,
+    is_provisional_application,
     is_identifying_number_tool,
     is_keyword_search_tool,
     is_uspto_tool,
@@ -954,7 +955,9 @@ async def _rank_pending_pool(agent, candidates, lang,
                 f"statuses={[str(c.get('status'))[:40] for c in dead_filtered[:5]]} "
                 f"granted={[bool(c.get('patent_number')) for c in dead_filtered[:5]]}"
             )
-    live = [c for c in new_cands if not is_dead_status(c.get("status"))]
+    live = [c for c in new_cands
+            if not is_dead_status(c.get("status"))
+            and not is_provisional_application(c)]
     head = live[:SCORE_PER_CALL]
     if PRESCORE_ENABLED and len(live) > SCORE_PER_CALL:
         # Two-stage scoring: bge-m3 prescores the whole batch in one
