@@ -60,11 +60,17 @@ export default function ResultsPage() {
   // Hydrate conversation when arriving with a session_id but no messages
   useEffect(() => {
     const sid = searchParams.get('session_id')
+    // [sessdbg] A refresh on the results page lands HERE, not in chat's
+    // mount effect — so follow-up-save loss shows up as a stale backend
+    // load (msgs < expected, missing follow-up).
+    console.info(`[sessdbg] RESULTS-MOUNT href=${window.location.href} sid=${sid ?? 'null'} loadedRef=${loadedRef.current} msgs=${messages.length}`)
     if (!sid || loadedRef.current || messages.length > 0) return
     ;(async () => {
       try {
         const data = await getSession(sid)
         if (!Array.isArray(data.messages)) return
+        const last = data.messages[data.messages.length - 1]
+        console.info(`[sessdbg] RESULTS-LOAD sid=${sid} raw=${data.messages.length} last=${last?.role} prefix=${JSON.stringify((last?.content || '').slice(0, 50))}`)
         // Only mark hydrated after the fetch succeeds so a transient failure
         // can retry on the next navigation/re-mount.
         loadedRef.current = true
@@ -82,7 +88,8 @@ export default function ResultsPage() {
           }))
         setMessages(restoreResultsInMessages(loaded, loadResultsStore(window.localStorage)))
         setSessionId(sid)
-      } catch {
+      } catch (e) {
+        console.warn(`[sessdbg] RESULTS-LOAD-FAIL sid=${sid}`, e)
         // Session unavailable — stay in empty state
       }
     })()

@@ -226,6 +226,9 @@ export default function Chat() {
   const pathname = usePathname()
   useEffect(() => {
     const sid = searchParams.get('session_id')
+    // [sessdbg] Full URL at mount — distinguishes a refresh on /app/chat
+    // (expect MOUNT-SID) from a refresh on /app/results (no mount log here).
+    console.info(`[sessdbg] MOUNT-EFFECT href=${window.location.href.split('?')[0]}?${window.location.search} sid=${sid ?? 'null'} lastLoadedSidRef=${lastLoadedSidRef.current ?? 'null'} msgs=${messages.length}`)
     if (!sid) {
       // A URL without session_id means "new conversation" — but only when
       // the chat page is the active route.  Handles both the case where
@@ -346,7 +349,12 @@ export default function Chat() {
   // (刷新/关闭) 用 fetch keepalive 尽力保存最新消息 (需求 2 补漏)。
   useEffect(() => {
     function saveOnUnload() {
-      if (!sessionId || streaming || messages.length === 0) return
+      if (!sessionId || streaming || messages.length === 0) {
+        // [sessdbg] Unload while save is blocked — streaming=true means the
+        // 1s save effect also skipped, so the latest messages are lost.
+        console.info(`[sessdbg] SAVE-PAGEHIDE-SKIP sid=${sessionId ?? 'null'} streaming=${streaming} msgs=${messages.length}`)
+        return
+      }
       const toSave = messages.map(m => ({
         role: m.role,
         content: m.content,

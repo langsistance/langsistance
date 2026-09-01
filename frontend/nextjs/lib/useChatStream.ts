@@ -453,11 +453,21 @@ export function useChatStream() {
       setStreamingId(null)
       abortRef.current = null
 
+      // [sessdbg] Stream end snapshot — if a follow-up's save never appears
+      // after this line, the timer was cancelled by the navigation below
+      // (or the page unloaded before the 1s save fired).
+      const streamEndLast = messagesRef.current[messagesRef.current.length - 1]
+      console.info(`[sessdbg] STREAM-END msgs=${messagesRef.current.length} last=${streamEndLast?.role} prefix=${JSON.stringify((streamEndLast?.content || '').slice(0, 50))} decodedSetId=${decodedSetId ?? 'null'}`)
+
       // Auto-open the results page once a search has streamed a decoded
       // results set — no intermediate card click required.  decodedSetId is
       // assigned synchronously in the SSE loop (independent of React commit
       // timing), so this check is deterministic.
       if (decodedSetId) {
+        // [sessdbg] Navigating away unmounts the chat page — the 1s save
+        // timer gets cleared by its effect cleanup, so only sessionStorage
+        // survives.  A later refresh restores from the BACKEND (stale!).
+        console.info(`[sessdbg] NAV-RESULTS set=${decodedSetId} sid=${sessionId ?? 'null'}`)
         // Yield a task so React commits the final streaming update (and
         // its layout effects) before the snapshot is persisted.  Then
         // persist the conversation synchronously before navigating: the
