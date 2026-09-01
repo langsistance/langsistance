@@ -95,3 +95,42 @@ export function saveChatStore(storage, messages) {
 export function persistChatToStorage(storage, messages) {
   saveChatStore(storage, pruneMessagesForPersistence(messages))
 }
+
+/**
+ * Last backend session per browser user (需求 2: 会话持久化).
+ *
+ * Pure-chat conversations now get a backend session_id too; this record
+ * lets a fresh mount (no session_id in the URL) restore the most recent
+ * conversation.  The uid is stored alongside so a different account on
+ * the same browser never resurrects another user's conversation.
+ */
+export const LAST_SESSION_KEY = 'copiioai_last_session'
+
+export function saveLastSession(storage, sessionId, uid) {
+  if (!storage || !sessionId) return
+  try {
+    storage.setItem(LAST_SESSION_KEY, JSON.stringify({ sid: sessionId, uid: uid || null }))
+  } catch {
+    // Storage unavailable — degrade silently
+  }
+}
+
+export function loadLastSession(storage) {
+  if (!storage) return null
+  try {
+    const raw = JSON.parse(storage.getItem(LAST_SESSION_KEY))
+    if (!raw || typeof raw !== 'object' || typeof raw.sid !== 'string') return null
+    return { sid: raw.sid, uid: typeof raw.uid === 'string' ? raw.uid : null }
+  } catch {
+    return null
+  }
+}
+
+export function clearLastSession(storage) {
+  if (!storage) return
+  try {
+    storage.removeItem(LAST_SESSION_KEY)
+  } catch {
+    // Ignore
+  }
+}

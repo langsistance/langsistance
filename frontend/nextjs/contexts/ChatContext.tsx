@@ -62,6 +62,14 @@ interface ChatContextValue {
   abortRef: MutableRefObject<AbortController | null>
   sessionId: string | null
   setSessionId: Dispatch<SetStateAction<string | null>>
+  /**
+   * The backend session_id already loaded/created for the current
+   * conversation.  The chat page's URL-restore effect short-circuits on
+   * it, so a session created mid-stream (pure-chat backfill or
+   * long_task_created) can never re-trigger a restore that would clobber
+   * the in-flight conversation (需求 2).
+   */
+  lastLoadedSidRef: MutableRefObject<string | null>
   resultsSetId: string | null
   setResultsSetId: Dispatch<SetStateAction<string | null>>
   statusSteps: ChatStatusStep[]
@@ -83,6 +91,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [statusSteps, setStatusSteps] = useState<ChatStatusStep[]>([])
   const [statusElapsed, setStatusElapsed] = useState(0)
   const abortRef = useRef<AbortController | null>(null)
+  const lastLoadedSidRef = useRef<string | null>(null)
 
   // Two-phase hydration: the landing page (/) and /app/* routes mount
   // separate ChatProvider instances, so a client-side navigation between
@@ -130,6 +139,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         abortRef,
         sessionId,
         setSessionId,
+        lastLoadedSidRef,
         resultsSetId,
         setResultsSetId,
         statusSteps,

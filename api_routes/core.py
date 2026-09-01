@@ -67,8 +67,15 @@ async def get_cached_token_validation(auth_header: str):
 
     return user
 
-async def get_or_create_agent(create_agent_func, app_logger):
-    """Get an agent from pool or create new one"""
+async def get_or_create_agent(user_id, create_agent_func, app_logger):
+    """Get an agent from pool or create new one.
+
+    Pool is keyed by user_id: consecutive queries from the same user
+    reuse the same agent instance, whose _conversation_turns carry the
+    multi-turn context (需求 2 — 追问必须带前文; previously a follow-up
+    could land on any pooled agent and lose all context).  When the pool
+    is full the least-recently-used user's agent is evicted.
+    """
     async with _agent_pool_lock:
         current_time = datetime.now()
 
@@ -79,23 +86,31 @@ async def get_or_create_agent(create_agent_func, app_logger):
             del _agent_pool[k]
             app_logger.info(f"Removed expired agent from pool: {k}")
 
-        # Try to reuse an existing agent
-        for agent_id, (agent, _) in _agent_pool.items():
-            _agent_pool[agent_id] = (agent, current_time)
-            app_logger.info(f"Reusing agent from pool: {agent_id}")
-            return agent
+        # Reuse this user's dedicated agent if present
+        if user_id in _agent_pool:
+            _agent_pool[user_id] = (_agent_pool[user_id][0], current_time)
+            app_logger.info(f"Reusing agent from pool for user: {user_id}")
+            return _agent_pool[user_id][0]
 
         # Create new agent if pool is not full
         if len(_agent_pool) < AGENT_POOL_MAX_SIZE:
             agent = await create_agent_func()
-            agent_id = str(uuid.uuid4())
-            _agent_pool[agent_id] = (agent, current_time)
-            app_logger.info(f"Created new agent and added to pool: {agent_id}")
+            _agent_pool[str(user_id)] = (agent, current_time)
+            app_logger.info(f"Created new agent for user {user_id} and added to pool")
             return agent
 
-        # Pool is full, create temporary agent (not cached)
-        app_logger.warning("Agent pool is full, creating temporary agent")
-        return await create_agent_func()
+        # Pool is full — evict the least recently used user's agent and
+        # re-key the slot to the requesting user (the evicted user gets a
+        # fresh agent on their next request — LRU eviction semantics).
+        lru_key = min(_agent_pool, key=lambda k: _agent_pool[k][1])
+        agent = await create_agent_func()
+        del _agent_pool[lru_key]
+        _agent_pool[str(user_id)] = (agent, current_time)
+        app_logger.warning(
+            f"Agent pool is full — evicted LRU user {lru_key}, "
+            f"assigned to user {user_id}"
+        )
+        return agent
 
 async def check_usage_async(user_id: str) -> bool:
     """Async wrapper for check_and_increase_usage"""
@@ -1051,8 +1066,9 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
             return JSONResponse(status_code=429, content={"error": "Another query is being processed"})
 
         async def generate():
-            # Optimize: Reuse agent from pool instead of creating new one
-            general_agent = await get_or_create_agent(create_agent_func, app_logger)
+            # Optimize: Reuse agent from pool instead of creating new one.
+            # Pool is keyed by user_id so follow-ups keep multi-turn context.
+            general_agent = await get_or_create_agent(user_id, create_agent_func, app_logger)
             queue = asyncio.Queue()
             handler = SSECallbackHandler(queue)
 
@@ -1066,7 +1082,8 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                     openai_agent = await general_agent.create_agent(
                         user_id, request.query, request.query_id,
                         request.tool_data, handler,
-                        push_filter=request.push_filter
+                        push_filter=request.push_filter,
+                        conversation_history=request.conversation_history or []
                     )
                 except Exception as e:
                     app_logger.error(f"Failed to create agent: {str(e)}")

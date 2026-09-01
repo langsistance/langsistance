@@ -2,11 +2,12 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { queryStream, queryStreamWithFiles, pollLongTaskBatchStatus, getLongTaskReportUrl, getSession, saveSessionMessages } from '@/services/api'
+import { queryStream, queryStreamWithFiles, pollLongTaskBatchStatus, getLongTaskReportUrl, getSession, saveSessionMessages, createSession } from '@/services/api'
 import { pollRecoverLongTask } from '@/lib/longTaskRecovery'
 import { useI18n } from '@/lib/app-i18n'
 import { useAuth } from '@/contexts/AuthContext'
 import { useChatSession, type ChatMessage, type ChatStatusStep } from '@/contexts/ChatContext'
+import { saveLastSession } from '@/lib/chatStore'
 import { decodeArtifactChunksToResults, decodeResultsArtifact } from '@/lib/chatSession'
 import { persistResultsSetToStorage } from '@/lib/resultsStore'
 import { persistChatToStorage } from '@/lib/chatStore'
@@ -41,7 +42,7 @@ export function useChatStream() {
   const {
     messages, setMessages, input, setInput,
     streaming, setStreaming, streamingId, setStreamingId,
-    abortRef, sessionId, setSessionId,
+    abortRef, sessionId, setSessionId, lastLoadedSidRef,
     statusSteps, setStatusSteps, statusElapsed, setStatusElapsed,
   } = useChatSession()
 
@@ -51,6 +52,9 @@ export function useChatStream() {
   const activeTasksRef = useRef<Map<string, string>>(new Map())       // taskId → assistantId
   const globalPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const longTaskReceivedRef = useRef(false)
+  // Guards the fire-and-forget session creation so rapid consecutive sends
+  // never spawn duplicate backend sessions.
+  const sessionCreatingRef = useRef(false)
   // Artifact chunks are buffered in a ref and committed in ONE state update
   // at artifact_end.  Per-chunk setMessages rebuilt the artifacts array —
   // and re-persisted the whole conversation (multi-MB CSV/XLSX included) —
@@ -128,6 +132,34 @@ export function useChatStream() {
     const userMsg = createChatMessage('user', text)
     const assistant = createChatMessage('assistant', '')
     const assistantId = assistant.id
+
+    // 需求 2 (backend session persistence): pure-chat conversations get a
+    // session_id too — previously only long tasks created one, so a refresh
+    // lost the conversation.  Fire-and-forget; the send never blocks on it,
+    // and a failure degrades to the no-session behaviour (same-page
+    // follow-ups still carry context via conversation_history injection).
+    if (!sessionId && !sessionCreatingRef.current) {
+      sessionCreatingRef.current = true
+      createSession(text.slice(0, 60), [{ role: 'user', content: text }])
+        .then((sid) => {
+          if (!sid) return
+          // Mark as loaded BEFORE the state/URL update so the chat page's
+          // URL-restore effect short-circuits and cannot re-restore (and
+          // clobber) the in-flight conversation.
+          lastLoadedSidRef.current = sid
+          setSessionId(sid)
+          const url = new URL(window.location.href)
+          url.searchParams.set('session_id', sid)
+          window.history.replaceState({}, '', url.toString())
+          saveLastSession(window.localStorage, sid, user?.uid ?? null)
+        })
+        .catch(() => {
+          // Degrade silently — see comment above
+        })
+        .finally(() => {
+          sessionCreatingRef.current = false
+        })
+    }
 
     // Local (synchronous) tracking of the JSON artifact so the post-stream
     // navigation decision never depends on React state commit timing.
@@ -291,8 +323,11 @@ export function useChatStream() {
                   msg.id === assistantId ? { ...msg, taskId } : msg
                 )
               })
-              // Use the backend-created session_id (don't create a new one)
+              // Use the backend-created session_id (don't create a new one).
+              // Mark as loaded first so the URL-restore effect cannot
+              // re-restore this session and clobber the in-flight card.
               if (!sessionId && sid) {
+                lastLoadedSidRef.current = sid
                 setSessionId(sid)
                 const url = new URL(window.location.href)
                 url.searchParams.set('session_id', sid)

@@ -3,11 +3,15 @@ import assert from 'node:assert/strict'
 
 import {
   CHAT_STORE_KEY,
+  LAST_SESSION_KEY,
   MAX_PERSIST_SUMMARY_CHARS,
+  clearLastSession,
   loadChatStore,
+  loadLastSession,
   persistChatToStorage,
   pruneMessagesForPersistence,
   saveChatStore,
+  saveLastSession,
 } from './chatStore.js'
 import {
   loadResultsStore,
@@ -20,6 +24,7 @@ function memoryStorage() {
   return {
     getItem: (key) => (map.has(key) ? map.get(key) : null),
     setItem: (key, value) => { map.set(key, value) },
+    removeItem: (key) => { map.delete(key) },
   }
 }
 
@@ -206,4 +211,41 @@ test('hydration re-attaches results from the results store when the message copy
 
   assert.ok(hydrated[1].results)
   assert.equal(hydrated[1].results.setId, 'set-1')
+})
+
+// ── 需求 2: last-session persistence (backend session restore) ──
+
+test('saveLastSession stores sid + uid JSON', () => {
+  const storage = memoryStorage()
+  saveLastSession(storage, 'sess_abc', 'uid-1')
+  assert.deepEqual(JSON.parse(storage.getItem(LAST_SESSION_KEY)), { sid: 'sess_abc', uid: 'uid-1' })
+})
+
+test('saveLastSession no-ops without storage or sid', () => {
+  assert.doesNotThrow(() => saveLastSession(null, 'sess_abc', 'u'))
+  const storage = memoryStorage()
+  assert.doesNotThrow(() => saveLastSession(storage, '', 'u'))
+  assert.equal(storage.getItem(LAST_SESSION_KEY), null)
+})
+
+test('loadLastSession returns parsed record', () => {
+  const storage = memoryStorage()
+  saveLastSession(storage, 'sess_x', 'uid-2')
+  assert.deepEqual(loadLastSession(storage), { sid: 'sess_x', uid: 'uid-2' })
+})
+
+test('loadLastSession tolerates missing/corrupt storage', () => {
+  assert.equal(loadLastSession(null), null)
+  const storage = memoryStorage()
+  storage.setItem(LAST_SESSION_KEY, 'not-json')
+  assert.equal(loadLastSession(storage), null)
+  storage.setItem(LAST_SESSION_KEY, '{"sid": 42}')
+  assert.equal(loadLastSession(storage), null)
+})
+
+test('clearLastSession removes the record', () => {
+  const storage = memoryStorage()
+  saveLastSession(storage, 'sess_y', 'u')
+  clearLastSession(storage)
+  assert.equal(storage.getItem(LAST_SESSION_KEY), null)
 })

@@ -4,6 +4,7 @@ import { useRef, useEffect } from 'react'
 import { usePathname, useSearchParams } from 'next/navigation'
 import { getSession, saveSessionMessages, pollLongTaskBatchStatus, getLongTaskReportUrl } from '@/services/api'
 import { replaceAssistantMessage, shouldResetConversationOnNavigation } from '@/lib/chatSession'
+import { loadLastSession, clearLastSession } from '@/lib/chatStore'
 import { useI18n } from '@/lib/app-i18n'
 import { useAuth } from '@/contexts/AuthContext'
 import MarkdownMessage from '@/components/app/MarkdownMessage'
@@ -28,6 +29,7 @@ export default function Chat() {
     streamingId,
     sessionId,
     setSessionId,
+    lastLoadedSidRef,
   } = useChatSession()
   const {
     send,
@@ -71,78 +73,63 @@ export default function Chat() {
 
 
 
-  // Load session from URL param (and resume long task polling if needed)
-  const lastLoadedSidRef = useRef<string | null>(null)
-  const pathname = usePathname()
-  useEffect(() => {
-    const sid = searchParams.get('session_id')
-    if (!sid) {
-      // A URL without session_id means "new conversation" — but only when
-      // the chat page is the active route.  Handles both the case where
-      // the component persisted across a client-side navigation (e.g.
-      // 新对话) and the case where it freshly mounted with stale
-      // ChatProvider state from the parent layout.  During a client-side
-      // transition away (e.g. the auto-open of the results page after a
-      // search) the router context updates before this component
-      // unmounts — clearing then would wipe the shared conversation out
-      // from under the incoming page.
-      if (!shouldResetConversationOnNavigation(pathname)) return
-      stopLongTaskPolling()
-      setMessages([])
-      setSessionId(null)
-      lastLoadedSidRef.current = null
-      sessionLoadedRef.current = false
-      return
-    }
-    if (sid === lastLoadedSidRef.current) return
-
-    lastLoadedSidRef.current = sid
-    sessionLoadedRef.current = true
-
-    let cancelled = false
-    ;(async () => {
-      try {
-        const data = await getSession(sid)
-        if (cancelled) return
-        const longTaskIds: string[] = data.long_task_ids || []
-        if (data.messages && Array.isArray(data.messages)) {
-          const loaded = data.messages
-            .filter((m: { role: string; content: string }) => m.role && m.content)
-            .map((m: { role: string; content: string; taskId?: string; patent_ids?: string[] }, i: number) => ({
-              id: `hist_${i}_${Date.now()}`,
-              role: m.role,
-              content: m.content,
-              taskId: (m as any).taskId || undefined,
-              artifacts: [],
-              resultSummary: (m as any).resultSummary || undefined,
-              patent_ids: (m as any).patent_ids || undefined,
-              results: (m as any).results || undefined,
-            }))
-            // Strip orphan long-task messages (🔬/✅/❌ without taskId).
-            // These were saved before taskId was attached during SSE.
-            // The resume loop below will recreate them with proper taskId,
-            // avoiding duplicates that never update.
-            .filter((m: { taskId?: string; content: string }) =>
-              m.taskId || (!m.content.includes('🔬') && !m.content.includes('✅') && !m.content.includes('❌'))
-            )
-          if (loaded.length > 0) {
-            setMessages(restoreResultsInMessages(loaded, loadResultsStore(window.localStorage)))
-            // Scroll to bottom after loading session messages
-            requestAnimationFrame(() => {
-              isNearBottomRef.current = true
-              bottomRef.current?.scrollIntoView({ behavior: 'instant' as ScrollBehavior })
-            })
-          }
+  // 需求 2: restore a backend session into the chat.  Shared by the URL
+  // branch and the last-session localStorage fallback so pure-chat
+  // sessions restore exactly like long-task ones.  *cancelledRef* is set
+  // by the effect cleanup when the user navigates away mid-restore.
+  async function loadSessionIntoState(sid: string, cancelledRef: { current: boolean }) {
+    try {
+      const data = await getSession(sid)
+      if (cancelledRef.current) return
+      const longTaskIds: string[] = data.long_task_ids || []
+      if (data.messages && Array.isArray(data.messages)) {
+        const loaded = data.messages
+          .filter((m: { role: string; content: string }) => m.role && m.content)
+          .map((m: { role: string; content: string; taskId?: string; patent_ids?: string[] }, i: number) => ({
+            id: `hist_${i}_${Date.now()}`,
+            role: m.role,
+            content: m.content,
+            taskId: (m as any).taskId || undefined,
+            artifacts: [],
+            resultSummary: (m as any).resultSummary || undefined,
+            patent_ids: (m as any).patent_ids || undefined,
+            results: (m as any).results || undefined,
+          }))
+          // Strip orphan long-task messages (🔬/✅/❌ without taskId).
+          // These were saved before taskId was attached during SSE.
+          // The resume loop below will recreate them with proper taskId,
+          // avoiding duplicates that never update.
+          .filter((m: { taskId?: string; content: string }) =>
+            m.taskId || (!m.content.includes('🔬') && !m.content.includes('✅') && !m.content.includes('❌'))
+          )
+        if (loaded.length > 0) {
+          setMessages(restoreResultsInMessages(loaded, loadResultsStore(window.localStorage)))
+          // Scroll to bottom after loading session messages
+          requestAnimationFrame(() => {
+            isNearBottomRef.current = true
+            bottomRef.current?.scrollIntoView({ behavior: 'instant' as ScrollBehavior })
+          })
         }
-        setSessionId(sid)
+      }
+      setSessionId(sid)
+      // Sync the URL so a later refresh/back-forward keeps this session.
+      // Next.js intercepts history.replaceState, so useSearchParams will
+      // reflect the sid — the lastLoadedSidRef guard prevents the effect
+      // from re-restoring (and clobbering) what we just loaded.
+      const url = new URL(window.location.href)
+      if (url.searchParams.get('session_id') !== sid) {
+        url.searchParams.set('session_id', sid)
+        window.history.replaceState({}, '', url.toString())
+      }
 
-        // Resume polling for any incomplete long tasks — batch fetch all statuses
-        if (longTaskIds.length > 0) {
-          try {
-            const batch = await pollLongTaskBatchStatus(longTaskIds)
-            for (const tid of longTaskIds) {
-              const status = batch[tid]
-              if (!status) continue
+      // Resume polling for any incomplete long tasks — batch fetch all statuses
+      if (longTaskIds.length > 0) {
+        try {
+          const batch = await pollLongTaskBatchStatus(longTaskIds)
+          if (cancelledRef.current) return
+          for (const tid of longTaskIds) {
+            const status = batch[tid]
+            if (!status) continue
 
             // Session save happens ~1s after SSE end, but the task may complete
             // minutes later.  The in-memory message transitions to ✅/❌ via
@@ -221,22 +208,67 @@ export default function Chat() {
               }]
             })
             startLongTaskPolling(tid, pollMsgId)
-            }
-          } catch {
-            // Batch status fetch failed — skip resume
           }
+        } catch {
+          // Batch status fetch failed — skip resume
         }
-      } catch {
-        // Session not found or error — start fresh
       }
-    })()
+    } catch {
+      // Session not found or error — start fresh
+    }
+  }
 
-    return () => { cancelled = true }
-  }, [searchParams, pathname, sessionId, setMessages, setSessionId])
+  // Load session from URL param (and resume long task polling if needed)
+  const pathname = usePathname()
+  useEffect(() => {
+    const sid = searchParams.get('session_id')
+    if (!sid) {
+      // A URL without session_id means "new conversation" — but only when
+      // the chat page is the active route.  Handles both the case where
+      // the component persisted across a client-side navigation (e.g.
+      // 新对话) and the case where it freshly mounted with stale
+      // ChatProvider state from the parent layout.  During a client-side
+      // transition away (e.g. the auto-open of the results page after a
+      // search) the router context updates before this component
+      // unmounts — clearing then would wipe the shared conversation out
+      // from under the incoming page.
+      if (!shouldResetConversationOnNavigation(pathname)) return
+      stopLongTaskPolling()
+      setMessages([])
+      setSessionId(null)
+      lastLoadedSidRef.current = null
+      sessionLoadedRef.current = false
+      // 需求 2: a fresh mount with no URL session restores the most recent
+      // conversation from the backend.  Skipped when a conversation is
+      // already in state (新对话 navigation) or the stored session belongs
+      // to a different account.
+      if (messages.length === 0 && user?.uid) {
+        const last = loadLastSession(window.localStorage)
+        if (last && last.uid === user.uid) {
+          const cancelledRef = { current: false }
+          lastLoadedSidRef.current = last.sid
+          sessionLoadedRef.current = true
+          loadSessionIntoState(last.sid, cancelledRef)
+          return () => { cancelledRef.current = true }
+        }
+      }
+      return
+    }
+    if (sid === lastLoadedSidRef.current) return
+
+    lastLoadedSidRef.current = sid
+    sessionLoadedRef.current = true
+
+    const cancelledRef = { current: false }
+    loadSessionIntoState(sid, cancelledRef)
+
+    return () => { cancelledRef.current = true }
+  }, [searchParams, pathname, sessionId, user, setMessages, setSessionId])
 
   const messagesHash = JSON.stringify(messages.map(m => ({ role: m.role, content: m.content, taskId: (m as any).taskId, resultSummary: (m as any).resultSummary, patent_ids: (m as any).patent_ids })))
-  // Save session after streaming completes — but ONLY if a session already exists
-  // (session is created only when a long task is triggered)
+  // Save session after streaming completes — the session_id now exists for
+  // every conversation (纯 chat 首轮发送即建会话, 需求 2), so chat-only
+  // conversations are persisted to the backend as well.
   const pendingSaveRef = useRef(false)
   useEffect(() => {
     if (streaming || messages.length === 0) return

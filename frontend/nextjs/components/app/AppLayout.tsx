@@ -10,7 +10,7 @@ import MessageBell from '@/components/app/MessageBell'
 import FeedbackFAB from '@/components/app/FeedbackFAB'
 import { getSessions, type SessionItem } from '@/services/api'
 import { chatPath } from '@/lib/appRoutes'
-import { CHAT_STORE_KEY } from '@/lib/chatStore'
+import { CHAT_STORE_KEY, clearLastSession } from '@/lib/chatStore'
 
 const NAV_ITEMS = [
   {
@@ -239,7 +239,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <aside className={`sidebar${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
           <nav className="nav-menu">
             {visibleNavItems.map(({ to, key, icon }) => (
-              <Link key={to} href={to} style={{ textDecoration: 'none' }}>
+              <Link
+                key={to}
+                href={to}
+                style={{ textDecoration: 'none' }}
+                onClick={to === '/app/chat'
+                  ? () => clearLastSession(window.localStorage)
+                  : undefined}
+              >
                 <button className={`nav-item${pathname === to ? ' active' : ''}`} title={t(key)}>
                   {icon}
                   <span>{t(key)}</span>

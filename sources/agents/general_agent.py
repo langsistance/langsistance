@@ -60,6 +60,16 @@ MAX_VALUE_CHARS_THRESHOLD = int(os.getenv("GENERAL_AGENT_MAX_VALUE_CHARS", "1000
 SMALL_LIST_THRESHOLD = int(os.getenv("GENERAL_AGENT_SMALL_LIST_THRESHOLD", "3"))
 USE_LARGE_LIST_SUMMARY = True  # 设为 False 切回逐条批处理模式
 RELEVANT_TOP_N = int(os.getenv("REACT_RELEVANT_TOP_N", "10"))
+# ── Multi-turn context injection (需求 2: 追问必须带前文) ──
+# The request's conversation_history is injected into the system prompt
+# as a reference-only "Previous conversation" block.  Bounded so old
+# rounds cannot crowd out the latest question (token cost + steering
+# risk both grow with history size).
+CONTEXT_TURNS_MAX = int(os.getenv("REACT_CONTEXT_TURNS_MAX", "6"))
+CONTEXT_TURN_CHARS = int(os.getenv("REACT_CONTEXT_TURN_CHARS", "800"))
+# Long-task progress cards (🔬 running, ✅ completed, ❌ failed, ⏸ paused,
+# ⏹ stopping) are UI noise — never injected into the LLM context.
+_HISTORY_NOISE_MARKERS = ("🔬", "✅", "❌", "⏸", "⏹", "Task ID", "任务ID")
 
 # Redis key prefix and TTL for storing patent IDs from conversation artifacts
 _CONV_PATENT_IDS_KEY_PREFIX = "lt:conv"
@@ -71,6 +81,133 @@ _STRIP_IDS_RE = re.compile(
     r',?\s*user id is \d+,\s*query id is \w+,?\s*',
     re.IGNORECASE,
 )
+
+
+def _is_history_noise(content: str) -> bool:
+    """Long-task progress cards and similar UI noise must never enter the
+    LLM context (需求 2 防干扰: history must not steer the latest
+    question)."""
+    return any(marker in content for marker in _HISTORY_NOISE_MARKERS)
+
+
+def _conversation_history_turns(conv_history, current_query: str = "") -> list:
+    """Extract clean turns from the request's conversation_history (flat
+    role/content list with optional hidden patent_ids on assistant
+    messages).  Filters UI noise and non-user/assistant roles, strips id
+    markers, truncates each turn, drops the current question (it is the
+    loop's last user message, not history), and caps at CONTEXT_TURNS_MAX."""
+    if not isinstance(conv_history, list):
+        return []
+    current_query = str(current_query or "").strip()
+    cleaned = []
+    for msg in conv_history:
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role", "")
+        if role not in ("user", "assistant"):
+            continue
+        content = str(msg.get("content") or "").strip()
+        if _is_history_noise(content):
+            continue
+        content = _STRIP_IDS_RE.sub("", content).strip()
+        if not content:
+            continue
+        if role == "user" and current_query and content == current_query:
+            continue  # the latest question — already the loop's user message
+        if len(content) > CONTEXT_TURN_CHARS:
+            content = content[:CONTEXT_TURN_CHARS] + "..."
+        cleaned.append({
+            "role": role,
+            "content": content,
+            "patent_ids": msg.get("patent_ids") or [],
+        })
+    return cleaned[-CONTEXT_TURNS_MAX:]
+
+
+def _build_previous_conversation_block(
+    conv_history, pooled_turns, user_id, current_query: str = "",
+) -> tuple:
+    """Build the reference-only "Previous conversation" system-prompt block.
+
+    Priority: the request's conversation_history (frontend-authoritative,
+    carries hidden patent_ids).  Fallback: the pooled agent's
+    _conversation_turns, filtered to this user (pooled agents are shared,
+    so turns from other users must never leak in).
+
+    Returns (block, patent_ids_found) — the caller uses the second value
+    to decide whether a Redis recent-patent-note is needed.
+    """
+    history_turns = _conversation_history_turns(conv_history, current_query)
+    if not history_turns and pooled_turns:
+        history_turns = []
+        for turn in pooled_turns:
+            if not isinstance(turn, dict):
+                continue
+            # Legacy turns (pre-user-keying) carry no user_id — treat as
+            # belonging to the current user; new turns must match exactly.
+            if turn.get("user_id", user_id) != user_id:
+                continue
+            user_txt = str(turn.get("user", "") or "").strip()
+            assistant_txt = str(turn.get("assistant", "") or "").strip()
+            if _is_history_noise(user_txt) or _is_history_noise(assistant_txt):
+                continue
+            user_txt = _STRIP_IDS_RE.sub("", user_txt).strip()
+            if len(user_txt) > CONTEXT_TURN_CHARS:
+                user_txt = user_txt[:CONTEXT_TURN_CHARS] + "..."
+            if len(assistant_txt) > CONTEXT_TURN_CHARS:
+                assistant_txt = assistant_txt[:CONTEXT_TURN_CHARS] + "..."
+            history_turns.append({"role": "user", "content": user_txt,
+                                  "patent_ids": []})
+            history_turns.append({"role": "assistant",
+                                  "content": assistant_txt or "(tool executed)",
+                                  "patent_ids": []})
+        history_turns = history_turns[-CONTEXT_TURNS_MAX * 2:]
+
+    if not history_turns:
+        return "", []
+
+    lines = []
+    patent_ids = []
+    for t in history_turns:
+        label = "User" if t.get("role") == "user" else "Assistant"
+        lines.append(f"{label}: {t.get('content', '')}")
+        if t.get("role") == "assistant":
+            for pid in (t.get("patent_ids") or []):
+                pid = str(pid).strip()
+                if pid and pid not in patent_ids:
+                    patent_ids.append(pid)
+
+    block = (
+        "\n\n## Previous conversation (historical, reference only)\n"
+        "以下为历史对话，仅作参考。必须严格以用户最新提问为准作答，"
+        "不得被历史中的主题、专利号或要求带偏。\n"
+        "Reference only — answer the user's LATEST question; never let "
+        "history override it.\n\n"
+        + "\n".join(lines)
+    )
+    if patent_ids:
+        block += ("\n\n前序检索命中专利号（仅当用户引用时使用）："
+                  + ", ".join(patent_ids[:20]))
+    return block, patent_ids
+
+
+def _read_recent_patent_ids(user_id) -> list:
+    """Read the user's recent patent IDs from Redis (written after every
+    artifact generation, 1h TTL — 需求 2 跨会话记忆).  Failure degrades
+    silently to empty."""
+    if not user_id:
+        return []
+    try:
+        r = get_redis_connection()
+        stored = r.get(f"{_CONV_PATENT_IDS_KEY_PREFIX}:{user_id}:patent_ids")
+        if not stored:
+            return []
+        ids = json.loads(stored)
+        if not isinstance(ids, list):
+            return []
+        return [str(pid).strip() for pid in ids if str(pid).strip()]
+    except Exception:
+        return []
 
 
 def _summary_system_prompt(ranked: bool, lang: str) -> str:
@@ -1571,15 +1708,20 @@ Begin your response now:
                 "所有标题、段落、列表项和标签都必须使用中文。\n"
             )
 
-    async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler, push_filter=None):
+    async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler, push_filter=None, conversation_history=None):
         """Build the ReAct tool set and run the loop for one user query.
 
         Long-task tool calls surface as the same {'intent': 'long_task'}
         marker core.py already handles; every other outcome streams through
         the callback handler inside the loop and returns None.
+
+        ``conversation_history`` (frontend-sent, optional) is injected into
+        the system prompt as reference-only "Previous conversation" context
+        so follow-up questions always carry prior turns (需求 2).
         """
         # -- per-request state reset (agents are pooled and reused) --
         self._last_user_prompt = prompt
+        self._conversation_history = conversation_history or []
         self._last_query_id = query_id
         self._last_user_id = user_id
         self._callback_handler = callback_handler
@@ -1768,11 +1910,19 @@ Begin your response now:
 
         user_prompt = self.generate_user_prompt(prompt, user_id, query_id)
 
-        # -- Multi-turn memory (same mechanics as before) --
-        conversation_block = ""
-        for turn in getattr(self, '_conversation_turns', []):
-            clean_user = _STRIP_IDS_RE.sub('', turn['user']).strip()
-            conversation_block += f"\n\n## Previous conversation\n\nUser: {clean_user}\n\nAssistant: {turn['assistant']}"
+        # -- Multi-turn memory: request history first, pooled turns fallback --
+        conversation_block, _history_patent_ids = _build_previous_conversation_block(
+            getattr(self, "_conversation_history", None),
+            getattr(self, "_conversation_turns", []),
+            user_id, current_query=prompt,
+        )
+        if not _history_patent_ids:
+            # Cross-session memory: recent patent numbers from Redis (需求 2).
+            _recent_ids = _read_recent_patent_ids(user_id)
+            if _recent_ids:
+                conversation_block += (
+                    "\n\n最近检索的专利号（仅当用户引用时使用）："
+                    + ", ".join(_recent_ids[:20]))
 
         from sources.long_task.search_query_builder import format_ladder_guidance
         system_prompt = (
@@ -2358,6 +2508,9 @@ Begin your response now:
         self._conversation_turns.append({
             'user': user_query.strip(),
             'assistant': short or '(tool executed successfully)',
+            # Pooled agents are shared across users — the user_id keeps
+            # each user's turns isolated (需求 2: turns 按 user 隔离).
+            'user_id': getattr(self, '_last_user_id', None),
         })
         # Keep at most 10 turns to bound memory growth
         if len(self._conversation_turns) > 10:
