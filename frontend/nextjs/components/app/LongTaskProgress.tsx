@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react'
 import { useI18n } from '@/lib/app-i18n'
 import { renderMarkdownToHtml } from '@/lib/markdownRender'
+import { failureHint } from '@/lib/messagePresentation'
 
 interface JurisdictionStatus {
   code: string
@@ -22,6 +23,8 @@ interface Props {
   tableColumns?: string[]
   familyOverview?: Record<string, any>
   jurisdictions?: JurisdictionStatus[]
+  /** 需求 4: 失败卡片一键重试 — 由页面实现 (调 retry API + 更新消息 + 恢复轮询) */
+  onRetry?: (taskId: string) => Promise<boolean>
 }
 
 interface TaskState {
@@ -324,10 +327,11 @@ async function callLongTaskApi(taskId: string, action: 'pause' | 'resume' | 'sto
 // LongTaskProgress — main component
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export default function LongTaskProgress({ content, resultSummary, streaming, analysisType, tableColumns, familyOverview, jurisdictions }: Props) {
+export default function LongTaskProgress({ content, resultSummary, streaming, analysisType, tableColumns, familyOverview, jurisdictions, onRetry }: Props) {
   const { t } = useI18n()
   const state = parseTaskContent(content)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
+  const [retrying, setRetrying] = useState(false)
   const summaryHtml = useMemo(
     () => (resultSummary ? renderMarkdownToHtml(resultSummary) : ''),
     [resultSummary],
@@ -667,9 +671,31 @@ export default function LongTaskProgress({ content, resultSummary, streaming, an
         </div>
       )}
 
-      {/* Failed: error */}
+      {/* Failed: error + actionable hint + one-click retry (需求 4) */}
       {state.phase === 'failed' && state.errorMessage && (
-        <p className="lt-error">{state.errorMessage}</p>
+        <div>
+          <p className="lt-error">{state.errorMessage}</p>
+          {failureHint(state.errorMessage) && (
+            <p className="lt-hint">{failureHint(state.errorMessage)}</p>
+          )}
+          {state.taskId && onRetry && (
+            <button
+              type="button"
+              className="lt-retry-btn"
+              disabled={retrying}
+              onClick={async () => {
+                setRetrying(true)
+                try {
+                  await onRetry(state.taskId)
+                } finally {
+                  setRetrying(false)
+                }
+              }}
+            >
+              {retrying ? t('longTask.retrying') : t('longTask.retry')}
+            </button>
+          )}
+        </div>
       )}
 
       {/* Submitted: waiting message */}

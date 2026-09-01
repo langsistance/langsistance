@@ -106,8 +106,36 @@ def set_task_completed(task_id: str, report_files: list,
           ex=TASK_STATUS_TTL)
 
 
+def _lookup_task_user_id(task_id: str) -> str | None:
+    """Fallback: resolve the task's user_id from MySQL long_tasks.
+
+    Only reached when the status record carries no user_id (older
+    submissions).  Failure degrades silently — analytics reporting must
+    never block task state transitions.
+    """
+    try:
+        from sources.knowledge.knowledge import get_db_connection
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT user_id FROM long_tasks WHERE task_id = %s",
+                    (task_id,))
+                row = cur.fetchone()
+            return str(row['user_id']) if row and row.get('user_id') else None
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+
 def set_task_failed(task_id: str, error: str) -> None:
-    """Mark task as failed with error message."""
+    """Mark task as failed with error message.
+
+    Every failure is reported to analytics (需求 4: 失败事件统一覆盖) —
+    previously only a few call sites tracked ``long_task:fail``, so silent
+    failures (e.g. no_patents_found paths) were invisible in analytics.
+    """
     r = _get_redis()
     raw = r.get(_status_key(task_id))
     status = json.loads(raw) if raw else {}
@@ -115,6 +143,16 @@ def set_task_failed(task_id: str, error: str) -> None:
     status['error_message'] = error
     r.set(_status_key(task_id), json.dumps(status, ensure_ascii=False),
           ex=TASK_STATUS_TTL)
+
+    user_id = status.get('user_id') or _lookup_task_user_id(task_id)
+    if not user_id:
+        return
+    try:
+        from sources.analytics import track_event
+        track_event("long_task:fail", user_id=str(user_id),
+                    task_id=task_id, extra={"error": str(error)[:200]})
+    except Exception:
+        pass  # Analytics failure must never break task state
 
 
 # ── Pause / Resume ──────────────────────────────────────────────────────────

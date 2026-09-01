@@ -762,9 +762,27 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
                 "data": {"count": 0, "message": message},
                 "raw_items": [],
             }
-        result = f"Request failed, status code: {response.status_code}"
-        if message:
-            result += f" — {message[:300]}"
+        # 需求 4: 403/404 语义化 — 用户要能判断"权限问题"还是"号码/国家不匹配"。
+        # 该执行器同时服务 USPTO 与第三方 CN 工具, 文案按 URL 区分;
+        # 原始 message (如 "Invalid q field") 保留在语义化文案之后供诊断。
+        is_uspto = "api.uspto.gov" in url
+        if response.status_code == 403:
+            result = (
+                "访问被拒绝（HTTP 403）：API 密钥无效或未授权，请确认工具凭据配置"
+                + ("。若查询的是中国专利号（CN 前缀/20 开头长数字），请注意它不属于美国专利库，应改用中国专利检索工具。" if is_uspto else "。")
+            )
+        elif response.status_code == 404:
+            result = (
+                "未找到匹配记录（HTTP 404）：查询合法但无结果，或号码不存在/国家不匹配"
+                + ("（如中国专利号进了美国接口）" if is_uspto else "")
+                + "。可核对号码后重试。"
+            )
+        else:
+            result = f"Request failed, status code: {response.status_code}"
+            if message:
+                result += f" — {message[:300]}"
+        if message and response.status_code in (403, 404):
+            result += f"（原始信息：{message[:200]}）"
         return {"data": result, "raw_items": None}
 
     return _parse_ok_response(response, url)

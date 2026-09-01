@@ -232,6 +232,8 @@ export default {
     cancelledLabel: '此任务已永久停止',
     downloadLabel: '下载 {format}',
     submittedMessage: '正在后台执行分析任务，您可以继续对话...',
+    retry: '重试',
+    retrying: '正在重新提交...',
     summaryTitle: '核心审查洞察',
     summaryStreaming: '撰写中',
   },

@@ -364,3 +364,8 @@ export async function submitLongTask(payload: {
     ...(payload.source ? { patent_source: payload.source } : {}),
   })
 }
+
+// 需求 4: 失败卡片一键重试 — 后端从原任务 input_params 重新入队, 返回新 task_id
+export async function retryLongTask(taskId: string): Promise<SubmitLongTaskResponse> {
+  return post<SubmitLongTaskResponse>(`/long_task/${encodeURIComponent(taskId)}/retry`, {})
+}

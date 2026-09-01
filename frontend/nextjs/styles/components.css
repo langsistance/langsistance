@@ -1284,6 +1284,35 @@ input[type="checkbox"] {
   border: 1px solid rgba(220,38,38,0.1);
 }
 
+/* 需求 4: 失败卡片的替代路径提示 + 一键重试按钮 */
+.lt-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #666;
+  padding: 0 2px;
+}
+
+.lt-retry-btn {
+  margin-top: 10px;
+  padding: 6px 16px;
+  font-size: 13px;
+  color: #fff;
+  background: var(--accent, #10A37F);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.lt-retry-btn:hover:not(:disabled) {
+  background: var(--accent-hover, #0d8f6f);
+}
+
+.lt-retry-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* ── Long Task Action Buttons (inline icon-only, like video player) ──────────── */
 
 .lt-phase-sep {

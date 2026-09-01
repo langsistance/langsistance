@@ -914,3 +914,70 @@ class TestUsptoZeroHitSemantics(unittest.TestCase):
         self.assertIsInstance(data, str)
         self.assertIn("401", data)
         self.assertIn("invalid_token", data)
+
+
+class TestHttpErrorSemantics(unittest.TestCase):
+    """需求 4: 403/404 语义化 — 用户要能判断"权限问题"还是"号码/国家不匹配"。
+
+    http_error_semantics — the generic tool executor must explain 403
+    (credentials) and 404 (no match / wrong country) instead of the bare
+    "Request failed, status code: 403" the LLM previously relayed.
+    """
+
+    def _tool(self):
+        from unittest.mock import MagicMock
+        tool = MagicMock()
+        tool.url = "https://api.uspto.gov/api/v1/patent/applications/search"
+        tool.params = ('{"method":"POST",'
+                       '"body":{"q":"template","pagination":{"offset":0,"limit":50}}}')
+        tool.timeout = 30
+        return tool
+
+    def _resp(self, status_code: int, text: str = "", payload=None):
+        from unittest.mock import MagicMock
+        resp = MagicMock()
+        resp.status_code = status_code
+        resp.headers = {"Content-Type": "application/json"}
+        resp.content = text.encode()
+        resp.text = text
+        if payload is not None:
+            resp.json = lambda: payload
+        else:
+            try:
+                resp.json = lambda: {}
+            except Exception:
+                resp.json = MagicMock(side_effect=ValueError("no json"))
+        return resp
+
+    def _exec(self, tool, status_code: int, text: str = "", payload=None):
+        from unittest.mock import patch
+        from sources.dynamic_tool_params import execute_backend_tool_request
+        with patch("sources.dynamic_tool_params.outbound_http.request",
+                   return_value=self._resp(status_code, text, payload)):
+            return execute_backend_tool_request(
+                tool, {"query": {"q": "some query"}})
+
+    def test_uspto_403_explains_credentials_and_cn_mismatch(self):
+        data = self._exec(self._tool(), 403)["data"]
+        self.assertIn("403", data)
+        self.assertIn("API 密钥无效或未授权", data)
+        self.assertIn("中国专利号", data)  # 提示 CN 号不该进 US 接口
+
+    def test_uspto_404_explains_no_match_or_wrong_country(self):
+        data = self._exec(self._tool(), 404)["data"]
+        self.assertIn("未找到匹配记录", data)
+        self.assertIn("国家不匹配", data)
+
+    def test_non_uspto_403_keeps_generic_wording(self):
+        tool = self._tool()
+        tool.url = "https://open.zldsj.com/api/patent/search/expression"
+        data = self._exec(tool, 403)["data"]
+        self.assertIn("403", data)
+        self.assertIn("API 密钥无效或未授权", data)
+        self.assertNotIn("中国专利号", data)  # 第三方 CN 工具不套 US 文案
+
+    def test_other_status_keeps_original_format(self):
+        data = self._exec(self._tool(), 500, "boom",
+                          payload={"detailedMessage": "boom"})["data"]
+        self.assertIn("Request failed, status code: 500", data)
+        self.assertIn("boom", data)

@@ -94,3 +94,77 @@ def test_set_failed(mock_redis):
 
     assert result['status'] == 'failed'
     assert 'DI platform auth expired' in result['error_message']
+
+
+# ── 需求 4: set_task_failed 统一上报 long_task:fail 事件 ──
+
+def test_set_task_failed_tracks_event_with_user_id(mock_redis):
+    """状态含 user_id 时, set_task_failed 必须统一上报 long_task:fail。"""
+    stored = {}
+    mock_redis.set = lambda k, v, ex=None: stored.update({k: v})
+    mock_redis.get = lambda k: stored.get(k)
+
+    with patch('sources.long_task.status_manager._get_redis', return_value=mock_redis), \
+         patch('sources.analytics.track_event') as mock_track:
+        # 先写入含 user_id 的状态 (execute_* 开头会带)
+        update_task_status("lt_fail_1", "analyzing", 10, "分析中",
+                           user_id="u_42")
+        set_task_failed("lt_fail_1", "no_patents_found")
+
+    mock_track.assert_called_once()
+    call_kwargs = mock_track.call_args
+    assert call_kwargs.args[0] == "long_task:fail"
+    assert call_kwargs.kwargs["user_id"] == "u_42"
+    assert call_kwargs.kwargs["task_id"] == "lt_fail_1"
+
+
+def test_set_task_failed_falls_back_to_mysql_lookup(mock_redis):
+    """状态无 user_id 时 (旧提交), 从 MySQL 反查并上报。"""
+    stored = {}
+    mock_redis.set = lambda k, v, ex=None: stored.update({k: v})
+    mock_redis.get = lambda k: stored.get(k)
+
+    fake_conn = MagicMock()
+    fake_conn.cursor.return_value.__enter__.return_value.fetchone.return_value = {
+        "user_id": "u_99"}
+
+    with patch('sources.long_task.status_manager._get_redis', return_value=mock_redis), \
+         patch('sources.long_task.status_manager._lookup_task_user_id',
+               return_value="u_99") as mock_lookup, \
+         patch('sources.analytics.track_event') as mock_track:
+        set_task_failed("lt_fail_2", "boom")
+
+    mock_lookup.assert_called_once_with("lt_fail_2")
+    mock_track.assert_called_once()
+    assert mock_track.call_args.kwargs["user_id"] == "u_99"
+
+
+def test_set_task_failed_silent_when_no_user_id(mock_redis):
+    """查不到 user_id 时静默 (不抛、不 track)。"""
+    stored = {}
+    mock_redis.set = lambda k, v, ex=None: stored.update({k: v})
+    mock_redis.get = lambda k: stored.get(k)
+
+    with patch('sources.long_task.status_manager._get_redis', return_value=mock_redis), \
+         patch('sources.long_task.status_manager._lookup_task_user_id',
+               return_value=None), \
+         patch('sources.analytics.track_event') as mock_track:
+        set_task_failed("lt_fail_3", "boom")
+
+    mock_track.assert_not_called()
+
+
+def test_set_task_failed_track_error_never_breaks_state(mock_redis):
+    """analytics 上报抛异常不影响任务状态写入。"""
+    stored = {}
+    mock_redis.set = lambda k, v, ex=None: stored.update({k: v})
+    mock_redis.get = lambda k: stored.get(k)
+
+    with patch('sources.long_task.status_manager._get_redis', return_value=mock_redis), \
+         patch('sources.long_task.status_manager._lookup_task_user_id',
+               return_value="u_1"), \
+         patch('sources.analytics.track_event',
+               side_effect=RuntimeError("analytics down")):
+        set_task_failed("lt_fail_4", "boom")  # 不得抛异常
+
+    assert json.loads(stored[list(stored)[0]])["status"] == "failed"

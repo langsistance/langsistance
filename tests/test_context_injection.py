@@ -23,6 +23,7 @@ sys.modules.setdefault("firebase_admin", MagicMock())
 from sources.agents.general_agent import (  # noqa: E402
     CONTEXT_TURN_CHARS,
     CONTEXT_TURNS_MAX,
+    RELEVANT_TOP_N,
     _build_previous_conversation_block,
     _conversation_history_turns,
     _is_history_noise,
@@ -215,3 +216,49 @@ def _run(coro):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDeliveryFormatGuidance(unittest.TestCase):
+    """需求 3: 检索答复必须带"最高关联专利"结论格式约束。"""
+
+    def _agent(self):
+        from unittest.mock import MagicMock
+        from sources.agents.general_agent import GeneralAgent
+        agent = GeneralAgent.__new__(GeneralAgent)
+        agent.logger = MagicMock()
+        agent.llm = MagicMock()
+        return agent
+
+    def test_loop_guidance_requires_top_matching_patent(self):
+        agent = self._agent()
+        guidance = agent._loop_system_guidance()
+        self.assertIn("Top matching result", guidance)
+        self.assertIn("MANDATORY", guidance)
+        self.assertIn("complete and copyable", guidance)
+        self.assertIn(str(RELEVANT_TOP_N), guidance)
+        # 通用指令 — 不得固化任何测试提问词
+        self.assertNotIn("干燥空气", guidance)
+        self.assertNotIn("RGB", guidance)
+
+
+class TestNotLoggedInPrompt(unittest.TestCase):
+    """需求 4-2: 未认证提示可操作化 — 不得再指示 LLM 输出内部标记。"""
+
+    def _agent(self):
+        from unittest.mock import MagicMock
+        from sources.agents.general_agent import GeneralAgent
+        agent = GeneralAgent.__new__(GeneralAgent)
+        agent.logger = MagicMock()
+        agent.llm = MagicMock()
+        agent.knowledgeTool = (None, None)  # not tool_info 分支
+        return agent
+
+    def test_no_internal_marker_in_prompts(self):
+        agent = self._agent()
+        for prompt in (
+            agent.generate_fixed_system_prompt(),
+            agent.generate_template_system_prompt(),
+        ):
+            self.assertNotIn("<Knowledge tool not logged in>", prompt)
+            self.assertIn("需要登录", prompt)
+            self.assertIn("Do NOT output internal markers", prompt)

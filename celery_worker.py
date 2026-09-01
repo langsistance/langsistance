@@ -225,12 +225,8 @@ def execute_patent_analysis(self, task_id: str, params: dict):
         _pipeline_logger.error(
             f"[task={task_id}] FAILED — error={e}"
         )
+        # long_task:fail 事件由 set_task_failed 统一上报 (需求 4)
         set_task_failed(task_id, str(e))
-        user_id_for_analytics = params.get('user_id', '')
-        if user_id_for_analytics:
-            track_event("long_task:fail", user_id=user_id_for_analytics,
-                        task_id=task_id,
-                        extra={"error": str(e)[:100]})
         try:
             raise self.retry(exc=e)
         except self.MaxRetriesExceededError:
@@ -919,12 +915,8 @@ async def _run_pipeline(
                                _t('search_complete', batch_lang, count=len(patent_ids)),
                                patent_ids=patent_ids)
         else:
+            # long_task:fail 事件由 set_task_failed 统一上报 (需求 4)
             set_task_failed(task_id, _t('no_patents_found', batch_lang))
-            user_id_for_analytics = params.get('user_id', '')
-            if user_id_for_analytics:
-                track_event("long_task:fail", user_id=user_id_for_analytics,
-                            task_id=task_id,
-                            extra={"error": "no_patents_found"})
             return {'status': 'failed', 'task_id': task_id,
                     'error': 'No patents found matching the search criteria'}
 

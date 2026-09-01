@@ -918,6 +918,19 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
   relevant top items (at most {RELEVANT_TOP_N}) — identifier, title, and
   one sentence on why each fits the user's question — before the overall
   summary.
+
+## Search Result Delivery Format (MANDATORY — applies unconditionally)
+
+Whenever a search tool was called and returned candidates, structure the final answer as follows (the user wants a usable identifier, not just a list):
+
+1. Open with the top matching result conclusion, formatted exactly as:
+   `**Top matching result: {{number}}** — {{title}} ({{one-sentence reason}})`
+   - When candidates are relevance-ranked, take the first one; otherwise pick the most relevant per the user's question.
+   - The identifier must be complete and copyable — never omit or paraphrase it.
+2. Then list the top {RELEVANT_TOP_N} candidates (identifier, title, one-sentence relevance reason).
+3. Close by telling the user the full results are available in the results panel (JSON/CSV/Excel download).
+
+This structure overrides other formatting preferences; only when the search returned no candidates should you honestly say no matching results were found.
 """
 
 
@@ -952,11 +965,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
 
             If no relevant knowledge is available to complete the user's task, clearly inform the user that no matching knowledge was found and suggest checking the community for shared knowledge or tools that may solve the problem.
 
-            If a tool response indicates that the user is not authenticated, or returns a login page, inform the user that authentication is required before the task can be executed.
-
-            In this case, always append the following tag at the end of your response:
-
-            <Knowledge tool not logged in>
+            If a tool response indicates that the user is not authenticated, or returns a login page, tell the user clearly that the tool requires login: e.g. "该工具需要登录后才能使用，请先完成登录再重试". Do NOT output internal markers or technical tags.
 
             """
             return system_prompt
@@ -1039,11 +1048,7 @@ You MUST follow these formatting rules to ensure beautiful, readable output:
 
             If no relevant knowledge is available to complete the user's task, clearly inform the user that no matching knowledge was found and suggest checking the community for shared knowledge or tools that may solve the problem.
 
-            If a tool response indicates that the user is not authenticated, or returns a login page, inform the user that authentication is required before the task can be executed.
-
-            In this case, always append the following tag at the end of your response:
-
-            <Knowledge tool not logged in>
+            If a tool response indicates that the user is not authenticated, or returns a login page, tell the user clearly that the tool requires login: e.g. "该工具需要登录后才能使用，请先完成登录再重试". Do NOT output internal markers or technical tags.
 
             """
             return system_prompt

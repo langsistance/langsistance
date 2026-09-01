@@ -6,6 +6,7 @@ import { useI18n } from '@/lib/app-i18n'
 import { useChatSession, type ChatStatusStep } from '@/contexts/ChatContext'
 import { attachImageRetryHandlers } from '@/lib/imageRetry'
 import {
+  sanitizeLegacyMarkers,
   shouldShowAssistantWaiting,
   shouldShowStatusSteps,
 } from '@/lib/messagePresentation'
@@ -35,6 +36,8 @@ interface Props {
   }>
   agentSteps?: AgentStep[]
   elapsedSeconds?: number
+  /** 需求 4: 失败卡片一键重试 — 透传给 LongTaskProgress */
+  onRetry?: (taskId: string) => Promise<boolean>
 }
 
 interface ChatArtifact {
@@ -106,7 +109,7 @@ function base64ChunksToBlob(chunks: string[], mimeType: string) {
   return new Blob(byteArrays, { type: mimeType })
 }
 
-export default function MarkdownMessage({ content, artifacts = [], resultSummary, streaming, statusSteps, statusElapsed = 0, analysisType, tableColumns, familyOverview, jurisdictions, agentSteps = [], elapsedSeconds }: Props) {
+export default function MarkdownMessage({ content, artifacts = [], resultSummary, streaming, statusSteps, statusElapsed = 0, analysisType, tableColumns, familyOverview, jurisdictions, agentSteps = [], elapsedSeconds, onRetry }: Props) {
   const { t } = useI18n()
   const { statusSteps: ctxStatusSteps, statusElapsed: ctxStatusElapsed } = useChatSession()
   const [copied, setCopied] = useState(false)
@@ -133,7 +136,9 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
   const runningStep = steps.find((s) => s.status === 'running')
 
   const doRender = useCallback((text: string, isStreaming: boolean) => {
-    const src = isStreaming ? text + ' ▋' : text
+    // 需求 4: 存量消息中的内部标记 (<Knowledge tool not logged in>)
+    // 渲染前替换为面向用户的可操作提示。
+    const src = sanitizeLegacyMarkers(isStreaming ? text + ' ▋' : text)
     setHtml(renderMarkdownToHtml(src) as string)
     lastRenderTimeRef.current = Date.now()
   }, [])
@@ -304,7 +309,7 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
         </div>
       )}
       {(content.includes('🔬') || content.includes('✅') || content.includes('❌') || content.includes('⏸') || content.includes('⏹') || /\[\d+%\]/.test(content)) ? (
-        <LongTaskProgress content={content} resultSummary={resultSummary} streaming={streaming} analysisType={analysisType} tableColumns={tableColumns} familyOverview={familyOverview} jurisdictions={jurisdictions} />
+        <LongTaskProgress content={content} resultSummary={resultSummary} streaming={streaming} analysisType={analysisType} tableColumns={tableColumns} familyOverview={familyOverview} jurisdictions={jurisdictions} onRetry={onRetry} />
       ) : (
         <div dangerouslySetInnerHTML={{ __html: html || '▋' }} />
       )}

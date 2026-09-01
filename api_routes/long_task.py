@@ -94,6 +94,37 @@ def _lookup_task_by_query_id_mysql(user_id: int, query_id: str) -> dict | None:
     return None
 
 
+_TASK_TYPE_TO_SCENARIO = {
+    "prosecution_analysis": "prosecution",
+    "family_analysis": "families",
+    "china_examination": "china_prosecution",
+    "patent_analysis": "search",
+}
+
+
+def _task_type_to_scenario(task_type: str) -> str:
+    """Map a stored long_tasks.task_type back to the celery scenario name."""
+    return _TASK_TYPE_TO_SCENARIO.get(task_type, "search")
+
+
+def _dispatch_retry_task(task_type: str, task_id: str, params: dict) -> None:
+    """Dispatch a retried task to the matching Celery executor (需求 4)."""
+    from celery_worker import (
+        execute_china_examination_analysis,
+        execute_family_analysis,
+        execute_patent_analysis,
+        execute_prosecution_analysis,
+    )
+    if task_type == "prosecution_analysis":
+        execute_prosecution_analysis.delay(task_id=task_id, params=params)
+    elif task_type == "family_analysis":
+        execute_family_analysis.delay(task_id=task_id, params=params)
+    elif task_type == "china_examination":
+        execute_china_examination_analysis.delay(task_id=task_id, params=params)
+    else:
+        execute_patent_analysis.delay(task_id=task_id, params=params)
+
+
 def _normalize_submit_patent_id(raw: str, scenario: str) -> str:
     """Validate and normalize a patent ID for the submit endpoint.
 
@@ -284,6 +315,87 @@ def register_long_task_routes(logger, config):
         return {
             "success": True,
             "task_id": task_id,
+            "session_id": session_id,
+            "status": status,
+        }
+
+    @router.post("/long_task/{task_id}/retry")
+    async def retry_long_task(task_id: str, http_request: Request):
+        """Re-submit a failed long task from its stored input params.
+
+        需求 4 (失败可操作化): the frontend failure card offers one-click
+        retry.  A NEW task_id is created (the old task record and its
+        failure state stay intact), then queued/dispatched exactly like a
+        fresh submission.
+        """
+        import json as _json
+        import uuid as _uuid
+
+        auth_header = http_request.headers.get("Authorization")
+        user = verify_firebase_token(auth_header)
+        user_id = int(user["uid"])
+
+        from sources.knowledge.knowledge import get_db_connection
+        from sources.long_task.user_queue import try_start_user_task
+
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT session_id, scene_id, task_type, input_params
+                       FROM long_tasks
+                       WHERE task_id = %s AND user_id = %s AND status != 2""",
+                    (task_id, user_id))
+                row = cur.fetchone()
+                if not row:
+                    raise HTTPException(status_code=404, detail="Task not found")
+                session_id = row.get("session_id") or ""
+                scene_id = row.get("scene_id")
+                task_type = row.get("task_type") or "patent_analysis"
+                stored = row.get("input_params")
+                input_params = _json.loads(stored) if isinstance(stored, str) else (stored or {})
+
+                new_task_id = f"lt_{_uuid.uuid4().hex[:12]}"
+                cur.execute(
+                    """INSERT INTO long_tasks
+                       (task_id, session_id, user_id, scene_id, task_type,
+                        input_params, status)
+                       VALUES (%s, %s, %s, %s, %s, %s, 'pending')""",
+                    (new_task_id, session_id, user_id, scene_id, task_type,
+                     _json.dumps(input_params, ensure_ascii=False)))
+                conn.commit()
+        finally:
+            conn.close()
+
+        celery_params = {
+            "query": input_params.get("query", ""),
+            "session_id": session_id,
+            "scene_id": scene_id,
+            "conversation_history": input_params.get("conversation_history", []),
+            "user_id": str(user_id),
+            "scenario": _task_type_to_scenario(task_type),
+            "lang": input_params.get("lang", "zh"),
+        }
+        if input_params.get("patent_id"):
+            celery_params["patent_id"] = input_params["patent_id"]
+            celery_params["patent_id_type"] = input_params.get("patent_id_type", "unknown")
+        if input_params.get("patent_ids"):
+            celery_params["patent_ids"] = input_params["patent_ids"]
+        celery_params["patent_source"] = input_params.get("patent_source", "auto")
+        if input_params.get("patent_texts"):
+            celery_params["patent_texts"] = input_params["patent_texts"]
+
+        queue_result = try_start_user_task(str(user_id), new_task_id)
+        status = "running" if queue_result == "running" else "queued"
+        if queue_result == "running":
+            _dispatch_retry_task(task_type, new_task_id, celery_params)
+        logger.info(
+            f"retry_long_task — old={task_id}, new={new_task_id}, "
+            f"type={task_type}, queue={queue_result}"
+        )
+        return {
+            "success": True,
+            "task_id": new_task_id,
             "session_id": session_id,
             "status": status,
         }

@@ -2,7 +2,7 @@
 
 import { useRef, useEffect } from 'react'
 import { usePathname, useSearchParams } from 'next/navigation'
-import { getSession, saveSessionMessages, pollLongTaskBatchStatus, getLongTaskReportUrl } from '@/services/api'
+import { getSession, saveSessionMessages, pollLongTaskBatchStatus, getLongTaskReportUrl, retryLongTask } from '@/services/api'
 import { replaceAssistantMessage, shouldResetConversationOnNavigation } from '@/lib/chatSession'
 import { loadLastSession, clearLastSession } from '@/lib/chatStore'
 import { useI18n } from '@/lib/app-i18n'
@@ -265,6 +265,33 @@ export default function Chat() {
     return () => { cancelledRef.current = true }
   }, [searchParams, pathname, sessionId, user, setMessages, setSessionId])
 
+  // 需求 4: 失败卡片一键重试 — 重新提交任务, 并把卡片切换为进行中状态
+  const handleRetryTask = async (taskId: string): Promise<boolean> => {
+    try {
+      const res = await retryLongTask(taskId)
+      if (!res.success || !res.task_id) return false
+      const newTaskId = res.task_id
+      const target = messages.find(m => m.taskId === taskId)
+      const targetId = target?.id ?? `lt_retry_${newTaskId}`
+      setMessages(m => m.map(msg =>
+        msg.taskId === taskId
+          ? {
+              ...msg,
+              taskId: newTaskId,
+              content: t('chat.longTaskProgress')
+                  .replace('{progress}', '[0%]')
+                  .replace('{phase}', t('chat.phasePreparing'))
+                + ` Task ID: ${newTaskId}`,
+            }
+          : msg
+      ))
+      startLongTaskPolling(newTaskId, targetId)
+      return true
+    } catch {
+      return false
+    }
+  }
+
   const messagesHash = JSON.stringify(messages.map(m => ({ role: m.role, content: m.content, taskId: (m as any).taskId, resultSummary: (m as any).resultSummary, patent_ids: (m as any).patent_ids })))
   // Save session after streaming completes — the session_id now exists for
   // every conversation (纯 chat 首轮发送即建会话, 需求 2), so chat-only
@@ -376,6 +403,7 @@ export default function Chat() {
                     jurisdictions={(msg as any).jurisdictions}
                     agentSteps={msg.agentSteps}
                     elapsedSeconds={msg.elapsedSeconds}
+                    onRetry={handleRetryTask}
                   />
                 </>
               ) : (

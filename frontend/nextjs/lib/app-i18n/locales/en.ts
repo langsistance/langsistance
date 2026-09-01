@@ -232,6 +232,8 @@ export default {
     cancelledLabel: 'This task has been permanently stopped',
     downloadLabel: 'Download {format}',
     submittedMessage: 'Analysis is running in background, you can continue the conversation...',
+    retry: 'Retry',
+    retrying: 'Re-submitting...',
     summaryTitle: 'Key Prosecution Insights',
     summaryStreaming: 'Writing',
   },
