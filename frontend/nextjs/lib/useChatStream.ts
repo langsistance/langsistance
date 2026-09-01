@@ -128,6 +128,9 @@ export function useChatStream() {
     setStatusSteps([])
     setStatusElapsed(0)
     longTaskReceivedRef.current = false
+    // [sessdbg] Snapshot of session state at send time — reveals which sid
+    // the follow-up will save into (双 session 竞态排查日志).
+    console.info(`[sessdbg] SEND sid=${sessionId ?? 'null'} lastLoadedSidRef=${lastLoadedSidRef.current ?? 'null'} creating=${sessionCreatingRef.current} msgs=${messages.length}`)
 
     const userMsg = createChatMessage('user', text)
     const assistant = createChatMessage('assistant', '')
@@ -143,6 +146,13 @@ export function useChatStream() {
       createSession(text.slice(0, 60), [{ role: 'user', content: text }])
         .then((sid) => {
           if (!sid) return
+          // [sessdbg] If a long-task session was adopted first (or a restore
+          // is in flight), this createSession would OVERWRITE it — the
+          // suspected 双 session 竞态. Log before it happens.
+          if (lastLoadedSidRef.current && lastLoadedSidRef.current !== sid) {
+            console.warn(`[sessdbg] CREATE-OVERWRITE prevLastLoaded=${lastLoadedSidRef.current} -> new=${sid}`)
+          }
+          console.info(`[sessdbg] CREATED sid=${sid} prevLastLoaded=${lastLoadedSidRef.current ?? 'null'}`)
           // Mark as loaded BEFORE the state/URL update so the chat page's
           // URL-restore effect short-circuits and cannot re-restore (and
           // clobber) the in-flight conversation.
@@ -326,6 +336,10 @@ export function useChatStream() {
               // Use the backend-created session_id (don't create a new one).
               // Mark as loaded first so the URL-restore effect cannot
               // re-restore this session and clobber the in-flight card.
+              // [sessdbg] Log whether the event sid is adopted or skipped —
+              // a skipped event sid means the follow-up saves into a
+              // different session than the long task (双 session 竞态排查).
+              console.info(`[sessdbg] LTC eventSid=${sid ?? 'null'} stateSid=${sessionId ?? 'null'} lastLoadedSidRef=${lastLoadedSidRef.current ?? 'null'}`)
               if (!sessionId && sid) {
                 lastLoadedSidRef.current = sid
                 setSessionId(sid)
@@ -409,6 +423,7 @@ export function useChatStream() {
           })
 
           const sid = recovered.sessionId
+          console.info(`[sessdbg] RECOVER sid=${sid ?? 'null'} stateSid=${sessionId ?? 'null'}`)
           if (!sessionId && sid) {
             setSessionId(sid)
             const url = new URL(window.location.href)

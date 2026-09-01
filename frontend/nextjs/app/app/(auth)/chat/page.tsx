@@ -2,7 +2,7 @@
 
 import { useRef, useEffect } from 'react'
 import { usePathname, useSearchParams } from 'next/navigation'
-import { getSession, saveSessionMessages, pollLongTaskBatchStatus, getLongTaskReportUrl, retryLongTask } from '@/services/api'
+import { getSession, saveSessionMessages, pollLongTaskBatchStatus, getLongTaskReportUrl, retryLongTask, authHeaders } from '@/services/api'
 import { replaceAssistantMessage, shouldResetConversationOnNavigation } from '@/lib/chatSession'
 import { loadLastSession, clearLastSession } from '@/lib/chatStore'
 import { useI18n } from '@/lib/app-i18n'
@@ -78,6 +78,7 @@ export default function Chat() {
   // sessions restore exactly like long-task ones.  *cancelledRef* is set
   // by the effect cleanup when the user navigates away mid-restore.
   async function loadSessionIntoState(sid: string, cancelledRef: { current: boolean }) {
+    console.info(`[sessdbg] LOAD-START sid=${sid}`)
     try {
       const data = await getSession(sid)
       if (cancelledRef.current) return
@@ -102,6 +103,8 @@ export default function Chat() {
           .filter((m: { taskId?: string; content: string }) =>
             m.taskId || (!m.content.includes('🔬') && !m.content.includes('✅') && !m.content.includes('❌'))
           )
+        const last = loaded[loaded.length - 1]
+        console.info(`[sessdbg] LOAD-DONE sid=${sid} raw=${data.messages.length} msgs=${loaded.length} last=${last?.role} prefix=${JSON.stringify((last?.content || '').slice(0, 50))} longTasks=${longTaskIds.length}`)
         if (loaded.length > 0) {
           setMessages(restoreResultsInMessages(loaded, loadResultsStore(window.localStorage)))
           // Scroll to bottom after loading session messages
@@ -213,7 +216,8 @@ export default function Chat() {
           // Batch status fetch failed — skip resume
         }
       }
-    } catch {
+    } catch (e) {
+      console.warn(`[sessdbg] LOAD-FAIL sid=${sid}`, e)
       // Session not found or error — start fresh
     }
   }
@@ -244,6 +248,7 @@ export default function Chat() {
       // to a different account.
       if (messages.length === 0 && user?.uid) {
         const last = loadLastSession(window.localStorage)
+        console.info(`[sessdbg] MOUNT-NOSID last=${last ? `sid=${last.sid} uid=${last.uid}` : 'none'} uid=${user.uid}`)
         if (last && last.uid === user.uid) {
           const cancelledRef = { current: false }
           lastLoadedSidRef.current = last.sid
@@ -256,6 +261,7 @@ export default function Chat() {
     }
     if (sid === lastLoadedSidRef.current) return
 
+    console.info(`[sessdbg] MOUNT-SID sid=${sid} lastLoadedSidRef=${lastLoadedSidRef.current ?? 'null'}`)
     lastLoadedSidRef.current = sid
     sessionLoadedRef.current = true
 
@@ -299,13 +305,21 @@ export default function Chat() {
   const pendingSaveRef = useRef(false)
   useEffect(() => {
     if (streaming || messages.length === 0) return
-    if (!sessionId) return  // No session yet = no long task ever triggered
+    if (!sessionId) {
+      // [sessdbg] Messages exist but no session yet — save would be lost.
+      // Happens when createSession/restore has not resolved while a
+      // follow-up already streamed (双 session 竞态排查日志).
+      const last = messages[messages.length - 1]
+      console.info(`[sessdbg] SAVE-SKIP-NOSID msgs=${messages.length} last=${last?.role} prefix=${JSON.stringify((last?.content || '').slice(0, 50))}`)
+      return  // No session yet = no long task ever triggered
+    }
     if (pendingSaveRef.current) return
     pendingSaveRef.current = true
 
     const timer = setTimeout(async () => {
+      let toSave: { role: string; content: string; [key: string]: unknown }[] = []
       try {
-        const toSave = messages.map(m => ({
+        toSave = messages.map(m => ({
           role: m.role,
           content: m.content,
           ...(m.taskId ? { taskId: m.taskId } : {}),
@@ -315,15 +329,54 @@ export default function Chat() {
             ? { results: pruneResultsForPersistence((m as any).results) }
             : {}),
         }))
+        const last = toSave[toSave.length - 1]
+        console.info(`[sessdbg] SAVE-EFFECT sid=${sessionId} msgs=${toSave.length} last=${last?.role} prefix=${JSON.stringify((last?.content || '').slice(0, 50))}`)
         await saveSessionMessages(sessionId, toSave)
-      } catch {
-        // Non-critical
+        console.info(`[sessdbg] SAVE-EFFECT-OK sid=${sessionId} msgs=${toSave.length}`)
+      } catch (e) {
+        console.warn(`[sessdbg] SAVE-EFFECT-FAIL sid=${sessionId} msgs=${toSave.length}`, e)
       }
       pendingSaveRef.current = false
     }, 1000)
 
     return () => { clearTimeout(timer); pendingSaveRef.current = false }
   }, [streaming, messagesHash, sessionId])
+
+  // 追问后立即刷新页面会丢失刚保存的消息 (保存有 1s 延迟) — 页面卸载前
+  // (刷新/关闭) 用 fetch keepalive 尽力保存最新消息 (需求 2 补漏)。
+  useEffect(() => {
+    function saveOnUnload() {
+      if (!sessionId || streaming || messages.length === 0) return
+      const toSave = messages.map(m => ({
+        role: m.role,
+        content: m.content,
+        ...(m.taskId ? { taskId: m.taskId } : {}),
+        ...(m.resultSummary ? { resultSummary: m.resultSummary } : {}),
+        ...(m.patent_ids ? { patent_ids: m.patent_ids } : {}),
+        ...((m as any).results
+          ? { results: pruneResultsForPersistence((m as any).results) }
+          : {}),
+      }))
+      const last = toSave[toSave.length - 1]
+      console.info(`[sessdbg] SAVE-PAGEHIDE sid=${sessionId} msgs=${toSave.length} last=${last?.role} prefix=${JSON.stringify((last?.content || '').slice(0, 50))}`)
+      try {
+        // keepalive: 页面卸载期间请求仍会发出 (PUT 仅 fetch 支持,
+        // sendBeacon 只支持 POST)
+        void authHeaders().then((headers: Record<string, string>) => {
+          void fetch(`${process.env.NEXT_PUBLIC_API_BASE || 'https://api.copiioai.com'}/session/${encodeURIComponent(sessionId)}/messages`, {
+            method: 'PUT',
+            headers,
+            body: JSON.stringify({ messages: toSave, title: '' }),
+            keepalive: true,
+          }).catch(() => {})
+        })
+      } catch {
+        // Non-critical — 1s 延迟保存仍会兜底 (若页面未真正卸载)
+      }
+    }
+    window.addEventListener('pagehide', saveOnUnload)
+    return () => window.removeEventListener('pagehide', saveOnUnload)
+  }, [sessionId, streaming, messages])
 
   // Track whether the user is scrolled near the bottom of the chat.
   useEffect(() => {

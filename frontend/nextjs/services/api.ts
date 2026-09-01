@@ -4,7 +4,7 @@ import { withWebKnowledgePushFilter } from '@/lib/webKnowledgeQueries'
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_BASE || 'https://api.copiioai.com'
 
-async function authHeaders(): Promise<Record<string, string>> {
+export async function authHeaders(): Promise<Record<string, string>> {
   if (typeof window === 'undefined') throw new Error('API service is client-only')
   const token = await getValidToken()
   if (!token) throw new Error('Not authenticated')
