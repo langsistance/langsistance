@@ -941,6 +941,19 @@ async def _rank_pending_pool(agent, candidates, lang,
     # Dead candidates are never scored and sink in ranking — filter them
     # out before slicing so they cannot crowd live candidates out of the
     # per-call scoring head.
+    dead_filtered = [
+        c for c in new_cands if is_dead_status(c.get("status"))]
+    if dead_filtered:
+        # 诊断日志 (2026-09-01): 08:12 日志 US 20 条命中未进打分窗口,
+        # 疑似被 dead 过滤 (申请公开库 abandoned 占比高)。先验证根因
+        # 再决定产品行为, 不做未经验证的行为变更。
+        _glog = getattr(agent, "logger", None)
+        if _glog is not None:
+            _glog.info(
+                f"dead_filter_diag — filtered={len(dead_filtered)} "
+                f"statuses={[str(c.get('status'))[:40] for c in dead_filtered[:5]]} "
+                f"granted={[bool(c.get('patent_number')) for c in dead_filtered[:5]]}"
+            )
     live = [c for c in new_cands if not is_dead_status(c.get("status"))]
     head = live[:SCORE_PER_CALL]
     if PRESCORE_ENABLED and len(live) > SCORE_PER_CALL:
