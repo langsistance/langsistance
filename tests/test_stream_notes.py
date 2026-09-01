@@ -105,3 +105,51 @@ class TestRunPatentSearchStreamNotes(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWordLevelQueryFallback(unittest.TestCase):
+    """2026-09-01: applications/search 短语匹配词序敏感不稳定 —
+    "RGB LED driver" 404 而 "RGB LED" 200。404 时降级为词级 AND 重试。"""
+
+    def test_word_level_rewrite(self):
+        from sources.agents.react_tools import _word_level_query
+        self.assertEqual(
+            _word_level_query('("RGB LED driver" OR "three-channel LED driver")'),
+            "(RGB AND LED AND driver OR three-channel AND LED AND driver)")
+        self.assertIsNone(_word_level_query("RGB AND LED"))
+        self.assertIsNone(_word_level_query(""))
+
+    async def _run(self, q, first_status, second_status, second_items):
+        from sources.agents.react_tools import _uspto_search_by_query
+        from unittest.mock import MagicMock
+        calls = []
+
+        async def _fake_arequest(method, url, purpose=None, headers=None,
+                                json=None, timeout=None):
+            calls.append(json["q"])
+            resp = MagicMock()
+            resp.status_code = first_status if len(calls) == 1 else second_status
+            resp.json = lambda: {"patentFileWrapperDataBag": second_items}
+            return resp
+
+        with patch("sources.http_outbound.outbound_http") as mock_http:
+            mock_http.arequest = _fake_arequest
+            return await _uspto_search_by_query(q), calls
+
+    def test_phrase_404_falls_back_to_word_level(self):
+        import asyncio
+        items = [{"applicationNumberText": "19511555",
+                  "applicationMetaData": {"inventionTitle": "RGB LED driver"}}]
+        (result, note), calls = asyncio.run(self._run(
+            '("RGB LED driver")', 404, 200, items))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1], "(RGB AND LED AND driver)")
+        self.assertEqual(len(result), 1)
+
+    def test_200_no_fallback(self):
+        import asyncio
+        items = [{"applicationNumberText": "19511555"}]
+        (result, _note), calls = asyncio.run(self._run(
+            '"RGB LED"', 200, 200, items))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(result), 1)

@@ -1819,10 +1819,38 @@ def _normalize_uspto_items(items: list) -> list:
     return out
 
 
+_PHRASE_RE = re.compile(r'"([^"]+)"')
+
+
+def _word_level_query(q: str) -> str | None:
+    """Rewrite quoted phrases to word-level AND for applications/search.
+
+    The endpoint matches quoted phrases as ORDER-SENSITIVE exact phrases
+    — "RGB LED" returns 200 while "RGB LED driver" returns 404 on the
+    same corpus (observed 2026-09-01, five successive user logs).  Word-
+    level AND ("RGB AND LED AND driver") matches regardless of word
+    order/adjacency.  Returns None when nothing changes.
+    """
+    phrases = _PHRASE_RE.findall(q or "")
+    if not phrases:
+        return None
+    out = q
+    for p in phrases:
+        words = p.split()
+        if len(words) >= 2:
+            out = out.replace(f'"{p}"', " AND ".join(words))
+    return out if out != q else None
+
+
 async def _uspto_search_by_query(
     q: str, page: int = 1, page_size: int = 20,
 ) -> tuple[list, str]:
-    """POST USPTO applications/search; returns (raw_items, note)."""
+    """POST USPTO applications/search; returns (raw_items, note).
+
+    On 404 (zero hits), retries once with quoted phrases rewritten to
+    word-level AND — phrase matching on this endpoint is order-sensitive
+    and unstable, word-level matching is not.
+    """
     try:
         from sources.http_outbound import outbound_http
         from sources.long_task.recall_sources import (
@@ -1833,19 +1861,29 @@ async def _uspto_search_by_query(
         uspto_key = _os.getenv("USPTO_API_KEY")
         if uspto_key:
             headers["X-API-Key"] = uspto_key
-        body = {
-            "q": q,
-            "pagination": {
-                "offset": max(page - 1, 0) * page_size,
-                "limit": page_size,
-            },
-            "fields": RECALL_SEARCH_FIELDS,
-            "sort": [{"field": "_score", "order": "desc"}],
-        }
-        response = await outbound_http.arequest(
-            "POST", USPTO_SEARCH_URL, purpose="dual_patent_search",
-            headers=headers, json=body, timeout=30,
-        )
+
+        async def _search(query: str) -> tuple:
+            body = {
+                "q": query,
+                "pagination": {
+                    "offset": max(page - 1, 0) * page_size,
+                    "limit": page_size,
+                },
+                "fields": RECALL_SEARCH_FIELDS,
+                "sort": [{"field": "_score", "order": "desc"}],
+            }
+            resp = await outbound_http.arequest(
+                "POST", USPTO_SEARCH_URL, purpose="dual_patent_search",
+                headers=headers, json=body, timeout=30,
+            )
+            return resp, query
+
+        response, used_q = await _search(q)
+        if getattr(response, "status_code", 0) != 200:
+            # 引号短语 0 命中 → 词级降级重试一次
+            word_q = _word_level_query(q)
+            if word_q:
+                response, used_q = await _search(word_q)
         if getattr(response, "status_code", 0) != 200:
             return [], f"USPTO HTTP {response.status_code}"
         data = response.json()
