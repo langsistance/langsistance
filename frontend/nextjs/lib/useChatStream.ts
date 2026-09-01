@@ -105,8 +105,13 @@ export function useChatStream() {
   // it fresh as soon as each commit lands; the finally block yields a
   // task before reading it so the final streaming update is committed.
   const messagesRef = useRef<ChatMessage[]>(messages)
+  // Same ref pattern for sessionId — the finally block's results-page
+  // navigation must carry the CURRENT sid, not the stale send() closure
+  // value (createSession resolves asynchronously, so the closure saw null).
+  const sessionIdRef = useRef<string | null>(sessionId)
   useLayoutEffect(() => {
     messagesRef.current = messages
+    sessionIdRef.current = sessionId
   })
 
   async function send(presetText: string = '') {
@@ -289,7 +294,7 @@ export function useChatStream() {
                   persistResultsSetToStorage(
                     window.localStorage,
                     decodedResults,
-                    { sessionId, queryText: text, savedAt: Date.now() },
+                    { sessionId: sessionIdRef.current, queryText: text, savedAt: Date.now() },
                   )
                 }
               }
@@ -429,6 +434,9 @@ export function useChatStream() {
             const url = new URL(window.location.href)
             url.searchParams.set('session_id', sid)
             window.history.replaceState({}, '', url.toString())
+            // Same bookkeeping as createSession — a later refresh with no
+            // URL sid restores from localStorage, so it must know this sid.
+            saveLastSession(window.localStorage, sid, user?.uid ?? null)
             saveSessionMessages(sid, [
               { role: userMsg.role, content: userMsg.content },
               { role: assistant.role, content: initContent },
@@ -467,7 +475,7 @@ export function useChatStream() {
         // [sessdbg] Navigating away unmounts the chat page — the 1s save
         // timer gets cleared by its effect cleanup, so only sessionStorage
         // survives.  A later refresh restores from the BACKEND (stale!).
-        console.info(`[sessdbg] NAV-RESULTS set=${decodedSetId} sid=${sessionId ?? 'null'}`)
+        console.info(`[sessdbg] NAV-RESULTS set=${decodedSetId} sid=${sessionIdRef.current ?? 'null'}`)
         // Yield a task so React commits the final streaming update (and
         // its layout effects) before the snapshot is persisted.  Then
         // persist the conversation synchronously before navigating: the
@@ -475,7 +483,7 @@ export function useChatStream() {
         // from the landing page's) and hydrates it from this copy.
         await new Promise((resolve) => setTimeout(resolve, 0))
         persistChatToStorage(window.sessionStorage, messagesRef.current)
-        router.push(resultsPath(decodedSetId, sessionId))
+        router.push(resultsPath(decodedSetId, sessionIdRef.current))
       }
     }
   }

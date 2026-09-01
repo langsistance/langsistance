@@ -2,7 +2,7 @@
 
 import { useRef, useEffect } from 'react'
 import { usePathname, useSearchParams } from 'next/navigation'
-import { getSession, saveSessionMessages, pollLongTaskBatchStatus, getLongTaskReportUrl, retryLongTask, authHeaders } from '@/services/api'
+import { getSession, pollLongTaskBatchStatus, getLongTaskReportUrl, retryLongTask } from '@/services/api'
 import { replaceAssistantMessage, shouldResetConversationOnNavigation } from '@/lib/chatSession'
 import { loadLastSession, clearLastSession } from '@/lib/chatStore'
 import { useI18n } from '@/lib/app-i18n'
@@ -11,7 +11,6 @@ import MarkdownMessage from '@/components/app/MarkdownMessage'
 import UserCopyButton from '@/components/app/UserCopyButton'
 import ChatLanding from '@/components/app/ChatLanding'
 import ChatComposer from '@/components/app/ChatComposer'
-import { pruneResultsForPersistence } from '@/lib/results'
 import { loadResultsStore, restoreResultsInMessages } from '@/lib/resultsStore'
 import { useChatSession } from '@/contexts/ChatContext'
 import { useChatStream } from '@/lib/useChatStream'
@@ -301,90 +300,9 @@ export default function Chat() {
     }
   }
 
-  const messagesHash = JSON.stringify(messages.map(m => ({ role: m.role, content: m.content, taskId: (m as any).taskId, resultSummary: (m as any).resultSummary, patent_ids: (m as any).patent_ids })))
-  // Save session after streaming completes — the session_id now exists for
-  // every conversation (纯 chat 首轮发送即建会话, 需求 2), so chat-only
-  // conversations are persisted to the backend as well.
-  const pendingSaveRef = useRef(false)
-  useEffect(() => {
-    if (streaming || messages.length === 0) return
-    if (!sessionId) {
-      // [sessdbg] Messages exist but no session yet — save would be lost.
-      // Happens when createSession/restore has not resolved while a
-      // follow-up already streamed (双 session 竞态排查日志).
-      const last = messages[messages.length - 1]
-      console.info(`[sessdbg] SAVE-SKIP-NOSID msgs=${messages.length} last=${last?.role} prefix=${JSON.stringify((last?.content || '').slice(0, 50))}`)
-      return  // No session yet = no long task ever triggered
-    }
-    if (pendingSaveRef.current) return
-    pendingSaveRef.current = true
-
-    const timer = setTimeout(async () => {
-      let toSave: { role: string; content: string; [key: string]: unknown }[] = []
-      try {
-        toSave = messages.map(m => ({
-          role: m.role,
-          content: m.content,
-          ...(m.taskId ? { taskId: m.taskId } : {}),
-          ...(m.resultSummary ? { resultSummary: m.resultSummary } : {}),
-          ...(m.patent_ids ? { patent_ids: m.patent_ids } : {}),
-          ...((m as any).results
-            ? { results: pruneResultsForPersistence((m as any).results) }
-            : {}),
-        }))
-        const last = toSave[toSave.length - 1]
-        console.info(`[sessdbg] SAVE-EFFECT sid=${sessionId} msgs=${toSave.length} last=${last?.role} prefix=${JSON.stringify((last?.content || '').slice(0, 50))}`)
-        await saveSessionMessages(sessionId, toSave)
-        console.info(`[sessdbg] SAVE-EFFECT-OK sid=${sessionId} msgs=${toSave.length}`)
-      } catch (e) {
-        console.warn(`[sessdbg] SAVE-EFFECT-FAIL sid=${sessionId} msgs=${toSave.length}`, e)
-      }
-      pendingSaveRef.current = false
-    }, 1000)
-
-    return () => { clearTimeout(timer); pendingSaveRef.current = false }
-  }, [streaming, messagesHash, sessionId])
-
-  // 追问后立即刷新页面会丢失刚保存的消息 (保存有 1s 延迟) — 页面卸载前
-  // (刷新/关闭) 用 fetch keepalive 尽力保存最新消息 (需求 2 补漏)。
-  useEffect(() => {
-    function saveOnUnload() {
-      if (!sessionId || streaming || messages.length === 0) {
-        // [sessdbg] Unload while save is blocked — streaming=true means the
-        // 1s save effect also skipped, so the latest messages are lost.
-        console.info(`[sessdbg] SAVE-PAGEHIDE-SKIP sid=${sessionId ?? 'null'} streaming=${streaming} msgs=${messages.length}`)
-        return
-      }
-      const toSave = messages.map(m => ({
-        role: m.role,
-        content: m.content,
-        ...(m.taskId ? { taskId: m.taskId } : {}),
-        ...(m.resultSummary ? { resultSummary: m.resultSummary } : {}),
-        ...(m.patent_ids ? { patent_ids: m.patent_ids } : {}),
-        ...((m as any).results
-          ? { results: pruneResultsForPersistence((m as any).results) }
-          : {}),
-      }))
-      const last = toSave[toSave.length - 1]
-      console.info(`[sessdbg] SAVE-PAGEHIDE sid=${sessionId} msgs=${toSave.length} last=${last?.role} prefix=${JSON.stringify((last?.content || '').slice(0, 50))}`)
-      try {
-        // keepalive: 页面卸载期间请求仍会发出 (PUT 仅 fetch 支持,
-        // sendBeacon 只支持 POST)
-        void authHeaders().then((headers: Record<string, string>) => {
-          void fetch(`${process.env.NEXT_PUBLIC_API_BASE || 'https://api.copiioai.com'}/session/${encodeURIComponent(sessionId)}/messages`, {
-            method: 'PUT',
-            headers,
-            body: JSON.stringify({ messages: toSave, title: '' }),
-            keepalive: true,
-          }).catch(() => {})
-        })
-      } catch {
-        // Non-critical — 1s 延迟保存仍会兜底 (若页面未真正卸载)
-      }
-    }
-    window.addEventListener('pagehide', saveOnUnload)
-    return () => window.removeEventListener('pagehide', saveOnUnload)
-  }, [sessionId, streaming, messages])
+  // Backend session save + pagehide keepalive live in ChatProvider now
+  // (chat + results share it) — removed from this page 2026-09-01 because
+  // follow-ups asked from the results page never saved to the backend.
 
   // Track whether the user is scrolled near the bottom of the chat.
   useEffect(() => {
