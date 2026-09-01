@@ -2,15 +2,18 @@ import Script from 'next/script'
 
 /**
  * Render JSON-LD structured data as a Next.js Script component.
- * Use `strategy="beforeInteractive"` only when data depends on no client state,
- * e.g. static Organization / WebSite / SoftwareApplication.
+ *
+ * `beforeInteractive` is required here: the data is static (no client
+ * state), and afterInteractive would inject it client-side only — meaning
+ * crawlers that don't execute JS (Baidu) and AI search engines (DeepSeek,
+ * etc.) would never see the structured data in the raw HTML.
  */
 export default function JsonLd({ data, id }: { data: Record<string, unknown>; id?: string }) {
   return (
     <Script
       id={id || 'jsonld'}
       type="application/ld+json"
-      strategy="afterInteractive"
+      strategy="beforeInteractive"
       dangerouslySetInnerHTML={{ __html: JSON.stringify(data) }}
     />
   )
@@ -45,14 +48,8 @@ export function copiioaiWebSiteJsonLd() {
     description:
       'AI-powered patent search, family analysis, and prosecution insights across USPTO, CNIPA, EPO, and more. Chat with patent data using natural language.',
     inLanguage: ['en', 'zh-Hans', 'ja', 'ko', 'es', 'fr', 'de'],
-    potentialAction: {
-      '@type': 'SearchAction',
-      target: {
-        '@type': 'EntryPoint',
-        urlTemplate: 'https://copiioai.com/search?q={search_term_string}',
-      },
-      'query-input': 'required name=search_term_string',
-    },
+    // No SearchAction: the /search?q= route this previously pointed to
+    // does not exist — a dead structured-data link is worse than none.
   }
 }
 

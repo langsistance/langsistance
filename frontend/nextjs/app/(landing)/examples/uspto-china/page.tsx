@@ -27,7 +27,7 @@ export const metadata: Metadata = {
     locale: 'zh_Hans',
     images: [
       {
-        url: 'https://copiioai.com/icon.png',
+        url: 'https://copiioai.com/og.png',
         width: 1200,
         height: 630,
         alt: 'CopiioAI USPTO 专利检索示例',
@@ -39,7 +39,7 @@ export const metadata: Metadata = {
     title: '国内用户使用 CopiioAI 检索 USPTO',
     description:
       '通过自然语言对话方式查询美国专利信息、专利文档、关键词和被转让人结果。',
-    images: ['https://copiioai.com/icon.png'],
+    images: ['https://copiioai.com/og.png'],
   },
   alternates: {
     canonical: 'https://copiioai.com/examples/uspto-china',

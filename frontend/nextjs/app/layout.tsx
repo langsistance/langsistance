@@ -25,6 +25,13 @@ export const metadata: Metadata = {
     'max-image-preview': 'large',
     'max-video-preview': -1,
   },
+  // 百度站长验证: 在百度搜索资源平台注册 copiioai.com 后，把验证码配到
+  // Cloudflare Pages 构建环境变量 NEXT_PUBLIC_BAIDU_SITE_VERIFICATION。
+  verification: {
+    other: process.env.NEXT_PUBLIC_BAIDU_SITE_VERIFICATION
+      ? { 'baidu-site-verification': process.env.NEXT_PUBLIC_BAIDU_SITE_VERIFICATION }
+      : undefined,
+  },
   openGraph: {
     type: 'website',
     siteName: 'CopiioAI',

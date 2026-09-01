@@ -29,6 +29,9 @@ Allow: /
 User-agent: Applebot-Extended
 Allow: /
 
+User-agent: DeepSeekBot
+Allow: /
+
 # Training crawlers remain blocked
 User-agent: CCBot
 Disallow: /
