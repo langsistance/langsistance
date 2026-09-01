@@ -60,6 +60,26 @@ class TestRunPatentSearchStreamNotes(unittest.TestCase):
         self.assertIn("18317505", text)
         self.assertIn("CN220271258U", text)
 
+    def test_nested_application_number_us_candidates_enter_pool(self):
+        # 2026-09-01: USPTO API 的 applicationNumberText 在顶层/嵌套间漂移,
+        # 嵌套结构曾被 _rank_builtin_patent_pool 的顶层检查跳过, 导致 20 条
+        # US 候选全丢、池里只剩 1 条 CN。build_candidates 兼容嵌套读取。
+        agent = _FakeAgent()
+        result = self._run(
+            agent,
+            us_items=[{"applicationMetaData": {
+                "applicationNumberText": "16544963",
+                "inventionTitle": "RGB LED driver with independent channels"}}],
+            cn_items=[],
+        )
+        self.assertIn("16544963", result["text"])
+        # _pending_raw_items 存的是 _raw (原始 USPTO item)
+        self.assertEqual(len(agent._pending_raw_items or []), 1)
+        raw = agent._pending_raw_items[0]
+        self.assertEqual(
+            str(raw.get("applicationMetaData", {}).get("applicationNumberText")),
+            "16544963")
+
     def test_notes_still_logged(self):
         agent = _FakeAgent()
         calls = []

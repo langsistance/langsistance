@@ -2056,7 +2056,14 @@ async def _rank_builtin_patent_pool(agent, items: list, lang: str) -> list:
                 continue
             if item.get("source") == "baiten":
                 candidates.append(_cn_item_to_pool_candidate(item))
-            elif item.get("applicationNumberText"):
+            else:
+                # build_candidates reads applicationNumberText from BOTH the
+                # top level and applicationMetaData — the USPTO API has
+                # drifted between the two across schema versions (observed
+                # 2026-09-01: 20 US hits for an RGB-LED question were all
+                # nested, skipped by a top-level-only check, and the pool
+                # ended up with a single CN candidate).  Items without any
+                # pid yield [] and are skipped safely.
                 candidates.extend(build_candidates([item]))
         if not candidates:
             return items
