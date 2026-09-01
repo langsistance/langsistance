@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from sources.agents.react_tools import (
+    REACT_PATENT_AUTO_LADDER_MAX,
     _auto_run_patent_ladder,
     _baiten_results_to_candidates,
     _baiten_search_by_query,
@@ -661,7 +662,7 @@ class TestRunPatentSearch(unittest.TestCase):
         with patch("sources.agents.react_tools._uspto_search_by_query", _us), \
              patch("sources.agents.react_tools._baiten_search_by_query", _cn):
             agent = _FakeAgent()
-            agent._patent_auto_used = {"us": 4, "cn": 0}  # US 已用尽(前两轮补跑)
+            agent._patent_auto_used = {"us": REACT_PATENT_AUTO_LADDER_MAX, "cn": 0}  # US 已用尽
             result = asyncio.run(_run_patent_search(
                 agent, {"query_string_us": "us-tight",
                         "query_string_cn": "ti:(散热)"}, "zh"))
@@ -670,7 +671,7 @@ class TestRunPatentSearch(unittest.TestCase):
         self.assertIn("CN118000002A", result["text"])
         # 数据来源/状态噪声不进用户可见文本 (2026-09-01), 只进日志
         self.assertNotIn("已自动补跑中国专利阶梯式", result["text"])
-        self.assertEqual(agent._patent_auto_used, {"us": 4, "cn": 1})
+        self.assertEqual(agent._patent_auto_used, {"us": REACT_PATENT_AUTO_LADDER_MAX, "cn": 1})
         self.assertEqual(len(agent._pending_raw_items), 1)
 
     def test_budget_exhausted_logs_warning(self):
@@ -690,7 +691,7 @@ class TestRunPatentSearch(unittest.TestCase):
 
         agent = _FakeAgent()
         agent.logger = _Logger()
-        agent._patent_auto_used = {"us": 4, "cn": 0}
+        agent._patent_auto_used = {"us": REACT_PATENT_AUTO_LADDER_MAX, "cn": 0}
         result = asyncio.run(_auto_run_patent_ladder(
             agent, ["us-loose"], _search, [], [], "zh", "us", 1, 20))
         self.assertEqual(result, 0)

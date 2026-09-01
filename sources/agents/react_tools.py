@@ -1926,9 +1926,12 @@ async def _baiten_search_by_query(
 
 # ── Dual-source query resolution + preferred-source auto-ladder ─────────────
 
-PATENT_AUTO_LADDER_BATCH = 2  # untried ladder queries auto-run per call
+# 自动补跑预算 (每源): applications/search 对短语查询命中不稳定
+# (2026-09-01 日志: 8 条查询只试了 3 条, "RGB LED" 200 而 "RGB LED driver"
+# 404), 提高批次与上限让单概念查询也有机会被尝试。
+PATENT_AUTO_LADDER_BATCH = 4  # untried ladder queries auto-run per call
 REACT_PATENT_AUTO_LADDER_MAX = int(os.getenv(
-    "REACT_PATENT_AUTO_LADDER_MAX", "4"))
+    "REACT_PATENT_AUTO_LADDER_MAX", "8"))
 
 
 def _resolve_patent_queries(args, us_ladder, cn_ladder, agent,
