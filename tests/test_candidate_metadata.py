@@ -294,3 +294,73 @@ class TestToolPredicates(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDedupeApplicantAndHighScoreRules(unittest.TestCase):
+    """2026-09-01: 同标题去重加申请人条件 + 高分豁免。
+
+    背景: USPTO 申请公开库中同一发明的 continuation/divisional 申请
+    标题一字不差极多, 旧规则把 6 个 US 命中收敛成 1 个 (用户日志 06:01)。
+    """
+
+    def test_same_title_same_applicant_deduped(self):
+        candidates = [
+            {"patent_id": "11111111", "title": "Air Dryer System",
+             "applicant": "Atlas Copco", "relevance_score": 3, "_raw": {}},
+            {"patent_id": "22222222", "title": "AIR DRYER SYSTEM",
+             "applicant": "Atlas Copco", "relevance_score": 2, "_raw": {}},
+        ]
+        kept, dropped = dedupe_candidates(candidates)
+        self.assertEqual(len(kept), 1)   # 同标题同申请人 = 真重复
+        self.assertEqual(dropped, 1)
+
+    def test_same_title_different_applicant_kept(self):
+        candidates = [
+            {"patent_id": "11111111", "title": "Air Dryer System",
+             "applicant": "Atlas Copco", "relevance_score": 3, "_raw": {}},
+            {"patent_id": "22222222", "title": "AIR DRYER SYSTEM",
+             "applicant": "Ingersoll Rand", "relevance_score": 3, "_raw": {}},
+        ]
+        kept, dropped = dedupe_candidates(candidates)
+        self.assertEqual(len(kept), 2)   # 不同申请人 = 不同技术方案, 保留
+        self.assertEqual(dropped, 0)
+
+    def test_high_score_exempt_from_title_dedupe(self):
+        # 5 分未授权 vs 2 分已授权同标题: granted 排序优先, 旧规则会砍掉 5 分
+        candidates = [
+            {"patent_id": "11111111", "title": "Air Dryer System",
+             "patent_number": "US1234567", "relevance_score": 2, "_raw": {}},
+            {"patent_id": "22222222", "title": "AIR DRYER SYSTEM",
+             "relevance_score": 5, "_raw": {}},
+        ]
+        kept, dropped = dedupe_candidates(candidates)
+        self.assertEqual(len(kept), 2)   # 高分 (>=4) 豁免标题去重
+        self.assertEqual(dropped, 0)
+
+    def test_low_score_same_title_still_deduped(self):
+        candidates = [
+            {"patent_id": "11111111", "title": "Air Dryer System",
+             "relevance_score": 3, "_raw": {}},
+            {"patent_id": "22222222", "title": "AIR DRYER SYSTEM",
+             "relevance_score": 2, "_raw": {}},
+        ]
+        kept, dropped = dedupe_candidates(candidates)
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(dropped, 1)
+
+    def test_high_score_never_exempt_from_continuity(self):
+        # continuity 是真同族 — 高分也逃不过
+        candidates = [
+            {"patent_id": "19511555", "title": "Air dryer",
+             "relevance_score": 5, "filing_date": "2024-08-05",
+             "_raw": {"parentContinuityBag": [
+                 {"parentApplicationNumberText": "19504130",
+                  "childApplicationNumberText": "19511555"}]}},
+            {"patent_id": "19504130", "title": "Unrelated title",
+             "relevance_score": 5, "filing_date": "2024-06-01",
+             "_raw": {"parentContinuityBag": [
+                 {"parentApplicationNumberText": "19511555"}]}},
+        ]
+        kept, dropped = dedupe_candidates(candidates)
+        self.assertEqual(len(kept), 1)   # continuity 判重不受高分豁免
+        self.assertEqual(dropped, 1)

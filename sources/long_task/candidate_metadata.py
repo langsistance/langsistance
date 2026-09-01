@@ -185,6 +185,15 @@ def _norm_title(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", (title or "").lower())
 
 
+# Candidates at or above this relevance score are never dropped for having
+# the same normalized title as another candidate — a high score means the
+# user is likely interested, and the application-publication corpus
+# contains many same-title continuation/divisional filings that are
+# distinct technical records (observed 2026-09-01: 5 of 6 US hits for a
+# dry-air question collapsed to 1 by title dedupe alone).
+DEDUPE_HIGH_SCORE = 4
+
+
 def _continuity_ids(item: dict) -> set[str]:
     """Collect application numbers referenced by parentContinuityBag."""
     ids: set[str] = set()
@@ -229,14 +238,24 @@ def _sort_key(c: dict) -> tuple:
 def dedupe_candidates(candidates: list[dict]) -> tuple[list[dict], int]:
     """Remove family/near-duplicate candidates, keeping the best one.
 
-    Two candidates are duplicates when one's patent_id appears in the
-    other's ``parentContinuityBag``, or their normalized titles are
-    identical. Preference: live status > granted > higher
+    A candidate is a duplicate when:
+      1. its patent_id appears in another kept candidate's
+         ``parentContinuityBag`` (true family — same application chain), or
+      2. its normalized title AND normalized applicant match a kept
+         candidate — same title under a DIFFERENT applicant is a different
+         technical record and is kept (observed: USPTO application-publication
+         corpus is full of same-title continuation/divisional filings).
+
+    Candidates with ``relevance_score >= DEDUPE_HIGH_SCORE`` are exempt
+    from the title/applicant rule (high score = the user likely wants it),
+    but never from the continuity rule.
+
+    Preference among duplicates: live status > granted > higher
     relevance_score > newer filing date (ordering by ``_sort_key``
     descending).
     """
     ordered = sorted(candidates, key=_sort_key, reverse=True)
-    title_groups: dict[str, str] = {}
+    title_groups: dict[tuple, str] = {}
     seen_ids: set[str] = set()
     kept: list[dict] = []
     dropped = 0
@@ -244,14 +263,21 @@ def dedupe_candidates(candidates: list[dict]) -> tuple[list[dict], int]:
         pid = c["patent_id"]
         dup = any(rel in seen_ids for rel in _continuity_ids(c.get("_raw") or {}))
         nt = _norm_title(c.get("title", ""))
-        if not dup and nt:
-            if nt in title_groups:
+        high_score = (
+            isinstance(c.get("relevance_score"), (int, float))
+            and c["relevance_score"] >= DEDUPE_HIGH_SCORE
+        )
+        if not dup and nt and not high_score:
+            key = (nt, _norm_title(c.get("applicant", "")))
+            if key in title_groups:
                 dup = True
         if dup:
             dropped += 1
             continue
         seen_ids.add(pid)
-        if nt and nt not in title_groups:
-            title_groups[nt] = pid
+        if nt:
+            key = (nt, _norm_title(c.get("applicant", "")))
+            if key not in title_groups:
+                title_groups[key] = pid
         kept.append(c)
     return kept, dropped

@@ -482,7 +482,8 @@ class TestRunPatentSearch(unittest.TestCase):
             us_result=(us_items, "USPTO 1 hits"),
             cn_result=([], "Baiten failed: method path wrong (P0 unverified)")))
         self.assertIn("19511555", result["text"])
-        self.assertIn("Baiten failed", result["text"])
+        # 数据来源/状态噪声不进用户可见文本 (2026-09-01)
+        self.assertNotIn("Baiten failed", result["text"])
         self.assertEqual(len(agent._pending_raw_items), 1)
 
     def test_both_empty_sources(self):
@@ -490,7 +491,8 @@ class TestRunPatentSearch(unittest.TestCase):
             {"query_string_cn": "ti:(散热)"},
             cn_result=([], "Baiten not configured")))
         self.assertIn("两个数据源均未返回结果", result["text"])
-        self.assertIn("Baiten not configured", result["text"])
+        # 数据来源/状态噪声不进用户可见文本 (2026-09-01)
+        self.assertNotIn("Baiten not configured", result["text"])
         self.assertEqual(agent._pending_raw_items, [])
 
     def test_requires_at_least_one_query(self):
@@ -549,7 +551,8 @@ class TestRunPatentSearch(unittest.TestCase):
         # US 首轮 0 命中同样补跑 1 条——共享预算）
         self.assertEqual(cn_calls, ["ti:(散热)", "ti:(载体)"])
         self.assertIn("CN118000002A", result["text"])
-        self.assertIn("已自动补跑中国专利阶梯式", result["text"])
+        # 数据来源/状态噪声不进用户可见文本 (2026-09-01), 只进日志
+        self.assertNotIn("已自动补跑中国专利阶梯式", result["text"])
         self.assertEqual(agent._patent_auto_used, {"us": 1, "cn": 1})
         self.assertIn("ti:(载体)", agent._tried_queries)
         self.assertEqual(len(agent._pending_raw_items), 1)
@@ -578,7 +581,8 @@ class TestRunPatentSearch(unittest.TestCase):
                 agent, {"query_string_us": "us-tight",
                         "query_string_cn": "ti:(散热)"}, "en"))
         self.assertEqual(us_calls, ["us-tight", "us-loose"])
-        self.assertIn("Auto-ran 1 US ladder", result["text"])
+        # 数据来源/状态噪声不进用户可见文本 (2026-09-01)
+        self.assertNotIn("Auto-ran 1 US ladder", result["text"])
         self.assertIn("19511555", result["text"])
 
     def test_non_preferred_source_gets_fallback(self):
@@ -664,7 +668,8 @@ class TestRunPatentSearch(unittest.TestCase):
         # CN 兜底不受 US 预算耗尽影响;US 侧 0 命中但预算尽,静默降级
         self.assertEqual(cn_calls, ["ti:(散热)", "ti:(载体)"])
         self.assertIn("CN118000002A", result["text"])
-        self.assertIn("已自动补跑中国专利阶梯式", result["text"])
+        # 数据来源/状态噪声不进用户可见文本 (2026-09-01), 只进日志
+        self.assertNotIn("已自动补跑中国专利阶梯式", result["text"])
         self.assertEqual(agent._patent_auto_used, {"us": 4, "cn": 1})
         self.assertEqual(len(agent._pending_raw_items), 1)
 

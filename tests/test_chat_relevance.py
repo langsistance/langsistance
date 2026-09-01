@@ -294,11 +294,24 @@ class TestSearchPoolRanking(unittest.TestCase):
         self.assertEqual([c["patent_id"] for c in ranked], ["19511555"])
 
     def test_ranked_dedupes_identical_titles(self):
+        # 高分 (>= DEDUPE_HIGH_SCORE) 豁免标题去重 — 申请公开库同标题的
+        # continuation 申请是独立技术记录, 用户宁可多看 (2026-09-01)。
         pool = SearchPool("测试问题")
         pool.add([_usp_raw_item("19511555", "Same title"),
                   _usp_raw_item("18184836", "Same title")])
         pool._by_id["19511555"]["relevance_score"] = 5
         pool._by_id["18184836"]["relevance_score"] = 4
+        ranked = pool.ranked(10)
+        self.assertEqual(sorted(c["patent_id"] for c in ranked),
+                         ["18184836", "19511555"])
+
+    def test_ranked_low_score_identical_title_still_deduped(self):
+        # 低分同标题候选仍被高分候选去重 (高分豁免只保护高分不被砍)
+        pool = SearchPool("测试问题")
+        pool.add([_usp_raw_item("19511555", "Same title"),
+                  _usp_raw_item("18184836", "Same title")])
+        pool._by_id["19511555"]["relevance_score"] = 5
+        pool._by_id["18184836"]["relevance_score"] = 2
         ranked = pool.ranked(10)
         self.assertEqual([c["patent_id"] for c in ranked], ["19511555"])
 

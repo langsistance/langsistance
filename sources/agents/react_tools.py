@@ -2273,8 +2273,8 @@ async def _run_patent_search(agent, args, lang: str, dual: bool = True) -> dict:
     if notes:
         if _glog is not None:
             _glog.info("patent_search_notes — " + "; ".join(notes))
-        digest += "\n\n" + ("status: " if lang == "en" else "状态：") \
-            + "; ".join(notes)
+        # 数据来源/状态噪声 (USPTO HTTP 404 / Baiten N hits / 自动补跑阶梯)
+        # 只进日志, 不拼进用户可见的流式 observation 文本 (2026-09-01)。
     return {"kind": "observation", "text": digest}
 
 
