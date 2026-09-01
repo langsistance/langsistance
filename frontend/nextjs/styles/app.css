@@ -1,6 +1,17 @@
 @import './popup.css';
 @import './components.css';
 
+/* Web 端 AppLayout 显式布局 (需求: 首页 SEO 内容块不得出现在聊天界面内)。
+   popup.css 的 .main-container 高度依赖其 :root 变量链, 在 web 端不保证
+   生效; 此处显式声明 — chat 应用占满视口、内部滚动, SEO 内容块 (页面级
+   sibling) 自然落在视口下方。 */
+.main-container {
+  display: flex;
+  min-height: calc(100vh - 56px);
+  height: calc(100vh - 56px);
+  overflow: hidden;
+}
+
 :root {
   --bg-white: #FFFFFF;
   --bg-main: #F8F8F7;
