@@ -169,6 +169,18 @@ class Provider:
             kwargs["callbacks"] = [callback_handler]
         if self.provider_name == "minimax":
             kwargs["base_url"] = os.getenv("MINIMAX_API_BASE", "https://api.minimaxi.com/v1")
+        # deepseek-v4-flash streams a long thinking pass before its answer on
+        # every call (observed 2026-09-02: 30-90s and thousands of streamed
+        # chunks per 10-candidate scoring batch in provider.log).  Scoring and
+        # JSON classification want the answer, not the chain of thought —
+        # disable thinking for flash-variant deepseek models unless
+        # DEEPSEEK_THINKING=enabled opts back in.  Non-flash deepseek models
+        # are never touched.
+        if (self.provider_name == "deepseek"
+                and "flash" in (self.model or "").lower()
+                and os.getenv("DEEPSEEK_THINKING", "disabled").lower()
+                != "enabled"):
+            kwargs["model_kwargs"] = {"thinking": {"type": "disabled"}}
 
         return ChatOpenAI(**kwargs)
 
