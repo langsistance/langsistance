@@ -73,6 +73,10 @@ export default function UsptoChinaExamplePage() {
           headline: '国内用户使用 CopiioAI 检索 USPTO',
           description:
             '一个面向国内美国专利检索场景的 CopiioAI 使用示例：通过自然语言查询美国专利信息、专利文档、关键词和被转让人结果。',
+          // datePublished 为该示例页首次上线时间（sitemap 记录），
+          // dateModified 随本次内容/结构化数据更新刷新 —— 保持 E-E-A-T 新鲜度信号
+          datePublished: '2026-07-28',
+          dateModified: '2026-09-02',
           author: {
             '@type': 'Organization',
             name: 'CopiioAI',

@@ -1,0 +1,24 @@
+# CopiioAI
+
+> AI 专利情报助手：用自然语言搜索、分析、对比美国（USPTO）、中国（CNIPA）、欧洲（EPO）、WIPO 等全球专利；支持专利家族分析、审查历史（prosecution history）洞察与批量对比。免费 Chrome 扩展，面向知识产权从业者、专利代理人、跨境卖家与研发团队。
+> AI patent intelligence assistant: search, analyze, and compare patents from USPTO, CNIPA, EPO, WIPO and more in natural language — family analysis, prosecution-history insights, and batch comparison. Free Chrome extension for IP professionals, patent attorneys, cross-border sellers, and R&D teams.
+
+## Main pages
+
+- [Home](https://copiioai.com/): 产品首页 — CopiioAI 是什么、核心功能与使用方式（中英多语言切换） / Product overview, features, and how to use it
+- [USPTO Search for China-based Users](https://copiioai.com/examples/uspto-china): 面向国内用户的 USPTO 自然语言检索使用示例（中文教程） / Chinese walkthrough of searching US patents with CopiioAI
+- [Privacy Policy](https://copiioai.com/privacy-policy): 数据收集与使用政策 / Data collection and usage policy
+
+## Key facts
+
+- Category: AI patent intelligence platform（AI 专利情报工具）
+- Form: Chrome extension, free to use（Chrome 扩展，免费）
+- Jurisdictions: USPTO, CNIPA, EPO, WIPO and more（支持多辖区检索）
+- Capabilities: natural-language patent search; patent family analysis; prosecution-history insights; batch comparison（自然语言专利检索 / 专利家族分析 / 审查历史中文解读 / 批量对比）
+- Target users: IP professionals, patent attorneys, cross-border sellers, R&D teams（专利代理人、知识产权律师、跨境卖家、研发团队）
+
+## Contact
+
+- Email: support@copiioai.com
+- Chrome Web Store: https://chromewebstore.google.com/detail/copiioai/lejbegpfaanpcilacmakkdediinkmnne
+- Product Hunt: https://www.producthunt.com/products/copiioai

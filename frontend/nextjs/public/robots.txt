@@ -32,6 +32,12 @@ Allow: /
 User-agent: DeepSeekBot
 Allow: /
 
+# Baidu — explicit allow for Chinese search engine indexing
+# (covered by "User-agent: *" above; explicit group documents intent
+# and pairs with the Baidu Webmaster Tools site verification file)
+User-agent: Baiduspider
+Allow: /
+
 # Training crawlers remain blocked
 User-agent: CCBot
 Disallow: /

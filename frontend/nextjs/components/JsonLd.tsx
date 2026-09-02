@@ -1,19 +1,22 @@
-import Script from 'next/script'
-
 /**
- * Render JSON-LD structured data as a Next.js Script component.
+ * Render JSON-LD structured data as a plain inline <script> tag.
  *
- * `beforeInteractive` is required here: the data is static (no client
- * state), and afterInteractive would inject it client-side only — meaning
- * crawlers that don't execute JS (Baidu) and AI search engines (DeepSeek,
- * etc.) would never see the structured data in the raw HTML.
+ * Must NOT use next/script: its `beforeInteractive` strategy does not emit a
+ * real <script type="application/ld+json"> tag into the HTML under
+ * `output: 'export'` (static export) — the data only lands in client-side
+ * loader instructions, invisible to crawlers that don't execute JS (Baidu)
+ * and AI search engines (DeepSeek, Perplexity, etc.).
+ *
+ * This file is imported only from server components, so the plain <script>
+ * tag is rendered into the exported HTML directly. JSON-LD is inert markup
+ * (`type="application/ld+json"` never executes), so dangerouslySetInnerHTML
+ * is safe here — the content is our own static data, never user input.
  */
 export default function JsonLd({ data, id }: { data: Record<string, unknown>; id?: string }) {
   return (
-    <Script
+    <script
       id={id || 'jsonld'}
       type="application/ld+json"
-      strategy="beforeInteractive"
       dangerouslySetInnerHTML={{ __html: JSON.stringify(data) }}
     />
   )
