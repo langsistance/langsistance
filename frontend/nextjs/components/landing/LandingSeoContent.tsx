@@ -1,18 +1,19 @@
 /**
- * Server-rendered SEO content block for the homepage.
+ * Server-rendered SEO content block for the homepage — NOT user-facing.
  *
  * The chat app itself is a client component — without this block the SSR
  * HTML carries no indexable text, so non-JS crawlers (Baidu) and AI search
- * engines (DeepSeek, etc.) see an empty page.  Static bilingual copy
- * rendered below the app: visible to users at the footer, readable by
- * every crawler in the raw HTML.
+ * engines (DeepSeek, Perplexity, etc.) see an empty page.
+ *
+ * This block exists only to put static bilingual copy into the raw HTML for
+ * crawlers. It must never be visible to users: on the homepage it sits right
+ * below the chat composer and reads like an assistant reply ("CopiioAI 是
+ * 一款……AI 助手"). Hence sr-only — present in the DOM for crawlers,
+ * invisible in the UI.
  */
 export default function LandingSeoContent() {
   return (
-    <section
-      aria-label="About CopiioAI"
-      className="w-full border-t border-gray-100 bg-white py-12"
-    >
+    <section aria-label="About CopiioAI" className="sr-only">
       <div className="mx-auto max-w-3xl px-6">
         <h2 className="text-lg font-semibold text-gray-900">
           CopiioAI — AI 专利情报检索与分析平台
