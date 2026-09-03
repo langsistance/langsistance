@@ -203,7 +203,7 @@ PATENT_NUMBER_RESOLVE_TOOL_NAME = "patent_number_resolve"
 class _NumberResolveArgs(BaseModel):
     number: str = Field(
         description=("专利号/公开号/申请号原文，无需格式化或补国别前缀"
-                     "（如 117941643、CN117941643A、US9019058B2）；"
+                     "（纯数字或带 CN/US 前缀均可）；"
                      "系统会解析格式并自动做中美双库核验"),
     )
 
@@ -2065,6 +2065,18 @@ async def _uspto_search_by_query(
             word_q = _word_level_query(q)
             if word_q:
                 response, used_q = await _search(word_q)
+        if getattr(response, "status_code", 0) != 200:
+            # 括号 AND/OR 结构 0 命中 → 去括号纯空格词形重试一次
+            # (2026-09-03 观察: 多概念括号查询整轮 404, 空格词形返回 200,
+            # 噪声由 relevance gate/dead 过滤兜底)。
+            try:
+                from sources.long_task.search_query_builder import (
+                    destructure_uspto_query)
+                flat_q = destructure_uspto_query(q)
+            except Exception:
+                flat_q = ""
+            if flat_q and flat_q not in (q, word_q):
+                response, used_q = await _search(flat_q)
         if getattr(response, "status_code", 0) != 200:
             return [], f"USPTO HTTP {response.status_code}"
         data = response.json()

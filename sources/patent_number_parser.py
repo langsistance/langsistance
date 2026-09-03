@@ -1,11 +1,12 @@
 """Patent identifier recognition — the deterministic front end of
 number routing.
 
-Background (2026-09-03, sample #16): a bare-number question such as
-``117941643`` was searched once against USPTO applications/search
-(404 = zero hits) and closed — no country disambiguation, no Baiten CN
-cross-check, no format guidance.  The rest of the pipeline was built for
-keyword language; nothing recognized a number as a patent identifier.
+Background (2026-09-03, production observation): a bare numeric-string
+question (no country prefix, no type word) was searched once against
+USPTO applications/search (404 = zero hits) and closed — no country
+disambiguation, no Baiten CN cross-check, no format guidance.  The rest
+of the pipeline was built for keyword language; nothing recognized a
+number as a patent identifier.
 
 This module turns raw user text into candidate identifiers:
 ``parse_patent_identifiers`` → ordered list of candidates carrying
@@ -33,7 +34,7 @@ NUMBER_PARSE_ENABLED = os.getenv("REACT_NUMBER_PARSE_ENABLED", "1") == "1"
 
 # Each candidate dict:
 #   raw        — matched token as found in the text
-#   display    — canonical readable form (e.g. "CN117941643A")
+#   display    — canonical readable form (e.g. "CN1xxxxxxxxA" shape)
 #   country    — "CN" | "US" | "EP" | "WO" | "JP" | "" (unknown)
 #   id_type    — publication | grant | utility | design | application
 #                | reissue | unsupported | ambiguous
@@ -69,7 +70,7 @@ _DOCUMENT_TEXT_LEN = 600       # 超过: 视为文档粘贴, 不做标识符解�
 _MAX_CANDIDATES = 3
 
 # 9 位纯数字以 1 开头 → 中国公开号核心号段(2017 年起 100000000+ 滚动,
-# 2023 年前后 ~117xxxxxx)。公开号形如 CN117941643A。
+# 2023 年前后 ~117xxxxxx)。公开号形如 CN1xxxxxxxxA。
 _CN_PUB_BARE_9_RE = re.compile(r"^1[0-9]{8}$")
 
 
@@ -335,14 +336,14 @@ def _classify_bare(token: str) -> dict | None:
     if n in (12, 13) and digits.startswith(("19", "20")):
         check = digits[12] if n == 13 else None
         return _cn_application(False, digits[:12], check, dotted=False)
-    # 9 位 1 开头 → CN 公开号核心段 (样本 16: 117941643 → CN117941643A)。
+    # 9 位 1 开头 → CN 公开号核心号段。
     if n == 9 and _CN_PUB_BARE_9_RE.match(digits):
         return {
             "raw": token, "display": f"CN{digits}",
             "country": "CN", "id_type": "publication",
             "confidence": "medium",
             "reason": ("9 位纯数字以 1 开头，符合中国公开号核心号段"
-                       "（如 CN117941643A）；若为美国专利号通常为 8 位"),
+                       "（公开号形如 CN1xxxxxxxxA）；若为美国专利号通常为 8 位"),
             "lookups": [f"CN{digits}A", f"CN{digits}", digits],
         }
     # 其余 6-8 位: 美国授权号/申请号歧义, 同一数字按引用检索。

@@ -7,12 +7,25 @@ LLM call so they can be unit-tested without a provider.
 """
 
 import json
+import os
 import re
 from typing import Any, Optional
 
 DEFAULT_QUERY_MAX_LENGTH = 250
 
 _CJK_RE = re.compile(r'[　-〿぀-ヿ㐀-䶿一-鿿＀-￯가-힯]')
+
+# 申请人概念渲染语法 — 见 render_applicant_query。field 形态需先经
+# scripts/uspto_applicant_field_probe.py 网关冒烟确认可用再启用
+# (2026-09-03 观察: 申请人概念被当普通全文词叠 AND, USPTO 对括号 AND
+# 组合又大量 404 — 含申请人限定的组合检索整轮打空)。
+USPTO_APPLICANT_SYNTAX = os.getenv(
+    "USPTO_APPLICANT_SYNTAX", "phrase").strip().lower()
+USPTO_APPLICANT_FIELD = os.getenv(
+    "USPTO_APPLICANT_FIELD", "firstApplicantName").strip()
+
+_APPLICANT_ROLES = {"applicant", "assignee", "company", "申请人", "company_name"}
+_AND_OR_NOT_RE = re.compile(r"\b(?:AND|OR|NOT)\b", re.IGNORECASE)
 
 REWRITE_SYSTEM_PROMPT = (
     "你是一个专利检索概念提取专家。把用户的自然语言技术问题分解为 "
@@ -24,7 +37,12 @@ REWRITE_SYSTEM_PROMPT = (
     "概念按重要性排序（最重要的放最前）——代码将按此顺序组装由紧到松"
     "的检索式阶梯。概念必须与提问中的独立技术要素一一对应，禁止把两"
     "个技术要素合并成一个概念（例如把要素甲与要素乙合并成「甲乙控制」"
-    "）——合并会丢失概念组合的检索结构，导致检索域漂移\n"
+    "）——合并会丢失概念组合的检索结构，导致检索域漂移。若问题中出现"
+    "申请人/公司/机构名（人名、公司名、大学或研究机构名），把它抽为独立"
+    "概念并在该概念的 role 字段标 applicant（禁止与任何技术要素合并"
+    "；role 缺省为 technical）；申请人概念的 keywords 只给该主体的各种"
+    "法定/常用名称变体（全称、简称、历史用名、常见译名），不给通用词"
+    "（applicant/company/assignee 之类不是检索词）\n"
     "2. 每个概念翻译成该领域专利文献常用的英文术语，并给出至少 5 个"
     "同义/近义关键词（含行业缩写、上位/下位词、英美拼写变体），"
     "关键词同样按重要性排序（最重要的放最前，代码只取前若干个进入"
@@ -63,7 +81,8 @@ REWRITE_SYSTEM_PROMPT = (
     "（代码负责）\n"
     'Return JSON: {"concepts": [{"concept": "中文概念", '
     '"keywords": ["english term", ...], '
-    '"carriers": ["english term", ...]}, ...]}'
+    '"carriers": ["english term", ...], '
+    '"role": "technical" 或 "applicant"(仅申请人概念)}, ...]}'
 )
 
 MAX_KEYWORDS_PER_GROUP = 5
@@ -97,6 +116,87 @@ def sanitize_uspto_query(q: str) -> str:
     """Strip CJK characters, collapse whitespace and cap query length."""
     if not q:
         return ""
+    q = _CJK_RE.sub(" ", q)
+    q = re.sub(r"\s+", " ", q).strip()
+    return q[:DEFAULT_QUERY_MAX_LENGTH]
+
+
+# ── Applicant-anchor semantics (2026-09-03 production observation) ───────────
+# An applicant-constrained question was rewritten as an ordinary concept
+# AND-ed with the technical concepts; every 4/3/2-concept bracket query
+# then 404'd while the plain assignee word full-text matched tens of
+# thousands of transfer records.  Fixes here:
+#   1. the rewrite marks applicant concepts with role="applicant";
+#   2. build_search_queries moves them to the FRONT of the ladder so the
+#      AND-drop chain can only ever drop technical groups — the loosest
+#      level is the applicant anchor alone, never a bare technical word;
+#   3. the anchor renders via render_applicant_query (phrase by default;
+#      field syntax behind gateway smoke).
+
+def _concept_role(c: Any) -> str:
+    """'applicant' when the concept is a company/assignee, else 'technical'."""
+    if not isinstance(c, dict):
+        return "technical"
+    role = str(c.get("role") or "").strip().lower()
+    return "applicant" if role in _APPLICANT_ROLES else "technical"
+
+
+def order_concepts_by_role(concepts: list) -> list:
+    """Move applicant concepts to the front (stable within each group).
+
+    The deterministic ladder drops concepts from the END, so an
+    applicant placed first survives until every technical group has been
+    dropped — a company-name-alone query is the intended loosest level.
+    Pure.
+    """
+    if not concepts:
+        return []
+    applicant = [c for c in concepts if _concept_role(c) == "applicant"]
+    technical = [c for c in concepts if _concept_role(c) != "applicant"]
+    return applicant + technical
+
+
+def render_applicant_query(keywords: list, syntax: str = "",
+                           field: str = "") -> str:
+    """Render an applicant/company concept as one query group.
+
+    *syntax*: ``phrase`` (default, quoted OR-group), ``field``
+    (``firstApplicantName:(...)`` — enable only after the gateway smoke
+    probe confirms the field syntax) or ``space`` (plain words, the
+    de-structured fallback that survives the endpoint's bracket-AND
+    404s).  Returns "" when there are no usable keywords.
+    """
+    seen: list[str] = []
+    for k in keywords or []:
+        k = sanitize_uspto_query(str(k)).strip('"')
+        if k and k not in seen:
+            seen.append(k)
+    if not seen:
+        return ""
+    syntax = (syntax or USPTO_APPLICANT_SYNTAX).lower()
+    if syntax == "space":
+        return " ".join(seen)
+    if syntax == "field":
+        inner = " OR ".join(
+            f'"{k}"' if " " in k and "*" not in k else k for k in seen)
+        return f"{(field or USPTO_APPLICANT_FIELD)}:({inner})"
+    joined = " OR ".join(
+        f'"{k}"' if " " in k and "*" not in k else k for k in seen)
+    return f"({joined})"
+
+
+def destructure_uspto_query(q: str) -> str:
+    """De-bracket a USPTO query into plain space-joined words.
+
+    applications/search 404s most parenthesized AND/OR structures — a
+    2026-09-03 production log shows 4-, 3- AND 2-concept bracket queries
+    ALL 404 while the same words space-joined return 200.  Quotes and
+    operators are stripped so the retry can never carry the failing
+    structure.  Returns "" when nothing remains.
+    """
+    q = _AND_OR_NOT_RE.sub(" ", q or "")
+    q = q.replace("(", " ").replace(")", " ")
+    q = q.replace('"', " ")
     q = _CJK_RE.sub(" ", q)
     q = re.sub(r"\s+", " ", q).strip()
     return q[:DEFAULT_QUERY_MAX_LENGTH]
@@ -173,18 +273,29 @@ async def build_search_queries(query: str, provider: Any) -> dict:
         return {"concepts": [], "queries": []}
     if not isinstance(result, dict):
         return {"concepts": [], "queries": []}
+    # 申请人(role=applicant)概念与技术概念分离: 技术组保持原语义组装
+    # 阶梯; 申请人锚经 render_applicant_query 单独渲染并拼在每条检索式
+    # 最前(锚定不可丢) — 阶梯放宽只发生在技术组之间, 最终最松一级是
+    # "申请人锚 AND 首个技术组", 再由末尾的 anchor-alone 收底
+    # (2026-09-03 观察: 申请人被当普通概念叠 AND 导致整轮打空)。
+    concepts = result.get("concepts") or []
+    app_kw_groups: list[list[str]] = []
     groups: list[list[str]] = []
     carrier_groups: list[list[str]] = []
-    for c in result.get("concepts") or []:
+    for c in concepts:
         if not isinstance(c, dict):
             groups.append([])
             carrier_groups.append([])
             continue
         kws = c.get("keywords")
         cars = c.get("carriers")
-        groups.append([str(k) for k in kws] if isinstance(kws, list) else [])
-        carrier_groups.append(
-            [str(k) for k in cars] if isinstance(cars, list) else [])
+        kw_list = [str(k) for k in kws] if isinstance(kws, list) else []
+        car_list = [str(k) for k in cars] if isinstance(cars, list) else []
+        if _concept_role(c) == "applicant":
+            app_kw_groups.append(kw_list)
+        else:
+            groups.append(kw_list)
+            carrier_groups.append(car_list)
     literal_ladder = _assemble_ladder(groups)
     carrier_ladder = _assemble_ladder(carrier_groups)
     # Interleave tightest-first: each literal level is followed by its
@@ -197,17 +308,29 @@ async def build_search_queries(query: str, provider: Any) -> dict:
         if i < len(carrier_ladder):
             interleaved.append(carrier_ladder[i])
     seen: set[str] = set()
-    queries: list[str] = []
+    tech_ladder: list[str] = []
     for q in interleaved:
         if q not in seen:
             seen.add(q)
-            queries.append(q)
+            tech_ladder.append(q)
+
+    anchors = [a for a in
+               (render_applicant_query(kws) for kws in app_kw_groups)
+               if a]
+    queries: list[str] = []
+    if anchors:
+        anchor = " AND ".join(anchors)
+        queries = [f"{anchor} AND {q}" for q in tech_ladder]
+        if anchor not in queries:
+            queries.append(anchor)  # 最松一级: 仅申请人名下专利
+    else:
+        queries = list(tech_ladder)
     queries = queries[:6]
     if not queries:
         # Legacy fallback: a provider that still returns hand-written
         # queries keeps working.
         queries = _validated_rewrite(result)["queries"]
-    return {"concepts": result.get("concepts") or [], "queries": queries}
+    return {"concepts": concepts, "queries": queries}
 
 
 def format_ladder_guidance(rewrite: dict, lang: str = "zh",

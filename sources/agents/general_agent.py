@@ -2233,6 +2233,28 @@ Begin your response now:
 
     async def _stream_raw_items(self, raw_items, callback_handler):
         self._pending_raw_items = None
+        # 无标识号又无标题的条目不是可展示的专利结果 — 例如失败包装体或
+        # 缺字段记录, 渲染出来就是占位的 "--"。直接滤除并记录, 不让坏
+        # 数据占据结果位 (2026-09-03 观察)。
+        _ID_KEYS = ("applicationNumberText", "patent_id", "pn", "doc_id",
+                    "patentNumber", "app_num", "application_number")
+        _TITLE_KEYS = ("title", "inventionTitle", "titleOfInvention", "ti")
+        _renderable: list = []
+        for item in raw_items or []:
+            if not isinstance(item, dict):
+                _renderable.append(item)
+                continue
+            has_id = any(str(item.get(k) or "").strip()
+                         for k in _ID_KEYS)
+            has_title = any(str(item.get(k) or "").strip()
+                            for k in _TITLE_KEYS)
+            if has_id or has_title:
+                _renderable.append(item)
+            else:
+                self.logger.warning(
+                    "stream_raw_items — dropped non-renderable item "
+                    f"(no id, no title): {str(item)[:160]}")
+        raw_items = _renderable
         original_total = len(raw_items)
         user_prompt = getattr(self, "_last_user_prompt", "")
         batch_size = 1
