@@ -3,7 +3,11 @@ import asyncio
 import unittest
 from unittest.mock import patch
 
+from types import SimpleNamespace
+
 from sources.agents.react_tools import (
+    BUILTIN_DEEP_ANALYSIS_TOOL_NAME,
+    _us_citing_note,
     REACT_PATENT_AUTO_LADDER_MAX,
     _auto_run_patent_ladder,
     _baiten_results_to_candidates,
@@ -806,6 +810,101 @@ class TestBuildToolSetRegistration(unittest.TestCase):
         # 未指定国别（默认）→ 双源工具注册（未传 patent_source）
         registry, _ = asyncio.run(self._build(None))
         self.assertIn("patent_search_dual", registry)
+
+
+
+class TestBuiltinDeepAnalysisTool(unittest.TestCase):
+    """#22: family/prosecution analysis entry must exist even for users whose
+    knowledge base matched no tailored type-3 long-task tool."""
+
+    async def _build(self, candidates):
+        with patch("sources.agents.react_tools.get_knowledge_tool_candidates",
+                   return_value=candidates):
+            return await build_tool_set(
+                _FakeAgent(), "u1", "分析 CN105414512A 的全球同族审查差异",
+                patent_source="dual")
+
+    def test_registered_when_no_tailored_long_task(self):
+        registry, tools = asyncio.run(self._build([]))
+        entry = registry.get(BUILTIN_DEEP_ANALYSIS_TOOL_NAME)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.kind, "long_task")
+        self.assertIsNone(entry.knowledge)
+        bound_names = {t["name"] for t in tools}
+        self.assertIn(BUILTIN_DEEP_ANALYSIS_TOOL_NAME, bound_names)
+
+    def test_not_registered_when_tailored_long_task_exists(self):
+        knowledge = SimpleNamespace(
+            id="k1", type=3, scene_id=1,
+            question="zh:审查历史分析|en:prosecution history analysis",
+            description="",
+        )
+        registry, _tools = asyncio.run(self._build([(knowledge, None)]))
+        self.assertNotIn(BUILTIN_DEEP_ANALYSIS_TOOL_NAME, registry)
+        self.assertTrue(any(e.kind == "long_task" and e.knowledge is not None
+                            for e in registry.values()))
+
+
+class TestUsCitingNote(unittest.TestCase):
+    """#22c: US hits on a single-CN-publication search are citing docs."""
+
+    def _us(self, n=20):
+        return [{"applicationNumberText": f"19{i:06d}"} for i in range(n)]
+
+    def test_family_intent_gets_deep_task_nudge(self):
+        note = _us_citing_note(
+            "分析 CN105414512A 及其全球同族申请的审查差异",
+            '(CN105414512A OR "CN 105414512 A")',
+            [{"patent_id": "CN105414512A", "source": "baiten"}],
+            self._us(), lang="zh")
+        self.assertIn("引用该中国专利", note)
+        self.assertIn("同族", note)
+
+    def test_generic_query_gets_light_annotation(self):
+        note = _us_citing_note(
+            "查询一下这个专利的相关技术",
+            "CN105414512A",
+            [{"patent_id": "CN105414512A", "source": "baiten"}],
+            self._us(), lang="zh")
+        self.assertIn("引用该中国专利", note)
+        self.assertNotIn("深度分析任务", note)
+
+    def test_en_family_intent(self):
+        note = _us_citing_note(
+            "Analyze CN105414512A worldwide family examination differences",
+            "CN105414512A",
+            [{"patent_id": "CN105414512A", "source": "baiten"}],
+            self._us(), lang="en")
+        self.assertTrue(note)
+
+    def test_no_note_when_cn_not_single_publication(self):
+        # Two CN publications in the query → the pattern does not apply.
+        self.assertEqual(
+            _us_citing_note(
+                "对比 CN105414512A 与 CN112139463A",
+                "CN105414512A OR CN112139463A",
+                [{"patent_id": "CN105414512A", "source": "baiten"}],
+                self._us(), lang="zh"),
+            "")
+
+    def test_no_note_when_no_us_hits(self):
+        self.assertEqual(
+            _us_citing_note(
+                "分析 CN105414512A 的同族",
+                "CN105414512A",
+                [{"patent_id": "CN105414512A", "source": "baiten"}],
+                [], lang="zh"),
+            "")
+
+    def test_no_note_when_cn_candidates_not_single(self):
+        self.assertEqual(
+            _us_citing_note(
+                "分析 CN105414512A 的同族",
+                "CN105414512A",
+                [{"patent_id": "CN105414512A", "source": "baiten"},
+                 {"patent_id": "CN112139463A", "source": "baiten"}],
+                self._us(), lang="zh"),
+            "")
 
 
 if __name__ == "__main__":

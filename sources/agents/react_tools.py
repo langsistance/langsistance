@@ -308,6 +308,96 @@ async def _long_task_stub(query: str) -> str:
     raise NotImplementedError("executed via dispatch, not directly")
 
 
+# Built-in deep-analysis entry (#22, 2026-09-03): family/prosecution
+# analysis tools came ONLY from per-user type-3 knowledge items, so a
+# fresh user or a scene without them silently had no way to start one —
+# the same "分析 X 的全球同族审查差异" ask worked or degraded depending on
+# configuration (observed with users 3044…/1825…).  Register one generic
+# entry whenever no tailored long-task entry exists.
+BUILTIN_DEEP_ANALYSIS_TOOL_NAME = "patent_deep_analysis"
+BUILTIN_DEEP_ANALYSIS_QUESTION = (
+    "对指定专利进行深度后台分析（审查历史 / 全球同族审查差异 / 复审无效）"
+)
+
+# CN publication shape (CN114948588A / CN 1149 48588 A) for the citing-US
+# annotation (#22c): a CN-number search whose USPTO leg returns hits usually
+# matched US applications CITING that CN document, not its family members.
+_RE_CN_PUB_NUMBER = re.compile(r"CN\s*\d{7,12}\s*[A-Za-z]{1,2}")
+_FAMILY_INTENT_KEYWORDS_ZH = ("同族", "家族", "全球", "各国", "审查差异", "跨国")
+_FAMILY_INTENT_KEYWORDS_EN = ("family", "worldwide", "jurisdiction",
+                              "counterpart", "examination difference")
+
+
+def _builtin_deep_analysis_description(lang: str = "zh") -> str:
+    """Description for the built-in deep-analysis long task entry.
+
+    Deliberately narrow: it must NOT hijack plain legal-status questions
+    ("被驳回了吗" — answered by search + legal-status enrichment) or
+    retrieval requests (document download).  It exists for examination /
+    family ANALYSIS of a specific patent id.
+    """
+    if lang == "en":
+        return (
+            "Start a background deep-analysis task for ONE patent: "
+            "prosecution/examination history (office actions, rejections, "
+            "re-examination, invalidation) OR its worldwide family "
+            "examination across countries (family members, examination "
+            "differences). Requires a specific patent/application id in the "
+            "question. The task runs asynchronously — after calling it, tell "
+            "the user the analysis task was created and that results will "
+            "appear here when done. Do NOT substitute a keyword search for "
+            "this analysis."
+        )[:800]
+    return (
+        "对指定专利发起后台深度分析任务：审查历史/审查意见/OA/驳回/复审无效，"
+        "或全球同族申请在各国的审查过程与差异。问题中必须包含具体专利号/申请号。"
+        "任务异步执行——调用后告知用户任务已创建，完成后结果会出现在本会话；"
+        "不要用普通关键词检索代替该分析。仅法律状态查询（如“被驳回了吗”）"
+        "不属于本任务，请走检索。"
+    )[:800]
+
+
+def _us_citing_note(query: str, cn_q: str, cn_cands: list,
+                    us_cands: list, lang: str = "zh") -> str:
+    """Annotation for a CN-publication-number search whose US leg hit docs.
+
+    When the Chinese query slot is exactly ONE CN publication number, Baiten
+    returned exactly that document, and the USPTO leg still returned hits,
+    those US hits are almost always applications CITING the CN document
+    (USPTO full-text search matched the cited number), not its family
+    members.  Returning them unlabelled misleads family questions.
+    Returns the note text, or "" when the pattern does not apply.
+    """
+    if not (cn_q and us_cands):
+        return ""
+    if len(cn_cands) != 1:
+        return ""
+    # Canonicalize matches by stripping ALL internal whitespace, then dedupe:
+    # rewrite ladders repeat the SAME number across OR variants
+    # (… OR "CN 105414512 A" OR CN-105414512-A), which must count as one.
+    tokens = {re.sub(r"\s+", "", t)
+              for t in _RE_CN_PUB_NUMBER.findall(cn_q or "")}
+    if len(tokens) != 1:
+        return ""
+    lower_query = (query or "").lower()
+    if lang == "zh":
+        hits_intent = any(k in (query or "") for k in _FAMILY_INTENT_KEYWORDS_ZH)
+    else:
+        hits_intent = any(k in lower_query
+                          for k in _FAMILY_INTENT_KEYWORDS_EN)
+    if hits_intent:
+        return (
+            "注：本检索式命中单一中国专利文献，美国端返回的申请多为引用该"
+            "中国专利的文献（非同族成员）。如需该专利的全球同族及各国审查"
+            "情况，请发起深度分析任务（回复“分析 <专利号> 的全球同族审查差异”"
+            "或使用分析任务入口）。"
+        )
+    return (
+        "注：美国端命中多为引用该中国专利的申请（非同族成员），相关性低于"
+        "中国端结果，请注意区分。"
+    )
+
+
 def _tool_to_bind_dict(tool: StructuredTool) -> dict:
     """bind_tools-compatible dict for a StructuredTool."""
     return {
@@ -446,6 +536,26 @@ async def build_tool_set(
             continue
         add(ToolEntry(name=dynamic_tool.name, kind="knowledge",
                       knowledge=knowledge, tool_info=tool_info, tool=dynamic_tool))
+
+    # ── Built-in deep-analysis entry (#22) ──
+    # Tailored type-3 entries above depend on per-user/scene knowledge; when
+    # none matched, a fresh user must still be able to start a
+    # family/prosecution analysis — otherwise the identical question works
+    # for some users and silently degrades for others (users 3044…/1825…).
+    # knowledge=None keeps it out of the deterministic pre-route (see
+    # _match_long_task_intent guard) — it stays reachable via ReAct tool
+    # choice, which is the intended gap-fill.
+    if not any(e.kind == "long_task" for e in registry.values()):
+        builtin_tool = StructuredTool.from_function(
+            func=_long_task_stub,
+            name=BUILTIN_DEEP_ANALYSIS_TOOL_NAME,
+            description=_builtin_deep_analysis_description(
+                getattr(agent, "_lang", "zh")),
+            args_schema=_QueryArgs,
+        )
+        add(ToolEntry(name=BUILTIN_DEEP_ANALYSIS_TOOL_NAME,
+                      kind="long_task", knowledge=None, tool_info=None,
+                      tool=builtin_tool))
     return registry, tools
 
 
@@ -684,6 +794,17 @@ async def _match_long_task_intent(agent, query: str, entries: list,
     matched ToolEntry or None.
     """
     if not LONG_TASK_ROUTE_ENABLED or not entries:
+        return None
+    # Tailored-knowledge pre-route only: the built-in generic deep-analysis
+    # entry carries knowledge=None (no question to classify against); every
+    # query would match a blank question under the classifier's
+    # "宁可命中不可漏判" bias and route EVERYTHING into the deep task.
+    entries = [
+        e for e in entries
+        if e.knowledge is not None
+        and str(getattr(e.knowledge, "question", "") or "").strip()
+    ]
+    if not entries:
         return None
     query_text = str(query or "").strip()
     # Retrieval requests ("获取...档案/文档") are the document-list tools'
@@ -2435,6 +2556,22 @@ async def _run_patent_search(agent, args, lang: str, dual: bool = True) -> dict:
             _glog.info("patent_search_notes — " + "; ".join(notes))
         # 数据来源/状态噪声 (USPTO HTTP 404 / Baiten N hits / 自动补跑阶梯)
         # 只进日志, 不拼进用户可见的流式 observation 文本 (2026-09-01)。
+
+    # #22c: US hits on a single-CN-publication search are usually citing
+    # documents, not family members — the annotation MUST ride the digest
+    # (LLM-visible text), because notes above only reach the logs.
+    try:
+        us_cands = [c for c in merged
+                    if not (isinstance(c, dict) and c.get("source") == "baiten")]
+        cn_cands = [c for c in merged
+                    if isinstance(c, dict) and c.get("source") == "baiten"]
+        citing_note = _us_citing_note(
+            getattr(agent, "_last_user_prompt", "") or "",
+            cn_q or "", cn_cands, us_cands, lang)
+        if citing_note:
+            digest = f"{digest}\n\n{citing_note}"
+    except Exception:
+        pass  # annotation is an enhancement — never breaks the search
     return {"kind": "observation", "text": digest}
 
 

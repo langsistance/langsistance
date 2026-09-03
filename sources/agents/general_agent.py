@@ -932,6 +932,23 @@ Whenever a search tool was called and returned candidates, structure the final a
 3. Close by telling the user the full results are available in the results panel (JSON/CSV/Excel download).
 
 This structure overrides other formatting preferences; only when the search returned no candidates should you honestly say no matching results were found.
+
+## Deep Analysis Task Boundary
+
+- When the user asks for EXAMINATION/FAMILY analysis of a specific patent —
+  prosecution history, office actions, rejections, re-examination,
+  invalidation, worldwide family examination across countries, examination
+  differences between family members — and a background analysis tool
+  (`patent_deep_analysis` or a knowledge-base analysis task) is available,
+  call that tool to start the task. Do NOT substitute a keyword search for
+  it, and do NOT fabricate prosecution/family conclusions from search
+  results alone.
+- If NO analysis tool is available or the task did not start: state the
+  boundary plainly in the answer — you can provide bibliographic and
+  search-level information, but not prosecution/family-level conclusions —
+  and tell the user the concrete next step (e.g. reply "创建同族分析任务"
+  or upload the patent files to start an analysis task). Never imply a
+  deep analysis was performed when it was not.
 """
 
 
