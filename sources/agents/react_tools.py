@@ -1297,12 +1297,9 @@ async def _invoke_and_merge(agent, entry, q: str, lang) -> Optional[Tuple[list, 
     outermost merge call reranks the final pool exactly once.
     """
     try:
-        envelope = _build_uspto_envelope(entry.tool_info, q)
-        await asyncio.to_thread(
-            entry.tool.invoke, _tool_invoke_payload(agent, envelope))
+        raw = await _invoke_uspto_with_fallback(agent, entry, q)
     except Exception:
         return None
-    raw = getattr(agent, "_pending_raw_items", None) or []
     if not raw:
         return [], "", 0
     try:
@@ -2085,6 +2082,117 @@ async def _uspto_search_by_query(
         return items, f"USPTO {len(items)} hits"
     except Exception as exc:
         return [], f"USPTO failed: {exc}"
+
+
+# ── KB 工具路径的括号-404 降级 (2026-09-03 生产观察) ─────────────────────────
+# 线上 ReAct 主要经知识库推送工具 (search_patent_by_key_word / by_assignee
+# 等) 走 dynamic_backend_tool_function — 它们不经过 _uspto_search_by_query,
+# 没有降级链。同一观察里 8/8 次含括号/引号短语的查询全部 404, 而无括号
+# 裸词查询返回 200。因此: 凡 USPTO applications/search 工具返回空且查询
+# 带括号或引号 → 自动以空格词形重试一次; 不带括号的查询 (如 "A AND B")
+# 保持不变 (有 200 记录)。
+
+def _is_uspto_search_tool(tool_info) -> bool:
+    """True for tools whose URL targets USPTO applications/search."""
+    url = (getattr(tool_info, "url", "") or "").lower()
+    return "uspto" in url and "/applications/search" in url
+
+
+def _flatten_query_for_uspto(q: str) -> str:
+    """Return the plain-space form when *q* carries bracket/quoted
+    structure (the structure this endpoint 404s on); otherwise unchanged.
+    Pure."""
+    if not q or ("(" not in q and '"' not in q):
+        return q or ""
+    try:
+        from sources.long_task.search_query_builder import (
+            destructure_uspto_query)
+        return destructure_uspto_query(q) or q
+    except Exception:
+        return q
+
+
+def _with_query_replaced(payload, new_q: str) -> dict:
+    """Deep-copy *payload* with its query slot replaced by *new_q*.
+
+    Understands the shapes invoke payloads take: envelope body.q,
+    params-JSON-string, nested query.q, or top-level q.  Returns the
+    original payload unchanged when no query slot is found.
+    """
+    import copy as _copy
+    if not isinstance(payload, dict):
+        return payload
+    out = _copy.deepcopy(payload)
+
+    def _replace_in(d: dict) -> bool:
+        if not isinstance(d, dict):
+            return False
+        body = d.get("body")
+        if isinstance(body, dict) and "q" in body:
+            body["q"] = new_q
+            return True
+        nested = d.get("query")
+        if isinstance(nested, dict):
+            if "q" in nested:
+                nested["q"] = new_q
+                return True
+            if _replace_in(nested):
+                return True
+        params = d.get("params")
+        if isinstance(params, dict):
+            if "q" in params:
+                params["q"] = new_q
+                return True
+            if _replace_in(params):
+                return True
+        if isinstance(params, str) and params.strip():
+            try:
+                parsed = json.loads(params)
+            except (ValueError, TypeError):
+                parsed = None
+            if isinstance(parsed, dict) and "q" in parsed:
+                parsed["q"] = new_q
+                d["params"] = json.dumps(parsed, ensure_ascii=False)
+                return True
+        if isinstance(d.get("q"), str):
+            d["q"] = new_q
+            return True
+        for value in d.values():
+            if isinstance(value, dict) and _replace_in(value):
+                return True
+        return False
+
+    _replace_in(out)
+    return out
+
+
+async def _invoke_uspto_with_fallback(agent, entry, q: str) -> list:
+    """Invoke one USPTO search query via the KB tool with bracket fallback.
+
+    Calls the tool once; when the result is empty AND the query carries
+    bracket/quoted structure, re-invokes the plain-space form (the
+    structure's 404s are the observed norm).  Returns the pending raw
+    items of the last attempt.  Never raises.
+    """
+    envelope = _build_uspto_envelope(entry.tool_info, q)
+    await asyncio.to_thread(
+        entry.tool.invoke, _tool_invoke_payload(agent, envelope))
+    pending = getattr(agent, "_pending_raw_items", None) or []
+    if pending or not _is_uspto_search_tool(entry.tool_info):
+        return pending
+    flat = _flatten_query_for_uspto(q)
+    if flat and flat != q:
+        _glog = getattr(agent, "logger", None)
+        if _glog is not None:
+            _glog.info(
+                "uspto_query_bracket_fallback — "
+                f"q0={q[:90]!r} flat={flat[:90]!r}")
+        await asyncio.to_thread(
+            entry.tool.invoke,
+            _tool_invoke_payload(
+                agent, _build_uspto_envelope(entry.tool_info, flat)))
+        pending = getattr(agent, "_pending_raw_items", None) or []
+    return pending
 
 
 # Legal-status enrichment limits (chat path, 2026-09-03): a single FLZT
@@ -2933,6 +3041,25 @@ async def make_action_executor(agent, registry, push_filter=None):
                 tried = agent._tried_queries = []
             if q_used not in tried:
                 tried.append(q_used)
+
+        # 括号/引号结构在 applications/search 上 404 是常态 — KB 工具
+        # 首次调用落空时, 自动以空格词形重试一次 (观察 2026-09-03:
+        # 8/8 括号查询 404, 空格词形 200; 噪声由 relevance gate 兜底)。
+        if (not getattr(agent, "_pending_raw_items", None)
+                and q_used and _is_uspto_search_tool(entry.tool_info)):
+            flat_q = _flatten_query_for_uspto(q_used)
+            if flat_q and flat_q != q_used:
+                _glog = getattr(agent, "logger", None)
+                if _glog is not None:
+                    _glog.info(
+                        "uspto_query_bracket_fallback — "
+                        f"q0={q_used[:90]!r} flat={flat_q[:90]!r}")
+                retry_args = _with_query_replaced(invoke_args, flat_q)
+                try:
+                    result = await asyncio.to_thread(
+                        entry.tool.invoke, retry_args)
+                except Exception as exc:
+                    return {"kind": "observation", "text": f"Error: {exc}"}
 
         # Keep the exact pairing used later by _stream_raw_items for
         # source inference and artifact building.
