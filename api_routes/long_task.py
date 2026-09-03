@@ -308,6 +308,22 @@ def register_long_task_routes(logger, config):
                 execute_family_analysis.delay(task_id=task_id, params=celery_params)
         else:
             status = "queued"
+        # M1: persist a "task created" message in the conversation so the
+        # analysis task (and its later outcome) is visible in chat history.
+        try:
+            from sources.long_task.task_messages import append_task_message
+            created_content = (
+                f"已提交分析任务（{patent_id}），正在后台分析。\n\n"
+                "任务完成后将在此展示结果摘要，可直接追问细节。"
+                if queue_result == "running" else
+                "分析任务已排队，将在当前任务完成后自动开始。"
+            )
+            append_task_message(
+                task_id, event="created",
+                content=created_content, patent_ids=[patent_id])
+        except Exception as e:
+            logger.warning(
+                f"submit_long_task created message failed: {e}")
         logger.info(
             f"submit_long_task — task_id={task_id}, scenario={scenario}, "
             f"patent_id={patent_id}, queue={queue_result}"

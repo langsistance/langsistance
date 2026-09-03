@@ -111,9 +111,16 @@ class TestLlmProviderCompleteJson(unittest.IsolatedAsyncioTestCase):
 class TestLlmProviderFlashThinking(unittest.IsolatedAsyncioTestCase):
     """deepseek flash models disable thinking by default (scoring latency).
 
-    The toggle lives in _get_langchain_llm: model_kwargs thinking disabled
-    only for deepseek + "flash"-named models, unless DEEPSEEK_THINKING
-    =enabled.  Non-flash deepseek and other providers are never touched.
+    The toggle lives in _get_langchain_llm: the ``thinking`` disable is sent
+    via ``extra_body`` (body-level custom param) only for deepseek +
+    "flash"-named models, unless DEEPSEEK_THINKING =enabled.  Non-flash
+    deepseek and other providers are never touched.
+
+    Regression guard (2026-09-03): the param must NOT go through
+    ``model_kwargs`` — langchain-openai spreads model_kwargs into top-level
+    kwargs of AsyncCompletions.create(), which raises
+    "unexpected keyword argument 'thinking'" and broke every long-task /
+    scoring LLM call on deepseek-flash.
     """
 
     def _llm_init_kwargs(self, provider_name: str, model: str) -> dict:
@@ -125,21 +132,25 @@ class TestLlmProviderFlashThinking(unittest.IsolatedAsyncioTestCase):
     def test_deepseek_flash_disables_thinking_by_default(self):
         kwargs = self._llm_init_kwargs("deepseek", "deepseek-v4-flash")
         self.assertEqual(
-            kwargs.get("model_kwargs"),
+            kwargs.get("extra_body"),
             {"thinking": {"type": "disabled"}},
         )
+        self.assertNotIn("model_kwargs", kwargs)
 
     def test_non_flash_deepseek_untouched(self):
         kwargs = self._llm_init_kwargs("deepseek", "deepseek-chat")
+        self.assertNotIn("extra_body", kwargs)
         self.assertNotIn("model_kwargs", kwargs)
 
     def test_other_provider_untouched(self):
         kwargs = self._llm_init_kwargs("minimax", "MiniMax-M2.7-highspeed")
+        self.assertNotIn("extra_body", kwargs)
         self.assertNotIn("model_kwargs", kwargs)
 
     def test_env_override_reenables_thinking(self):
         with patch.dict(os.environ, {"DEEPSEEK_THINKING": "enabled"}):
             kwargs = self._llm_init_kwargs("deepseek", "deepseek-v4-flash")
+        self.assertNotIn("extra_body", kwargs)
         self.assertNotIn("model_kwargs", kwargs)
 
 

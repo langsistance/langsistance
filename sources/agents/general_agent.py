@@ -34,6 +34,7 @@ from sources.agents.react_tools import (
     build_tool_set,
     make_action_executor,
     _match_long_task_intent,
+    _tool_to_bind_dict,
 )
 from sources.http_outbound import outbound_http
 
@@ -1713,7 +1714,7 @@ Begin your response now:
                 "所有标题、段落、列表项和标签都必须使用中文。\n"
             )
 
-    async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler, push_filter=None, conversation_history=None):
+    async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler, push_filter=None, conversation_history=None, allow_long_task=True):
         """Build the ReAct tool set and run the loop for one user query.
 
         Long-task tool calls surface as the same {'intent': 'long_task'}
@@ -1723,6 +1724,12 @@ Begin your response now:
         ``conversation_history`` (frontend-sent, optional) is injected into
         the system prompt as reference-only "Previous conversation" context
         so follow-up questions always carry prior turns (需求 2).
+
+        ``allow_long_task=False`` strips every long-task entry from the
+        tool set so neither the deterministic pre-route matcher nor the
+        ReAct loop can hand the query to the analysis pipeline — used by
+        core.py's low-confidence refusal (chat_fallback) to answer through
+        the normal search tools instead (incident 2026-09-03).
         """
         # -- per-request state reset (agents are pooled and reused) --
         self._last_user_prompt = prompt
@@ -1947,6 +1954,16 @@ Begin your response now:
         registry, bind_tools = await build_tool_set(
             self, user_id, prompt, push_filter,
             patent_source=getattr(self, "_patent_tool_source", "auto"))
+        if not allow_long_task:
+            # Low-confidence long-task refusal (core.py chat_fallback):
+            # strip every long-task entry so the pre-route matcher below
+            # finds nothing and the ReAct loop has no long-task tool bound.
+            registry = {
+                name: entry for name, entry in registry.items()
+                if entry.kind != "long_task"
+            }
+            bind_tools = [_tool_to_bind_dict(entry.tool)
+                          for entry in registry.values()]
         self._react_registry = registry
 
         # Deterministic long-task routing: when the request clearly

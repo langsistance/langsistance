@@ -112,32 +112,97 @@ class TestOrderPendingForLang(unittest.TestCase):
 
 
 class TestEnrichBaitenLawStatus(unittest.TestCase):
-    async def _run(self, candidates, state=None, fail=False):
+    """One FLZT call per candidate → status + legal_timeline; FSWX (复审
+    无效) decisions are attached only for small (number-lookup) lists,
+    with fullText truncated (chat-path wiring, 2026-09-03)."""
+
+    async def _run(self, candidates, timeline=None, decisions=None,
+                   fail=False):
         class _Client:
-            async def query_law_state(self, app_num):
+            async def query_legal_state_timeline(self, app_num):
                 if fail:
                     raise RuntimeError("gateway down")
-                return state or {}
+                return timeline or []
+
+            async def query_patent_review(self, app_num):
+                if fail:
+                    raise RuntimeError("gateway down")
+                return decisions or []
 
         await _enrich_baiten_law_status(_Client(), candidates, None)
 
-    def test_fills_status_from_law_state(self):
+    def test_fills_status_and_timeline_from_flzt(self):
         candidates = [{"patent_id": "CN118000001A", "app_num": "CN2023XXX",
                        "status": ""}]
-        asyncio.run(self._run(
-            candidates, state={"lawStatus": "专利权维持"}))
-        self.assertEqual(candidates[0]["status"], "专利权维持")
+        asyncio.run(self._run(candidates, timeline=[
+            {"date": "2024-06-01", "lawStatus": "驳回等"},
+            {"date": "2024-03-01", "lawStatus": "实质审查的生效"},
+        ]))
+        c = candidates[0]
+        self.assertEqual(c["status"], "驳回等")
+        self.assertEqual(len(c["legal_timeline"]), 2)
+        self.assertEqual(c["legal_timeline"][1]["lawStatus"], "实质审查的生效")
 
-    def test_failure_degrades_to_empty_status(self):
+    def test_small_list_attaches_fswx_decisions_truncated(self):
+        candidates = [{"patent_id": "CN118000001A", "app_num": "CN2023XXX",
+                       "status": ""}]
+        decisions = [{"declareDate": "2024-08-01", "declareNum": "FS12345",
+                      "lawBase": "专利法第22条第3款",
+                      "fullText": "决定全文内容。" * 300}]
+        asyncio.run(self._run(
+            candidates,
+            timeline=[{"date": "2024-06-01", "lawStatus": "驳回等"}],
+            decisions=decisions))
+        c = candidates[0]
+        self.assertEqual(len(c["review_decisions"]), 1)
+        self.assertEqual(c["review_decisions"][0]["declareNum"], "FS12345")
+        self.assertLessEqual(
+            len(c["review_decisions"][0]["fullText"]),
+            800)
+
+    def test_large_hit_list_skips_fswx(self):
+        # Topic sweep (many candidates) must not fire an FSWX call per row.
+        candidates = [
+            {"patent_id": f"CN11800000{i}A", "app_num": f"CN2023{i}",
+             "status": ""} for i in range(5)
+        ]
+        asyncio.run(self._run(candidates, timeline=[
+            {"date": "2024-06-01", "lawStatus": "驳回等"}]))
+        for c in candidates:
+            self.assertEqual(c["status"], "驳回等")
+            self.assertNotIn("review_decisions", c)
+
+    def test_failure_degrades_to_empty_fields(self):
         candidates = [{"patent_id": "CN118000001A", "app_num": "CN2023XXX",
                        "status": ""}]
         asyncio.run(self._run(candidates, fail=True))
         self.assertEqual(candidates[0]["status"], "")
+        self.assertNotIn("legal_timeline", candidates[0])
+        self.assertNotIn("review_decisions", candidates[0])
 
     def test_skips_candidates_without_app_num(self):
         candidates = [{"patent_id": "CN118000001A", "status": ""}]
-        asyncio.run(self._run(candidates, state={"lawStatus": "X"}))
+        asyncio.run(self._run(
+            candidates, timeline=[{"date": "2024-06-01",
+                                   "lawStatus": "驳回等"}]))
         self.assertEqual(candidates[0]["status"], "")
+
+    def test_digest_rows_carry_compact_law_tail(self):
+        items = [{"patent_id": "CN118000001A", "source": "baiten",
+                  "title": "散热装置", "applicant": "华为",
+                  "pub_date": "2024-01-01", "status": "驳回等",
+                  "legal_timeline": [
+                      {"date": "2024-06-01", "lawStatus": "驳回等"},
+                      {"date": "2024-03-01", "lawStatus": "实质审查的生效"},
+                      {"date": "2023-11-01", "lawStatus": "公开"},
+                  ],
+                  "review_decisions": [
+                      {"declareDate": "2024-08-01", "declareNum": "FS1"},
+                  ]}]
+        digest = _items_digest(items)
+        self.assertIn("状态:驳回等", digest)
+        self.assertIn("3次状态变更", digest)
+        self.assertIn("复审/无效决定1条(最近2024-08-01)", digest)
 
 
 class TestNormalizeUsptoItems(unittest.TestCase):

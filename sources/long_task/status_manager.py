@@ -93,7 +93,12 @@ def load_checkpoint(task_id: str) -> dict | None:
 
 def set_task_completed(task_id: str, report_files: list,
                       patent_ids: list | None = None) -> None:
-    """Mark task as completed with report file metadata and optional patent IDs."""
+    """Mark task as completed with report file metadata and optional patent IDs.
+
+    Completion is always terminal, so the outcome is also written back
+    into the task's conversation (M1: results must be discussable in the
+    next chat turn).  The write-back never raises — it degrades silently.
+    """
     r = _get_redis()
     raw = r.get(_status_key(task_id))
     status = json.loads(raw) if raw else {}
@@ -104,6 +109,45 @@ def set_task_completed(task_id: str, report_files: list,
         status['patent_ids'] = patent_ids
     r.set(_status_key(task_id), json.dumps(status, ensure_ascii=False),
           ex=TASK_STATUS_TTL)
+
+    try:
+        from sources.long_task.task_messages import (
+            append_task_message, build_result_digest,
+        )
+        append_task_message(
+            task_id,
+            event='completed',
+            content=build_result_digest(task_id),
+            patent_ids=patent_ids,
+            report_files=report_files,
+        )
+    except Exception:
+        pass  # conversation write-back must never break task state
+
+
+def notify_terminal_failure(task_id: str, error: str) -> None:
+    """Mark *task_id* failed AND surface the failure in its conversation.
+
+    Only call at TERMINAL failure points (retries exhausted, hard stop,
+    an explicit failed pipeline result) — ``set_task_failed`` alone is
+    also used on retryable attempts and must NOT spam the conversation.
+    The failed message carries the reason (bounded) so the user sees why
+    instead of a silent "task submitted" that never resolves.
+    """
+    set_task_failed(task_id, error)
+    reason = str(error or "")[:500]
+    if not reason:
+        reason = "未知错误"
+    content = (
+        "批量分析任务执行失败。\n\n"
+        f"失败原因：{reason}\n\n"
+        "可在任务面板点击重试，或重新描述需求后再试。"
+    )
+    try:
+        from sources.long_task.task_messages import append_task_message
+        append_task_message(task_id, event='failed', content=content)
+    except Exception:
+        pass  # conversation write-back must never break task state
 
 
 def _lookup_task_user_id(task_id: str) -> str | None:

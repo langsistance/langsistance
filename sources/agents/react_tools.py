@@ -487,6 +487,15 @@ def _items_digest(raw_items, limit: int = SEARCH_DIGEST_LIMIT,
             c.get("applicant") or "?",
             c.get("pub_date") or c.get("apply_date") or "?",
         ]
+        tail_bits = []
+        current_status = str(c.get("status") or "").strip()
+        if current_status:
+            tail_bits.append(f"状态:{current_status}")
+        law_tail = _compact_baiten_law_summary(c)
+        if law_tail:
+            tail_bits.append(law_tail)
+        if tail_bits:
+            parts.append("; ".join(tail_bits))
         lines.append(" | ".join(str(p) for p in parts))
     if lines:
         text = "\n".join(lines)
@@ -569,6 +578,9 @@ def _ranked_digest(candidates, limit: int = SEARCH_DIGEST_LIMIT,
             c.get("filing_date") or "?",
             c.get("status") or "?",
         ]
+        law_tail = _compact_baiten_law_summary(c)
+        if law_tail:
+            parts.append(law_tail)
         lines.append(" | ".join(str(p) for p in parts) + score_txt)
     text = "\n".join(lines)
     if len(candidates) > limit:
@@ -1894,34 +1906,118 @@ async def _uspto_search_by_query(
         return [], f"USPTO failed: {exc}"
 
 
-async def _enrich_baiten_law_status(client, candidates: list, glog) -> None:
-    """Fill Baiten candidate ``status`` from the /openService/law gateway.
+# Legal-status enrichment limits (chat path, 2026-09-03): a single FLZT
+# payload carries both the current status and the event timeline, so the
+# timeline costs no extra request.  FSWX (复审无效) decisions carry full
+# decision text — fetched only for small hit lists (single-number lookups)
+# and truncated so the item payload / SMALL-LIST batch stay bounded.
+LAW_DETAIL_SMALL_LIST = 3       # ≤3 Baiten candidates → also fetch FSWX
+LAW_TIMELINE_MAX_ITEMS = 12     # FLZT events kept per candidate
+LAW_REVIEW_MAX_ITEMS = 3        # FSWX decisions kept per candidate
+LAW_REVIEW_FULLTEXT_CHARS = 800  # decision fullText cap per decision
 
-    One FLZT (法律状态) call per candidate, fired concurrently with a short
-    per-call timeout so a slow gateway never blocks the result list; any
-    failure degrades to the empty status the candidate already carries.
-    Pure enrichment — never raises.
+
+def _compact_baiten_law_summary(c: dict) -> str:
+    """One-line legal-status suffix for a digest row (observation only).
+
+    Rows already carry the current ``status`` column; the suffix adds the
+    timeline depth and the review/decision count so the model can answer
+    "被驳回了吗 / 有没有复审记录" from the digest itself.  The full
+    timeline/decision bodies ride the item payloads, never the digest.
+    """
+    bits: list = []
+    timeline = c.get("legal_timeline") or []
+    if len(timeline) > 1:
+        bits.append(f"{len(timeline)}次状态变更")
+    reviews = c.get("review_decisions") or []
+    if reviews:
+        bit = f"复审/无效决定{len(reviews)}条"
+        first_date = str(reviews[0].get("declareDate")
+                         or reviews[0].get("declare_date") or "")
+        if first_date:
+            bit += f"(最近{first_date})"
+        bits.append(bit)
+    return ("[" + "; ".join(bits) + "]") if bits else ""
+
+
+async def _enrich_baiten_law_status(client, candidates: list, glog) -> None:
+    """Fill Baiten candidates with /openService/law legal data.
+
+    Per candidate (concurrent, 5s cap each so a slow gateway never blocks
+    the result list): one FLZT call yields the current ``status`` (latest
+    event — existing semantics) AND ``legal_timeline`` (capped events).
+    When the candidate list is small enough to be a number lookup rather
+    than a topic sweep (≤ LAW_DETAIL_SMALL_LIST), an FSWX (复审无效) call
+    additionally attaches ``review_decisions`` with truncated fullText.
+
+    Any failure degrades to the fields the candidate already carries —
+    pure enrichment, never raises.
     """
     if not candidates:
         return
+    detail_lookup = len(candidates) <= LAW_DETAIL_SMALL_LIST
+
+    async def _app_num(c: dict) -> str:
+        return str(c.get("app_num") or c.get("application_number")
+                   or "").strip()
 
     async def _one(c: dict) -> None:
-        app_num = str(c.get("app_num") or "").strip()
+        app_num = await _app_num(c)
         if not app_num:
             return
         try:
-            state = await asyncio.wait_for(
-                client.query_law_state(app_num), timeout=5)
+            timeline = await asyncio.wait_for(
+                client.query_legal_state_timeline(app_num), timeout=5)
         except Exception as exc:
             if glog is not None:
                 glog.warning(
                     f"baiten law status failed for {app_num}: {exc}")
             return
-        law = str((state or {}).get("lawStatus") or "").strip()
+        if not timeline:
+            return
+        law = str((timeline[0] or {}).get("lawStatus") or "").strip()
         if law:
             c["status"] = law
+        kept = [
+            {"date": str(e.get("date") or ""),
+             "lawStatus": str(e.get("lawStatus") or "")}
+            for e in timeline[:LAW_TIMELINE_MAX_ITEMS]
+            if isinstance(e, dict) and (e.get("date") or e.get("lawStatus"))
+        ]
+        if kept:
+            c["legal_timeline"] = kept
+
+    async def _reviews(c: dict) -> None:
+        app_num = await _app_num(c)
+        if not app_num:
+            return
+        try:
+            decisions = await asyncio.wait_for(
+                client.query_patent_review(app_num), timeout=5)
+        except Exception as exc:
+            if glog is not None:
+                glog.warning(
+                    f"baiten FSWX review failed for {app_num}: {exc}")
+            return
+        kept = []
+        for d in (decisions or [])[:LAW_REVIEW_MAX_ITEMS]:
+            if not isinstance(d, dict):
+                continue
+            full_text = str(d.get("fullText") or "").strip()
+            kept.append({
+                "declareDate": str(d.get("declareDate")
+                                   or d.get("declare_date") or ""),
+                "declareNum": str(d.get("declareNum")
+                                  or d.get("declare_num") or ""),
+                "lawBase": str(d.get("lawBase") or d.get("law_base") or ""),
+                "fullText": full_text[:LAW_REVIEW_FULLTEXT_CHARS],
+            })
+        if kept:
+            c["review_decisions"] = kept
 
     await asyncio.gather(*[_one(c) for c in candidates])
+    if detail_lookup:
+        await asyncio.gather(*[_reviews(c) for c in candidates])
 
 
 async def _baiten_search_by_query(

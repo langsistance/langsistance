@@ -59,6 +59,17 @@ app.conf.update(
 )
 
 
+def _notify_terminal_failure(task_id, error):
+    """Surface a TERMINAL task failure in its conversation (M1).
+
+    Only call at terminal failure points (retries exhausted, hard stop,
+    an explicit failed pipeline result) — retryable attempts must not
+    spam the conversation with failure messages.
+    """
+    from sources.long_task.status_manager import notify_terminal_failure
+    notify_terminal_failure(task_id, error)
+
+
 @app.task(bind=True, max_retries=3, default_retry_delay=30, time_limit=3600, soft_time_limit=3540)
 def execute_patent_analysis(self, task_id: str, params: dict):
     """Batch patent analysis -- 4-phase serial pipeline with checkpointing."""
@@ -83,6 +94,8 @@ def execute_patent_analysis(self, task_id: str, params: dict):
                 complete_user_task(str(user_id), task_id)
             except Exception:
                 pass
+        _notify_terminal_failure(
+            task_id, f'Max retries ({self.max_retries}) exceeded')
         return {'status': 'failed', 'task_id': task_id,
                 'error': f'Max retries ({self.max_retries}) exceeded'}
     from sources.long_task.status_manager import (
@@ -218,6 +231,10 @@ def execute_patent_analysis(self, task_id: str, params: dict):
             _pipeline_logger.info(
                 f"[task={task_id}] PIPELINE_DONE — status={result.get('status')}"
             )
+            if (isinstance(result, dict)
+                    and result.get('status') == 'failed'):
+                _notify_terminal_failure(
+                    task_id, str(result.get('error') or '任务失败'))
             return result
         finally:
             loop.close()
@@ -257,6 +274,7 @@ def execute_patent_analysis(self, task_id: str, params: dict):
                     _pipeline_logger.warning(
                         f"[task={task_id}] QUEUE_CLEANUP_FAILED — {qe}"
                     )
+            _notify_terminal_failure(task_id, str(e))
             raise
 
 
@@ -1663,6 +1681,8 @@ def execute_family_analysis(self, task_id: str, params: dict):
                 complete_user_task(str(user_id), task_id)
             except Exception:
                 pass
+        _notify_terminal_failure(
+            task_id, f'Max retries ({self.max_retries}) exceeded')
         return {'status': 'failed', 'task_id': task_id,
                 'error': f'Max retries ({self.max_retries}) exceeded'}
 
@@ -2856,7 +2876,13 @@ def execute_family_analysis(self, task_id: str, params: dict):
 
     loop = _asyncio.new_event_loop()
     try:
-        return loop.run_until_complete(_run())
+        _task_result = loop.run_until_complete(_run())
+        if (isinstance(_task_result, dict)
+                and _task_result.get('status') == 'failed'):
+            _notify_terminal_failure(
+                task_id,
+                str(_task_result.get('error') or '任务失败'))
+        return _task_result
     except Exception as e:
         import traceback
         _pipeline_logger.error(
@@ -2869,7 +2895,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
                 complete_user_task(str(user_id), task_id)
             except Exception:
                 pass
-        set_task_failed(task_id, f"{type(e).__name__}: {e}")
+        _notify_terminal_failure(task_id, f"{type(e).__name__}: {e}")
         _update_mysql_progress(task_id, 'failed', 0)
         return {'status': 'failed', 'task_id': task_id,
                 'error': f'{type(e).__name__}: {e}'}
@@ -3104,6 +3130,8 @@ def execute_china_examination_analysis(self, task_id: str, params: dict):
                 complete_user_task(str(user_id), task_id)
             except Exception:
                 pass
+        _notify_terminal_failure(
+            task_id, f'Max retries ({self.max_retries}) exceeded')
         return {'status': 'failed', 'task_id': task_id,
                 'error': f'Max retries ({self.max_retries}) exceeded'}
 
@@ -3643,7 +3671,13 @@ def execute_china_examination_analysis(self, task_id: str, params: dict):
 
     loop = _asyncio.new_event_loop()
     try:
-        return loop.run_until_complete(_run())
+        _task_result = loop.run_until_complete(_run())
+        if (isinstance(_task_result, dict)
+                and _task_result.get('status') == 'failed'):
+            _notify_terminal_failure(
+                task_id,
+                str(_task_result.get('error') or '任务失败'))
+        return _task_result
     except Exception as e:
         import traceback
         _pipeline_logger.error(
@@ -3656,7 +3690,7 @@ def execute_china_examination_analysis(self, task_id: str, params: dict):
                 complete_user_task(str(user_id), task_id)
             except Exception:
                 pass
-        set_task_failed(task_id, f"{type(e).__name__}: {e}")
+        _notify_terminal_failure(task_id, f"{type(e).__name__}: {e}")
         _update_mysql_progress(task_id, 'failed', 0)
         return {'status': 'failed', 'task_id': task_id,
                 'error': f'{type(e).__name__}: {e}'}
@@ -3712,6 +3746,8 @@ def execute_epo_examination_analysis(self, task_id: str, params: dict):
                 complete_user_task(str(user_id), task_id)
             except Exception:
                 pass
+        _notify_terminal_failure(
+            task_id, f'Max retries ({self.max_retries}) exceeded')
         return {'status': 'failed', 'task_id': task_id,
                 'error': f'Max retries ({self.max_retries}) exceeded'}
 
@@ -4024,7 +4060,13 @@ def execute_epo_examination_analysis(self, task_id: str, params: dict):
 
     loop = _asyncio.new_event_loop()
     try:
-        return loop.run_until_complete(_run())
+        _task_result = loop.run_until_complete(_run())
+        if (isinstance(_task_result, dict)
+                and _task_result.get('status') == 'failed'):
+            _notify_terminal_failure(
+                task_id,
+                str(_task_result.get('error') or '任务失败'))
+        return _task_result
     except Exception as e:
         import traceback
         _pipeline_logger.error(
@@ -4037,7 +4079,7 @@ def execute_epo_examination_analysis(self, task_id: str, params: dict):
                 complete_user_task(str(user_id), task_id)
             except Exception:
                 pass
-        set_task_failed(task_id, f"{type(e).__name__}: {e}")
+        _notify_terminal_failure(task_id, f"{type(e).__name__}: {e}")
         _update_mysql_progress(task_id, 'failed', 0)
         return {'status': 'failed', 'task_id': task_id,
                 'error': f'{type(e).__name__}: {e}'}
@@ -4084,6 +4126,8 @@ def execute_japan_examination_analysis(self, task_id: str, params: dict):
                 complete_user_task(str(user_id), task_id)
             except Exception:
                 pass
+        _notify_terminal_failure(
+            task_id, f'Max retries ({self.max_retries}) exceeded')
         return {'status': 'failed', 'task_id': task_id,
                 'error': f'Max retries ({self.max_retries}) exceeded'}
 
@@ -4414,7 +4458,13 @@ def execute_japan_examination_analysis(self, task_id: str, params: dict):
 
     loop = _asyncio.new_event_loop()
     try:
-        return loop.run_until_complete(_run())
+        _task_result = loop.run_until_complete(_run())
+        if (isinstance(_task_result, dict)
+                and _task_result.get('status') == 'failed'):
+            _notify_terminal_failure(
+                task_id,
+                str(_task_result.get('error') or '任务失败'))
+        return _task_result
     except Exception as e:
         import traceback
         _pipeline_logger.error(
@@ -4427,7 +4477,7 @@ def execute_japan_examination_analysis(self, task_id: str, params: dict):
                 complete_user_task(str(user_id), task_id)
             except Exception:
                 pass
-        set_task_failed(task_id, f"{type(e).__name__}: {e}")
+        _notify_terminal_failure(task_id, f"{type(e).__name__}: {e}")
         _update_mysql_progress(task_id, 'failed', 0)
         return {'status': 'failed', 'task_id': task_id,
                 'error': f'{type(e).__name__}: {e}'}
@@ -5146,7 +5196,13 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
 
     loop = asyncio.new_event_loop()
     try:
-        return loop.run_until_complete(_run())
+        _task_result = loop.run_until_complete(_run())
+        if (isinstance(_task_result, dict)
+                and _task_result.get('status') == 'failed'):
+            _notify_terminal_failure(
+                task_id,
+                str(_task_result.get('error') or '任务失败'))
+        return _task_result
     except Exception as e:
         import traceback
         _pipeline_logger.error(
@@ -5160,7 +5216,7 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
                 complete_user_task(str(user_id), task_id)
             except Exception:
                 pass
-        set_task_failed(task_id, f"{type(e).__name__}: {e}")
+        _notify_terminal_failure(task_id, f"{type(e).__name__}: {e}")
         _update_mysql_progress(task_id, 'failed', 0)
         return {'status': 'failed', 'task_id': task_id,
                 'error': f'{type(e).__name__}: {e}'}

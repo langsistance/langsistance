@@ -176,11 +176,21 @@ class Provider:
         # disable thinking for flash-variant deepseek models unless
         # DEEPSEEK_THINKING=enabled opts back in.  Non-flash deepseek models
         # are never touched.
+        #
+        # The disable must go through ``extra_body``, NOT ``model_kwargs``:
+        # langchain-openai merges model_kwargs into the top-level kwargs of
+        # AsyncCompletions.create() (chat_models/base.py:1305), so a custom
+        # body param like ``thinking`` raises
+        #   TypeError: AsyncCompletions.create() got an unexpected keyword
+        #   argument 'thinking'
+        # and kills every long-task/scoring LLM call on deepseek-flash
+        # (production incident 2026-09-03).  extra_body is sent nested in the
+        # request body, which is where non-OpenAI params belong.
         if (self.provider_name == "deepseek"
                 and "flash" in (self.model or "").lower()
                 and os.getenv("DEEPSEEK_THINKING", "disabled").lower()
                 != "enabled"):
-            kwargs["model_kwargs"] = {"thinking": {"type": "disabled"}}
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
 
         return ChatOpenAI(**kwargs)
 

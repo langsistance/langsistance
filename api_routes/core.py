@@ -359,6 +359,59 @@ async def _classify_long_task_async(
     }
 
 
+# ── Patent-id token scan for the no-LLM fallback ──────────────────────────
+# The LLM scenario classifier knows every id shape and jurisdiction; the
+# regex fallback must not.  These scanners recognise the shapes users
+# actually paste or quote, so the low-confidence guard (chat_fallback) can
+# tell "the query itself names a few US ids" (direct_ids) from "references
+# earlier results / names a CN document / names nothing" (refuse the long
+# task).  CN publication numbers (CN114948588A) were previously invisible
+# to the 20xx-only rule — a CN-family question then fell through to a
+# 140-id conversation sweep routed to the USPTO pipeline (incident
+# 2026-09-03).
+
+def _extract_patent_id_tokens(text: str) -> list:
+    """Return canonical patent-id tokens found in *text* (US first, then CN).
+
+    US: bare 8-digit application/grant numbers plus 2/6 series/serial
+    pairs (17/027,484 → 17027484).  CN: 20xx application numbers with an
+    optional CN prefix (CN202210498116.7) and CN publication numbers with
+    a kind code (CN114948588A).  De-duplicated, first-occurrence order,
+    never raises.
+    """
+    import re as _re
+    if not text:
+        return []
+    # Users paste separators inside numbers (17/027,484, CN 1149 48588 A) —
+    # drop spacing/commas between digits once so every shape below matches
+    # compact runs ("CN202210498116.7"-style).  Queries and history are
+    # short, so a global digit-run normalization is safe here.
+    text = _re.sub(r"(?<=\d)[ ,](?=\d)", "", text)
+    us_eight = _re.findall(r"(?<![\w.])(\d{8})(?![\w.])", text)
+    us_slash = [
+        a + b for a, b in _re.findall(
+            r"(?<![\w.])(\d{2})/(\d{6})(?![\w])", text)
+    ]
+    cn_app = []
+    for m in _re.finditer(
+            r"(?<![\w.])(?:CN\s*)?(20[12]\d{8,9}(?:\.\d)?)(?![\w.])",
+            text):
+        prefixed = m.group(0)[:2].upper() == "CN"
+        cn_app.append("CN" + m.group(1) if prefixed else m.group(1))
+    cn_pub = [
+        _re.sub(r"\s+", "", t) for t in _re.findall(
+            r"(?<![\w.])(CN\s*\d{7,12}\s*[A-Za-z]{1,2})(?![\w])", text)
+    ]
+    return list(dict.fromkeys(us_eight + us_slash + cn_app + cn_pub))
+
+
+def _is_us_patent_token(token: str) -> bool:
+    """True for a canonical US token (bare 8 digits — slash pairs collapse
+    to 8 digits upstream; CN tokens carry a prefix or 11+ digits)."""
+    import re as _re
+    return bool(_re.fullmatch(r"\d{8}", token or ""))
+
+
 def _prepare_long_task_inputs(
     query: str,
     conv_history: list,
@@ -370,22 +423,26 @@ def _prepare_long_task_inputs(
 ) -> dict:
     """Prepare patent analysis inputs, optionally enriched by LLM classification.
 
-    Three scenarios:
+    Scenarios:
       1. "conversation_refs" — query is a FOLLOW-UP about previous results.
          IDs come from conversation history (LLM extracts them).
       2. "direct_ids" — query ITSELF contains patent application IDs.
          Self-contained question. IDs come from query.
       3. "file_upload" — user uploaded patent specification files.
+      4. "chat_fallback" — no LLM result and the regex fallback cannot
+         route confidently (see the else branch below): the caller must
+         NOT start a long task and answers through the normal chat path.
 
-    When ``llm_result`` is provided (from ``_classify_long_task_async``),
-    scenario and patent_source from the LLM are used directly.
-    Otherwise falls back to regex extraction + keyword detection.
+    When ``llm_result`` is provided (from ``_classify_long_task_async``)
+    with a scenario other than "unknown", scenario and patent_source from
+    the LLM are used directly.  Otherwise (LLM failed or returned
+    unknown) a conservative regex fallback runs: only query-local,
+    exclusively-US, ≤3 ids yield "direct_ids"; everything else yields
+    "chat_fallback".
 
     Returns dict with keys:
       scenario, patent_ids, patent_source, patent_texts
     """
-    import re as _patent_id_re
-
     conv_history = conv_history or []
     patent_file_refs = patent_file_refs or []
 
@@ -420,11 +477,7 @@ def _prepare_long_task_inputs(
         if isinstance(msg, dict):
             text_sources.append(msg.get("content", ""))
     combined_text = "\n".join(text_sources)
-    uspto_matches = _patent_id_re.findall(r'\b(\d{8})\b', combined_text)
-    slash_matches = _patent_id_re.findall(r'\b(\d{2})/(\d{6})\b', combined_text)
-    uspto_matches += [a + b for a, b in slash_matches]
-    cnipa_matches = _patent_id_re.findall(r'\b(20[12]\d{8,9}(?:\.\d)?)\b', combined_text)
-    regex_ids = list(dict.fromkeys(uspto_matches + cnipa_matches))
+    regex_ids = _extract_patent_id_tokens(combined_text)
 
     # ── Use LLM result if available ──
     if llm_result and llm_result.get("scenario") != "unknown":
@@ -488,49 +541,28 @@ def _prepare_long_task_inputs(
                 f"conv_history_msgs={len(conv_history)}"
             )
     else:
-        # ── Fallback: regex + keyword detection (no LLM available) ──
-        patent_ids = list(dict.fromkeys(regex_ids))
-
-        query_uspto = _patent_id_re.findall(r'\b(\d{8})\b', query or "")
-        query_slash = _patent_id_re.findall(r'\b(\d{2})/(\d{6})\b', query or "")
-        query_uspto += [a + b for a, b in query_slash]
-        query_cnipa = _patent_id_re.findall(r'\b(20[12]\d{8,9}(?:\.\d)?)\b', query or "")
-        query_has_ids = bool(query_uspto or query_cnipa)
-
-        followup_keywords = ["这", "上述", "前面", "以上", "从中", "其中", "筛选", "过滤",
-                            "挑出", "选出", "哪些", "哪个", "这几个", "那几个"]
-        query_is_followup = any(kw in (query or "") for kw in followup_keywords)
-
-        scenario = "direct_ids" if (query_has_ids and not query_is_followup) else "conversation_refs"
-
-        # ── Read hidden patent_ids from assistant messages ──
-        # Only when this is a followup query (conversation_refs scenario).
-        # When query has no IDs and is not a followup, it's a new topic
-        # that should trigger search mode — do NOT pull stale IDs from history.
-        patent_texts = {}
-        _msg_patent_ids_found = 0
-        if scenario == "conversation_refs":
-            for msg in conv_history:
-                if msg.get('role') == 'assistant':
-                    # Read hidden patent_ids array emitted by general_agent / long task
-                    hidden_ids = msg.get('patent_ids')
-                    if isinstance(hidden_ids, list) and hidden_ids:
-                        _msg_patent_ids_found += len(hidden_ids)
-                        for pid in hidden_ids:
-                            pid = str(pid).strip()
-                            if pid and pid not in patent_ids:
-                                patent_ids.append(pid)
-                    # Read patent_data (richer format with spec_text)
-                    if msg.get('patent_data'):
-                        for p in msg['patent_data']:
-                            if isinstance(p, dict) and 'patent_id' in p:
-                                pid = p['patent_id']
-                                if pid not in patent_ids:
-                                    patent_ids.append(pid)
-                                st = p.get('spec_text', '')
-                                if st and len(st) > 100:
-                                    patent_texts[pid] = st
-        patent_texts = patent_texts if patent_texts else None
+        # ── Fallback: regex only (no LLM available) ──
+        # Low-confidence guard (incident 2026-09-03): without the LLM we
+        # must not guess.  A CN-family question ("分析 CN114948588A 及其
+        # 全球同族申请的审查差异") was once guessed conversation_refs and
+        # swept 140 mixed history ids into the USPTO pipeline.  Here we
+        # trust ONLY ids the query itself carries, exclusively US-shaped
+        # (CN analysis needs the china_prosecution / families scenarios,
+        # which only the LLM can route), and at most three.  Anything
+        # else — CN ids, no ids, mixed ids, history-only references —
+        # refuses the long task with scenario "chat_fallback" so the
+        # caller answers through the normal chat/search path instead of
+        # launching a doomed pipeline.
+        query_tokens = _extract_patent_id_tokens(query or "")
+        us_tokens = [t for t in query_tokens if _is_us_patent_token(t)]
+        if (us_tokens and len(us_tokens) == len(query_tokens)
+                and len(us_tokens) <= 3):
+            scenario = "direct_ids"
+            patent_ids = us_tokens
+        else:
+            scenario = "chat_fallback"
+            patent_ids = []
+        patent_texts = None
 
         patent_source = _detect_patent_source(
             scene_id=scene_id, conv_history=conv_history, query=query, app_logger=app_logger,
@@ -992,6 +1024,26 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                 local_user_id, query_id, task_id, session_id, event_status,
             )
 
+            # M1: persist a "task created" message in the conversation so the
+            # upload task is visible in chat history and its outcome (digest /
+            # failure) becomes discussable on later turns.
+            try:
+                from sources.long_task.task_messages import append_task_message
+                created_content = (
+                    f"已提交批量分析任务（{len(patent_ids)} 个文件），"
+                    "正在后台分析。\n\n"
+                    "任务完成后将在此展示结果摘要，可直接追问细节"
+                    "（如“哪些被驳回”“第 3 件与某专利是否同族”）。"
+                    if event_status == "running" else
+                    "批量分析任务已排队，将在当前任务完成后自动开始。"
+                )
+                append_task_message(
+                    task_id, event="created",
+                    content=created_content, patent_ids=patent_ids)
+            except Exception as e:
+                app_logger.warning(
+                    f"[user={user_id}] File upload created message failed: {e}")
+
             # Return SSE with long_task_created
             async def generate_sse():
                 event_data = json.dumps({
@@ -1072,6 +1124,21 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
             queue = asyncio.Queue()
             handler = SSECallbackHandler(queue)
 
+            # M1: inject task lifecycle messages (created/completed/failed)
+            # that the frontend has not seen yet (no page reload needed for
+            # a just-finished analysis to be discussable).  The agent then
+            # carries the task digest in its conversation context.
+            agent_history = request.conversation_history or []
+            if request.session_id:
+                try:
+                    from sources.long_task.task_messages import (
+                        hydrate_session_task_messages)
+                    agent_history = hydrate_session_task_messages(
+                        request.session_id.strip(), user_id, agent_history)
+                except Exception as e:
+                    app_logger.warning(
+                        f"Session task hydrate failed: {e}")
+
             # Run the entire agent pipeline (create + invoke) in a background
             # task so the queue reading loop can yield status events to the
             # client as soon as they arrive, rather than buffering them until
@@ -1083,7 +1150,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         user_id, request.query, request.query_id,
                         request.tool_data, handler,
                         push_filter=request.push_filter,
-                        conversation_history=request.conversation_history or []
+                        conversation_history=agent_history
                     )
                 except Exception as e:
                     app_logger.error(f"Failed to create agent: {str(e)}")
@@ -1136,6 +1203,51 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                             f"Long task: session_id from request="
                             f"'{request.session_id}', resolved='{session_id}'"
                         )
+
+                        # ── Low-confidence refusal (chat_fallback) ──
+                        # Scenario classification failed AND the regex
+                        # fallback cannot route confidently (incident
+                        # 2026-09-03: a CN-family question was guessed
+                        # conversation_refs and swept 140 history ids into
+                        # the USPTO pipeline).  Do NOT insert DB rows or
+                        # start Celery: rerun the query through the normal
+                        # chat/search path with long-task tools stripped.
+                        if scenario == "chat_fallback":
+                            app_logger.warning(
+                                "Long task refused (low confidence) — "
+                                "rerunning chat path. reasoning="
+                                f"{(llm_result or {}).get('reasoning', '')[:200]}"
+                            )
+                            track_event("long_task:refused",
+                                        user_id=str(local_user_id),
+                                        task_id=task_id,
+                                        session_id=session_id or None,
+                                        query_text=request.query)
+                            try:
+                                rerun = await general_agent.create_agent(
+                                    user_id, request.query, request.query_id,
+                                    request.tool_data, handler,
+                                    push_filter=request.push_filter,
+                                    conversation_history=agent_history,
+                                    allow_long_task=False,
+                                )
+                                if (isinstance(rerun, dict)
+                                        and rerun.get('intent') == 'long_task'):
+                                    await queue.put({'type': 'error', 'message':
+                                                     '该分析当前不可用，请换个问法重试'})
+                                    await queue.put({'type': 'end'})
+                                else:
+                                    await general_agent.invoke_agent(rerun, handler)
+                                    await queue.put({'type': 'end', 'content': '[DONE]'})
+                            except Exception as e:
+                                app_logger.error(
+                                    f"Chat fallback rerun failed: {str(e)}")
+                                await queue.put({'type': 'error', 'message': str(e)})
+                                await queue.put({'type': 'end'})
+                            finally:
+                                handler.queue.put_nowait({'type': 'done'})
+                            return
+
                         conn = get_db_connection()
                         app_logger.info(f"Long task: DB connected, inserting records...")
                         try:
@@ -1277,6 +1389,31 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         _register_long_task_for_recovery(
                             local_user_id, request.query_id, task_id, session_id, queue_result,
                         )
+
+                        # M1: persist a "task created" message in the
+                        # conversation (visible in chat history; outcome
+                        # digest/failure will follow on completion).
+                        try:
+                            from sources.long_task.task_messages import (
+                                append_task_message)
+                            if queue_result == "running":
+                                created_content = (
+                                    f"批量分析任务已提交（{len(patent_ids)} 项），"
+                                    "正在后台分析。\n\n"
+                                    "任务完成后将在此展示结果摘要，可直接追问细节。"
+                                )
+                            else:
+                                created_content = (
+                                    "批量分析任务已排队，"
+                                    "将在当前任务完成后自动开始。"
+                                )
+                            append_task_message(
+                                task_id, event="created",
+                                content=created_content,
+                                patent_ids=patent_ids)
+                        except Exception as e:
+                            app_logger.warning(
+                                f"Long task created message failed: {e}")
 
                         if is_families:
                             status_msg = (
