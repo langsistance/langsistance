@@ -24,6 +24,31 @@ from sources.logger import Logger
 
 load_dotenv()
 
+
+def _build_main_provider(config):
+    """Provider for the main chat agent (model-override layer, 2026-09).
+
+    [MAIN] provider_name/provider_model win unless the [MODEL] chat_*
+    pair is configured (both set) — then it overrides them.  Any failure
+    reading the override falls back to [MAIN] untouched.
+    """
+    provider_name = config["MAIN"]["provider_name"]
+    provider_model = config["MAIN"]["provider_model"]
+    try:
+        from sources.long_task.config import get_model_overrides, _override_pair
+        override_provider, override_model = _override_pair(
+            get_model_overrides(), 'chat')
+        if override_provider and override_model:
+            provider_name, provider_model = override_provider, override_model
+    except Exception:
+        pass  # override layer is optional — never break startup
+    return Provider(
+        provider_name=provider_name,
+        model=provider_model,
+        server_address=config["MAIN"]["provider_server_address"],
+        is_local=config.getboolean('MAIN', 'is_local')
+    )
+
 def is_running_in_docker():
     """Detect if code is running inside a Docker container."""
     # Method 1: Check for .dockerenv file
@@ -65,12 +90,7 @@ def initialize_system():
         
         headless = True
     
-    provider = Provider(
-        provider_name=config["MAIN"]["provider_name"],
-        model=config["MAIN"]["provider_model"],
-        server_address=config["MAIN"]["provider_server_address"],
-        is_local=config.getboolean('MAIN', 'is_local')
-    )
+    provider = _build_main_provider(config)
     logger.info(f"Provider initialized: {provider.provider_name} ({provider.model})")
 
     browser = Browser(
@@ -152,12 +172,7 @@ async def think_wrapper(user_id, interaction, query, query_id):
         raise e
 
 async def create_agent():
-    provider = Provider(
-        provider_name=config["MAIN"]["provider_name"],
-        model=config["MAIN"]["provider_model"],
-        server_address=config["MAIN"]["provider_server_address"],
-        is_local=config.getboolean('MAIN', 'is_local')
-    )
+    provider = _build_main_provider(config)
     return GeneralAgent(
         name="General",
         prompt_path=f"prompts/jarvis/general_agent.txt",

@@ -34,6 +34,7 @@ from sources.long_task.search_query_builder import (
     _CJK_RE, sanitize_uspto_query)
 
 INTERPRET_ENABLED = os.getenv("REACT_INTERPRET_ENABLED", "1") == "1"
+INTERPRET_PROVIDER = os.getenv("REACT_INTERPRET_PROVIDER", "openrouter")
 INTERPRET_MODEL = os.getenv("REACT_INTERPRET_MODEL", "openai/gpt-5.6-terra")
 
 
@@ -106,17 +107,37 @@ INTERPRET_SYSTEM_PROMPT = (
 )
 
 # Provider construction is expensive and must stay lazy (llm_provider
-# imports optional backends); cache one provider per model name.
+# imports optional backends); cache one provider per (provider, model) pair.
 _PROVIDER_CACHE: dict = {}
 
 
-def _interpret_provider(model: str):
-    if model not in _PROVIDER_CACHE:
+def _resolve_interpret_provider_model() -> tuple:
+    """Resolve the interpretation (provider, model) pair.
+
+    Priority (model-override layer, 2026-09): [MODEL] interpret_* pair >
+    env REACT_INTERPRET_PROVIDER / REACT_INTERPRET_MODEL > the original
+    hardcoded openrouter + gpt-5.6-terra defaults.  The provider previously
+    had NO override point at all — setting only REACT_INTERPRET_MODEL sent
+    the model to openrouter regardless.
+    """
+    try:
+        from sources.long_task.config import get_model_overrides, _override_pair
+        provider, model = _override_pair(get_model_overrides(), 'interpret')
+        if provider and model:
+            return provider, model
+    except Exception:
+        pass  # override layer is optional
+    return INTERPRET_PROVIDER, INTERPRET_MODEL
+
+
+def _interpret_provider(provider_name: str, model: str):
+    key = (provider_name, model)
+    if key not in _PROVIDER_CACHE:
         from sources.llm_provider import Provider
-        _PROVIDER_CACHE[model] = Provider(
-            provider_name="openrouter", model=model,
+        _PROVIDER_CACHE[key] = Provider(
+            provider_name=provider_name, model=model,
             server_address="", is_local=False)
-    return _PROVIDER_CACHE[model]
+    return _PROVIDER_CACHE[key]
 
 
 def _clean_str_list(raw: dict, key: str) -> list:
@@ -458,7 +479,9 @@ async def interpret_query(query: str, cpc_hints: Optional[list] = None,
         ]
     user_content = json.dumps(payload, ensure_ascii=False)
     try:
-        provider = _interpret_provider(model or INTERPRET_MODEL)
+        resolved_provider, resolved_model = _resolve_interpret_provider_model()
+        provider = _interpret_provider(
+            resolved_provider, model or resolved_model)
         result = await asyncio.wait_for(
             provider.complete_json(INTERPRET_SYSTEM_PROMPT, user_content,
                                    max_retries=1),

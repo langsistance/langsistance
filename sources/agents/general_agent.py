@@ -1760,6 +1760,9 @@ Begin your response now:
         self._search_rewrite = None   # deterministic q rewrite cache, per request
         self._search_rewrite_cn = None  # Baiten CN rewrite, per request
         self._patent_tool_source = "auto"  # uspto/cn/dual — built-in search tool
+        self._number_candidates = []  # parsed patent identifiers, per request
+        self._number_cross_done = False  # cross-source zero-hit check fired
+        self._number_cross_used = 0  # number-resolution gateway-call budget
         self._search_interpretation = None  # architecture-level interpretation, per request
         self._request_started = time.monotonic()  # whole-request timer (agent_elapsed origin)
         self._grounded_done = False  # post-retrieval grounded synthesis, once per request
@@ -1810,6 +1813,35 @@ Begin your response now:
             ])
         )
         _need_cn = self._patent_tool_source in ("dual", "cn")
+
+        # ── 号码解析与硬信号国别路由 (样本16 裸号, 2026-09-03) ──
+        # 纯数字/带前缀标识符 → 确定性候选; 仅高置信国别(CN/US 显式前缀或
+        # 校验位通过的 CN 申请号)强制单源 — 歧义裸号保留 dual/auto, 由
+        # 0 命中跨源复核层按两个数据源兜底。解析为空 → 原路径零改动。
+        try:
+            from sources.patent_number_parser import (
+                NUMBER_PARSE_ENABLED,
+                decide_number_source, parse_patent_identifiers)
+            if NUMBER_PARSE_ENABLED:
+                self._number_candidates = parse_patent_identifiers(prompt)
+                number_source = decide_number_source(self._number_candidates)
+                if number_source:
+                    self.logger.info(
+                        "number_source route — "
+                        f"source={number_source} "
+                        f"via {[c.get('display') for c in self._number_candidates]}")
+                    self._patent_tool_source = number_source
+        except Exception:
+            self._number_candidates = []
+        if self._number_candidates:
+            self.logger.info(
+                "number_parse — "
+                + json.dumps(
+                    [{k: c.get(k)
+                      for k in ("display", "country", "id_type",
+                                "confidence")}
+                     for c in self._number_candidates],
+                    ensure_ascii=False))
 
         if callback_handler:
             await _emit_status(callback_handler,
@@ -1954,6 +1986,13 @@ Begin your response now:
                     + ", ".join(_recent_ids[:20]))
 
         from sources.long_task.search_query_builder import format_ladder_guidance
+        number_guidance = ""
+        try:
+            from sources.patent_number_parser import format_number_guidance
+            number_guidance = format_number_guidance(
+                getattr(self, "_number_candidates", []), lang)
+        except Exception:
+            number_guidance = ""
         system_prompt = (
             self._get_fixed_system_prefix()
             + conversation_block
@@ -1961,6 +2000,7 @@ Begin your response now:
             + format_ladder_guidance(
                 self._search_rewrite, lang,
                 cn_rewrite=self._search_rewrite_cn)
+            + number_guidance
         )
         self.memory.reset([
             {'role': 'user', 'content': user_prompt},

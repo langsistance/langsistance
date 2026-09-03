@@ -57,6 +57,13 @@ def get_long_task_config(config_path: str = 'config.ini') -> dict:
     vision_enabled = cfg.getboolean('LONG_TASK', 'vision_enabled',
                                      fallback=True)
 
+    # [MODEL] vision_* pair overrides [LONG_TASK] vision_provider/model when
+    # BOTH are configured (model-override layer, 2026-09).
+    _ov_vision_provider, _ov_vision_model = _override_pair(
+        get_model_overrides(config_path), 'vision')
+    if _ov_vision_provider and _ov_vision_model:
+        vision_provider, vision_model = _ov_vision_provider, _ov_vision_model
+
     return {
         'provider_family': provider_family,
         'max_patents': max_patents,
@@ -66,6 +73,69 @@ def get_long_task_config(config_path: str = 'config.ini') -> dict:
         'vision_provider': vision_provider,
         'vision_model': vision_model,
     }
+
+
+# ── Model-role override layer ([MODEL] section) ──────────────────────────────
+# A single config section lets every expensive/visible model role be switched
+# to another provider+model pair (e.g. openai/gpt-5.6-terra → deepseek/
+# deepseek-v4-flash; vision → deepseek/deepseek-v4-flash-vision-exp) without
+# touching each role's original config location.  Provider+model must be set
+# TOGETHER — a lone model would be sent to the wrong upstream.  Priority:
+#   [MODEL] pair > original config (env or original ini section) > default.
+
+_MODEL_ROLE_KEYS = {
+    'chat': ('chat_provider', 'chat_model'),
+    'interpret': ('interpret_provider', 'interpret_model'),
+    'stream': ('stream_provider', 'stream_model'),
+    'vision': ('vision_provider', 'vision_model'),
+}
+
+
+def get_model_overrides(config_path: str = 'config.ini') -> dict:
+    """Read the [MODEL] override section.
+
+    Returns a dict with keys ``<role>_provider`` / ``<role>_model`` for the
+    four roles (chat/interpret/stream/vision); values are stripped strings,
+    ``''`` = not configured.
+    """
+    cfg = _read_config(config_path)
+    out: dict = {}
+    for _role, (pkey, mkey) in _MODEL_ROLE_KEYS.items():
+        out[pkey] = ''
+        out[mkey] = ''
+    if cfg.has_section('MODEL'):
+        for _role, (pkey, mkey) in _MODEL_ROLE_KEYS.items():
+            out[pkey] = cfg.get('MODEL', pkey, fallback='').strip()
+            out[mkey] = cfg.get('MODEL', mkey, fallback='').strip()
+    return out
+
+
+def _override_pair(overrides: dict, role: str,
+                   fallback_provider: str = '',
+                   fallback_model: str = '') -> tuple:
+    """Return the (provider, model) for *role* when the override pair is
+    complete; otherwise the fallback.  Never returns a half-pair."""
+    provider = (overrides.get(f'{role}_provider') or '').strip()
+    model = (overrides.get(f'{role}_model') or '').strip()
+    if provider and model:
+        return provider, model
+    return fallback_provider, fallback_model
+
+
+def get_streaming_provider_model(config_path: str = 'config.ini') -> tuple:
+    """Resolve the report streaming (visible text) provider+model pair.
+
+    Priority: [MODEL] stream_* > [PROSECUTION] streaming_* > ('', '') —
+    the streaming role is shared by the batch report (Phase 3) and the
+    prosecution report; [PROSECUTION] stays the legacy location.
+    """
+    provider, model = _override_pair(get_model_overrides(config_path),
+                                     'stream')
+    if provider and model:
+        return provider, model
+    ptc = get_prosecution_config(config_path)
+    return ((ptc.get('streaming_provider') or '').strip(),
+            (ptc.get('streaming_model') or '').strip())
 
 
 # ── Prosecution analysis config ───────────────────────────────────────────────

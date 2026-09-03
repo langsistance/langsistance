@@ -111,6 +111,13 @@ LADDER_MAX_HITS = int(os.getenv("REACT_LADDER_MAX_HITS")
 # converging.  At the cap the tool returns a stop-nudge instead of fetching
 # yet another application.
 VERIFY_CALL_MAX = int(os.getenv("REACT_VERIFY_CALL_MAX", "8"))
+# Built-in number resolution (2026-09-03, sample #16): a bare-number
+# question was closed after a single USPTO 404 — no CN cross-check, no
+# format guidance.  The deterministic resolve tool + zero-hit cross
+# round share one per-request gateway-call budget so a multi-candidate
+# parse can never fan out without bound.
+NUMBER_CROSS_MAX_QUERIES = int(os.getenv(
+    "REACT_NUMBER_CROSS_MAX_QUERIES", "4"))
 
 
 async def _agent_status(agent, message: str) -> None:
@@ -180,6 +187,28 @@ class _PatentIdArgs(BaseModel):
 
 
 async def _fetch_patent_spec_stub(patent_id: str) -> str:
+    raise NotImplementedError("executed via dispatch, not directly")
+
+
+# ── Built-in number resolution (USPTO + Baiten CN) ───────────────────────────
+# Registered on every request in build_tool_set; executed via
+# make_action_executor (kind="patent_number").  Deterministic: the tool
+# function parses the number itself and runs the sources — no LLM query
+# construction, so a bare or malformed number can never send a keyword
+# ladder down the wrong pipe.
+
+PATENT_NUMBER_RESOLVE_TOOL_NAME = "patent_number_resolve"
+
+
+class _NumberResolveArgs(BaseModel):
+    number: str = Field(
+        description=("专利号/公开号/申请号原文，无需格式化或补国别前缀"
+                     "（如 117941643、CN117941643A、US9019058B2）；"
+                     "系统会解析格式并自动做中美双库核验"),
+    )
+
+
+async def _patent_number_stub(number: str) -> str:
     raise NotImplementedError("executed via dispatch, not directly")
 
 
@@ -448,6 +477,25 @@ async def build_tool_set(
     )
     add(ToolEntry(name=FETCH_PATENT_SPEC_TOOL_NAME, kind="patent_spec",
                   knowledge=None, tool_info=None, tool=spec_tool))
+
+    # Built-in exact-number lookup — always registered: identifiers can
+    # arrive in any country mode, and the deterministic resolve must not
+    # depend on the LLM picking the right pushed KB tool (sample #16).
+    number_tool = StructuredTool.from_function(
+        func=_patent_number_stub,
+        name=PATENT_NUMBER_RESOLVE_TOOL_NAME,
+        description=(
+            "Look up a patent by its exact number (application / "
+            "publication / grant / design number, US or CN). Use this "
+            "when the user gives a number or patent identifier instead "
+            "of a technical description. Runs a deterministic parse and "
+            "checks BOTH the USPTO and Baiten CN sources, attaching "
+            "bibliographic data and legal status when found."
+        ),
+        args_schema=_NumberResolveArgs,
+    )
+    add(ToolEntry(name=PATENT_NUMBER_RESOLVE_TOOL_NAME, kind="patent_number",
+                  knowledge=None, tool_info=None, tool=number_tool))
 
     search_tool = StructuredTool.from_function(
         func=_search_knowledge_stub,
@@ -2603,6 +2651,205 @@ async def _run_patent_spec(agent, args, lang: str) -> dict:
     return {"kind": "observation", "text": truncated_fallback(text)}
 
 
+# ── Deterministic number resolution (USPTO + Baiten CN) ──────────────────────
+# Sample #16 (2026-09-03): a bare-number question was closed after ONE
+# USPTO 404 — no country disambiguation, no CN cross-check, no guidance.
+# The functions below run the parse → primary-source → cross-source
+# verification sequence system-side.  The shared per-request budget
+# (agent._number_cross_used) bounds gateway calls whether the LLM invoked
+# the built-in tool or a KB number tool 404'd and the cross hook fired.
+
+async def _uspto_search_by_number(numbers: list) -> tuple[list, str]:
+    """USPTO records for identifier numbers via the recall transport.
+
+    applications/search's quoted free-text query matches the number in
+    any bibliographic field (applicationNumberText / patentNumber), so a
+    single call covers the grant-vs-application ambiguity of a bare digit
+    string without guessing field syntax.
+    """
+    numbers = [str(n).strip() for n in (numbers or []) if str(n).strip()]
+    if not numbers:
+        return [], "USPTO: empty number list"
+    try:
+        from sources.long_task.recall_sources import fetch_by_numbers
+        raw = await asyncio.to_thread(fetch_by_numbers, numbers)
+        return _normalize_uspto_items(raw), f"USPTO {len(raw)} hits"
+    except Exception as exc:
+        return [], f"USPTO failed: {exc}"
+
+
+async def _lookup_number_candidates(
+    agent, candidates: list,
+) -> tuple[list, list]:
+    """Resolve parsed identifiers against their sources.
+
+    Per candidate: its country's source runs first (CN → Baiten, US →
+    USPTO); when that source returns nothing, the OTHER source is tried
+    with the raw digits — the sample-#16 outcome (single-source 404
+    closes the case) is structurally impossible here.  Leg results are
+    collected into *notes* so the observation can state exactly what was
+    checked.  Shared per-request gateway budget.  Never raises.
+    """
+    _glog = getattr(agent, "logger", None)
+    used = int(getattr(agent, "_number_cross_used", 0) or 0)
+    merged: list = []
+    notes: list = []
+    us_tried: set = set()
+
+    async def _baiten_leg(lookups: list) -> None:
+        nonlocal used
+        for q in lookups[:2]:
+            if used >= NUMBER_CROSS_MAX_QUERIES:
+                break
+            used += 1
+            try:
+                items, note = await _baiten_search_by_query(
+                    q, page=1, page_size=10, agent=agent)
+            except Exception as exc:
+                items, note = [], f"Baiten failed: {exc}"
+            notes.append(f"Baiten(q={q[:40]!r}) — {note}")
+            if items:
+                merged.extend(items)
+                return
+
+    async def _uspto_leg(lookups: list) -> None:
+        nonlocal used
+        nums = []
+        for lookup in lookups:
+            digits = re.sub(r"\D", "", str(lookup or ""))
+            if digits and digits not in us_tried:
+                us_tried.add(digits)
+                nums.append(digits)
+        if not nums or used >= NUMBER_CROSS_MAX_QUERIES:
+            return
+        used += 1
+        items, note = await _uspto_search_by_number(nums)
+        notes.append(f"USPTO(nums={','.join(nums[:2])}) — {note}")
+        if items:
+            merged.extend(items)
+
+    for c in (candidates or [])[:3]:
+        country = str(c.get("country") or "")
+        lookups = [l for l in (c.get("lookups") or []) if l]
+        if not lookups:
+            continue
+        primary = "cn" if country == "CN" else "us"
+        for source in (primary, "us" if primary == "cn" else "cn"):
+            before = len(merged)
+            if source == "cn":
+                await _baiten_leg(lookups)
+            else:
+                await _uspto_leg(lookups)
+            if len(merged) > before:
+                break  # 主源已命中 — 无需再打对侧
+    agent._number_cross_used = used
+    return merged, notes
+
+
+def _pool_candidates_for_items(items: list) -> list:
+    """Map mixed USPTO/Baiten display items into pool candidate shape."""
+    out = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("source") == "baiten":
+            out.append(_cn_item_to_pool_candidate(item))
+        else:
+            out.extend(build_candidates([item]))
+    return out
+
+
+async def _run_patent_number_resolve(agent, args, lang: str) -> dict:
+    """kind='patent_number' executor — deterministic dual-source lookup."""
+    number_arg = str((args or {}).get("number") or "").strip()
+    source_text = number_arg or (getattr(agent, "_last_user_prompt", "") or "")
+    candidates: list = []
+    try:
+        from sources.patent_number_parser import (
+            NUMBER_PARSE_ENABLED, parse_patent_identifiers)
+        if NUMBER_PARSE_ENABLED:
+            candidates = parse_patent_identifiers(source_text)
+    except Exception:
+        candidates = []
+    if not candidates:
+        candidates = getattr(agent, "_number_candidates", None) or []
+    if not candidates:
+        return {"kind": "observation", "text": (
+            "Error: no recognizable patent number in the input — ask for "
+            "the full number (CN/US prefix optional) or rephrase as a "
+            "keyword search." if lang == "en"
+            else "未能识别出专利号格式——请提供完整号码（可含 CN/US 前缀），"
+                 "或用关键词描述技术内容进行检索。")}
+
+    # 工具内已完成双源核验 —— 零命中钩子不得再重复执行。
+    agent._number_cross_done = True
+    merged, notes = await _lookup_number_candidates(agent, candidates)
+    _glog = getattr(agent, "logger", None)
+    if _glog is not None:
+        _glog.info(
+            "number_resolve — candidates="
+            + str([c.get("display") for c in candidates])
+            + " merged=" + str(len(merged))
+            + " legs=" + "; ".join(notes))
+
+    # 与 _run_patent_search 相同的尾部: 并入 pending、池化排序、落显示列表。
+    pending = _merge_pending_items(
+        getattr(agent, "_pending_raw_items", None), merged)
+    ranked_pending = await _rank_builtin_patent_pool(agent, pending, lang)
+    agent._pending_raw_items = _order_pending_for_lang(ranked_pending, lang)
+
+    digest = _items_digest(merged, lang=lang)
+    if not digest:
+        checked = ("\n".join(f"- {n}" for n in notes)
+                   if notes else "- (no source was queryable)")
+        digest = (
+            f"No records found for the number. Sources checked:\n{checked}"
+            if lang == "en"
+            else f"未按该号码查到专利记录。已核验的数据源：\n{checked}")
+    return {"kind": "observation", "text": digest}
+
+
+async def _auto_number_cross_round(agent, lang) -> Optional[Tuple[list, str, str]]:
+    """Zero-hit cross-source verification for number questions.
+
+    Fires once per request when a KB number tool (or any search) returned
+    nothing displayable AND the request carried parsed identifiers —
+    the deterministic dual-source lookup then still checks the other
+    country's source.  Returns the same triple contract as
+    ``_auto_ladder_round`` (ranked pool candidates, ranking note,
+    executed note) or None when there is nothing to run.  Never raises.
+    """
+    candidates = getattr(agent, "_number_candidates", None) or []
+    if not candidates or getattr(agent, "_number_cross_done", False):
+        return None
+    agent._number_cross_done = True
+    merged, notes = await _lookup_number_candidates(agent, candidates)
+    _glog = getattr(agent, "logger", None)
+    if _glog is not None:
+        _glog.info(
+            "number_cross_check — candidates="
+            + str([c.get("display") for c in candidates])
+            + " merged=" + str(len(merged))
+            + " legs=" + "; ".join(notes))
+    executed = "\n".join(f"- {n}" for n in notes) if notes else ""
+    executed = executed or ("- nothing to check" if lang == "en"
+                            else "- 无可用数据源")
+    if merged:
+        pool_cands = _pool_candidates_for_items(merged)
+        ranked, _note = await _rank_pending_pool(
+            agent, pool_cands, lang, apply_rerank=False)
+        cross_note = (
+            f"Cross-source number verification found "
+            f"{len(ranked)} record(s):\n{executed}" if lang == "en"
+            else f"号码跨源复核命中 {len(ranked)} 条：\n{executed}")
+        return ranked, "", cross_note
+    cross_note = (
+        f"Cross-source number verification found nothing:\n{executed}"
+        if lang == "en"
+        else f"号码跨源复核无命中（已按候选做双库核验）：\n{executed}")
+    return [], "", cross_note
+
+
 async def make_action_executor(agent, registry, push_filter=None):
     """Return the loop's execute_action closure."""
     user_id = getattr(agent, "_last_user_id", None)
@@ -2615,6 +2862,9 @@ async def make_action_executor(agent, registry, push_filter=None):
 
         if entry.kind == "patent_spec":
             return await _run_patent_spec(agent, args, lang)
+
+        if entry.kind == "patent_number":
+            return await _run_patent_number_resolve(agent, args, lang)
 
         if entry.kind == "patent_search":
             return await _run_patent_search(
@@ -2743,11 +2993,15 @@ async def make_action_executor(agent, registry, push_filter=None):
             text = _apply_ladder_cap(agent, text, total, lang)
             if not shown or (isinstance(total, int) and total == 0):
                 # No displayable results — zero hits, or every hit was
-                # dead-filtered.  First execute the untried ladder
-                # queries system-side (the agent cannot conclude early
-                # while they remain untried), then point the agent at
-                # whatever is still left.
-                auto = await _auto_ladder_round(agent, entry, lang)
+                # dead-filtered.  For number questions the OTHER country's
+                # source is verified first (a single-source 404 must not
+                # close the case — sample #16); otherwise execute the
+                # untried ladder queries system-side (the agent cannot
+                # conclude early while they remain untried), then point
+                # the agent at whatever is still left.
+                auto = await _auto_number_cross_round(agent, lang)
+                if auto is None:
+                    auto = await _auto_ladder_round(agent, entry, lang)
                 if auto is not None:
                     ranked, ranking_note, ladder_note = auto
                     if ranked:

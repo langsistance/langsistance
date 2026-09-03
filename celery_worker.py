@@ -1264,13 +1264,13 @@ async def _run_pipeline(
     _update_mysql_progress(task_id, 'analyzing', 75)
 
     # ==== Phase 3: Generate report (Pro, dynamic, streaming) ====
-    # ── Streaming provider: use [PROSECUTION] streaming_provider/model for
-    # visible streaming text (executive summary + sections), same as
-    # execute_prosecution_analysis. Falls back to pro_provider if unset.
-    from sources.long_task.config import get_prosecution_config
-    _ptc = get_prosecution_config()
-    _stream_cfg_provider = _ptc.get('streaming_provider')
-    _stream_cfg_model = _ptc.get('streaming_model')
+    # ── Streaming provider: [MODEL] stream_* pair, else [PROSECUTION]
+    # streaming_provider/model, for the visible streaming text (executive
+    # summary + sections), same as execute_prosecution_analysis. Falls
+    # back to pro_provider if unset.
+    from sources.long_task.config import get_streaming_provider_model
+    (_stream_cfg_provider,
+     _stream_cfg_model) = get_streaming_provider_model()
     _streaming_provider = None
     if _stream_cfg_provider and _stream_cfg_model:
         from sources.llm_provider import Provider
@@ -4570,12 +4570,14 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
     include_priority_2 = ptc.get('include_priority_2', True)
 
     # ── Streaming provider (report summary + section writing) ──
-    # When configured in [PROSECUTION], overrides pro_provider for the
-    # streaming output phases so users can use their chat model (e.g.
-    # openrouter/openai/gpt-5.6-terra) for the visible streaming text.
+    # [MODEL] stream_* pair first, else [PROSECUTION] streaming_*; when set,
+    # overrides pro_provider for the streaming output phases so users can use
+    # their chat model (e.g. openrouter/openai/gpt-5.6-terra) for the visible
+    # streaming text.
     streaming_provider = None
-    _stream_cfg_provider = ptc.get('streaming_provider')
-    _stream_cfg_model = ptc.get('streaming_model')
+    from sources.long_task.config import get_streaming_provider_model
+    (_stream_cfg_provider,
+     _stream_cfg_model) = get_streaming_provider_model()
     _pipeline_logger.info(
         f"[task={task_id}] CONFIG — prosecution_config="
         f"streaming_provider={_stream_cfg_provider!r}, "
