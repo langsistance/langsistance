@@ -30,16 +30,13 @@ const TAG_TEXT: Record<string, string> = { '': '已上线', soon: '规划中' }
 export default function SellerLandingSections() {
   return (
     <div className="chat-landing-section flex flex-col items-center gap-6 pt-4">
-      <div className="flex flex-col items-center gap-2">
-        <h3 className="seller-landing-h">卖家的每一步，都有人替你盯着专利</h3>
-        <p className="seller-landing-sub">选品到被诉，全生命周期</p>
-      </div>
-      <div className="seller-stages">
+      <h3 className="seller-landing-h">卖家的每一步，都有人替你盯着专利</h3>
+      <div className="seller-steps" role="list" aria-label="卖家防侵权的五个环节">
         {STAGES.map((stage) => (
-          <span key={stage.no} className="seller-stage">
-            <b>{stage.no}</b>
-            {stage.title}
-          </span>
+          <div key={stage.no} className="seller-step" role="listitem">
+            <span className="seller-step-no">{stage.no}</span>
+            <span className="seller-step-t">{stage.title}</span>
+          </div>
         ))}
       </div>
 
