@@ -1,9 +1,12 @@
 'use client'
 
+import { useState } from 'react'
 import { useI18n } from '@/lib/app-i18n'
+import { getSceneMode, setSceneMode, type SceneMode } from '@/lib/sceneStore'
 import ChatComposer, { type ChatComposerProps } from './ChatComposer'
 import SceneHint from './SceneHint'
 import SceneBar from './SceneBar'
+import SellerLandingSections from './SellerLandingSections'
 import PatentOnboardingWizard from './PatentOnboardingWizard'
 
 // Linear icons matching the app's existing stroke-2px style (feather/lucide
@@ -63,22 +66,25 @@ const CAPABILITIES = [
 
 export default function ChatLanding(composerProps: ChatComposerProps) {
   const { t } = useI18n()
+  const [mode, setMode] = useState<SceneMode>(() => getSceneMode())
 
-  // Scene quick chips send a preset question through the normal composer
-  // path (presetText) so streaming / history behave identically.
-  const handleQuick = (text: string) => {
-    composerProps.send(undefined, text)
+  const handleSceneChange = (next: SceneMode) => {
+    setMode(next)
+    setSceneMode(next)
   }
 
   return (
     <div className="chat-landing">
       <h2 className="chat-landing-slogan">{t('chat.landing.slogan')}</h2>
       <div className="chat-landing-scene">
-        <SceneBar onQuickQuestion={handleQuick} />
+        <SceneBar mode={mode} onChange={handleSceneChange} />
       </div>
       <div className="chat-landing-composer">
         <ChatComposer {...composerProps} />
       </div>
+      {mode === 'seller' ? (
+        <SellerLandingSections />
+      ) : (
       <div className="chat-landing-grid">
         {CAPABILITIES.map((cap) => (
           <div key={cap.titleKey} className={`chat-landing-card${cap.free ? ' free' : ''}`} data-cap={cap.cap}>
@@ -90,6 +96,7 @@ export default function ChatLanding(composerProps: ChatComposerProps) {
           </div>
         ))}
       </div>
+      )}
       <div className="chat-landing-section">
         <SceneHint />
       </div>

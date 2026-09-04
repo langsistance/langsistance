@@ -11,11 +11,11 @@ export type SceneMode = 'seller' | 'pro'
 const SCENE_KEY = 'copiioai_scene'
 
 export function getSceneMode(): SceneMode {
-  if (typeof window === 'undefined') return 'seller'
+  if (typeof window === 'undefined') return 'pro'
   try {
-    return window.localStorage.getItem(SCENE_KEY) === 'pro' ? 'pro' : 'seller'
+    return window.localStorage.getItem(SCENE_KEY) === 'seller' ? 'seller' : 'pro'
   } catch {
-    return 'seller'
+    return 'pro'
   }
 }
 
