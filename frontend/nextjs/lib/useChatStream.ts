@@ -12,6 +12,7 @@ import { decodeArtifactChunksToResults, decodeResultsArtifact } from '@/lib/chat
 import { persistResultsSetToStorage } from '@/lib/resultsStore'
 import { persistChatToStorage } from '@/lib/chatStore'
 import { resultsPath } from '@/lib/appRoutes'
+import { getSceneMode } from '@/lib/sceneStore'
 import {
   addAssistantArtifactComplete,
   addAssistantArtifactEnd,
@@ -206,9 +207,10 @@ export function useChatStream() {
       const currentFiles = selectedFiles
       setSelectedFiles([])
 
+      const scene = getSceneMode()
       const body = currentFiles.length > 0
-        ? await queryStreamWithFiles(text, queryId, controller.signal, currentFiles, conversationHistory, sessionId || undefined)
-        : await queryStream(text, queryId, controller.signal, conversationHistory, sessionId || undefined)
+        ? await queryStreamWithFiles(text, queryId, controller.signal, currentFiles, conversationHistory, sessionId || undefined, scene)
+        : await queryStream(text, queryId, controller.signal, conversationHistory, sessionId || undefined, scene)
       const reader = body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''

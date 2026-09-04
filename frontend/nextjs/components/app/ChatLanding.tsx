@@ -3,6 +3,7 @@
 import { useI18n } from '@/lib/app-i18n'
 import ChatComposer, { type ChatComposerProps } from './ChatComposer'
 import SceneHint from './SceneHint'
+import SceneBar from './SceneBar'
 import PatentOnboardingWizard from './PatentOnboardingWizard'
 
 // Linear icons matching the app's existing stroke-2px style (feather/lucide
@@ -63,9 +64,18 @@ const CAPABILITIES = [
 export default function ChatLanding(composerProps: ChatComposerProps) {
   const { t } = useI18n()
 
+  // Scene quick chips send a preset question through the normal composer
+  // path (presetText) so streaming / history behave identically.
+  const handleQuick = (text: string) => {
+    composerProps.send(undefined, text)
+  }
+
   return (
     <div className="chat-landing">
       <h2 className="chat-landing-slogan">{t('chat.landing.slogan')}</h2>
+      <div className="chat-landing-scene">
+        <SceneBar onQuickQuestion={handleQuick} />
+      </div>
       <div className="chat-landing-composer">
         <ChatComposer {...composerProps} />
       </div>

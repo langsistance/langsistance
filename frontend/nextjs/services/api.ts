@@ -112,10 +112,12 @@ export async function queryStream(
   abortSignal: AbortSignal,
   conversationHistory: { role: string; content: string }[] = [],
   sessionId?: string,
+  scene?: string,
 ): Promise<ReadableStream<Uint8Array>> {
   const headers = await authHeaders()
   const body: Record<string, unknown> = { query, query_id: queryId, push_filter: 2, conversation_history: conversationHistory }
   if (sessionId) body.session_id = sessionId
+  if (scene) body.scene = scene
   const res = await fetch(`${BASE_URL}/query_stream`, {
     method: 'POST',
     headers,
@@ -134,6 +136,7 @@ export async function queryStreamWithFiles(
   files: File[],
   conversationHistory: { role: string; content: string }[] = [],
   sessionId?: string,
+  scene?: string,
 ): Promise<ReadableStream<Uint8Array>> {
   const formData = new FormData()
   formData.append('query', query)
@@ -141,6 +144,7 @@ export async function queryStreamWithFiles(
   formData.append('push_filter', '2')
   formData.append('conversation_history', JSON.stringify(conversationHistory))
   if (sessionId) formData.append('session_id', sessionId)
+  if (scene) formData.append('scene', scene)
   for (const file of files) {
     formData.append('patent_files', file)
   }
