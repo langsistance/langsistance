@@ -13,6 +13,7 @@ from sources.knowledge.knowledge import (
 from sources.utility import pretty_print, animate_thinking
 from sources.agents.agent import Agent
 from sources.tools.mcpFinder import MCP_finder
+from sources.seller.scene_pack import seller_voice_addendum
 from sources.memory import Memory
 from sources.logger import Logger
 from sources.dynamic_tool_params import (
@@ -1731,7 +1732,7 @@ Begin your response now:
                 "所有标题、段落、列表项和标签都必须使用中文。\n"
             )
 
-    async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler, push_filter=None, conversation_history=None, allow_long_task=True):
+    async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler, push_filter=None, conversation_history=None, allow_long_task=True, scene=None):
         """Build the ReAct tool set and run the loop for one user query.
 
         Long-task tool calls surface as the same {'intent': 'long_task'}
@@ -1749,6 +1750,7 @@ Begin your response now:
         the normal search tools instead (incident 2026-09-03).
         """
         # -- per-request state reset (agents are pooled and reused) --
+        self._scene = scene  # 场景 token（seller | None），驱动卖家口径注入（A1）
         self._last_user_prompt = prompt
         self._conversation_history = conversation_history or []
         self._last_query_id = query_id
@@ -2002,6 +2004,9 @@ Begin your response now:
                 cn_rewrite=self._search_rewrite_cn)
             + number_guidance
         )
+        if getattr(self, "_scene", None) == "seller":
+            # 卖家口径：仅在本次请求的 system prompt 尾部追加（A1）
+            system_prompt += "\n\n" + seller_voice_addendum(lang)
         self.memory.reset([
             {'role': 'user', 'content': user_prompt},
             {'role': 'system', 'content': system_prompt},

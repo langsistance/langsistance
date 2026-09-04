@@ -1150,7 +1150,8 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         user_id, request.query, request.query_id,
                         request.tool_data, handler,
                         push_filter=request.push_filter,
-                        conversation_history=agent_history
+                        conversation_history=agent_history,
+                        scene=getattr(request, "scene", None),
                     )
                 except Exception as e:
                     app_logger.error(f"Failed to create agent: {str(e)}")

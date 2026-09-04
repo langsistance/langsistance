@@ -11,6 +11,7 @@ class QueryRequest(BaseModel):
     push_filter: Optional[int] = None  # web app passes 2 to restrict to push=2 tools
     conversation_history: list = []  # 最近一次问答的历史记录 [{role, content, patent_data?}]
     session_id: str = ""  # 已有的 session_id，用于复用会话而非创建新会话
+    scene: Optional[str] = None  # 场景 token：seller | pro | None（卖家线 A1）
 
     def __str__(self):
         return f"Query: {self.query}, Query ID: {self.query_id}, TTS: {self.tts_enabled}, Tool Data: {self.tool_data}"
@@ -23,6 +24,7 @@ class QueryRequest(BaseModel):
             "tool_data": self.tool_data,
             "push_filter": self.push_filter,
             "session_id": self.session_id,
+            "scene": self.scene,
         }
 
 class QueryResponse(BaseModel):
