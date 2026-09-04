@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CopiioAI 专利情报，一问即得 · 统一首页交互原型 v3</title>
+<style>
+/* 对齐 copiioai.com：白底灰字 + teal-600 + rounded-lg + 细边框；v3 = 首页与卖家首页合并为单一页面 */
+:root{
+  --teal:#0d9488; --teal-d:#0f766e; --teal-l:#f0fdfa; --teal-ring:rgba(13,148,136,.14);
+  --ink:#111827; --ink-2:#374151; --ink-3:#6b7280; --ink-4:#9ca3af;
+  --line:#e5e7eb; --line-2:#d1d5db;
+  --bg:#f9fafb; --card:#fff;
+  --red:#dc2626; --red-bg:#fef2f2; --red-line:#fecaca;
+  --amber:#d97706; --amber-bg:#fffbeb; --amber-line:#fde68a;
+  --green:#16a34a; --green-bg:#f0fdf4; --green-line:#bbf7d0;
+  --mono:"SF Mono",Consolas,"Roboto Mono",monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:"PingFang SC","Microsoft YaHei",-apple-system,"Segoe UI",sans-serif;background:#fff;color:var(--ink);line-height:1.65;font-size:15px;-webkit-font-smoothing:antialiased}
+button{font-family:inherit;cursor:pointer}
+a{color:var(--teal);text-decoration:none}
+.cont{max-width:1200px;margin:0 auto;padding:0 28px}
+.demo-strip{background:#fefce8;border-bottom:1px solid #fde68a;color:#854d0e;font-size:12px;text-align:center;padding:5px 14px}
+.demo-strip b{font-weight:600}
+
+/* header：与 LandingHeader.tsx 同款 */
+.hd{position:fixed;top:0;left:0;right:0;background:#fff;box-shadow:0 1px 2px rgba(17,24,39,.06);z-index:50}
+.hd-in{max-width:1280px;margin:0 auto;padding:0 28px;height:60px;display:flex;align-items:center;gap:14px}
+.lg{display:flex;align-items:center;gap:9px}
+.lgdot{width:30px;height:30px;border-radius:9999px;background:var(--teal);display:grid;place-items:center;color:#fff;font-weight:800;font-size:14px}
+.lg-name{font-size:18px;font-weight:600;color:var(--ink)}
+.hd .sp{flex:1}
+.bth{border:1px solid var(--line-2);background:#fff;color:var(--ink-2);border-radius:8px;padding:7px 15px;font-size:13.5px;transition:.13s}
+.bth:hover{color:var(--ink);background:var(--bg)}
+.btp{background:var(--teal);color:#fff;border:0;border-radius:8px;padding:7px 15px;font-size:13.5px;font-weight:500;transition:.13s}
+.btp:hover{background:var(--teal-d)}
+
+/* 主区 */
+.main{padding:92px 0 0}
+.hero-top{text-align:center}
+h1{font-size:40px;line-height:1.2;font-weight:800;letter-spacing:-.6px;margin:14px 0 6px}
+.hero-sub{color:var(--ink-3);font-size:15px;max-width:600px;margin:0 auto}
+/* 场景切换：标题下方、提问框上方（DeepSeek / WorkBuddy 式，显眼大按钮） */
+.seg{display:inline-flex;gap:3px;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:5px;margin:22px auto 0}
+.segbt{display:inline-flex;align-items:center;gap:9px;border:0;background:none;color:var(--ink-2);border-radius:9px;padding:10px 24px;font-size:15px;font-weight:600;transition:.15s;text-align:left}
+.segbt .sb{display:flex;flex-direction:column;align-items:flex-start;line-height:1.2}
+.segbt .sb i{font-style:normal;font-size:11px;color:var(--ink-4);font-weight:400;letter-spacing:.2px;margin-top:1px}
+.segbt:hover{background:#fff}
+.segbt.on{background:var(--teal);color:#fff;box-shadow:0 4px 14px -6px rgba(13,148,136,.5)}
+.segbt.on .sb i{color:#ccfbf1}
+.segbt.on svg{color:#fff}
+
+/* 提问框 */
+.askbox{margin:24px auto 0;max-width:760px;background:#fff;border:1.5px solid var(--line-2);border-radius:13px;display:flex;overflow:hidden;box-shadow:0 4px 16px -10px rgba(17,24,39,.22);transition:.15s}
+.askbox:focus-within{border-color:var(--teal);box-shadow:0 0 0 4px var(--teal-ring),0 4px 16px -10px rgba(17,24,39,.22)}
+.askbox input{flex:1;border:0;outline:0;padding:15px 19px;font-size:16px;min-width:0}
+.askbox .go{border:0;background:var(--teal);color:#fff;font-size:15.5px;font-weight:500;padding:0 28px}
+.askbox .go:hover{background:var(--teal-d)}
+
+/* 提问框下方 = 模式内容区（随切换变化） */
+#modeArea{max-width:880px;margin:0 auto;padding:30px 0 10px}
+.view{display:none}
+.view.show{display:block}
+.scope-line{font-size:12px;color:var(--ink-3);display:flex;align-items:center;gap:7px;justify-content:center;margin-top:6px}
+.scope-line .ok{color:var(--green);font-weight:600}
+.mode-chips{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:16px}
+.chip{border:1px solid var(--line-2);background:#fff;color:var(--ink-3);font-size:13px;border-radius:9999px;padding:6px 15px;transition:.13s}
+.chip:hover{border-color:var(--teal);color:var(--teal)}
+/* 空态：模式相关的入口卡 */
+.quick-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:13px;margin-top:24px}
+.e-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;transition:.15s;text-align:left}
+.e-card:hover{border-color:var(--teal);box-shadow:0 10px 22px -18px rgba(13,148,136,.6)}
+.e-card .e-ico{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;font-weight:800;font-size:14px;margin-bottom:9px}
+.e-card h3{font-size:14px;font-weight:600}
+.e-card p{font-size:12.3px;color:var(--ink-3);margin-top:3px;line-height:1.6}
+.e-card .soon{display:inline-flex;gap:5px;font-size:11px;color:var(--ink-4);margin-top:7px}
+.mode-tip{text-align:center;font-size:12.5px;color:var(--ink-4);margin-top:18px}
+.mode-tip b{color:var(--teal-d);font-weight:600}
+
+/* 加载 / 结果 / 专利卡 */
+.loading{padding:44px 0;display:flex;flex-direction:column;align-items:center;gap:12px;color:var(--ink-3);font-size:14px}
+.spinner{width:28px;height:28px;border-radius:50%;border:3px solid #ccfbf1;border-top-color:var(--teal);animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading .steps{font-size:12.5px;color:var(--ink-4)}
+.results-head{display:flex;align-items:baseline;justify-content:space-between;margin:8px 0 14px;gap:14px;flex-wrap:wrap}
+.results-head .rh-t{font-weight:700;font-size:17px}
+.results-head .rh-s{font-size:12.5px;color:var(--ink-3)}
+.pat-row{width:100%;display:flex;gap:14px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 15px;margin-bottom:9px;align-items:center;transition:.13s;text-align:left}
+.pat-row:hover{border-color:var(--teal);box-shadow:0 8px 20px -18px rgba(13,148,136,.6)}
+.pat-thumb{width:58px;height:58px;border-radius:9px;border:1px solid var(--line);background:#fff;display:grid;place-items:center;flex-shrink:0;overflow:hidden}
+.pat-thumb svg{width:46px;height:46px}
+.pat-info{flex:1;min-width:0}
+.pat-num{font-family:var(--mono);font-weight:700;font-size:13.5px}
+.pat-title{font-size:13px;color:var(--ink-3);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pat-meta{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;align-items:center}
+.badge{font-size:11px;border-radius:6px;padding:1.5px 8px;font-weight:600}
+.b-type{background:var(--teal-l);color:var(--teal-d)}
+.b-ok{background:var(--green-bg);color:var(--green)}
+.b-dead{background:var(--bg);color:var(--ink-4)}
+.sim{font-size:11px;font-weight:700;border-radius:6px;padding:1.5px 8px}
+.sim-hi{background:var(--red-bg);color:var(--red)}
+.sim-mid{background:var(--amber-bg);color:var(--amber)}
+.sim-lo{background:var(--green-bg);color:var(--green)}
+.pat-date{font-size:11px;color:var(--ink-4);font-family:var(--mono)}
+.pat-row .arrow{color:var(--ink-4);font-size:13px}
+.askline{display:flex;gap:10px;align-items:center;background:#fff;border:1px dashed var(--line-2);border-radius:11px;padding:11px 14px;margin-top:16px;font-size:13px;color:var(--ink-3)}
+.askline .ask-in{flex:1;border:0;outline:0;font-size:13.5px;min-width:0}
+.askline button{border:0;background:var(--teal-l);color:var(--teal-d);font-weight:600;font-size:13px;border-radius:7px;padding:7px 14px;white-space:nowrap}
+.askline button:hover{background:#ccfbf1}
+.ask-tag{font-weight:700;color:var(--teal);white-space:nowrap}
+.backlink{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--ink-2);margin:14px 0 0;background:#fff;border:1px solid var(--line);border-radius:8px;padding:7px 14px}
+.backlink:hover{color:var(--teal);border-color:var(--teal)}
+.pcard{background:#fff;border:1px solid var(--line);border-radius:14px;overflow:hidden;margin-top:6px}
+.pc-head{display:flex;gap:16px;padding:20px 22px 14px;align-items:flex-start;border-bottom:1px solid var(--line)}
+.pc-head .pat-thumb{width:88px;height:88px}
+.pc-head .pat-thumb svg{width:74px;height:74px}
+.pc-meta{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+.pc-title{font-size:16.5px;font-weight:700;margin:4px 0 7px}
+.pc-grid{display:grid;grid-template-columns:1fr 1fr}
+.pc-cell{padding:16px 22px}
+.pc-cell+.pc-cell{border-left:1px solid var(--line)}
+.pc-k{font-size:11px;color:var(--ink-4);letter-spacing:1.4px;font-weight:700;margin-bottom:7px}
+.pc-desc{font-size:13.3px;color:var(--ink-2);line-height:1.8}
+.pc-expiry{font-size:13.3px;color:var(--ink-2)}
+.pc-expiry b{color:var(--ink)}
+.sugg{margin:14px 22px 0;border-radius:11px;padding:13px 17px;display:flex;gap:12px;align-items:flex-start;border:1px solid}
+.sugg .s-ico{font-size:18px;line-height:1.3}
+.sugg .s-t{font-weight:700;font-size:14px;margin-bottom:2px}
+.sugg .s-d{font-size:12.6px;line-height:1.7;color:var(--ink-2)}
+.sugg-red{background:var(--red-bg);border-color:var(--red-line)} .sugg-red .s-t{color:var(--red)}
+.sugg-amber{background:var(--amber-bg);border-color:var(--amber-line)} .sugg-amber .s-t{color:var(--amber)}
+.sugg-green{background:var(--green-bg);border-color:var(--green-line)} .sugg-green .s-t{color:var(--green)}
+.pc-actions{display:flex;gap:9px;padding:14px 22px 16px;flex-wrap:wrap}
+.pc-actions .btp,.pc-actions .bth{padding:7px 14px;font-size:13px}
+.pc-anchor{font-size:12px;color:var(--ink-4);padding:0 22px 8px}
+.pc-anchor a{text-decoration:underline dotted}
+.pc-disc{font-size:11px;color:var(--ink-4);background:var(--bg);border-top:1px solid var(--line);padding:8px 22px}
+
+/* 下方共享营销区（不随模式变） */
+.market{padding:64px 0 20px;border-top:1px solid var(--line);background:var(--bg)}
+.market h2{font-size:22px;font-weight:700;text-align:center;letter-spacing:-.2px}
+.sec-sub{color:var(--ink-3);font-size:13px;text-align:center;margin-top:6px}
+.steps{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:32px}
+.step{text-align:center;padding:0 8px}
+.step .st-no{width:29px;height:29px;border-radius:9999px;background:#fff;color:var(--teal-d);font-weight:700;font-size:13px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line-2)}
+.step .st-t{font-weight:600;font-size:14px;margin-top:9px}
+.step .st-d{font-size:12.3px;color:var(--ink-3);margin-top:4px;line-height:1.55}
+.modules{display:grid;grid-template-columns:repeat(3,1fr);gap:13px;margin-top:32px}
+.module{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 18px;display:flex;gap:12px;align-items:flex-start;transition:.15s}
+.module:hover{border-color:var(--line-2);box-shadow:0 8px 20px -16px rgba(17,24,39,.22)}
+.mico{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;font-weight:800;font-size:14px;flex-shrink:0}
+.module h3{font-size:14.5px;font-weight:600;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.module p{font-size:12.4px;color:var(--ink-3);margin-top:3px;line-height:1.6}
+.mtag{font-size:11px;border-radius:9999px;padding:1.5px 9px;font-weight:600;white-space:nowrap}
+.m-ok{background:var(--teal-l);color:var(--teal-d)}
+.m-m2{background:var(--amber-bg);color:var(--amber)}
+.m-m3{background:var(--bg);color:var(--ink-4);border:1px solid var(--line)}
+.pro-strip{margin-top:40px;display:flex;justify-content:center}
+.pro-strip .n-inline{display:inline-flex;align-items:center;gap:10px;background:#fff;border:1px solid var(--line);border-radius:9999px;padding:8px 18px;font-size:13px;color:var(--ink-3)}
+.pro-strip a{font-weight:600}
+.footer-note{border-top:1px solid var(--line);margin-top:60px;padding:22px 0 44px;text-align:center;font-size:12px;color:var(--ink-4);line-height:2}
+
+/* login overlay */
+.overlay{position:fixed;inset:0;background:rgba(17,24,39,.45);display:none;align-items:center;justify-content:center;z-index:100}
+.overlay.show{display:flex}
+.card-pop{background:#fff;border-radius:14px;box-shadow:0 24px 60px -20px rgba(17,24,39,.4);padding:24px 26px;width:390px;max-width:92vw}
+.card-pop h2{font-size:18px;font-weight:700;text-align:left}
+.lg-sub{color:var(--ink-3);font-size:13px;margin:4px 0 16px}
+.field{width:100%;border:1px solid var(--line-2);border-radius:8px;padding:10px 13px;font-size:14px;outline:0;margin-bottom:10px}
+.field:focus{border-color:var(--teal);box-shadow:0 0 0 3px var(--teal-ring)}
+.card-pop .btp,.card-pop .bth{width:100%;padding:10px;margin-bottom:8px}
+.dv{display:flex;align-items:center;gap:10px;color:var(--ink-4);font-size:12px;margin:10px 0}
+.dv::before,.dv::after{content:"";flex:1;height:1px;background:var(--line)}
+.xbtn{float:right;border:0;background:none;color:var(--ink-4);font-size:15px;padding:2px 6px}
+.lg-tip{font-size:11.5px;color:var(--ink-4);text-align:center;margin-top:6px}
+#toast{position:fixed;left:50%;bottom:34px;transform:translateX(-50%) translateY(16px);background:var(--ink);color:#fff;font-size:13.5px;padding:11px 20px;border-radius:10px;opacity:0;pointer-events:none;transition:all .22s;z-index:200;box-shadow:0 12px 30px rgba(17,24,39,.3);max-width:86vw}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+@media(max-width:900px){.steps{grid-template-columns:repeat(2,1fr);gap:18px 6px}.modules,.quick-cards{grid-template-columns:1fr}.pc-grid{grid-template-columns:1fr}.pc-cell+.pc-cell{border-left:0;border-top:1px solid var(--line)}h1{font-size:30px}.segbt{padding:9px 15px}}
+</style>
+</head>
+<body>
+
+<div class="demo-strip"><b>交互原型 v3 · 统一首页</b> —— 标题 / 模式切换 / 提问框，切换模式 URL 不变，仅"提问框下方"内容变化 · 下方营销区两模式共享 · 对应 spec §4–§5、§10</div>
+
+<div id="page">
+  <header class="hd">
+    <div class="hd-in">
+      <div class="lg"><span class="lgdot">C</span><span class="lg-name">CopiioAI</span></div>
+      <div class="sp"></div>
+      <button class="bth" onclick="toast('文档与示例：/examples/* 子页（SEO 长尾入口，本演示略）')">示例</button>
+      <button class="bth" onclick="toast('中 / EN / JA … 多语言为站点全局能力')">中文</button>
+      <span id="accountBtn"><button class="bth" onclick="openLogin()">登录</button> <button class="btp" onclick="openLogin()">免费开始</button></span>
+    </div>
+  </header>
+
+  <div class="main">
+    <div class="hero-top cont">
+      <h1>CopiioAI 专利情报，一问即得</h1>
+      <p class="hero-sub">中美双库 · 卖家防侵权与专业分析同一入口 · 不学专利法也能用</p>
+
+      <!-- 模式切换：标题下 / 提问框上 -->
+      <div class="seg" id="sceneTabs">
+        <button class="segbt on" id="tabSeller" onclick="applyMode('seller')">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8h12l-1.1 12H7.1L6 8z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg>
+          <span class="sb">卖家安全台<i>结论 · 防侵权</i></span>
+        </button>
+        <button class="segbt" id="tabPro" onclick="applyMode('pro')">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 3v6.4L4.6 18a2.2 2.2 0 0 0 2 3.2h10.8a2.2 2.2 0 0 0 2-3.2L14 9.4V3"/><path d="M8.6 3h6.8"/><path d="M7.4 13.2h9.2"/></svg>
+          <span class="sb">专业工作台<i>检索 · OA · 同族</i></span>
+        </button>
+      </div>
+
+      <form class="askbox" onsubmit="return doQuery(event)">
+        <input id="qbox" placeholder="产品名 / ASIN / 专利号，如：折叠水杯、US D1,088,888" autocomplete="off">
+        <button class="go" type="submit">问它</button>
+      </form>
+    </div>
+
+    <!-- 提问框下方：模式内容区（随切换变化；URL 不变） -->
+    <div id="modeArea" class="cont">
+      <div class="scope-line" id="scopeLine" style="display:none"><span class="ok">✓</span><span id="scopeText"></span></div>
+
+      <div class="view show" id="v-empty"></div>
+
+      <div class="view" id="v-loading">
+        <div class="loading">
+          <div class="spinner"></div>
+          <div id="loadingText">正在检索中美专利库…</div>
+          <div class="steps" id="loadingSteps"></div>
+        </div>
+      </div>
+
+      <div class="view" id="v-results">
+        <div class="results-head">
+          <div class="rh-t" id="resTitle"></div>
+          <div class="rh-s" id="resSub"></div>
+        </div>
+        <div id="resultList"></div>
+        <div class="askline">
+          <span class="ask-tag">追问</span>
+          <input class="ask-in" id="ask-results" placeholder="比如：这件最像的，改掉卡扣能规避吗？" onkeydown="if(event.key==='Enter')askNow(this)">
+          <button onclick="askNow(document.getElementById('ask-results'))">发送</button>
+        </div>
+        <button class="backlink" onclick="backToEmpty()">← 重新提问</button>
+      </div>
+
+      <div class="view" id="v-patent">
+        <button class="backlink" id="pcBack" onclick="pcBack()">← 返回候选列表</button>
+        <div id="patentCard"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 下方共享营销区（两模式一致） -->
+  <div class="market">
+    <div class="cont">
+      <h2>卖家的每一步，都有人替你盯着专利</h2>
+      <p class="sec-sub">覆盖选品到被诉的完整生命周期（专业用户请用上方切换钮进入专业工作台）</p>
+      <div class="steps">
+        <div class="step"><span class="st-no">1</span><div class="st-t">选品排雷</div><div class="st-d">看中一个产品，先查有没有人在先布局</div></div>
+        <div class="step"><span class="st-no">2</span><div class="st-t">上架自查</div><div class="st-d">风险报告：改哪一处能规避，写清楚</div></div>
+        <div class="step"><span class="st-no">3</span><div class="st-t">日常盯梢</div><div class="st-d">盯竞品新专利，防爆款被抢注</div></div>
+        <div class="step"><span class="st-no">4</span><div class="st-t">供应商验真</div><div class="st-d">"这是我们的专利产品"？一分钟验证</div></div>
+        <div class="step"><span class="st-no">5</span><div class="st-t">被诉应对</div><div class="st-d">投诉后 48 小时，先看懂对方专利</div></div>
+      </div>
+      <h2 style="margin-top:56px">六大模块，免费起步</h2>
+      <p class="sec-sub">所有分析标注检索范围与免责声明——不藏不确定性</p>
+      <div class="modules">
+        <div class="module"><div class="mico" style="background:var(--teal-l);color:var(--teal-d)">查</div><div><h3>查一查 <span class="mtag m-ok">已上线</span></h3><p>产品图片 / 产品名 / ASIN，中美专利库找疑似相关，按相似度排序。</p></div></div>
+        <div class="module"><div class="mico" style="background:var(--teal-l);color:var(--teal-d)">卡</div><div><h3>专利卡 <span class="mtag m-ok">已上线</span></h3><p>任意专利号一屏说清：保护什么、撞不撞、到期没、下一步。</p></div></div>
+        <div class="module"><div class="mico" style="background:var(--amber-bg);color:var(--amber)">报</div><div><h3>风险报告 <span class="mtag m-m2">M2</span></h3><p>逐件比对 + 风险等级 + 行动建议，PDF 带署名水印可分享。</p></div></div>
+        <div class="module"><div class="mico" style="background:var(--amber-bg);color:var(--amber)">真</div><div><h3>供应商验真 <span class="mtag m-m2">M2</span></h3><p>供应商的专利号：是真的吗、还有效吗、真覆盖这个产品吗？</p></div></div>
+        <div class="module"><div class="mico" style="background:var(--bg);color:var(--ink-3)">盯</div><div><h3>盯一盯 <span class="mtag m-m3">M3</span></h3><p>竞品新专利、相似外观公开、专利到期，邮件推送。防抢注靠它。</p></div></div>
+        <div class="module"><div class="mico" style="background:var(--red-bg);color:var(--red)">救</div><div><h3>投诉应对包 <span class="mtag m-m3">M3</span></h3><p>对方专利人话解读 + 弱点提示 + 申诉要点草稿（中英双语）。</p></div></div>
+      </div>
+      <div class="pro-strip"><span class="n-inline">研发 / 专利从业者需要权利要求语言、对比文件与审查档案？<a href="javascript:void(0)" onclick="applyMode('pro')">切到专业工作台 →</a></span></div>
+    </div>
+  </div>
+
+  <div class="cont"><div class="footer-note">CopiioAI · 专利情报平台（统一首页：卖家防侵权与专业分析共用入口与账号）<br>免责声明：基于公开数据库自动分析，不保证检索穷尽，不构成法律意见。重大决策建议咨询执业律师。<br>© 2026 CopiioAI</div></div>
+</div>
+
+<!-- login -->
+<div class="overlay" id="loginOverlay">
+  <div class="card-pop">
+    <button class="xbtn" onclick="closeLogin()">✕</button>
+    <h2>登录 CopiioAI</h2>
+    <div class="lg-sub">同一账号免费使用 · 登录后原地继续，结果直接出现在提问框下方</div>
+    <input class="field" type="email" placeholder="邮箱" value="seller@example.com">
+    <button class="btp" onclick="doLogin()">登录 / 注册</button>
+    <div class="dv">或</div>
+    <button class="bth" onclick="doLogin()">继续使用 Google</button>
+    <button class="bth" onclick="doLogin()">微信扫码（演示）</button>
+    <div class="lg-tip">演示原型：任意方式登录即继续</div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+/* ================= demo data（虚构示例） ================= */
+const THUMBS = {
+  cup1:'<svg viewBox="0 0 64 64" fill="none"><rect x="14" y="26" width="36" height="24" rx="6" stroke="#9ca3af" stroke-width="2.4"/><path d="M22 26v-6a10 10 0 0 1 20 0v6" stroke="#9ca3af" stroke-width="2.4"/><rect x="26" y="34" width="12" height="5" rx="2" fill="#dc2626" opacity=".7"/><path d="M32 39v4" stroke="#9ca3af" stroke-width="2"/><path d="M29 21h6" stroke="#dc2626" stroke-width="2.6" stroke-linecap="round"/></svg>',
+  cup2:'<svg viewBox="0 0 64 64" fill="none"><rect x="16" y="20" width="32" height="14" rx="4" stroke="#9ca3af" stroke-width="2.4"/><rect x="16" y="34" width="32" height="14" rx="4" stroke="#9ca3af" stroke-width="2.4"/><path d="M16 27h32M16 41h32" stroke="#e5e7eb" stroke-width="1.6"/><circle cx="32" cy="48" r="2.6" fill="#9ca3af"/></svg>',
+  cup3:'<svg viewBox="0 0 64 64" fill="none"><path d="M20 24v22a6 6 0 0 0 6 6h12a6 6 0 0 0 6-6V24" stroke="#9ca3af" stroke-width="2.6"/><path d="M20 30h-7a3 3 0 0 0 0 6h7M44 32h5" stroke="#9ca3af" stroke-width="2.6"/><path d="M26 16h12l-2 8H28z" stroke="#9ca3af" stroke-width="2.4"/><circle cx="44" cy="42" r="3" stroke="#dc2626" stroke-width="2.2"/></svg>',
+  cup4:'<svg viewBox="0 0 64 64" fill="none"><rect x="20" y="16" width="24" height="32" rx="7" stroke="#9ca3af" stroke-width="2.6"/><rect x="24" y="22" width="16" height="8" rx="3" stroke="#e5e7eb" stroke-width="1.8"/><path d="M24 38h16" stroke="#e5e7eb" stroke-width="1.8"/><circle cx="32" cy="52" r="2.6" fill="#9ca3af"/></svg>',
+  cup5:'<svg viewBox="0 0 64 64" fill="none"><path d="M22 18h20l-3 12H25z" stroke="#9ca3af" stroke-width="2.4"/><rect x="24" y="30" width="16" height="18" rx="5" stroke="#9ca3af" stroke-width="2.4"/><path d="M28 20l-6-4M36 20l6-4" stroke="#9ca3af" stroke-width="2"/><rect x="27" y="42" width="10" height="3.4" rx="1.7" fill="#dc2626" opacity=".8"/></svg>',
+  cup6:'<svg viewBox="0 0 64 64" fill="none"><rect x="17" y="24" width="30" height="26" rx="8" stroke="#9ca3af" stroke-width="2.6"/><path d="M26 24v-3a6 6 0 0 1 12 0v3" stroke="#9ca3af" stroke-width="2.2"/><path d="M25 14c4 3 10 3 14 0" stroke="#9ca3af" stroke-width="2"/><circle cx="40" cy="45" r="2.2" fill="#dc2626"/></svg>',
+  snake:'<svg viewBox="0 0 64 64" fill="none"><path d="M14 44c2-18 34-22 36-6 1 11-20 12-20 4 0-6 10-6 10-1" stroke="#9ca3af" stroke-width="2.8" stroke-linecap="round"/><circle cx="18" cy="42" r="3.4" fill="#9ca3af"/><path d="M15 39l-3-2M17 36l-1-4" stroke="#9ca3af" stroke-width="1.8"/><path d="M48 16c2 2 1 5-2 5" stroke="#dc2626" stroke-width="2.2" stroke-linecap="round"/></svg>',
+  juice:'<svg viewBox="0 0 64 64" fill="none"><path d="M24 12h16l-2 12h-12z" stroke="#9ca3af" stroke-width="2.4"/><rect x="22" y="24" width="20" height="26" rx="6" stroke="#9ca3af" stroke-width="2.4"/><path d="M28 24v-6a4 4 0 0 1 8 0v6" stroke="#e5e7eb" stroke-width="1.8"/><path d="M26 40h12M26 45h12" stroke="#e5e7eb" stroke-width="1.8"/><circle cx="46" cy="18" r="3.4" stroke="#dc2626" stroke-width="2.2"/></svg>'
+};
+const SETS = {
+  cup: { title:'"折叠水杯" 疑似相关专利', sub:'可折叠便携水杯（卡扣闭合）',
+    items:[
+      {n:'US D1,088,888', type:'外观设计', status:'有效', sim:'高', date:'到期 2031-06', fig:'cup1', title:'可折叠水杯（卡扣式折叠结构）', feat:['卡扣式闭合','分段折叠杯身','硅胶密封圈','便携挂扣'], ver:'与你的产品高度相似：卡扣 + 分段折叠 + 挂扣三项特征一致。'},
+      {n:'US 11,675,432', type:'发明专利', status:'有效', sim:'中', date:'到期 2039-11', fig:'cup2', title:'折叠容器及其卡扣闭锁机构', feat:['折叠杯身','闭锁机构','可拆洗结构'], ver:'结构思路接近，但闭锁机构实现方式不同，需比对细节。'},
+      {n:'US D1,087,654', type:'外观设计', status:'已过期', sim:'中', date:'已过期（未缴年费）', fig:'cup3', title:'带提手折叠杯', feat:['提手','折叠结构'], ver:'外观接近但已过期——过期专利不构成障碍，可放心参考。'},
+      {n:'US D1,089,210', type:'外观设计', status:'有效', sim:'低', date:'到期 2032-02', fig:'cup4', title:'保温旅行杯', feat:['杯身纹路','旋盖'], ver:'整体观感有差异，主要保护点不重叠，风险低。'},
+      {n:'US 11,812,007', type:'发明专利', status:'有效', sim:'低', date:'到期 2040-04', fig:'cup5', title:'液体容器密封结构', feat:['密封圈','螺纹配合'], ver:'保护密封机理，与折叠结构无直接冲突。'},
+      {n:'CN 306,998,821', type:'外观设计', status:'有效', sim:'低', date:'到期 2031-09', fig:'cup6', title:'折叠水杯（CN 外观）', feat:['折叠杯身','杯盖造型'], ver:'中文库同类外观，整体造型差异明显，风险低。'}
+    ]},
+  snake: { title:'"遥控玩具蛇" 疑似相关专利', sub:'遥控爬行玩具蛇（拟真）',
+    items:[
+      {n:'US D1,077,543', type:'外观设计', status:'有效', sim:'高', date:'到期 2030-12', fig:'snake', title:'拟真爬行玩具蛇', feat:['蛇形躯干','爬行关节','头部造型'], ver:'躯干分段与爬行姿态高度相似，撞车风险高。'},
+      {n:'US 11,888,121', type:'发明专利', status:'有效', sim:'中', date:'到期 2040-07', fig:'snake', title:'仿生爬行动作机构', feat:['摆动驱动','多段连杆'], ver:'驱动机构近似，需比对内部实现。'},
+      {n:'CN 307,120,456', type:'外观设计', status:'已过期', sim:'中', date:'已过期', fig:'snake', title:'遥控玩具蛇（CN）', feat:['蛇身造型'], ver:'中文库近似外观，但已过期，不构成障碍。'}
+    ]},
+  juice: { title:'"便携榨汁杯" 疑似相关专利', sub:'ASIN B0XXXXX 便携榨汁杯',
+    items:[
+      {n:'US D1,090,112', type:'外观设计', status:'有效', sim:'高', date:'到期 2032-08', fig:'juice', title:'便携式榨汁杯', feat:['杯盖刀组','双层杯身','磁吸充电座'], ver:'杯身比例与刀组位置高度一致。'},
+      {n:'US 11,934,555', type:'发明专利', status:'有效', sim:'中', date:'到期 2041-01', fig:'juice', title:'手持榨汁装置及刀组结构', feat:['刀组结构','安全锁'], ver:'涉及刀组安全锁结构，需比对细节。'}
+    ]}
+};
+const FALLBACK = SETS.cup;
+
+/* ================= state ================= */
+const $ = id => document.getElementById(id);
+let mode = 'seller';          // 场景仅存于状态，URL 不变
+let loggedIn = false;
+let pendingQuery = null;
+let cameFromResults = false;
+let lastSetKey = 'cup';
+let modeInited = false;
+
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toast._h); toast._h=setTimeout(()=>t.classList.remove('show'),2800); }
+function showView(name){['v-empty','v-loading','v-results','v-patent'].forEach(v=>$(v).classList.toggle('show', v==='v-'+name));}
+function setScope(t){ $('scopeLine').style.display='flex'; $('scopeText').textContent=t; }
+function clearScope(){ $('scopeLine').style.display='none'; }
+
+/* 模式空态内容 = 提问框下方的"变"区 */
+function sellerEmptyHTML(){
+  return `
+    <div class="mode-chips">
+      <button class="chip" onclick="ask('US D1,088,888')">US D1,088,888（专利号读卡）</button>
+      <button class="chip" onclick="ask('折叠水杯')">折叠水杯</button>
+      <button class="chip" onclick="ask('遥控玩具蛇')">遥控玩具蛇</button>
+      <button class="chip" onclick="ask('ASIN B0XXXXX 便携榨汁杯')">ASIN 查询</button>
+    </div>
+    <div class="quick-cards">
+      <button class="e-card" onclick="ask('US D1,088,888')">
+        <div class="e-ico" style="background:var(--teal-l);color:var(--teal-d)">卡</div>
+        <h3>专利卡：把专利号翻译成人话</h3>
+        <p>投诉信里只有一个专利号？输进来，一屏看懂：保护什么、撞不撞、到期没。</p>
+      </button>
+      <button class="e-card" onclick="ask('折叠水杯')">
+        <div class="e-ico" style="background:var(--teal-l);color:var(--teal-d)">查</div>
+        <h3>查一查：我的产品有没有专利</h3>
+        <p>输入产品名或一句话，美国 + 中文专利库找疑似相关，按相似度排序。</p>
+      </button>
+      <button class="e-card" onclick="toast('风险报告 M2 上线：一键生成 PDF + 署名水印分享')">
+        <div class="e-ico" style="background:var(--amber-bg);color:var(--amber)">报</div>
+        <h3>风险报告</h3>
+        <p>逐件特征比对 + 风险等级 + 行动建议，可分享给老板与供应商。</p>
+        <span class="soon">⏳ M2 建设中</span>
+      </button>
+    </div>
+    <p class="mode-tip">不会说行话？<b>直接问人话</b>："1688 这款折叠水杯能上美国亚马逊吗" —— 我们替你翻译</p>`;
+}
+function proEmptyHTML(){
+  return `
+    <div class="mode-chips">
+      <button class="chip" onclick="ask('折叠容器闭锁机构的近场现有技术')">折叠容器闭锁机构 · 现有技术检索</button>
+      <button class="chip" onclick="ask('US 11,675,432')">公开号直接解析</button>
+      <button class="chip" onclick="ask('US D1,088,888 的优先权与同族')">同族分析</button>
+      <button class="chip" onclick="toast('OA 解读 / Claim Mapping 属案件指挥台路线（V1），演示略')">OA 解读（V1）</button>
+    </div>
+    <div class="quick-cards">
+      <button class="e-card" onclick="toast('专业检索走现有对话引擎：权利要求语言直接问（演示略）')">
+        <div class="e-ico" style="background:var(--bg);color:var(--ink-2)">检</div>
+        <h3>自然语言检索</h3>
+        <p>中美双库（US 自建 644 万件 + 佰腾 CN），权利要求语言与技术词直接问。</p>
+      </button>
+      <button class="e-card" onclick="toast('审查历史 / OA 解读属案件指挥台（V1），复用主线成果')">
+        <div class="e-ico" style="background:var(--bg);color:var(--ink-2)">OA</div>
+        <h3>审查历史 / OA</h3>
+        <p>驳回逐条拆解、Claim Mapping、原文锚点。</p>
+      </button>
+      <button class="e-card" onclick="toast('跨国同族分析属主线 V1，演示略')">
+        <div class="e-ico" style="background:var(--bg);color:var(--ink-2)">族</div>
+        <h3>跨国同族</h3>
+        <p>同族地图、中美审查对照、指示函草稿。</p>
+      </button>
+    </div>
+    <p class="mode-tip">专业模式与卖家模式共用<b>同一检索与分析底层、同一账号</b>，只换语言口径（spec §10）</p>`;
+}
+function renderModeEmpty(){
+  $('v-empty').innerHTML = (mode==='seller') ? sellerEmptyHTML() : proEmptyHTML();
+  $('qbox').placeholder = (mode==='seller')
+    ? '产品名 / ASIN / 专利号，如：折叠水杯、US D1,088,888'
+    : '权利要求语言 / 技术词 / 公开号，如：折叠容器 闭锁机构、US 11,675,432';
+}
+
+/* 模式切换：不改 URL，只变提问框下方内容区 + 占位 */
+function applyMode(m){
+  mode = m;
+  $('tabSeller').classList.toggle('on', m==='seller');
+  $('tabPro').classList.toggle('on', m==='pro');
+  clearScope(); cameFromResults=false;
+  renderModeEmpty(); showView('empty');
+  document.querySelector('.hero-top').scrollIntoView({behavior:'smooth', block:'start'});
+}
+function backToEmpty(){ $('qbox').value=''; clearScope(); renderModeEmpty(); showView('empty'); }
+
+/* ================= login gate（同 URL 原位继续） ================= */
+function openLogin(){ $('loginOverlay').classList.add('show'); }
+function closeLogin(){ $('loginOverlay').classList.remove('show'); }
+function doLogin(){ closeLogin(); loggedIn=true;
+  $('accountBtn').innerHTML = '<button class="bth" onclick="doLogout()">退出（演示账号）</button>';
+  if(pendingQuery){ const q=pendingQuery; pendingQuery=null; setTimeout(()=>runQuery(q), 350); } }
+function doLogout(){ loggedIn=false; pendingQuery=null;
+  $('accountBtn').innerHTML = '<button class="bth" onclick="openLogin()">登录</button> <button class="btp" onclick="openLogin()">免费开始</button>';
+  toast('已退出（演示）—— 模式记忆与页面状态保留'); }
+
+/* ================= query flow ================= */
+function ask(q){ $('qbox').value=q; doQuerySubmit(q); }
+function doQuery(e){ e.preventDefault(); const q=$('qbox').value.trim(); if(q) doQuerySubmit(q); return false; }
+function doQuerySubmit(q){
+  if(!loggedIn){ pendingQuery=q; openLogin(); return; }
+  runQuery(q);
+}
+const isPatentNo = q => /^(US|CN)\s?[A-Z0-9\s,./-]{4,}$/i.test(q) || /^\d{2}\/\d{3},\d{3}/.test(q) || /D\d{3},\d{3}/i.test(q);
+function runQuery(q){
+  cameFromResults = false;
+  showView('loading');
+  setScope(isPatentNo(q) ? '目标：专利号解读' : '目标：「' + q.slice(0,16) + (q.length>16?'…':'') + '」相关候选');
+  $('loadingText').textContent = isPatentNo(q) ? '正在解析专利号，拉取公开数据…' : '正在检索中美专利库…';
+  $('loadingSteps').textContent = '';
+  let step=0; const steps = isPatentNo(q) ? ['识别专利类型…','拉取公开文本与图片…','生成人话解读…'] : ['多源检索中…','相似度粗排…','生成候选卡片…'];
+  loadingInterval = setInterval(()=>{ if(step<steps.length){ $('loadingSteps').textContent = steps[step++]; } }, 420);
+  setTimeout(()=>{ clearInterval(loadingInterval);
+    if(isPatentNo(q)) renderPatentCard(pickPatentFor(q), true);
+    else renderResults(q);
+  }, 1500);
+}
+let loadingInterval=null;
+
+/* results */
+function keyOf(q){ if(/蛇/.test(q)) return 'snake'; if(/榨汁|果汁/.test(q)) return 'juice'; return 'cup'; }
+function pickSet(q){ const k=keyOf(q); lastSetKey=k; return SETS[k]||FALLBACK; }
+function simBadge(s){
+  const map={高:['sim-hi','高危：撞车风险高'],中:['sim-mid','中危：需进一步比对'],低:['sim-lo','低危：参考']};
+  const [cls,tip]=map[s]||['sim-lo',''];
+  return '<span class="sim '+cls+'" title="'+tip+'">'+s+'相似</span>';
+}
+function renderResults(q){
+  const s = pickSet(q);
+  $('resTitle').textContent = s.title; $('resSub').textContent = s.sub;
+  setScope('已检索：美国专利自建库 644 万件 + 中文佰腾库 → 匹配到 '+s.items.length+' 件候选');
+  $('resultList').innerHTML = s.items.map((it,i)=>`
+    <button class="pat-row" onclick="openFromResults(${i})">
+      <div class="pat-thumb">${THUMBS[it.fig]||''}</div>
+      <div class="pat-info">
+        <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+          <span class="pat-num">${it.n}</span>
+          ${simBadge(it.sim)}
+        </div>
+        <div class="pat-title">${it.title}</div>
+        <div class="pat-meta">
+          <span class="badge b-type">${it.type}</span>
+          <span class="badge ${it.status==='有效'?'b-ok':'b-dead'}">${it.status}</span>
+          <span class="pat-date">${it.date}</span>
+        </div>
+      </div>
+      <span class="arrow">看卡 →</span>
+    </button>`).join('');
+  showView('results'); cameFromResults = true;
+}
+function openFromResults(i){ renderPatentCard(SETS[lastSetKey].items[i], false); }
+function pickPatentFor(q){ const k=keyOf(q); return (SETS[k]||FALLBACK).items.find(x=>x.sim==='高') || (SETS[k]||FALLBACK).items[0]; }
+function pcBack(){ cameFromResults ? showView('results') : backToEmpty(); }
+
+/* patent card */
+function renderPatentCard(it, direct){
+  const verdict = it.status==='已过期' ? {cls:'sugg-green', ico:'✅', t:'这件已过期，不构成障碍', d:it.title+' 已失效/未缴年费。过期专利不限制他人使用——但仍建议核对同族是否还有有效件。'}
+    : it.sim==='高' ? {cls:'sugg-red', ico:'🚧', t:'高风险：建议规避或授权', d:'主要保护特征与你的产品重叠。上架前建议：改掉 '+it.feat.slice(0,2).join('、')+' 中的重叠特征，或向权利人询价授权；拿不准就跑一份完整风险报告（M2 上线）。'}
+    : it.sim==='中' ? {cls:'sugg-amber', ico:'⚠️', t:'中风险：先比对再上架', d:'保护思路接近但实现可能不同。建议逐项核对特征，必要时请专业检索或直接问我们。'}
+    : {cls:'sugg-green', ico:'✅', t:'低风险：可上架，保留本次记录', d:'当前未见明显冲突。上架后可用"盯一盯"持续关注同类新公开（M3 上线）。'};
+  $('patentCard').innerHTML = `
+  <div class="pcard">
+    <div class="pc-head">
+      <div class="pat-thumb">${THUMBS[it.fig]||''}</div>
+      <div style="flex:1">
+        <div class="pc-meta">
+          <span class="pat-num" style="font-size:15px">${it.n}</span>
+          <span class="badge b-type">${it.type}</span>
+          <span class="badge ${it.status==='有效'?'b-ok':'b-dead'}">${it.status}</span>
+          <span class="sim ${it.sim==='高'?'sim-hi':it.sim==='中'?'sim-mid':'sim-lo'}">${it.sim}相似</span>
+        </div>
+        <div class="pc-title">${it.title}</div>
+        <div class="pc-meta"><span class="badge" style="background:var(--bg);color:var(--ink-2)">${it.type==='外观设计'?'保护外观造型，不看内部功能':'保护结构 / 方法，看权利要求'}</span></div>
+      </div>
+    </div>
+    <div class="pc-grid">
+      <div class="pc-cell">
+        <div class="pc-k">① 它保护什么</div>
+        <div class="pc-desc">主要保护特征：<b>${it.feat.join('、')}</b><br>${it.ver}</div>
+      </div>
+      <div class="pc-cell">
+        <div class="pc-k">③ 状态与到期</div>
+        <div class="pc-expiry">当前状态：<b>${it.status}</b><br>${it.date==='已过期（未缴年费）'||it.date==='已过期'?'该专利已失效，公众可自由实施其方案':it.type==='外观设计'?'外观专利授权后 15 年有效，预估 '+it.date:'发明专利通常自申请日起 20 年，预估 '+it.date}</div>
+      </div>
+    </div>
+    <div class="sugg ${verdict.cls}">
+      <div class="s-ico">${verdict.ico}</div>
+      <div><div class="s-t">④ 下一步建议 · ${verdict.t}</div><div class="s-d">${verdict.d}</div></div>
+    </div>
+    <div class="pc-actions">
+      <button class="btp" onclick="toast('风险报告 M2 上线：一键生成 PDF + 署名水印分享')">生成风险报告</button>
+      <button class="bth" onclick="toast('追问已交给检索分析 agent（正式版落现有对话，带当前场景包）')">问：怎么改能避开</button>
+      <button class="bth" style="margin-left:auto" onclick="switchModeForThis()">🔬 换专业视角看这件</button>
+    </div>
+    <div class="pc-anchor">📎 每条判断可回溯原文：<a href="javascript:void(0)" onclick="toast('演示版：正式版锚点到 USPTO / 佰腾原文段落')">权利要求原文锚点</a></div>
+    <div class="pc-disc">免责声明：基于公开数据库自动分析，不保证检索穷尽，不构成法律意见。已检索范围见上方声明。</div>
+  </div>`;
+  showView('patent');
+}
+function switchModeForThis(){ applyMode('pro'); toast('已切到专业工作台——同一专利可继续用权利要求语言追问（URL 未变，仅下方内容切换）'); }
+function askNow(el){ const q=el.value.trim(); if(q){ toast('「'+q.slice(0,26)+(q.length>26?'…':'')+'」—— 已接入分析 agent（正式版落对话，演示仅提示）'); el.value=''; } }
+
+renderModeEmpty();
+</script>
+</body>
+</html>
