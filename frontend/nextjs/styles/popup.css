@@ -3938,6 +3938,66 @@ body {
   padding: 0 var(--spacing-4);
 }
 
+/* ── 卖家安全台空态区块：复用 chat-landing 卡片语言，文案从简 ── */
+.seller-landing-h {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  text-align: center;
+}
+.seller-landing-sub {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+.seller-stages {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.seller-stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-white);
+}
+.seller-stage b {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+.seller-landing-modules {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--spacing-3);
+  width: 100%;
+  max-width: 900px;
+}
+@media (max-width: 1023px) {
+  .seller-landing-modules { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 639px) {
+  .seller-landing-modules { grid-template-columns: 1fr; }
+}
+.seller-tag {
+  font-size: 10px;
+  border-radius: 999px;
+  padding: 1px 8px;
+  margin-left: auto;
+  white-space: nowrap;
+  background: rgba(16, 163, 127, 0.1);
+  color: var(--color-primary);
+}
+.seller-tag.soon {
+  background: rgba(180, 83, 9, 0.08);
+  color: #b45309;
+}
+
 @media (max-width: 1023px) {
   .chat-landing-grid {
     grid-template-columns: repeat(2, 1fr);
