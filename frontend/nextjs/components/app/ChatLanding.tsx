@@ -4,7 +4,6 @@ import { useState } from 'react'
 import { useI18n } from '@/lib/app-i18n'
 import { getSceneMode, setSceneMode, type SceneMode } from '@/lib/sceneStore'
 import ChatComposer, { type ChatComposerProps } from './ChatComposer'
-import SceneHint from './SceneHint'
 import SceneBar from './SceneBar'
 import SellerLandingSections from './SellerLandingSections'
 import PatentOnboardingWizard from './PatentOnboardingWizard'
@@ -96,11 +95,6 @@ export default function ChatLanding(composerProps: ChatComposerProps) {
           </div>
         ))}
       </div>
-      )}
-      {mode !== 'seller' && (
-        <div className="chat-landing-section">
-          <SceneHint />
-        </div>
       )}
       <PatentOnboardingWizard />
     </div>
