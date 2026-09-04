@@ -97,9 +97,11 @@ export default function ChatLanding(composerProps: ChatComposerProps) {
         ))}
       </div>
       )}
-      <div className="chat-landing-section">
-        <SceneHint />
-      </div>
+      {mode !== 'seller' && (
+        <div className="chat-landing-section">
+          <SceneHint />
+        </div>
+      )}
       <PatentOnboardingWizard />
     </div>
   )
