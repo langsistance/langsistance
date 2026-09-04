@@ -144,6 +144,9 @@ api.mount("/screenshots", StaticFiles(directory=".screenshots"), name="screensho
 
 # Initialize system
 interaction, config = initialize_system()
+# Module-level provider for route factories registered below (seller routes
+# make direct LLM calls; initialize_system's own provider stays local).
+provider = _build_main_provider(config)
 is_generating = False
 query_resp_history = []
 
