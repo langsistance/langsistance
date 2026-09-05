@@ -254,14 +254,6 @@ class TestAnchorBlockSplice(unittest.TestCase):
         self.assertEqual(_splice_anchor_block(hist, None), hist)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestDeliveryFormatGuidance(unittest.TestCase):
     """需求 3: 检索答复必须带"最高关联专利"结论格式约束。"""
 
@@ -306,3 +298,7 @@ class TestNotLoggedInPrompt(unittest.TestCase):
             self.assertNotIn("<Knowledge tool not logged in>", prompt)
             self.assertIn("需要登录", prompt)
             self.assertIn("Do NOT output internal markers", prompt)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -139,6 +139,38 @@ def test_rebuild_from_latest_completed_receipt(fake_redis, fake_db):
     assert anchor["result_ids"] == ["CN1", "CN2"]
 
 
+def test_load_missing_falls_back_to_rebuild_and_persists(fake_redis, fake_db):
+    """Degradation chain step ①→②: on a Redis key miss (empty store),
+    load must rebuild from the latest completed receipt AND persist the
+    rebuilt anchor back to Redis so subsequent loads are cache hits."""
+    messages = [
+        {"role": "assistant", "content": "任务已完成 —— 目标：文件B.docx",
+         "meta": {"kind": "long_task", "event": "completed",
+                  "task_id": "lt_fallback", "seq": 0}},
+    ]
+    fake_db([{"messages": json.dumps(messages, ensure_ascii=False)}])
+    from sources.long_task.session_anchor import (
+        load_session_anchor, _key)
+    assert fake_redis.store == {}  # empty Redis → force the rebuild path
+    anchor = load_session_anchor("sess_1")
+    assert anchor is not None
+    assert anchor["task_id"] == "lt_fallback"
+    # fallback must have been persisted (rebuilt anchor written back to Redis)
+    assert anchor["_rebuilt"] is True
+    assert _key("sess_1") in fake_redis.store
+
+
+def test_load_fallback_none_still_none_without_receipt(fake_redis, fake_db):
+    """Step ③: no receipt exists → even after rebuild attempt, load is None
+    and the (still absent) key is left unset."""
+    fake_db([{"messages": json.dumps(
+        [{"role": "user", "content": "hi"}], ensure_ascii=False)}])
+    from sources.long_task.session_anchor import (
+        load_session_anchor, _key)
+    assert load_session_anchor("sess_2") is None
+    assert _key("sess_2") not in fake_redis.store
+
+
 def test_rebuild_none_without_receipt(fake_redis, fake_db):
     fake_db([{"messages": json.dumps(
         [{"role": "user", "content": "hi"}], ensure_ascii=False)}])

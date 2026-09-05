@@ -98,7 +98,17 @@ def load_session_anchor(session_id: str) -> dict | None:
         r = _get_redis()
         raw = r.get(_key(session_id))
         if not raw:
-            return None
+            # Key miss → degradation step ②: rebuild from the latest completed
+            # receipt, then persist the rebuilt anchor so later turns hit the
+            # cache.  rebuild_anchor_from_messages swallows its own errors and
+            # returns None (never recursing into load), so this stays inside
+            # the silent-degradation envelope.
+            anchor = rebuild_anchor_from_messages(session_id)
+            if anchor is None:
+                return None
+            payload = json.dumps(anchor, ensure_ascii=False)
+            r.set(_key(session_id), payload, ex=ANCHOR_TTL)
+            return anchor
         if isinstance(raw, bytes):
             raw = raw.decode()
         anchor = json.loads(raw)
