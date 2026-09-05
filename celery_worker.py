@@ -3433,7 +3433,27 @@ def execute_china_examination_analysis(self, task_id: str, params: dict):
             except Exception:
                 pass
 
-            set_task_completed(task_id, report_files)
+            # Task 3: single-patent anchor (degenerate CN path — claims/legal only).
+            _cn_degen_anchor = None
+            if patent_id:
+                _cn_degen_anchor = {
+                    'anchor_type': 'number',
+                    'target': str(patent_id),
+                    'target_summary': '',
+                    'source': '',
+                    'result_ids': [str(patent_id)],
+                    'result_titles': None,
+                    'task_id': task_id,
+                }
+                try:
+                    update_task_status(
+                        task_id, 'exporting', 100, '',
+                        target_name=str(patent_id)[:80],
+                    )
+                except Exception:
+                    pass  # target label must never block terminal state
+            set_task_completed(task_id, report_files,
+                               anchor_payload=_cn_degen_anchor)
             if user_id:
                 from sources.long_task.user_queue import complete_user_task
                 try:
@@ -3728,7 +3748,27 @@ def execute_china_examination_analysis(self, task_id: str, params: dict):
             f"files={[f['format'] for f in report_files]}"
         )
         _update_mysql_progress(task_id, 'exporting', 100)
-        set_task_completed(task_id, report_files)
+        # Task 3: single-patent anchor on the (normalised) user-supplied id.
+        _cn_anchor_payload = None
+        if patent_id:
+            _cn_anchor_payload = {
+                'anchor_type': 'number',
+                'target': str(patent_id),
+                'target_summary': '',
+                'source': '',
+                'result_ids': [str(patent_id)],
+                'result_titles': None,
+                'task_id': task_id,
+            }
+            try:
+                update_task_status(
+                    task_id, 'exporting', 100, '',
+                    target_name=str(patent_id)[:80],
+                )
+            except Exception:
+                pass  # target label must never block terminal state
+        set_task_completed(task_id, report_files,
+                           anchor_payload=_cn_anchor_payload)
 
         if user_id:
             from sources.long_task.user_queue import complete_user_task
@@ -4117,7 +4157,27 @@ def execute_epo_examination_analysis(self, task_id: str, params: dict):
             f"files={[f['format'] for f in report_files]}"
         )
         _update_mysql_progress(task_id, 'exporting', 100)
-        set_task_completed(task_id, report_files)
+        # Task 3: single-patent anchor on the (normalised) user-supplied id.
+        _epo_anchor_payload = None
+        if patent_id:
+            _epo_anchor_payload = {
+                'anchor_type': 'number',
+                'target': str(patent_id),
+                'target_summary': '',
+                'source': '',
+                'result_ids': [str(patent_id)],
+                'result_titles': None,
+                'task_id': task_id,
+            }
+            try:
+                update_task_status(
+                    task_id, 'exporting', 100, '',
+                    target_name=str(patent_id)[:80],
+                )
+            except Exception:
+                pass  # target label must never block terminal state
+        set_task_completed(task_id, report_files,
+                           anchor_payload=_epo_anchor_payload)
 
         if user_id:
             from sources.long_task.user_queue import complete_user_task
@@ -4515,7 +4575,27 @@ def execute_japan_examination_analysis(self, task_id: str, params: dict):
             f"files={[f['format'] for f in report_files]}"
         )
         _update_mysql_progress(task_id, 'exporting', 100)
-        set_task_completed(task_id, report_files)
+        # Task 3: single-patent anchor on the (normalised) user-supplied id.
+        _jp_anchor_payload = None
+        if patent_id:
+            _jp_anchor_payload = {
+                'anchor_type': 'number',
+                'target': str(patent_id),
+                'target_summary': '',
+                'source': '',
+                'result_ids': [str(patent_id)],
+                'result_titles': None,
+                'task_id': task_id,
+            }
+            try:
+                update_task_status(
+                    task_id, 'exporting', 100, '',
+                    target_name=str(patent_id)[:80],
+                )
+            except Exception:
+                pass  # target label must never block terminal state
+        set_task_completed(task_id, report_files,
+                           anchor_payload=_jp_anchor_payload)
 
         if user_id:
             from sources.long_task.user_queue import complete_user_task
@@ -5253,7 +5333,27 @@ def execute_prosecution_analysis(self, task_id: str, params: dict):
             f"report_files={[f['format'] for f in report_files]}"
         )
         _update_mysql_progress(task_id, 'exporting', 100)
-        set_task_completed(task_id, report_files)
+        # Task 3: single-patent anchor on the (normalised) user-supplied id.
+        _pr_anchor_payload = None
+        if patent_id:
+            _pr_anchor_payload = {
+                'anchor_type': 'number',
+                'target': str(patent_id),
+                'target_summary': '',
+                'source': '',
+                'result_ids': [str(patent_id)],
+                'result_titles': None,
+                'task_id': task_id,
+            }
+            try:
+                update_task_status(
+                    task_id, 'exporting', 100, '',
+                    target_name=str(patent_id)[:80],
+                )
+            except Exception:
+                pass  # target label must never block terminal state
+        set_task_completed(task_id, report_files,
+                           anchor_payload=_pr_anchor_payload)
 
         if user_id:
             from sources.long_task.user_queue import complete_user_task
