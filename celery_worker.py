@@ -1536,8 +1536,59 @@ async def _run_pipeline(
             if _pid and not _row.get('_failed'):
                 _completed_patent_ids.append(_pid)
 
+    # ---- Task 3: structured session-anchor payload for the completion ----
+    # A helpful, human-referable label for the executed goal (used as the
+    # digest "目标" line via Redis status.target_name → build_result_digest).
+    # File-upload runs are anchored on the uploaded file; search/direct-id
+    # runs anchor on the query (falls back to the first completed id).
+    _title_col = next((c for c in columns if 'title' in c.lower()), None)
+    _anchor_ids = _completed_patent_ids[:50]
+    _query_text = str(params.get('query', '') or '').strip()
+    if is_file_upload_mode and patent_file_refs:
+        _anchor_file_ids = [
+            str(r.get('filename', '')).rsplit('.', 1)[0]
+            for r in patent_file_refs if r.get('filename')]
+        _target_label = (_anchor_file_ids[0] if _anchor_file_ids
+                         else (_query_text or (_anchor_ids[0] if _anchor_ids else '')))
+        _anchor_type = 'file'
+        _anchor_source = 'file_upload'
+        _anchor_ids = (_anchor_ids or _anchor_file_ids)[:50]
+        _target_summary = _query_text[:200] or _target_label[:200]
+    else:
+        _anchor_type = 'number'
+        _anchor_source = str(params.get('patent_source', '') or '')
+        _target_label = _query_text or (_anchor_ids[0] if _anchor_ids else '')
+        _target_summary = _query_text[:200]
+    _target_label = str(_target_label or '')  # may legitimately remain ''
+    if _target_label:
+        # Let build_result_digest surface "任务已完成 —— 目标：<label>" only
+        # when a meaningful goal can be named (many upload queries are brief).
+        try:
+            update_task_status(
+                task_id, 'exporting', 100, '',
+                target_name=_target_label[:80],
+            )
+        except Exception:
+            pass  # target label never blocks completion state
+    _anchor_payload = None
+    if _anchor_ids:
+        _anchor_payload = {
+            'anchor_type': _anchor_type,
+            'target': str(_target_label or _anchor_ids[0])[:200],
+            'target_summary': _target_summary[:200],
+            'source': _anchor_source,
+            'result_ids': _anchor_ids,
+            'result_titles': {
+                str(_row.get(columns[0], '')):
+                    str(_row.get(_title_col, '') or '')[:80]
+                for _row in table_rows
+                if _title_col and _row.get(columns[0])
+            } if _title_col else None,
+            'task_id': task_id,
+        }
     set_task_completed(task_id, report_files,
-                       patent_ids=_completed_patent_ids if _completed_patent_ids else None)
+                       patent_ids=_completed_patent_ids if _completed_patent_ids else None,
+                       anchor_payload=_anchor_payload)
 
     # Store analyzed patent IDs so follow-up conversation_refs queries
     # (e.g. "哪些是AI相关的") can find them even when the previous query
@@ -2859,7 +2910,30 @@ def execute_family_analysis(self, task_id: str, params: dict):
             f"report_files={[f['format'] for f in report_files]}"
         )
         _update_mysql_progress(task_id, 'exporting', 100)
-        set_task_completed(task_id, report_files)
+        # Task 3: family anchor on the (normalised) user-supplied patent id.
+        # ``patent_id`` (outer scope) is the most faithful referable target — the
+        # resolved ``us_pub_number`` / family member list are recoverable from the
+        # report, so we do not fabricate a row set beyond the anchor id.
+        _family_anchor_payload = None
+        if patent_id:
+            _family_anchor_payload = {
+                'anchor_type': 'number',
+                'target': str(patent_id),
+                'target_summary': '',
+                'source': str(patent_source or ''),
+                'result_ids': [str(patent_id)],
+                'result_titles': None,
+                'task_id': task_id,
+            }
+            try:
+                update_task_status(
+                    task_id, 'exporting', 100, '',
+                    target_name=str(patent_id)[:80],
+                )
+            except Exception:
+                pass  # target label must never block terminal state
+        set_task_completed(task_id, report_files,
+                           anchor_payload=_family_anchor_payload)
 
         if user_id:
             from sources.long_task.user_queue import complete_user_task
