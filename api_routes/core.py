@@ -501,6 +501,16 @@ def _prepare_long_task_inputs(
         # This is a reliable signal — the backend explicitly placed these
         # IDs in the message, so they are not random 8-digit noise.
         #
+        # R3 (需求#7): receipt patent_ids are guaranteed present on this turn
+        # once the follow-up path runs hydrate_session_task_messages (the
+        # completed receipt carries its own patent_ids/meta, spliced into
+        # agent_history before the LLM/scenario step).  That hydrated array is
+        # the authoritative source for conversation_refs; the lt:conv:<user>:
+        # patent_ids Redis list is ONLY a last-resort backstop (used by
+        # celery_worker when no IDs surfaced from text) — never the preferred
+        # channel here.  LOGIC DELIBERATELY UNCHANGED: keep reading msg
+        # patent_ids / patent_data from history, not Redis.
+        #
         # ONLY read from history when the LLM classified the scenario as
         # conversation_refs (the user is referring to prior results).
         # When scenario is direct_ids with empty patent_ids, the LLM has
@@ -974,6 +984,59 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
             finally:
                 pass  # conn is closed below after both branches
 
+            # ── R1/R2 reuse detection (需求#7, P4) ──
+            # R1 does NOT intercept or re-queue: it only logs + traces a
+            # same-session same-file re-upload within the 10-min window; the
+            # reuse prompt itself is carried by this task's created receipt
+            # (see created_content below) rather than by blocking the new task.
+            # R2 is computed here so the "task created" message can append a
+            # hint when this batch's numbers overlap numbers this session has
+            # already searched (see created_content / append_task_message).
+            # Both degrade silently — reuse detection never breaks an upload.
+            reuse_hint = None
+            if reused_session and existing_session_id:
+                try:
+                    from sources.long_task.session_anchor import suggest_reuse
+                    fname = (patent_file_refs[0].get("filename", "")
+                             if patent_file_refs else "")
+                    reuse_hint = suggest_reuse(existing_session_id, fname)
+                except Exception as e:
+                    app_logger.warning(f"Reuse detection failed: {e}")
+            if reuse_hint:
+                app_logger.info(
+                    f"File upload: R1 reuse hit session={existing_session_id}, "
+                    f"task={reuse_hint.get('task_id')}")
+                track_event("upload:reuse_hint",
+                            user_id=str(local_user_id),
+                            session_id=existing_session_id,
+                            task_id=reuse_hint.get("task_id"))
+            # R2: overlap with this session's already-searched numbers.  The
+            # lt:conv:<user>:patent_ids key holds a flat JSON list of prior
+            # numbers (no per-number hit counts), so X (overlap count) and N
+            # (hit count) are both the intersection size.
+            r2_hint = ""
+            try:
+                if session_id and patent_ids:
+                    from sources.knowledge.knowledge import get_redis_connection
+                    _stored = get_redis_connection().get(
+                        f"lt:conv:{local_user_id}:patent_ids")
+                    if _stored:
+                        if isinstance(_stored, bytes):
+                            _stored = _stored.decode()
+                        _stored_ids = json.loads(_stored)
+                        if isinstance(_stored_ids, list):
+                            _seen_norm = {str(x).strip().lower()
+                                          for x in _stored_ids if str(x).strip()}
+                            _overlap = [pid for pid in patent_ids
+                                        if str(pid).strip().lower() in _seen_norm]
+                            if _overlap:
+                                _n = len(_overlap)
+                                r2_hint = (
+                                    f"\n（提示：本会话已检索过 {_n}，"
+                                    f"命中 {_n} 件，可对比。）")
+            except Exception as e:
+                app_logger.warning(f"R2 reuse-hint failed: {e}")
+
             from sources.long_task.user_queue import try_start_user_task
             queue_result = try_start_user_task(str(local_user_id), task_id)
 
@@ -1037,6 +1100,10 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                     if event_status == "running" else
                     "批量分析任务已排队，将在当前任务完成后自动开始。"
                 )
+                # R2 (需求#7 P4): append the already-searched overlap hint to
+                # the receipt so the follow-up turn (and its conversation_refs
+                # hydrate) can see these numbers were searched this session.
+                created_content += r2_hint
                 append_task_message(
                     task_id, event="created",
                     content=created_content, patent_ids=patent_ids)
@@ -1139,6 +1206,21 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                     app_logger.warning(
                         f"Session task hydrate failed: {e}")
 
+            # Session anchor (需求#7 P3): render the current session's most
+            # recent completed long task as a reference-only context block and
+            # hand it to create_agent (spliced by Task 4 into the system
+            # prompt). Load only when a session exists; failures degrade to a
+            # plain (anchor-less) turn so chat/task state is never broken.
+            anchor_block = ""
+            if request.session_id:
+                try:
+                    from sources.long_task.session_anchor import (
+                        load_session_anchor, build_anchor_block)
+                    _anchor = load_session_anchor(request.session_id.strip())
+                    anchor_block = build_anchor_block(_anchor)
+                except Exception as e:
+                    app_logger.warning(f"Session anchor load failed: {e}")
+
             # Run the entire agent pipeline (create + invoke) in a background
             # task so the queue reading loop can yield status events to the
             # client as soon as they arrive, rather than buffering them until
@@ -1150,7 +1232,8 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         user_id, request.query, request.query_id,
                         request.tool_data, handler,
                         push_filter=request.push_filter,
-                        conversation_history=agent_history
+                        conversation_history=agent_history,
+                        anchor_block=anchor_block,
                     )
                 except Exception as e:
                     app_logger.error(f"Failed to create agent: {str(e)}")
@@ -1230,6 +1313,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                     push_filter=request.push_filter,
                                     conversation_history=agent_history,
                                     allow_long_task=False,
+                                    anchor_block=anchor_block,
                                 )
                                 if (isinstance(rerun, dict)
                                         and rerun.get('intent') == 'long_task'):
