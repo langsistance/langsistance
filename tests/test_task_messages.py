@@ -13,6 +13,8 @@ import json
 import unittest
 from unittest.mock import patch
 
+import pytest  # noqa: E402
+
 from sources.long_task import task_messages  # noqa: E402
 from sources.long_task.task_messages import (  # noqa: E402
     append_task_message,
@@ -224,6 +226,179 @@ class TestHydrateSessionTaskMessages(unittest.TestCase):
         provided = [{"role": "user", "content": "hi"}]
         out = hydrate_session_task_messages("", 123, provided)
         self.assertEqual(out, provided)
+
+
+# ── 需求#7 P2: set_task_completed 完成路径统一写锚点 + digest 目标增强 ─────────
+
+class _RedisBackend:
+    """In-memory redis carrying no cross-call key state (status vs anchor)."""
+
+    def __init__(self, store=None):
+        self.store = store if store is not None else {}
+
+    def get(self, key):
+        v = self.store.get(key)
+        return v.encode() if isinstance(v, str) else v
+
+    def set(self, key, value, ex=None):
+        self.store[key] = value
+        return True
+
+    def exists(self, key):
+        return 1 if key in self.store else 0
+
+    def delete(self, key):
+        self.store.pop(key, None)
+
+
+def test_set_task_completed_writes_anchor_and_patent_data():
+    """anchor_payload → Redis 锚点写 + 回执消息 patent_data（≤50），全链路真实驱动。
+
+    使用本文件既有 _FakeConn/_FakeCursor（各自带 cursor 上下文协议、按 cursor
+    顺序分配行集），让两个 DB 反查 + 会话消息写入三类 SQL 各自得到真实行。
+    """
+    from sources.long_task import status_manager
+
+    # 三类光标行列:
+    #   cur0: set_task_completed -> _lookup_task_session_id (SELECT session_id)
+    #   cur1: append_task_message  -> _lookup_task_session (SELECT session_id, user_id)
+    #   cur2: append_task_message  -> conversations SELECT (id, messages)
+    conv_row = {"id": 1, "messages": json.dumps([], ensure_ascii=False)}
+    conn = _FakeConn(
+        [{"session_id": "sess_1", "user_id": "7"}],   # cur0 long_tasks
+        [{"session_id": "sess_1", "user_id": "7"}],   # cur1 long_tasks
+        [conv_row],                                   # cur2 conversations
+    )
+
+    status_redis = _RedisBackend()
+
+    # 状态 Redis：status_manager.set_task_completed 先读后写 + build_result_digest 读取。
+    status_patch = patch(
+        "sources.long_task.status_manager._get_redis", lambda: status_redis)
+    # 会话锚点 Redis：session_anchor.write_session_anchor 走自家的 _get_redis。
+    anchor_redis = _RedisBackend()
+    anchor_patch = patch(
+        "sources.long_task.session_anchor._get_redis", lambda: anchor_redis)
+    db_patch = patch(
+        "sources.knowledge.knowledge.get_db_connection", lambda: conn)
+
+    with status_patch, anchor_patch, db_patch:
+        status_manager.set_task_completed(
+            "lt_x", [{"format": "pdf", "filename": "report.pdf"}],
+            patent_ids=["CN1", "CN2"],
+            anchor_payload={
+                "anchor_type": "file", "target": "文件A.pdf",
+                "target_summary": "摘要", "source": "cnipa",
+                "result_ids": ["CN1", "CN2"],
+                "result_titles": {"CN1": "标题1", "CN2": "标题2"},
+                "task_id": "lt_x",
+            })
+
+    # 锚点必须已写，键含 sess_1（session 解析出来的会话）。
+    anchor_keys = [k for k in anchor_redis.store]
+    assert anchor_keys, "anchor must be written on completion"
+    assert any("sess_1" in k for k in anchor_keys)
+
+    # 端到端：回执消息确实落库，且 entry 带 patent_data（非 None 路径才该有）。
+    last_conn_cursor = conn.cursors[-1]
+    sqls = [s for s, _ in last_conn_cursor.executed]
+    assert any(s.startswith("UPDATE conversations") for s in sqls), (
+        "append_task_message must persist a receipt message")
+    update_sql, update_params = last_conn_cursor.executed[-1]
+    assert update_sql.startswith("UPDATE conversations")
+    messages = json.loads(update_params[0])
+    entry = messages[-1]
+    assert entry["patent_ids"] == ["CN1", "CN2"]
+    assert entry["report_files"] == [{"format": "pdf", "filename": "report.pdf"}]
+    assert len(entry["patent_data"]) == 2
+    assert entry["patent_data"][0]["patent_id"] == "CN1"
+    assert entry["patent_data"][0]["source"] == "cnipa"
+
+
+def test_set_task_completed_without_anchor_payload_keeps_old_shape():
+    """anchor_payload=None：不写锚点；回执不带 patent_data（向后兼容）。"""
+    from sources.long_task import status_manager
+    import sources.long_task.session_anchor as sa
+
+    conv_row = {"id": 1, "messages": json.dumps([], ensure_ascii=False)}
+    conn = _FakeConn(
+        [{"session_id": "sess_1", "user_id": "7"}],   # append lookup
+        [conv_row],                                   # conversations
+    )
+    status_redis = _RedisBackend()
+    anchor_redis = _RedisBackend()
+
+    with patch("sources.long_task.status_manager._get_redis",
+               lambda: status_redis), \
+         patch("sources.long_task.session_anchor._get_redis",
+               lambda: anchor_redis), \
+         patch("sources.knowledge.knowledge.get_db_connection",
+               lambda: conn):
+        status_manager.set_task_completed(
+            "lt_old", [{"format": "pdf", "filename": "report.pdf"}],
+            patent_ids=["CN1"])
+
+    assert list(anchor_redis.store) == [], "no anchor when payload is None"
+    last_cur = conn.cursors[-1]
+    update_sql, update_params = last_cur.executed[-1]
+    assert update_sql.startswith("UPDATE conversations")
+    entry = json.loads(update_params[0])[-1]
+    assert entry["patent_ids"] == ["CN1"]
+    assert "patent_data" not in entry
+
+
+# ── digest 目标增强（无 target 时逐字节兼容旧文案） ───────────────────────────
+
+def test_digest_with_target_name_when_no_summary():
+    """无 result_summary 但有 target_name 时，降级文案带目标行。"""
+    with patch("sources.long_task.status_manager.get_task_status",
+               return_value={
+                   "patent_ids": ["CN1"],
+                   "target_name": "CN批量文件.xml",
+                   "report_files": ["r.pdf"],
+               }):
+        digest = build_result_digest("lt_abc")
+    assert digest.startswith("任务已完成 —— 目标：CN批量文件.xml。\n")
+    assert "批量分析任务已完成" in digest
+    assert "- r.pdf" in digest
+
+
+def test_digest_with_target_name_and_summary():
+    """有 target_name 且含摘要 → 头部目标行 + 结果摘要标题。"""
+    report = "# 报告头\n\n正文内容。"
+    with patch("sources.long_task.status_manager.get_task_status",
+               return_value={
+                   "patent_ids": ["CN1", "CN2"],
+                   "target_name": "CN冲突.xml",
+                   "result_summary": report,
+                   }):
+        digest = build_result_digest("lt_abc")
+    assert digest.startswith("任务已完成 —— 目标：CN冲突.xml。\n\n")
+    assert "共 2 件结果摘要如下：" in digest
+    assert "报告头" in digest
+
+
+def test_digest_without_target_matches_old_headers():
+    """无 target_name → digest 头部保持旧文案（无“目标：”行）。"""
+    report = "# 报告头\n\n正文。"
+    with patch("sources.long_task.status_manager.get_task_status",
+               return_value={
+                   "patent_ids": ["CN1", "CN2"],
+                   "result_summary": report,
+               }):
+        digest = build_result_digest("lt_abc")
+    assert not digest.startswith("任务已完成 —— 目标：")
+    assert digest.startswith("批量分析任务已完成（共 2 件）。\n\n")
+    assert "共 2 件结果摘要如下：" not in digest
+
+
+def test_clamp_target_caps_and_marks_overflow():
+    from sources.long_task.task_messages import _clamp_target
+    short = _clamp_target("CN批量分析.xml")
+    assert short == "CN批量分析.xml"
+    long = _clamp_target("标" * 200)
+    assert long.startswith("标" * 120)
+    assert long.endswith("...")
 
 
 if __name__ == "__main__":

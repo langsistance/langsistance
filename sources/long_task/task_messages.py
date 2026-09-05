@@ -80,6 +80,7 @@ def append_task_message(
     content: str,
     patent_ids: list | None = None,
     report_files: list | None = None,
+    patent_data: list | None = None,
 ) -> None:
     """Append one task lifecycle message to the task's session.
 
@@ -142,6 +143,8 @@ def append_task_message(
                     entry["patent_ids"] = list(patent_ids)
                 if report_files:
                     entry["report_files"] = list(report_files)
+                if patent_data:
+                    entry["patent_data"] = list(patent_data)[:50]
 
                 messages = messages + [entry]
                 cur.execute(
@@ -173,6 +176,12 @@ def _truncate_markdown(text: str, cap: int = DIGEST_MAX_CHARS) -> str:
     return head[:last_nl] if last_nl > 0 else head
 
 
+def _clamp_target(text: str, cap: int = 120) -> str:
+    """Trim *text* to ``cap`` chars, marking truncation with an ellipsis."""
+    text = (text or "").strip()
+    return text[:cap] + ("..." if len(text) > cap else "")
+
+
 def build_result_digest(task_id: str) -> str:
     """Build a bounded, chat-usable completion digest for *task_id*.
 
@@ -198,10 +207,16 @@ def build_result_digest(task_id: str) -> str:
         summary = str(summary)
 
     count_note = f"共 {len(patent_ids)} 件" if patent_ids else "批量分析"
+    target = _clamp_target(str(status.get("target_name") or ""))
     if not summary:
         # No report text (e.g. tasks that only export files) — degrade to
-        # whatever the status carries.
-        parts = [f"批量分析任务已完成（{count_note}）。"]
+        # whatever the status carries.  A target row is prepended only when
+        # the executor recorded a target (Task 3); otherwise output matches
+        # the pre-target wording exactly (backward compatible).
+        parts = []
+        if target:
+            parts.append(f"任务已完成 —— 目标：{target}。")
+        parts.append(f"批量分析任务已完成（{count_note}）。")
         if report_files:
             parts.append("报告文件：")
             parts.extend(f"- {f}" for f in report_files)
@@ -209,9 +224,11 @@ def build_result_digest(task_id: str) -> str:
 
     body = _truncate_markdown(summary)
     truncated = len(summary) > len(body)
-    digest = (
-        f"批量分析任务已完成（{count_note}）。\n\n"
-        f"{body}"
+    head = f"任务已完成 —— 目标：{target}。\n\n" if target else ""
+    digest = head + (
+        f"批量分析任务已完成（{count_note}）。\n\n" + body
+        if not target else
+        f"共 {len(patent_ids)} 件结果摘要如下：\n\n" + body
     )
     if truncated:
         digest += (
