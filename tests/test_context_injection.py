@@ -28,7 +28,9 @@ from sources.agents.general_agent import (  # noqa: E402
     _conversation_history_turns,
     _is_history_noise,
     _read_recent_patent_ids,
+    _splice_anchor_block,
 )
+from sources.long_task.session_anchor import build_anchor_block  # noqa: E402
 from api_routes.core import get_or_create_agent  # noqa: E402
 
 # 报告证据回归样本
@@ -212,6 +214,48 @@ class TestAgentPoolUserKeyed(unittest.TestCase):
 def _run(coro):
     import asyncio
     return asyncio.run(coro)
+
+
+class TestAnchorBlockSplice(unittest.TestCase):
+    """需求#7 P2: 锚点块拼接语义 — 真实调用 _splice_anchor_block。
+
+    Resolution-1 取真实纯函数形态: invoke_agent 组装段只有 3 行纯拼接逻辑
+    (anchor 追加/自成一节), 抽为模块级 _splice_anchor_block, invoke_agent
+    与测试皆调用它 → 测试驱动真实拼接路径 (非 brief 内联 stub)。
+    """
+
+    def test_anchor_alone_when_no_conversation(self):
+        hist = ""  # 空 conversation_block (无历史)
+        anchor = build_anchor_block({
+            "anchor_type": "file", "target": "文件A.pdf", "source": "cnipa",
+            "result_ids": ["CN1"], "target_summary": "摘要"})
+        out = _splice_anchor_block(hist, anchor)
+        self.assertEqual(out, anchor)               # 锚点不丢, 独立成节
+        self.assertIn("当前会话任务锚点", out)
+        self.assertIn("文件A.pdf", out)
+
+    def test_anchor_appended_after_conversation(self):
+        hist = "\n\n## Previous conversation（历史）"
+        anchor = build_anchor_block({
+            "anchor_type": "file", "target": "文件B.xml", "source": "uspto",
+            "result_ids": ["8388852"], "target_summary": "摘要"})
+        out = _splice_anchor_block(hist, anchor)
+        self.assertEqual(out, hist + anchor)        # 历史在前, 锚点紧随
+        self.assertLess(out.index("Previous conversation"),
+                        out.index("当前会话任务锚点"))
+
+    def test_empty_when_no_anchor_and_no_conversation(self):
+        self.assertEqual(_splice_anchor_block("", ""), "")
+        self.assertEqual(_splice_anchor_block("", None), "")
+
+    def test_conversation_unchanged_when_no_anchor(self):
+        hist = "\n\n## Previous conversation（历史）"
+        self.assertEqual(_splice_anchor_block(hist, ""), hist)  # 逐字节不变
+        self.assertEqual(_splice_anchor_block(hist, None), hist)
+
+
+if __name__ == "__main__":
+    unittest.main()
 
 
 if __name__ == "__main__":

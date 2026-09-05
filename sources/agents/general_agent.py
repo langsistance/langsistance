@@ -192,6 +192,26 @@ def _build_previous_conversation_block(
     return block, patent_ids
 
 
+def _splice_anchor_block(conversation_block, anchor_block) -> str:
+    """Splice the session-anchor block into the reference conversation block
+    (left pure so invoke_agent assembly and unit tests share one path).
+
+    Semantics (需求#7 P2):
+    - no anchor              -> conversation_block unchanged (byte-identical)
+    - anchor + history       -> anchor appended byte-verbatim AFTER history
+                                (patent-id history instructions precede it;
+                                anchor's own leading "\n\n" separates it)
+    - anchor + empty history -> conversation_block = anchor alone, so the
+                                anchor is never dropped
+    """
+    anchor = anchor_block or ""
+    if anchor and conversation_block:
+        return conversation_block + anchor
+    if anchor:
+        return anchor
+    return conversation_block or ""
+
+
 def _read_recent_patent_ids(user_id) -> list:
     """Read the user's recent patent IDs from Redis (written after every
     artifact generation, 1h TTL — 需求 2 跨会话记忆).  Failure degrades
@@ -1731,7 +1751,7 @@ Begin your response now:
                 "所有标题、段落、列表项和标签都必须使用中文。\n"
             )
 
-    async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler, push_filter=None, conversation_history=None, allow_long_task=True):
+    async def create_agent(self, user_id, prompt, query_id, tool_data, callback_handler, push_filter=None, conversation_history=None, allow_long_task=True, anchor_block: str = ""):
         """Build the ReAct tool set and run the loop for one user query.
 
         Long-task tool calls surface as the same {'intent': 'long_task'}
@@ -1742,6 +1762,13 @@ Begin your response now:
         the system prompt as reference-only "Previous conversation" context
         so follow-up questions always carry prior turns (需求 2).
 
+        ``anchor_block`` (rendered by Task 1 build_anchor_block, optional)
+        is reference-only context for this session's most recent completed
+        long task.  When conversation history exists the anchor is spliced
+        after it (专利号历史指令在前, 锚点紧随 1986 行后); when history is
+        absent a non-empty anchor becomes the conversation section on its
+        own so it is never dropped (需求#7 P2).
+
         ``allow_long_task=False`` strips every long-task entry from the
         tool set so neither the deterministic pre-route matcher nor the
         ReAct loop can hand the query to the analysis pipeline — used by
@@ -1751,6 +1778,7 @@ Begin your response now:
         # -- per-request state reset (agents are pooled and reused) --
         self._last_user_prompt = prompt
         self._conversation_history = conversation_history or []
+        self._anchor_block = anchor_block or ""
         self._last_query_id = query_id
         self._last_user_id = user_id
         self._callback_handler = callback_handler
@@ -1984,6 +2012,13 @@ Begin your response now:
                 conversation_block += (
                     "\n\n最近检索的专利号（仅当用户引用时使用）："
                     + ", ".join(_recent_ids[:20]))
+
+        # Session anchor (需求#7 P2): reference-only context for the current
+        # session's most recent completed long task.  Spliced only after the
+        # patent-id history branch above finishes, so its instructions come
+        # before the anchor and history is never perturbed.
+        conversation_block = _splice_anchor_block(
+            conversation_block, getattr(self, "_anchor_block", ""))
 
         from sources.long_task.search_query_builder import format_ladder_guidance
         number_guidance = ""
