@@ -7,45 +7,44 @@ interface SceneBarProps {
   onChange: (mode: SceneMode) => void
 }
 
+const TABS: { key: SceneMode; label: string }[] = [
+  { key: 'pro', label: '专业工作台' },
+  { key: 'seller', label: '卖家安全台' },
+]
+
 /**
  * Scene switcher (专业工作台 ⇄ 卖家安全台).
  *
- * Default scene is 专业工作台 (spec §3.2 / 2026-09-04 反馈); switching is
- * pure UI state — the URL never changes and the streaming hook reads the
- * persisted mode at send time (lib/useChatStream -> lib/sceneStore).
+ * DeepSeek instant-expert / WorkBuddy 式页签: 灰底浅容器内, 激活项呈
+ * 悬浮白卡 + 品牌色文字(teal), 未激活项静默灰字。纯 UI 状态, 不改变 URL;
+ * 流式发送时读持久化 scene(lib/useChatStream -> lib/sceneStore)。
  */
 export default function SceneBar({ mode, onChange }: SceneBarProps) {
-  const buttonClass = (active: boolean) =>
-    `px-4 py-2 rounded-md text-sm font-medium transition ${
-      active
-        ? 'bg-teal-600 text-white shadow-sm'
-        : 'text-gray-600 hover:text-gray-900'
-    }`
-
   return (
     <div
-      className="inline-flex rounded-lg bg-gray-100 p-1"
+      className="inline-flex items-center gap-1 rounded-2xl border border-gray-200/80 bg-gray-100/80 p-1.5"
       role="tablist"
       aria-label="工作台场景"
     >
-      <button
-        type="button"
-        role="tab"
-        aria-selected={mode === 'pro'}
-        onClick={() => onChange('pro')}
-        className={buttonClass(mode === 'pro')}
-      >
-        专业工作台
-      </button>
-      <button
-        type="button"
-        role="tab"
-        aria-selected={mode === 'seller'}
-        onClick={() => onChange('seller')}
-        className={buttonClass(mode === 'seller')}
-      >
-        卖家安全台
-      </button>
+      {TABS.map((tab) => {
+        const active = mode === tab.key
+        return (
+          <button
+            key={tab.key}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(tab.key)}
+            className={`rounded-xl px-5 py-2.5 text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/50 ${
+              active
+                ? 'bg-white text-teal-700 shadow-sm ring-1 ring-gray-200'
+                : 'text-gray-500 hover:bg-white/60 hover:text-gray-800'
+            }`}
+          >
+            {tab.label}
+          </button>
+        )
+      })}
     </div>
   )
 }
