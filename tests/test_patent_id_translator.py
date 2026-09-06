@@ -21,6 +21,7 @@ from sources.patent_id_translator import (
     translate,
     verdict_of,
     _us_docdb_candidates,
+    _us_resolver_id_type,
 )
 
 
@@ -128,6 +129,31 @@ class TestVerdictOfSync(unittest.TestCase):
         with mock.patch("sources.patent_id_translator.resolve_us_pub_number") as m:
             self.assertEqual(verdict_of("US12506212"), "resolvable")
             m.assert_not_called()
+
+    def test_verdict_of_none_when_no_recognisable_number(self):
+        # review 5f07835 MEDIUM-1: plain text (no patent number) → None so
+        # gates fall through to the legacy path instead of blocking it.
+        self.assertIsNone(verdict_of("what is the weather", "families"))
+        self.assertIsNone(verdict_of("", "families"))
+
+
+class TestUsResolverIdTypeMapping(unittest.TestCase):
+    def test_vocabulary_map(self):
+        self.assertEqual(_us_resolver_id_type("grant"), "grant_number")
+        self.assertEqual(_us_resolver_id_type("publication"), "publication_number")
+        self.assertEqual(_us_resolver_id_type("ambiguous"), "application_number")
+        self.assertEqual(_us_resolver_id_type("application"), "application_number")
+        self.assertEqual(_us_resolver_id_type(None), "application_number")
+
+    def test_translate_passes_mapped_id_type_to_resolve(self):
+        # review 5f07835 MEDIUM-2: grant-shaped input must query by grant
+        # number, not fall back to applicationNumberText.
+        m = mock.AsyncMock(return_value=("US20220294065A1", "17/123456",
+                                         "12506212"))
+        with mock.patch("sources.patent_id_translator.resolve_us_pub_number", m):
+            _awaited(translate("US9019058B2"))
+        m.assert_awaited_once_with(
+            "US9019058B2", tid="", id_type="grant_number")
 
 
 class TestUsDocdbOrdering(unittest.TestCase):

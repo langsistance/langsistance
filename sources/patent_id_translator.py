@@ -25,7 +25,7 @@ WO2023075806A1 for PCTUS2021059064).  Hence PCT → unresolvable-with-guidance
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from sources.patent_number_parser import parse_patent_identifiers
 from sources.patent_id_utils import extract_us_patent_digits
@@ -299,6 +299,22 @@ def _top_candidate(patent_id: str) -> dict | None:
     return parsed[0] if parsed else None
 
 
+def _us_resolver_id_type(parser_id_type: str | None) -> str:
+    """Map parser id_type vocabulary → resolve_us_pub_number query branch.
+
+    grant → grant_number (patentNumber), publication → publication_number
+    (earliestPublicationNumber); ambiguous / application / design / others keep
+    the legacy default (applicationNumberText, which the resolver always unions
+    in as fallback anyway).  Mirrors the id_type-aware querying the pre-extract
+    families Phase 0 code performed.
+    """
+    if parser_id_type == "grant":
+        return "grant_number"
+    if parser_id_type == "publication":
+        return "publication_number"
+    return "application_number"
+
+
 def verdict_of(patent_id: str, scenario: str = "") -> str | None:
     """Synchronous lightweight resolvable verdict (no network side effects).
 
@@ -307,12 +323,14 @@ def verdict_of(patent_id: str, scenario: str = "") -> str | None:
     ``translate`` (which may reverse-lookup a US application number) is overkill.
 
     Returns "resolvable" / "unresolvable"; None when nothing deterministic can
-    be asserted (no recognisable patent number) so callers fall through to the
-    legacy path.
+    be asserted (no recognisable patent number) so gates fall through to the
+    legacy path instead of blocking plain text (review 5f07835 MEDIUM-1).
     """
     del scenario  # verdict is scenario-independent for now.
-    decision = _decide(_top_candidate(patent_id))
-    return decision["verdict"]
+    candidate = _top_candidate(patent_id)
+    if candidate is None:
+        return None
+    return _decide(candidate)["verdict"]
 
 
 # ── Public async entry ───────────────────────────────────────────────────────
@@ -349,6 +367,7 @@ async def translate(
     office = {
         "epo_docdb": [], "uspto": decision["lookups"], "cnipa": [],
     }
+    confidence = decision["confidence"]
     if candidate is None:
         return base
 
@@ -356,14 +375,20 @@ async def translate(
         # US: epo docdb candidate benefits from an (optional) USPTO reverse
         # lookup that recovers grant / earliest-publication forms.  The first
         # orig attempts the original (prefixed) id, matching families Phase 0.
-        pub, app, grant = await resolve_us_pub_number(patent_id, tid="")
+        # Pass the parsed id_type through so the query uses the grant/publication
+        # branch instead of always defaulting to applicationNumberText
+        # (review 5f07835 MEDIUM-2).
+        pub, app, grant = await resolve_us_pub_number(
+            patent_id, tid="",
+            id_type=_us_resolver_id_type(candidate.get("id_type")),
+        )
         office["epo_docdb"] = _us_docdb_candidates(
             patent_id, pub, grant, app,
         )
         if not (grant or pub):
             # no grant found — still resolvable against USPTO, but the downstream
             # EPO candidate cannot be pinned down → drop confidence.
-            base.confidence = _lowest(base.confidence, "low")
+            confidence = _lowest(confidence, "low")
     elif decision["uspto_resolvable"]:
         office["epo_docdb"] = list(decision["lookups"])
 
@@ -374,8 +399,7 @@ async def translate(
         # independent of parser lookups (the WO source isn't wired into the
         # generic search legs).  display "WO2021/059064" → "WO2021059064".
         office["epo_docdb"] = [_wo_docdb(candidate.get("display") or patent_id)]
-    base.candidates = office
-    return base
+    return replace(base, confidence=confidence, candidates=office)
 
 
 def _wo_docdb(display: str) -> str:
