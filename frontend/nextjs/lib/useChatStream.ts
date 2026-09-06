@@ -392,7 +392,11 @@ export function useChatStream() {
                 : ''
             )
           if (token) {
-            setStatusSteps([])
+            // Final-answer text is typing: keep the activity timeline visible
+            // instead of wiping it, but retire the running-timer row — no more
+            // status events arrive until the stream ends and clears the list.
+            setStatusSteps((steps) => steps.map((s) =>
+              s.state === 'running' ? { ...s, state: 'done' as const } : s))
             setMessages((m) => updateAssistantMessage(m, assistantId, cleanGarbledText(String(token))))
           }
         }

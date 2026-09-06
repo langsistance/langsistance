@@ -234,14 +234,25 @@ def make_llm_call(provider, handler=None) -> LLMCall:
             llm = llm.bind_tools(tools)
         lc_messages = [_to_message(m) for m in messages]
 
+        # Narration routing (2026-09-06 stream-semantics fix): whether a round
+        # produced tool calls is only known after the stream ends, and some
+        # providers (DeepSeek/MiniMax family) write the model's pre-tool
+        # narration into *content* rather than reasoning_content.  When tools
+        # are bound we therefore buffer content instead of forwarding it live;
+        # a round WITH tool calls folds that narration into the step reasoning
+        # (never shown as answer text), and a pure-text round — the final
+        # answer — replays the buffer through the handler so progressive
+        # typing is preserved.  Without tools there is no ambiguity: forward
+        # live exactly as before.
         text_parts: List[str] = []
         reasoning_parts: List[str] = []
         calls: Dict[int, dict] = {}
+        defer = bool(tools)
         async for chunk in llm.astream(lc_messages):
             if getattr(chunk, "content", None):
-                if handler is not None:
-                    await handler.on_llm_new_token(chunk.content)
                 text_parts.append(chunk.content)
+                if not defer and handler is not None:
+                    await handler.on_llm_new_token(chunk.content)
             reasoning = None
             if hasattr(chunk, "reasoning_content"):
                 reasoning = chunk.reasoning_content
@@ -270,7 +281,20 @@ def make_llm_call(provider, handler=None) -> LLMCall:
                 "name": entry["name"],
                 "args": args,
             })
-        return "".join(text_parts), tool_calls, "".join(reasoning_parts)
+        text = "".join(text_parts)
+        if tool_calls:
+            # Content in a tool round is narration, not answer text — keep it
+            # out of the token stream and fold it into the step reasoning so
+            # the frontend step timeline (collapsed, expandable) carries it.
+            if text:
+                reasoning_parts.append(text)
+            return "", tool_calls, "".join(reasoning_parts)
+        if defer and handler is not None:
+            # Pure-text round under bound tools = final answer: replay the
+            # buffered chunks through the handler (near-live progressive text).
+            for piece in text_parts:
+                await handler.on_llm_new_token(piece)
+        return text, tool_calls, "".join(reasoning_parts)
 
     return llm_call
 

@@ -2,7 +2,8 @@
 import asyncio
 import unittest
 
-from sources.agents.react_loop import ReActLoop
+from sources.agents.react_loop import ReActLoop, make_llm_call
+from langchain_core.messages import AIMessageChunk
 
 
 class _FakeModel:
@@ -221,3 +222,111 @@ class TestReActLoop(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _TokenRecorder:
+    """Collects every token the adapter forwards to the handler."""
+
+    def __init__(self):
+        self.tokens = []
+
+    async def on_llm_new_token(self, content):
+        self.tokens.append(content)
+
+
+class _FakeStreamLLM:
+    """langchain-shaped fake: bind_tools no-op, astream yields given chunks."""
+
+    def __init__(self, chunks):
+        self.chunks = list(chunks)
+
+    def bind_tools(self, tools):
+        return self
+
+    async def astream(self, messages):
+        for chunk in self.chunks:
+            yield chunk
+
+
+class _FakeStreamProvider:
+    def __init__(self, chunks):
+        self._chunks = list(chunks)
+
+    def _get_langchain_llm(self, streaming=True):
+        return _FakeStreamLLM(self._chunks)
+
+
+def _tool_chunk(content, args="{}"):
+    return AIMessageChunk(
+        content=content,
+        tool_call_chunks=[
+            {"index": 0, "id": "call_0", "name": "search_patent", "args": args},
+        ],
+    )
+
+
+class TestLLMCallStreamSemantics(unittest.TestCase):
+    """Narration routing in make_llm_call (2026-09-06 stream fix).
+
+    A tool round whose provider writes pre-tool narration into *content* must
+    NOT stream it as answer tokens — it folds into the step reasoning.  A
+    pure-text round under bound tools (the final answer) replays its buffer so
+    progressive typing survives.  Without tools, forwarding stays live.
+    """
+
+    def _call(self, chunks, tools):
+        rec = _TokenRecorder()
+        llm_call = make_llm_call(_FakeStreamProvider(chunks), handler=rec)
+        return asyncio.run(llm_call([{"role": "user", "content": "?"}], tools)), rec
+
+    def test_tool_round_narration_not_streamed_and_folded(self):
+        (text, calls, reasoning), rec = self._call(
+            [_tool_chunk("I'll search the ladder first.")], tools=[{"name": "t"}])
+        self.assertEqual(text, "")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["name"], "search_patent")
+        self.assertEqual(rec.tokens, [], "tool-round narration must not stream")
+        self.assertIn("I'll search the ladder first.", reasoning)
+
+    def test_tool_round_folds_narration_after_provider_thinking(self):
+        chunk = AIMessageChunk(
+            content="narration text",
+            additional_kwargs={"reasoning_content": "provider think"},
+            tool_call_chunks=[
+                {"index": 0, "id": "c1", "name": "lookup", "args": "{}"},
+            ],
+        )
+        (text, calls, reasoning), rec = self._call([chunk], tools=[{"name": "t"}])
+        self.assertEqual(text, "")
+        self.assertIn("provider think", reasoning)
+        self.assertIn("narration text", reasoning)
+        self.assertLess(reasoning.index("provider think"),
+                        reasoning.index("narration text"))
+        self.assertEqual(rec.tokens, [])
+
+    def test_final_answer_round_replays_buffered_text(self):
+        (text, calls, reasoning), rec = self._call(
+            [AIMessageChunk(content="Here is "),
+             AIMessageChunk(content="the final answer.")],
+            tools=[{"name": "t"}])
+        self.assertEqual(text, "Here is the final answer.")
+        self.assertEqual(calls, [])
+        self.assertEqual("".join(rec.tokens), "Here is the final answer.")
+
+    def test_no_tools_forwards_live_and_returns_text(self):
+        (text, calls, reasoning), rec = self._call(
+            [AIMessageChunk(content="plain answer")], tools=[])
+        self.assertEqual(text, "plain answer")
+        self.assertEqual(calls, [])
+        self.assertEqual(rec.tokens, ["plain answer"])
+
+    def test_tool_round_empty_content_no_reasoning_noop(self):
+        chunk = AIMessageChunk(
+            content="", tool_call_chunks=[
+                {"index": 0, "id": "c1", "name": "lookup", "args": "{}"},
+            ])
+        (text, calls, reasoning), rec = self._call([chunk], tools=[{"name": "t"}])
+        self.assertEqual(text, "")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(reasoning, "")
+        self.assertEqual(rec.tokens, [])
