@@ -1,21 +1,14 @@
 # -*- coding: utf-8 -*-
-"""US 外观(design) B 方案可行性探针 —— V1-V5 一次性实测脚本。
+"""US 外观(design) B 方案可行性探针 —— V1-V5 一次性实测脚本(v2)。
 
-用途: 回填 docs/superpowers/specs/2026-09-06-us-design-clearance-feasibility.md
-§5 待验清单。流式/低内存(不落库, 随取随弃), 输出 JSON 结论表, 不触碰密钥明文。
+v2 修订(2026-09-06 首跑反馈):
+  1. 加载 .env(V1 全 401 根因: 独立脚本未 dotenv)；
+  2. 设计页 id 从 XHR 结果取(真实 id 带 S1 后缀, 如 patent/USD504889S1/en)；
+  3. V4 计数按 Google id 正则识别设计件(US D 与 EM/CN S 号), 并尝试 type 过滤；
+  4. V5 用已证可用的 publication 日期过滤按年代段抽样并验证页面图可得。
 
-待验项:
-  V1  USPTO applications/search 对 D 号段的查询形态与字段支持
-      (patentNumber 带 D 前缀 vs 纯 digits; 结果里分类字段的键名)
-  V2  Google Patents 设计专利页/检索: Locarno 与 USPC-D 可得性; XHR 的
-      design 检索/过滤参数行为
-  V3  patentimages.storage.googleapis.com 直链 200 验证(取真实页 <img> src)
-  V4  5 个通用品名词检索的 design 召回抽样(XHR, 统计 Top 内 USD 占比)
-  V5  年代段设计专利页面/图可得性(尽力而为; 过滤参数不支持则如实报告)
-
-运行(服务器, 有 .env 凭据):
+用途/输出/运行方式同 v1(见文件头注释):
   PYTHONUTF8=1 python scripts/design_feasibility_probe.py -o probe_results.json
-  进度打 stderr, 结论 JSON 写 -o 指定文件。
 """
 import argparse
 import asyncio
@@ -26,19 +19,40 @@ import sys
 
 import httpx
 
+
+def _load_dotenv() -> None:
+    for name in (".env",):
+        try:
+            with open(name, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, _, val = line.partition("=")
+                    key, val = key.strip(), val.strip().strip('"').strip("'")
+                    if key and key not in os.environ:
+                        os.environ[key] = val
+        except OSError:
+            return
+
+
+_load_dotenv()
+
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
 USPTO_SEARCH = "https://api.uspto.gov/api/v1/patent/applications/search"
 GP_XHR = "https://patents.google.com/xhr/query"
 GP_PAGE = "https://patents.google.com/patent/{pid}/en"
-GP_UA = UA
 
-# V4 抽样品名词 —— 仅探针工具数据, 不进入产品提示词(仓库红线: 检索增强不固化提问词)。
+# V4 抽样品名词 —— 仅探针工具数据, 不进入产品提示词。
 SAMPLE_TERMS = ["robot toy", "bottle", "office chair", "desk lamp", "headphones"]
-
-# V1 探针: D 号与 digits(带 D 前缀设计号, 已知 2005 年 Apple 外观 D504,889)。
+# V1 探针号: Apple 2005 外观 D504,889(经 XHR 已证存在于 Google Patents)。
 PROBE_D = "D504889"
 PROBE_DIGITS = "504889"
+DESIGN_LOOKUP = "USD504889S"
+
+# Google id 设计件识别: patent/USD...S1/en、EM...S/en、CN...S/en 等。
+_DESIGN_ID_RE = re.compile(r"/(?:USD?\d+|[A-Z]{2}\d+)[A-Z]?S\d*/en", re.I)
 
 
 def log(msg: str) -> None:
@@ -62,7 +76,7 @@ async def _uspto_search(client: httpx.AsyncClient, query: str,
         ],
     }
     resp = await client.post(USPTO_SEARCH, headers=headers, json=body)
-    out = {"http": resp.status_code}
+    out = {"http": resp.status_code, "api_key_present": bool(key)}
     if resp.status_code == 200:
         data = resp.json()
         results = (
@@ -80,12 +94,13 @@ async def _uspto_search(client: httpx.AsyncClient, query: str,
         out["sample_patent_number"] = meta.get("patentNumber") if meta else None
         out["sample_title"] = meta.get("inventionTitle") if meta else None
     else:
-        out["note"] = f"HTTP {resp.status_code}; 401=无 key 或 key 无效"
+        out["note"] = (f"HTTP {resp.status_code} (api_key_present={bool(key)}); "
+                       "401 且 key 缺失=确认 .env 无该键; 401 且 key 在=键无效")
     return out
 
 
 async def v1(client: httpx.AsyncClient) -> dict:
-    log("V1 USPTO D 号段查询形态…")
+    log("V1 USPTO D 号段查询形态(.env 已加载)…")
     return {
         "v1_patentNumber_with_D": await _uspto_search(
             client, f'applicationMetaData.patentNumber:"{PROBE_D}"'),
@@ -96,97 +111,130 @@ async def v1(client: httpx.AsyncClient) -> dict:
     }
 
 
+async def _xhr(client: httpx.AsyncClient, url_query: str) -> dict:
+    """XHR 检索; url_query 为 url 参数原文(未编码由 params 处理)。"""
+    try:
+        resp = await client.get(GP_XHR, params={"url": url_query, "exp": ""},
+                                headers={"User-Agent": UA})
+        rec = {"http": resp.status_code}
+        if resp.status_code != 200:
+            rec["body_head"] = resp.text[:150]
+            return rec
+        data = resp.json()
+        cluster = (((data.get("results") or {}).get("cluster") or [{}])[0]
+                   .get("result") or [])
+        rec["total"] = ((data.get("results") or {}).get("total_num_results"))
+        rec["items"] = []
+        for r in cluster[:10]:
+            pat = r.get("patent", {})
+            rec["items"].append({
+                "id": r.get("id", ""),
+                "pub": pat.get("publication_number", ""),
+                "title": (pat.get("title") or "").strip()[:80],
+                "cls": sorted(
+                    set((pat.get("classifications") or "").split(";"))
+                ) if pat.get("classifications") else [],
+            })
+        return rec
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
 async def _gp_page(client: httpx.AsyncClient, pid: str) -> dict:
     out = {"pid": pid, "http": None}
     try:
-        resp = await client.get(GP_PAGE.format(pid=pid), headers={"User-Agent": GP_UA})
+        resp = await client.get(GP_PAGE.format(pid=pid),
+                                headers={"User-Agent": UA})
         out["http"] = resp.status_code
         if resp.status_code != 200:
             return out
         html = resp.text
         out["has_locarno"] = "Locarno" in html
-        out["has_uspc"] = bool(re.search(r"USPC|United States Patent Classification", html))
+        out["has_uspc"] = "United States Patent Classification" in html
         imgs = re.findall(
             r'https://patentimages\.storage\.googleapis\.com/[^"\'>\s]+',
             html)
         out["patentimages_count"] = len(imgs)
         out["first_image"] = imgs[0] if imgs else None
-        # 分类段落取样(供人工确认 Locarno 号段写法)。
         m = re.search(r"Locarno Classification.{0,600}", html, re.S)
         out["locarno_snippet"] = (re.sub(r"<[^>]+>", " ", m.group(0))[:400]
                                   if m else None)
         return out
-    except Exception as exc:  # noqa: BLE001 探针容忍一切
+    except Exception as exc:  # noqa: BLE001
         out["error"] = f"{type(exc).__name__}: {exc}"
         return out
 
 
 async def v2_v3(client: httpx.AsyncClient) -> dict:
-    log("V2/V3 Google Patents 设计页字段与图直链…")
-    page = await _gp_page(client, "USD504889S")
+    log("V2/V3 设计号 XHR → 页 id → Locarno/USPC/图直链…")
+    lookup = await _xhr(client, f"q={DESIGN_LOOKUP}")
+    pid = None
+    if lookup.get("items"):
+        pid = lookup["items"][0].get("id", "").removeprefix("patent/")
+    page = await _gp_page(client, pid) if pid else {"pid": None,
+                                                    "note": "lookup 无命中"}
     img_check = None
     if page.get("first_image"):
         try:
             r = await client.get(page["first_image"],
-                                 headers={"User-Agent": GP_UA})
+                                 headers={"User-Agent": UA})
             img_check = {"http": r.status_code, "bytes": len(r.content),
                          "content_type": r.headers.get("content-type")}
         except Exception as exc:  # noqa: BLE001
             img_check = {"error": f"{type(exc).__name__}: {exc}"}
-    xhr = {}
-    for label, q in [("design_number", "USD504889S"), ("plain_term", "toy snake")]:
-        try:
-            resp = await client.get(
-                GP_XHR,
-                params={"url": f"q={q}", "exp": ""},
-                headers={"User-Agent": GP_UA})
-            xhr[label] = {"http": resp.status_code, "body_head": resp.text[:200]}
-        except Exception as exc:  # noqa: BLE001
-            xhr[label] = {"error": f"{type(exc).__name__}: {exc}"}
-    return {"v2_page": page, "v3_image_direct": img_check, "xhr_raw": xhr}
+    # XHR 是否支持 design 过滤: 尝试若干参数形态, 对比总量变化。
+    filters = {}
+    variants = {
+        "type_param": "q=toy snake&type=DESIGN",
+        "q_type_token": "q=toy snake type:DESIGN",
+        "plain": "q=toy snake",
+    }
+    for label, q in variants.items():
+        r = await _xhr(client, q)
+        filters[label] = {"total": r.get("total"), "http": r.get("http")}
+    return {"v2_xhr_lookup": lookup, "v2_page": page,
+            "v3_image_direct": img_check, "filter_trials": filters}
 
 
 async def v4_v5(client: httpx.AsyncClient) -> dict:
-    log("V4/V5 品名词 design 召回抽样与年代过滤尝试…")
+    log("V4 品名词设计召回 + V5 年代段图可得性…")
     terms = []
     for term in SAMPLE_TERMS:
-        try:
-            resp = await client.get(
-                GP_XHR,
-                params={"url": f"q={term}", "exp": ""},
-                headers={"User-Agent": GP_UA})
-            rec = {"term": term, "http": resp.status_code}
-            if resp.status_code == 200:
-                data = resp.json()
-                results = (((data.get("results") or {}).get("cluster") or [{}])[0]
-                           .get("result") or [])
-                pubs = [r.get("patent", {}).get("publication_number", "")
-                        for r in results]
-                rec["top_total"] = len(pubs)
-                rec["design_count_in_top"] = sum(
-                    1 for p in pubs if p.upper().startswith("USD"))
-                rec["sample_pubs"] = pubs[:5]
-            terms.append(rec)
-        except Exception as exc:  # noqa: BLE001
-            terms.append({"term": term, "error": f"{type(exc).__name__}: {exc}"})
-    # V5: 尝试按公开日区间过滤(Google Patents XHR url 内联 after/before)。
-    date_filter = {}
-    try:
-        url = "q=(toy)&after=publication:19900101&before=publication:19991231"
-        resp = await client.get(GP_XHR, params={"url": url, "exp": ""},
-                                headers={"User-Agent": GP_UA})
-        date_filter = {"http": resp.status_code,
-                       "body_head": resp.text[:200],
-                       "note": "若 http=200 且命中为 1990s 件则过滤可用; "
-                               "否则该过滤器不受支持(报告为准)"}
-    except Exception as exc:  # noqa: BLE001
-        date_filter = {"error": f"{type(exc).__name__}: {exc}"}
-    return {"v4_term_sample": terms, "v5_date_filter": date_filter}
+        r = await _xhr(client, f"q={term}")
+        items = r.get("items", [])
+        designs = [it for it in items if _DESIGN_ID_RE.search(it.get("id", ""))]
+        us_designs = [it for it in items if re.search(r"/USD?\d+S\d*/en", it.get("id", ""))]
+        terms.append({
+            "term": term, "http": r.get("http"), "total": r.get("total"),
+            "design_in_top10": len(designs), "us_design_in_top10": len(us_designs),
+            "sample_ids": [it["id"] for it in items[:5]],
+        })
+    eras = {}
+    for label, after, before in [
+        ("era_1990s", "publication:19900101", "publication:19991231"),
+        ("era_2000s", "publication:20000101", "publication:20091231"),
+        ("era_2010s", "publication:20100101", "publication:20191231"),
+    ]:
+        q = f"q=(toy)&after={after}&before={before}"
+        r = await _xhr(client, q)
+        pid = None
+        for it in r.get("items", []):
+            if _DESIGN_ID_RE.search(it.get("id", "")):
+                pid = it["id"].removeprefix("patent/")
+                break
+        page = await _gp_page(client, pid) if pid else {"pid": None}
+        eras[label] = {
+            "total": r.get("total"),
+            "first_design_id": pid,
+            "page_http": page.get("http"),
+            "patentimages_count": page.get("patentimages_count"),
+            "first_image": page.get("first_image"),
+        }
+    return {"v4_term_sample": terms, "v5_era_pages": eras}
 
 
 async def main(out_path: str) -> None:
     results: dict = {"vision_config": {}, "v1": {}, "v2_v3": {}, "v4_v5": {}}
-    # 记录生效视觉配置(不打印密钥)。
     try:
         import configparser
         cfg = configparser.ConfigParser()
