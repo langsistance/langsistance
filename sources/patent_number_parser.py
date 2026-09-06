@@ -239,15 +239,21 @@ def _pct(office: str, year: str, serial: str, spaced: bool) -> dict:
 
 
 def _wo(year: str, serial: str) -> dict:
-    """WO 公开号: WO{YYYY}/{NNNNNN}, docdb 候选 kind 可省(待实证)。"""
+    """WO 公开号: WO{YYYY}/{NNNNNN}, docdb 候选 kind 可省(待实证)。
+
+    lookups 保持空: 检索腿按 country 分发只认 CN/US, WO 若带 lookups 会被
+    剥数字送 USPTO 白跑 (review 9dfe978f MEDIUM)。WO 的落地入口是家族/
+    深分析任务经 translator 构造 docdb 候选, 通用检索侧靠 reason 引导。
+    """
     return {
         "raw": f"WO{year}{serial}",
         "display": f"WO{year}/{serial}",
         "country": "WO",
         "id_type": "wo",
         "confidence": "high",
-        "reason": f"WO 国际公开号（年份 {year}、公开序号 {serial}）",
-        "lookups": [f"WO{year}{serial}"],
+        "reason": (f"WO 国际公开号（年份 {year}、公开序号 {serial}）——"
+                   "通用专利检索暂未接入 WO 源；可作同族/家族分析入口"),
+        "lookups": [],
     }
 
 
@@ -515,7 +521,8 @@ def format_number_guidance(
     """
     candidates = [c for c in (candidates or [])
                   if c.get("country") in ("CN", "US", "WO")
-                  or c.get("id_type") == "unsupported"]
+                  or (c.get("id_type") == "unsupported"
+                      and not c.get("country"))]
     if not candidates:
         return ""
     lines = []

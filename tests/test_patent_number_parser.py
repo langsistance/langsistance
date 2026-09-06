@@ -266,19 +266,21 @@ class TestWoIdentifiers(unittest.TestCase):
         self.assertEqual(c["id_type"], "wo")
         self.assertEqual(c["display"], "WO2021/059064")
         self.assertEqual(c["country"], "WO")
-        self.assertIn("WO2021059064", c["lookups"])
+        # review 9dfe978f MEDIUM: WO 不带 lookups(检索腿无 WO 源, 防剥数字送
+        # USPTO 白跑); WO 落地入口是家族任务经 translator 的 docdb 候选。
+        self.assertEqual(c["lookups"], [])
 
     def test_wo_slashed(self):
         c = _top("WO2021/059064")
         self.assertEqual(c["id_type"], "wo")
         self.assertEqual(c["display"], "WO2021/059064")
-        self.assertIn("WO2021059064", c["lookups"])
+        self.assertEqual(c["lookups"], [])
 
     def test_wo_with_kind(self):
         c = _top("WO2021/059064A1")
         self.assertEqual(c["id_type"], "wo")
         self.assertEqual(c["display"], "WO2021/059064")
-        self.assertIn("WO2021059064", c["lookups"])
+        self.assertEqual(c["lookups"], [])
 
     def test_wo_spaced(self):
         c = _top("WO2021 059064")
@@ -322,6 +324,13 @@ class TestNewGuidanceAndRouting(unittest.TestCase):
     def test_guidance_wo(self):
         out = parse_patent_identifiers("WO2021/059064A1")
         self.assertIn("WO2021/059064", format_number_guidance(out, lang="zh"))
+
+    def test_guidance_ep_jp_not_widened(self):
+        # review 9dfe978f LOW: unsupported 扩容仅针对无国别裸数字守卫形态,
+        # 不得连带放行 _external 的 EP/JP 候选进 guidance。
+        for raw in ("EP3456789A1", "JP2023/123456"):
+            out = parse_patent_identifiers(raw)
+            self.assertEqual(format_number_guidance(out, lang="zh"), "")
 
     def test_pct_does_not_force_single_source(self):
         out = parse_patent_identifiers("PCTUS2021059064")
