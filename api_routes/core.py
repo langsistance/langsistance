@@ -977,6 +977,22 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
             scenario = inputs["scenario"]
             patent_id_type = inputs.get("patent_id_type", "unknown")
 
+            # ── Design P1 T8: seller appearance-clearance mounting seam ──
+            # Gate (controller ruling A): image-file ∧ scene=="seller" ∧ visual
+            # appearance cue ⇒ route this multipart upload to execute_design_clearance.
+            # The client carrier is queryStreamWithFiles, which already appends the
+            # 'scene' form field alongside session/query (frontend api.ts).  Additive:
+            # when all three conditions do NOT hold, the upload falls through, byte-for-
+            # byte, to the original patent-analysis path below (nothing else changes).
+            # Non-image or non-seller or non-cue uploads are never re-routed — a
+            # product-appearance review is meaningful only with all three present.
+            from sources.design.clearance_intent import seller_design_clearance_gate
+            upload_scene = (form.get("scene") or "").strip()
+            is_design_seller = bool(
+                seller_design_clearance_gate(upload_scene, patent_file_refs, query))
+            if is_design_seller:
+                patent_ids = []  # image refs are not patent ids
+
             reused_session = False
             existing_session_id = (form.get("session_id") or "").strip()
             conn = get_db_connection()
@@ -1015,19 +1031,29 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         track_event("session:new", user_id=str(local_user_id),
                                     session_id=session_id, query_text=query)
 
+                    from sources.design.clearance_intent import uploaded_image_refs_of
+                    _design_refs = (uploaded_image_refs_of(patent_file_refs)
+                                    if is_design_seller else [])
+                    _task_type = ("design_clearance" if is_design_seller
+                                  else "patent_analysis")
+                    _task_params = {
+                        "query": query,
+                        "query_id": query_id,
+                        "patent_ids": patent_ids,
+                        "patent_source": patent_source,
+                        "patent_file_refs": patent_file_refs,
+                    }
+                    if is_design_seller:
+                        _task_params["product_text"] = query
+                        _task_params["product_image_refs"] = _design_refs
+                        _task_params["source"] = "us_design"
                     cur.execute(
                         """INSERT INTO long_tasks
                            (task_id, session_id, user_id, scene_id, task_type, input_params, status)
                            VALUES (%s, %s, %s, %s, %s, %s, %s)""",
                         (task_id, session_id, local_user_id, None,
-                         "patent_analysis",
-                         json.dumps({
-                             "query": query,
-                             "query_id": query_id,
-                             "patent_ids": patent_ids,
-                             "patent_source": patent_source,
-                             "patent_file_refs": patent_file_refs,
-                         }, ensure_ascii=False),
+                         _task_type,
+                         json.dumps(_task_params, ensure_ascii=False),
                          "pending"))
                     conn.commit()
             finally:
@@ -1102,8 +1128,23 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
             }
 
             if queue_result == "running":
-                from celery_worker import execute_patent_analysis
-                execute_patent_analysis.delay(task_id=task_id, params=celery_params)
+                if is_design_seller:
+                    from celery_worker import execute_design_clearance
+                    design_params = {
+                        "query": query,
+                        "session_id": session_id,
+                        "conversation_history": conversation_history,
+                        "user_id": str(local_user_id),
+                        "product_text": query,
+                        "product_image_refs": _design_refs,
+                        "source": "us_design",
+                    }
+                    execute_design_clearance.delay(
+                        task_id=task_id, params=design_params)
+                else:
+                    from celery_worker import execute_patent_analysis
+                    execute_patent_analysis.delay(
+                        task_id=task_id, params=celery_params)
                 app_logger.info(f"[user={user_id}] File upload: dispatched task={task_id}")
                 track_event("long_task:submit", user_id=str(local_user_id),
                             task_id=task_id, patent_count=len(patent_ids),

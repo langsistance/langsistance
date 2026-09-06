@@ -5969,6 +5969,19 @@ def _dispatch_queued_task(next_task_id: str, user_id: str) -> None:
             execute_prosecution_analysis.delay(
                 task_id=next_task_id, params=next_params,
             )
+        elif task_type == 'design_clearance':
+            # Resume (design P1 T8): a design_clearance queued task must be
+            # dispatched to its own executor, not fall through to patent_analysis.
+            next_params = dict(next_params)
+            next_params['product_text'] = stored.get('product_text', '') \
+                if stored.get('product_text') is not None \
+                else stored.get('query', '')
+            next_params['product_image_refs'] = stored.get(
+                'product_image_refs', [])
+            next_params['source'] = stored.get('source') or 'us_design'
+            execute_design_clearance.delay(
+                task_id=next_task_id, params=next_params,
+            )
         else:
             execute_patent_analysis.delay(
                 task_id=next_task_id, params=next_params,

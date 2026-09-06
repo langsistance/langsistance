@@ -147,6 +147,87 @@ class TestDesignClearanceIntentDetector(unittest.TestCase):
         self.assertFalse(has_design_cue("帮我查这个号码的审查流程"))
 
 
+# ── T8 core plug point: seller three-condition gate (pure, broker-free) ──
+
+from sources.design.clearance_intent import (
+    is_image_file, uploaded_image_refs_of, seller_design_clearance_gate,
+)  # noqa: E402
+
+
+class TestSellerDesignClearanceGate(unittest.TestCase):
+    """Truth table: image-file ∧ scene=="seller" ∧ appearance cue → route.
+
+    Non-hit cases (缺 scene / 非 seller scene / 无 cue / 非图) must all be False
+    so the upload carries on its original patent path unchanged.
+    """
+
+    IMG = [{"filename": "mug.png", "path": "/up/a.png", "content_type": "image/png"}]
+    DOC = [{"filename": "spec.pdf", "path": "/up/b.pdf", "content_type": "application/pdf"}]
+
+    def test_all_three_true_routes(self):
+        self.assertTrue(
+            seller_design_clearance_gate("seller", self.IMG, "帮忙做外观侵权比对"))
+
+    def test_missing_scene_false(self):
+        self.assertFalse(
+            seller_design_clearance_gate("", self.IMG, "外观侵权比对"))
+        self.assertFalse(
+            seller_design_clearance_gate(None, self.IMG, "外观侵权比对"))
+
+    def test_non_seller_scene_false(self):
+        self.assertFalse(
+            seller_design_clearance_gate("pro", self.IMG, "外观侵权比对"))
+        self.assertFalse(
+            seller_design_clearance_gate("sellerX", self.IMG, "外观侵权比对"))
+
+    def test_missing_cue_false(self):
+        self.assertFalse(
+            seller_design_clearance_gate("seller", self.IMG, "看看这张图片"))
+
+    def test_non_image_file_false(self):
+        self.assertFalse(
+            seller_design_clearance_gate("seller", self.DOC, "外观侵权比对"))
+        self.assertFalse(
+            seller_design_clearance_gate("seller", [], "外观侵权比对"))
+
+    def test_cue_can_come_from_filename(self):
+        self.assertTrue(
+            seller_design_clearance_gate(
+                "seller", [{"filename": "外观专利比对.png", "path": "/up/x.png"}],
+                "帮我查这个"))
+
+    # pure image-file suffix detection
+    def test_is_image_file_extensions(self):
+        self.assertTrue(is_image_file("shot.PNG"))
+        self.assertTrue(is_image_file("a.jpg"))
+        self.assertTrue(is_image_file("b.webp"))
+        self.assertFalse(is_image_file("doc.pdf"))
+        self.assertFalse(is_image_file("doc.docx"))
+        self.assertFalse(is_image_file(""))
+
+    def test_uploaded_image_refs_of_filters(self):
+        refs = [{"filename": "mug.png", "path": "/u/m.png"},
+                {"filename": "spec.pdf", "path": "/u/spec.pdf"},
+                {"filename": "noext", "path": "/u/noext"}]
+        got = uploaded_image_refs_of(refs)
+        self.assertEqual(got, ["/u/m.png"])
+
+
+# ── T8: resume dispatch maps design_clearance to its own executor ──
+
+class TestDispatchDesignClearanceResume(unittest.TestCase):
+    """_dispatch_queued_task task_type table: design_clearance → executor."""
+
+    def test_dispatch_branches_for_design_clearance(self):
+        # read-only probe that the resume dispatch no longer lets a
+        # design_clearance row fall through to execute_patent_analysis.
+        import inspect
+        import celery_worker as _cw
+        body = inspect.getsource(_cw._dispatch_queued_task)
+        self.assertIn("elif task_type == 'design_clearance':", body)
+        self.assertIn("execute_design_clearance.delay", body)
+
+
 # ── I2: L2 pdf_fetch seam is real asyn-a-browser-crush, not the sync default ──
 
 class TestDesignPdfFetchSeam(unittest.TestCase):
