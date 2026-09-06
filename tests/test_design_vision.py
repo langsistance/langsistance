@@ -126,3 +126,30 @@ def test_call_vision_missing_api_key_raises(monkeypatch):
         assert False, "should raise"
     except DesignVisionError as exc:
         assert "key" in str(exc).lower()
+
+
+# ---------- call_vision: config 显式参数 (PostProvider 覆盖) ----------
+
+def test_call_vision_disabled_raises():
+    # enabled=false (显式 config) → DesignVisionError("vision disabled"), 不做外呼。
+    async def unexpected(*a, **k):  # noqa: ARG001
+        raise AssertionError("post 不应被调用 (disabled 提前短路)")
+
+    try:
+        asyncio.run(call_vision(["aGk="], "x", post=unexpected, config={"enabled": False}))
+        assert False, "should raise"
+    except DesignVisionError as exc:
+        assert "vision disabled" in str(exc)
+
+
+def test_call_vision_returns_exact_extracted_text():
+    # mock post 200 + choices[0].message.content → call_vision 恰返回该文本 (非仅非空)。
+    async def fake_post(url, headers, json, timeout):  # noqa: ARG001
+        class R:
+            status_code = 200
+            text = '{"choices":[{"message":{"content":"exact text"}}]}'
+
+        return R()
+
+    out = asyncio.run(call_vision(["aGVsbG8="], "describe", post=fake_post))
+    assert out == "exact text"

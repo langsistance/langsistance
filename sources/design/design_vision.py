@@ -83,12 +83,21 @@ def _prompt_kwargs(model: str, images_base64: list[str], prompt: str) -> dict:
     }
 
 
-async def call_vision(images_base64, prompt, config=None, post=None, timeout: int = 90) -> str:
+async def call_vision(
+    images_base64,
+    prompt,
+    post=None,
+    timeout: int = 90,
+    *,
+    config=None,
+) -> str:
     """把页图 + prompt 发给视觉模型, 返回 choices[0].message.content。
 
-    config: {"provider","model","enabled"} (Provider 覆盖), 缺省走 config.ini。
-    post: async (url, headers, json, timeout) -> {status_code,text}; 测试注入禁真实网络,
-    缺省走 httpx 生产封装。非 200 / 网络异常 → DesignVisionError; enabled=false → 同样抛。
+    签名契约 (与 brief 一致): images_base64, prompt, post, timeout 按位次; 优先级 config 为
+    keyword-only 后置参数。config: {"provider","model","enabled"} (Provider 覆盖), 缺省走
+    config.ini。post: async (url, headers, json, timeout) -> {status_code,text}; 测试注入禁
+    真实网络, 缺省走 httpx 生产封装。非 200 / 网络异常 → DesignVisionError; enabled=false →
+    同样抛 DesignVisionError("vision disabled")。
 
     注: 本编排把 provider 名解为鉴权来源, 简化单一视觉域; 键缺失 / 未知 provider → 报错。
     """
