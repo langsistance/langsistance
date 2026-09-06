@@ -92,8 +92,13 @@ def load_checkpoint(task_id: str) -> dict | None:
 
 
 def set_task_completed(task_id: str, report_files: list,
-                      patent_ids: list | None = None) -> None:
+                       patent_ids: list | None = None,
+                       anchor_payload: dict | None = None) -> None:
     """Mark task as completed with report file metadata and optional patent IDs.
+
+    ``anchor_payload`` (dict|None) carries the session-anchor data (Task 1
+    shape); when present the anchor is written and the completion receipt
+    carries a ``patent_data`` list (≤50) derived from it.
 
     Completion is always terminal, so the outcome is also written back
     into the task's conversation (M1: results must be discussable in the
@@ -112,17 +117,71 @@ def set_task_completed(task_id: str, report_files: list,
 
     try:
         from sources.long_task.task_messages import (
-            append_task_message, build_result_digest,
-        )
-        append_task_message(
-            task_id,
-            event='completed',
-            content=build_result_digest(task_id),
-            patent_ids=patent_ids,
-            report_files=report_files,
-        )
+            append_task_message, build_result_digest)
+        from sources.long_task.session_anchor import write_session_anchor
+        if isinstance(anchor_payload, dict):
+            session_id = _lookup_task_session_id(task_id)
+            if session_id:
+                write_session_anchor(
+                    session_id,
+                    anchor_type=str(anchor_payload.get('anchor_type') or 'topic'),
+                    target=str(anchor_payload.get('target') or ''),
+                    target_summary=str(anchor_payload.get('target_summary') or ''),
+                    source=str(anchor_payload.get('source') or ''),
+                    result_ids=list(anchor_payload.get('result_ids') or []),
+                    result_titles=anchor_payload.get('result_titles') or None,
+                    task_id=str(anchor_payload.get('task_id') or task_id),
+                )
+            patent_data = None
+            rids = list(anchor_payload.get('result_ids') or [])[:50]
+            if rids:
+                titles = anchor_payload.get('result_titles') or {}
+                patent_data = [
+                    {'patent_id': str(pid),
+                     'title': str(titles.get(pid, ''))[:200],
+                     'source': str(anchor_payload.get('source') or '')}
+                    for pid in rids]
+            append_task_message(
+                task_id,
+                event='completed',
+                content=build_result_digest(task_id),
+                patent_ids=patent_ids,
+                patent_data=patent_data,
+                report_files=report_files,
+            )
+        else:
+            append_task_message(
+                task_id,
+                event='completed',
+                content=build_result_digest(task_id),
+                patent_ids=patent_ids,
+                report_files=report_files,
+            )
     except Exception:
         pass  # conversation write-back must never break task state
+
+
+def _lookup_task_session_id(task_id: str) -> str | None:
+    """Session_id of *task_id* (MySQL long_tasks), or '' on any failure.
+
+    Mirrors the existing ``_lookup_task_user_id`` / task_messages lookup
+    query shape; only used when an anchor payload forces the session write.
+    Failure degrades silently — anchor plumbing must never break task state.
+    """
+    try:
+        from sources.knowledge.knowledge import get_db_connection
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT session_id FROM long_tasks WHERE task_id = %s",
+                    (task_id,))
+                row = cur.fetchone()
+            return (row.get('session_id') or '') if row else ''
+        finally:
+            conn.close()
+    except Exception:
+        return ''
 
 
 def notify_terminal_failure(task_id: str, error: str) -> None:
