@@ -333,6 +333,31 @@ def verdict_of(patent_id: str, scenario: str = "") -> str | None:
     return _decide(candidate)["verdict"]
 
 
+def unresolvable_gate_error(patent_id: str) -> str:
+    """A6 shared gate (spec §5.3): publication-format guidance text iff *patent_id*
+    is a deterministically unresolvable shape; ``""`` means pass-through.
+
+    One-line quick gate the CN / EP / JP examination resolvers place right
+    before they delegate a non-local id to the EPO ``lookup_family`` remote call,
+    so a PCT / unsupported-bare / foreign office shape never white-sends a wasted
+    remote family query.  Fail-open contract (spec §7): returns ``""`` when
+    nothing deterministic can be asserted (no recognisable number → None verdict)
+    or when the translator itself raises — in both cases callers keep their legacy
+    delegation unchanged.  Purely local / offline; builds generic next-step copy
+    from ``failure_guidance`` (reason_code ERR_UNRESOLVABLE_ID, spec §5.4).
+    """
+    try:
+        if verdict_of(patent_id) != "unresolvable":
+            return ""
+    except Exception:
+        _log().warning(
+            f"A6 gate — verdict_of raised for {patent_id!r}; pass-through")
+        return ""
+    from sources.long_task.status_manager import (
+        failure_guidance, ERR_UNRESOLVABLE_ID)
+    return failure_guidance("", ERR_UNRESOLVABLE_ID, lang="zh")
+
+
 # ── Public async entry ───────────────────────────────────────────────────────
 
 async def translate(

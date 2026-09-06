@@ -82,6 +82,21 @@ async def resolve_jp_application_number(
         )
         return raw_num, {"direct_jp": True, "input_id": patent_id}
 
+    # A6 shared resolvability gate (spec §5.3) — a deterministically-unresolvable
+    # id (PCT / unsupported / foreign shape) must not white-send to the EPO family
+    # API; route it through this module's existing (None, ctx) failure channel with
+    # generic publication-format guidance.  Fail-open: resolvable / None / a
+    # translator exception keeps the legacy delegation below.
+    from sources.patent_id_translator import unresolvable_gate_error
+    _gate = unresolvable_gate_error(patent_id)
+    if _gate:
+        _logger.warning(f"japan_resolve_unresolvable — input={patent_id}")
+        return None, {
+            "error": _gate,
+            "unresolvable": True,
+            "input_id": patent_id,
+        }
+
     # Resolve via EPO family
     from sources.long_task.patent_family import EPOError
 
