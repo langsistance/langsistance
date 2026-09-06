@@ -28,7 +28,7 @@ def _tid():
 
 class TestDesignComplete(unittest.TestCase):
     def test_writes_set_task_completed_anchor_from_digest(self):
-        result = {"report_md": "# ok",
+        result = {"report_md": "# ok report body",
                   "digest": {"target": "pirate ship mug",
                              "result_ids": ["USD9"], "totals": {}}}
         seen = {}
@@ -38,13 +38,25 @@ class TestDesignComplete(unittest.TestCase):
             seen["patent_ids"] = patent_ids
             seen["anchor"] = anchor_payload
 
+        def fake_update(tid, phase, progress, step_msg, status='running',
+                        **extra):
+            seen["summary_kw"] = extra
+
         with mock.patch(
                 "sources.long_task.status_manager.set_task_completed",
                 side_effect=fake_set), \
+             mock.patch("sources.long_task.status_manager.update_task_status",
+                        side_effect=fake_update) as _up, \
              mock.patch("sources.long_task.user_queue.complete_user_task") as _cq:
             celery_worker._design_complete(_tid(), result,
                                            {"source": "us_design"}, "user-7")
         _cq.assert_called_once()
+        # I1: report_md is persisted to the sticky result_summary so the
+        # completed-conversation digest (task_messages.build_result_digest)
+        # carries the report text rather than a bare "任务已完成".
+        _up.assert_called_once()
+        self.assertEqual(seen["summary_kw"].get("result_summary"),
+                         "# ok report body")
         self.assertEqual(seen["files"], [])
         self.assertEqual(seen["patent_ids"], ["USD9"])
         anchor = seen["anchor"]
@@ -52,6 +64,17 @@ class TestDesignComplete(unittest.TestCase):
         self.assertEqual(anchor["source"], "us_design")
         self.assertEqual(anchor["target"], "pirate ship mug")
         self.assertIn("USD9", anchor["result_ids"])
+
+    def test_no_report_md_skips_summary_persist(self):
+        with mock.patch(
+                "sources.long_task.status_manager.set_task_completed") as _st, \
+             mock.patch("sources.long_task.status_manager.update_task_status"
+                        ) as _up, \
+             mock.patch("sources.long_task.user_queue.complete_user_task") as _cq:
+            celery_worker._design_complete(_tid(), {"digest": {}}, {}, "")
+        _st.assert_called_once()
+        _cq.assert_not_called()
+        _up.assert_not_called()   # 无 report → 不写 result_summary
 
     def test_no_user_id_skips_queue_completion(self):
         with mock.patch(
@@ -124,5 +147,55 @@ class TestDesignClearanceIntentDetector(unittest.TestCase):
         self.assertFalse(has_design_cue("帮我查这个号码的审查流程"))
 
 
-if __name__ == "__main__":
-    unittest.main()
+# ── I2: L2 pdf_fetch seam is real asyn-a-browser-crush, not the sync default ──
+
+class TestDesignPdfFetchSeam(unittest.TestCase):
+    def test_placeholder_never_falls_back_to_sync_default(self):
+        # design_pipeline drives design_image.fetch_design_pdf(pdf_fetch=_pdf_fetch).
+        # The un-wired placeholder must raise (fail closed), so L2 never silently
+        # uses design_image._fetch_pdf_http on an idle/offline run.
+        import asyncio
+        from sources.design.design_pipeline import _pdf_fetch
+
+        async def probe():
+            try:
+                await _pdf_fetch("https://patentimages.storage.googleapis.com/x.pdf")
+                return "no-error"
+            except RuntimeError as e:
+                return str(e)
+
+        self.assertIn("not wired", asyncio.run(probe()))
+
+    def test_executor_real_fetcher_is_async_fail_open_byte_tuple(self):
+        # _design_pdf_fetch: async, answers the design_image pdf_fetch contract
+        # (status:int, body:bytes) and degrades network errors to (0, b"").
+        import asyncio
+        import inspect
+        self.assertTrue(inspect.iscoroutinefunction(
+            celery_worker._design_pdf_fetch))
+        import httpx as _httpx
+
+        class _Resp:
+            status_code = 200
+            content = b"%PDF-1.4"
+        with mock.patch.object(_httpx, "AsyncClient") as _ac:
+            async def __aenter__(_self):
+                return mock.MagicMock(get=mock.AsyncMock(return_value=_Resp()))
+            async def __aexit__(_self, *a):
+                return False
+            _ac.return_value.__aenter__ = __aenter__
+            _ac.return_value.__aexit__ = __aexit__
+            got = asyncio.run(celery_worker._design_pdf_fetch(
+                "https://patentimages.storage.googleapis.com/x.pdf"))
+        self.assertEqual(got, (200, b"%PDF-1.4"))
+
+    def test_executor_wires_pdf_fetch_into_pipeline(self):
+        # The executor's _run replaces design_pipeline._pdf_fetch with the real
+        # async fetcher (mirror of the _google_fetch seam).  Read-only probe of
+        # the source wiring keeps this broker-free.
+        import inspect
+        src = inspect.getsource(celery_worker.execute_design_clearance)
+        self.assertIn("design_pipeline._pdf_fetch = _design_pdf_fetch", src)
+
+
+# ── core plug point: design-clearance intent detector (additive, pure) ──

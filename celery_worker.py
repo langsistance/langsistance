@@ -2962,7 +2962,13 @@ def execute_design_clearance(self, task_id: str, params: dict):
         # module-global ``_google_fetch`` for L1 (search XHR) and L2 (patent page
         # HTML).  Replace it on this live run only so a real task genuinely hits
         # Google / patentimages; offline tests mock ``run`` and never touch it.
+        # Real fetch injection (seam wire#4/#6): design_pipeline drives the
+        # module-global ``_google_fetch`` for L1 (search XHR) and L2 (patent page
+        # HTML), and ``_pdf_fetch`` for L2's patentimages PDF bytes (see helper
+        # notes).  Replace both on this live run only; offline tests mock ``run``
+        # and never touch them.
         design_pipeline._google_fetch = _design_google_fetch
+        design_pipeline._pdf_fetch = _design_pdf_fetch
         ctx = _DesignCtx(task_id, update_task_status)
         try:
             result = await run(params, ctx)
@@ -3087,6 +3093,28 @@ async def _design_google_fetch(resource):
         return 0, ""
 
 
+async def _design_pdf_fetch(url: str):
+    """Real patentimages PDF fetch for the pipeline L2 pdf_fetch seam (wire#6).
+
+    async, browser UA, direct connection to the patentimages URL already handed
+    to us by extract_pdf_url — never routes through the module's synchronous
+    default ``design_image._fetch_pdf_http``.  Contract is (status, bytes);
+    every error degrades to (0, b"") which design_image treats as a fail-open
+    skip (L2 "文本维度候选"), never a hard crash.
+    """
+    try:
+        import httpx
+        headers = {"User-Agent": _DESIGN_UA}
+        async with httpx.AsyncClient(
+                headers=headers, timeout=30.0, follow_redirects=True) as _cl:
+            resp = await _cl.get(url)
+        return resp.status_code, resp.content
+    except Exception as e:  # noqa: BLE001 —— fail-open degrade
+        _pipeline_logger.warning(
+            f"DESIGN pdf fetch degrades {url[:60]!r}: {type(e).__name__}: {e}")
+        return 0, b""
+
+
 _DESIGN_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/120 Safari/537.36")
 
@@ -3112,9 +3140,25 @@ def _design_exception_hard_stop(task_id: str, user_id: str, error: str) -> None:
 
 def _design_complete(task_id: str, result: dict, params: dict,
                      user_id: str) -> None:
-    """Persist a successful/ degraded design outcome (set_task_completed + anchor)."""
-    from sources.long_task.status_manager import set_task_completed
+    """Persist a successful/ degraded design outcome (set_task_completed + anchor).
+
+    The design report markdown is written into the sticky ``result_summary`` on
+    the task status before completion so ``build_result_digest`` (task_messages)
+    carries the report head/text into the completed conversation entry — the
+    user-visible receipt — exactly like the family execut writing report_text via
+    ``update_task_status(..., result_summary=…)``.  Set AFTER resolution so the
+    terminal ``set_task_completed`` (which preserves sticky fields) snapshots it.
+    """
+    from sources.long_task.status_manager import (
+        set_task_completed, update_task_status)
     digest = dict(result.get('digest') or {})
+    report_md = str(result.get('report_md') or '')
+    if report_md:
+        try:
+            update_task_status(task_id, 'completed', 100, '',
+                               status='running_design', result_summary=report_md)
+        except Exception:  # noqa: BLE001 —— summary must never block terminal
+            pass
     anchor_payload = None
     if isinstance(digest, dict) and digest.get('target'):
         anchor_payload = {

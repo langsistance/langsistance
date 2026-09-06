@@ -1,4 +1,4 @@
-"""test_design_pipeline: design_pipeline.run 编排 (design P1 T7)。
+"""test_design_pipeline: design_pipeline.run 编排 (design P1 T7 + review I3 vision L0)。
 
 6 场景全 mock (禁真实网络)。说明: L1/L2 的网络 fetch 由模块级 mock 取代;
 流程①-⑥ 逐一驱动 run 以验证 digest/report/进度与异常分流。
@@ -11,6 +11,7 @@ import pytest
 from sources.design.design_pipeline import (DesignNeedClarification,
                                             DesignRuntimeError, run)
 from sources.design.design_risk import DesignCandidate, JudgeVerdict
+from sources.design.design_vision import DesignVisionError
 
 PARAMS = {"product_image_refs": ["p.jpg"], "product_text": "",
           "source": "us_design"}
@@ -171,3 +172,71 @@ def test_l3_all_fail_notes_unmatched():
         _close(*h)
     assert "未完成视觉比对" in out["report_md"] or any(
         "未完成视觉比对" in m for m in ctx.progress_msgs)
+
+
+# ── review I3: 纯图入口 (product_text 空 + 图) 走视觉 L0, 非恒 clarify ──
+#
+# Gating: product_image_refs 在文件系统解析出 base64 且 product_text 空 →
+# `_vision_resolve` → design_vision.call_vision(唯一 product data-uri, L0_PROMPT_ZH)
+# → parse_l0_json。`_to_product_images` 打桩回固定 data-uri 以驱动纯图分支
+# (filesystem 无关); call_vision / L1 / L2 / L3 全 mock 禁真网。
+
+_VISION_URI = "data:image/png;base64,AAABCAaa=="
+
+
+def _patch_vision_l0(call_vision):
+    """装配纯图 L0 桩: _to_product_images→固定 data-uri; call_vision→给定异步函数;
+    L1/L2/L3 全 stub。返回 handles 列表。"""
+    import sources.design.design_pipeline as dp
+    hs = [
+        mock.patch.object(dp, "_to_product_images", return_value=[_VISION_URI]),
+        mock.patch.object(dp.design_vision, "call_vision", new=call_vision),
+        mock.patch.object(dp.design_search, "search_designs",
+                          new=_search([_cand()])),
+        mock.patch.object(dp.design_image, "fetch_design_pdf", new=_ok_pdf),
+        mock.patch.object(dp.design_judge, "judge_product", new=_judge_ok),
+    ]
+    for h in hs:
+        h.start()
+    return hs
+
+
+def _vision_params():
+    return {"product_image_refs": ["real.png"], "product_text": "",
+            "source": "us_design"}
+
+
+def test_pure_image_vision_l0_proceeds_full_chain():
+    ctx = _Ctx()
+
+    async def _ok_vision(images_base64, prompt, post=None, timeout=90, *,
+                         config=None):
+        # 纯图 L0 视觉成功: 回含 en_name 的 L0 JSON → 后续 L1 命中可 proceed
+        assert config is None or config.get("enabled")  # 不 assert 具体
+        return '{"en_name": "pirate ship mug", "keywords": ["mug"], ' \
+               '"visual_features": [], "suggested_locarno": []}'
+
+    h = _patch_vision_l0(_ok_vision)
+    try:
+        out = asyncio.run(run(_vision_params(), ctx))
+    finally:
+        for ph in h:
+            ph.stop()
+    assert "USD1A" in out["digest"]["result_ids"]
+    assert "非法律意见" in out["report_md"]
+
+
+def test_pure_image_vision_l0_failure_still_clarifies():
+    ctx = _Ctx()
+
+    async def _fail_vision(images_base64, prompt, post=None, timeout=90, *,
+                           config=None):
+        raise DesignVisionError("vision disabled")
+
+    h = _patch_vision_l0(_fail_vision)
+    try:
+        with pytest.raises(DesignNeedClarification):
+            asyncio.run(run(_vision_params(), ctx))
+    finally:
+        for ph in h:
+            ph.stop()

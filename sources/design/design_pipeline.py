@@ -10,7 +10,9 @@ run(params, ctx) -> {"digest": ..., "report_md": str}; 顺序编排 + ctx.progre
 - 各阶段经模块引用 sources.design.* 整模块可 mock; 测试禁真实网络。
 L1 的 fetch (design_search.search_designs / design_image.fetch_design_pdf) 首参即本模块
 _google_fetch 信号位——真实 Google 池化客户端由 executor (wire #4) 覆写注入,P1 未接线
-绝不默认外呼。
+绝不默认外呼。PDF 腿 (wire #6) 的 patentimages 直链下载经同款模块级 _pdf_fetch 信号位
+注入 real-asis 客户端; 未由 executor 覆写时该占位抛错 (绝不落入 design_image 的同步
+httpx 默认腿), 测试整模块 mock 永不到达。
 """
 import base64
 import datetime
@@ -18,7 +20,7 @@ import logging
 import os
 
 from sources.design import (design_image, design_judge, design_query,
-                            design_risk, design_search)
+                            design_risk, design_search, design_vision)
 
 logger = logging.getLogger("design_pipeline")
 
@@ -50,6 +52,16 @@ async def _google_fetch(resource):
     raise RuntimeError("google_fetch not wired")
 
 
+async def _pdf_fetch(url):
+    """design_image.fetch_design_pdf 之 pdf_fetch 契约: (status, bytes)。
+
+    同步 httpx 默认腿 (design_image._fetch_pdf_http) 绝不作为编排默认 — 该腿将随真实
+    外呼在离线测试跑满真实网络。executor 以同风格 async real-async patentimages 客户端
+    覆写本占位; 未接线抛错 (P1 email/文本短腿不取附图也当安全跳过)。
+    """
+    raise RuntimeError("pdf_fetch not wired")
+
+
 async def run(params: dict, ctx) -> dict:
     """编排全链: 返回 {"digest": {...}, "report_md": str}。fail-open 兜底保成功单。"""
     product_text = str(params.get("product_text") or "").strip()
@@ -58,7 +70,7 @@ async def run(params: dict, ctx) -> dict:
 
     phase = "l0"
     try:
-        prof = await _l0_resolve(product_text, ctx)
+        prof = await _l0_resolve(product_text, refs, ctx)
         phase = "l1"
         cands = await _l1_search(prof, ctx)
         if not cands:
@@ -85,20 +97,44 @@ def _target(prof: dict) -> str:
     return str((prof or {}).get("en_name") or "").strip()[:120]
 
 
-async def _l0_resolve(product_text: str, ctx) -> dict:
-    """L0: 目标产品画像。文本优先, 空/en 缺失走图片 parse 路径。
+async def _l0_resolve(product_text: str, image_refs, ctx) -> dict:
+    """L0: 目标产品画像。纯图入口(uploaded eye) 走视觉 L0; 文本/en 种子沿用纯函数。
 
-    needs_clarification 或空 en_name → 澄清信号。简化: 产品词即文本段落直接作为
-    en_name 候选 (en_name 为空且纯图片场景在 P1 email/文本提供时以关键词推进)。
+    纯图入口: product_text 空 + 带了产品图 → _vision_resolve 拿 L0 JSON (不再 P1 恒
+    clarify)。文本存在 (含"图+文本")仍走 l0_product_from_text/parse_l0_json 纯函数路径
+    P1 无自动中译英, 不改。(en 种子并入视觉结果的交叉属可选增强, 判断无需双 LLM 时
+    保持单一通道。)
     """
-    prof = design_query.l0_product_from_text(product_text)
-    if prof.get("needs_clarification") or not prof.get("en_name"):
-        prof = design_query.parse_l0_json(product_text or "")
+    product_images = _to_product_images(image_refs)
+    if not product_text and product_images:
+        prof = await _vision_resolve(product_images)
+    else:
+        prof = design_query.l0_product_from_text(product_text)
+        if prof.get("needs_clarification") or not prof.get("en_name"):
+            prof = design_query.parse_l0_json(product_text or "")
     if prof.get("needs_clarification"):
         ctx.warning("请补充说明单一目标产品(名称/SKU)后再检。")
         raise DesignNeedClarification(
             "需澄清目标产品: 请说明是单一产品并上传其产品图。")
     return prof
+
+
+async def _vision_resolve(product_images) -> dict:
+    """纯图 L0: design_vision.call_vision 对产品图取 L0 JSON → parse 容错。
+
+    call_vision 对视觉调用方 (design_vision) 异常 → DesignVisionError: 该输入无文本
+    锚点, degrade 为澄清引导信号 (非硬失败)。parse_l0_json 同文本解析容错 (围栏/缺键/
+    坏 JSON → 空 en_name needs_clarification)。生产零外呼在测试禁密 —— 测试整模块
+    mock design_vision.call_vision。
+    """
+    try:
+        raw = await design_vision.call_vision(
+            product_images, design_query.L0_PROMPT_ZH)
+    except design_vision.DesignVisionError as exc:
+        logger.warning("design_pipeline L0 vision degrade: %s", exc)
+        raise DesignNeedClarification(
+            "需澄清目标产品: 请说明是单一产品并上传其产品图。") from exc
+    return design_query.parse_l0_json(raw)
 
 
 async def _l1_search(prof: dict, ctx) -> list:
@@ -135,7 +171,8 @@ async def _l2_pdf_images(active, ctx):
     out = {}
     for c in active:
         try:
-            pdf = await design_image.fetch_design_pdf(_google_fetch, c.pub)
+            pdf = await design_image.fetch_design_pdf(
+                _google_fetch, c.pub, pdf_fetch=_pdf_fetch)
             out[c.pub] = _pdf_to_base64_images(pdf) if pdf else []
         except Exception as exc:  # noqa: BLE001
             logger.info("design_pipeline L2 skip %s: %s", c.pub, exc)
