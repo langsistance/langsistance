@@ -3,6 +3,8 @@
 对应 spec: docs/superpowers/specs/2026-09-06-us-design-clearance-design.md §5.6/§6。
 - term 规则: grant_date >= 2015-05-13 → +15 年; 早于 → +14 年; is_expired 用"今天"比较。
 - 仅依赖标准库, 无 IO; 各函数可独立注入日期(断言与 TDD 的确定性)。
+- 契约: judge 输出 d_number 恒等于 DesignCandidate.pub (绝无 "S1 缺失前缀" 之类的派生),
+  报告跨候选取值是精确匹配, 不做前缀归一。
 - design P1 T1, 后续 T2-T7 依赖本模块 dataclass 与签名。
 """
 from dataclasses import dataclass, field
@@ -103,13 +105,40 @@ def aggregate(
 
 
 def _candidate_by_dnumber(agg: dict) -> dict[str, DesignCandidate]:
-    by_pub = {c.pub: c for c in agg["active"]}
-    # 兼容: verdict.d_number 可能是 pub 本身 (USD...) 或 D 号前缀丢 S1。
-    return by_pub
+    """按候选 pub 索引, 供报告标题/权利人取数。
+
+    契约: verdict.d_number 恒等于 DesignCandidate.pub (见模块 docstring),
+    因此仅做精确匹配, 不做任何前缀归一兼容。
+    """
+    return {c.pub: c for c in agg["active"]}
 
 
 def _render_dim(note: str, score: float) -> str:
     return f"{note} (score={round(score, 2)})" if note else f"(score={round(score, 2)})"
+
+
+def _row_for_verdict(
+    verdict: JudgeVerdict,
+    cand: DesignCandidate | None,
+) -> list[str]:
+    """单件高危报告的 markdown 行块 (含结尾空行; 候选缺失时仅示 D 号)。"""
+    c = cand
+    title = c.title if c else ""
+    assignee = f"，权利人: {c.assignee}" if (c and c.assignee) else ""
+    rows = [f"### {verdict.d_number}{' — ' + title if title else ''}", ""]
+    if assignee:
+        rows.append(assignee.lstrip("，"))
+        rows.append("")
+    rows.append(f"- 风险档位: {verdict.risk} (score={round(verdict.score, 2)})")
+    rows.append(f"- 命中维度: {len(verdict.dims)} 项")
+    for dim_name, dim_score, dim_note in verdict.dims:
+        rows.append(f"  - {dim_name}: {_render_dim(dim_note, dim_score)}")
+    if verdict.basis:
+        rows.append(f"- 判定依据: {verdict.basis}")
+    if verdict.difference:
+        rows.append(f"- 关键差异: {verdict.difference}")
+    rows.append("")
+    return rows
 
 
 def build_report_md(target_label: str, agg: dict) -> str:
@@ -139,25 +168,7 @@ def build_report_md(target_label: str, agg: dict) -> str:
         rows.append("无。")
         rows.append("")
     for v in high:
-        c = caps.get(v.d_number)
-        d_label = v.d_number
-        title = c.title if c else ""
-        assignee = f"，权利人: {c.assignee}" if (c and c.assignee) else ""
-        rows.append(f"### {d_label}{' — ' + title if title else ''}")
-        rows.append("")
-        if assignee:
-            rows.append(f"{assignee.lstrip('，')}")
-            rows.append("")
-        rows.append(f"- 风险档位: {v.risk} (score={round(v.score, 2)})")
-        rows.append(f"- 命中维度: {len(v.dims)} 项")
-        for dim_name, dim_score, dim_note in v.dims:
-            rows.append(
-                f"  - {dim_name}: {_render_dim(dim_note, dim_score)}")
-        if v.basis:
-            rows.append(f"- 判定依据: {v.basis}")
-        if v.difference:
-            rows.append(f"- 关键差异: {v.difference}")
-        rows.append("")
+        rows.extend(_row_for_verdict(v, caps.get(v.d_number)))
 
     rows.append("## 相关但已失效")
     rows.append("")

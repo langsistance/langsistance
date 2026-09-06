@@ -65,10 +65,8 @@ def test_aggregate_scores_medium_not_in_high():
 
 def test_aggregate_dedup_keeps_highest_and_expired_not_in_result_ids():
     # 同 d_number 去重保留最高 score; suppressed(phase out) 件不进 aggregate 判定。
-    active = [
-        DesignCandidate("USD3C", "Lamp", "2023-01-01", status="active"),
-        DesignCandidate("USD3C", "Lamp", "2023-01-01", status="active"),
-    ]
+    # 夹具收敛: 单件候选 (aggregate 不去重候选, 断言意图仍在同 D 号两件 verdict 留高)。
+    active = [DesignCandidate("USD3C", "Lamp", "2023-01-01", status="active")]
     low_v = JudgeVerdict("USD3C", 0.50, "medium", (("灯罩", 0.5, "n"),),
                          "basis", "diff")
     high_v = JudgeVerdict("USD3C", 0.85, "high", (("灯罩", 0.85, "y"),),
