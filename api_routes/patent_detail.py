@@ -620,7 +620,6 @@ async def _fetch_spec_pdf(source: str, patent_id: str,
     if _reason:
         raise PatentFormatError(_reason)
     from sources import uspto_download
-    from sources import uspto_download
     from sources.dynamic_tool_params import _build_uspto_download_proxy_url
     from sources.long_task.text_extractor import (
         USPTO_PDF_PREFERRED_MIME_ORDER,
