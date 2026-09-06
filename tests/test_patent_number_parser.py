@@ -220,5 +220,117 @@ class TestGuidanceText(unittest.TestCase):
         self.assertEqual(format_number_guidance([], lang="zh"), "")
 
 
+# ── PCT / WO international application numbers (2026-09-06, batch A1) ────────
+
+
+class TestPctIdentifiers(unittest.TestCase):
+    # 规格 §5.1: PCT 头先剥离再校验, 防空格/斜杠形态分裂; display 归一规范读法。
+    def test_pct_concatenated(self):
+        c = _top("PCTUS2021059064")
+        self.assertEqual(c["id_type"], "pct")
+        self.assertEqual(c["display"], "PCT/US2021/059064")
+        self.assertEqual(c["country"], "WO")
+        self.assertEqual(c["confidence"], "high")
+        self.assertEqual(c["meta"].get("office"), "US")
+        self.assertEqual(c["lookups"], [])
+
+    def test_pct_slashed(self):
+        c = _top("PCT/US2021/059064")
+        self.assertEqual(c["id_type"], "pct")
+        self.assertEqual(c["display"], "PCT/US2021/059064")
+        self.assertEqual(c["meta"].get("office"), "US")
+
+    def test_pct_spaced(self):
+        # 空格形态不得落 US prefix(A1 实测)。
+        c = _top("PCT US2021 059064")
+        self.assertEqual(c["id_type"], "pct")
+        self.assertEqual(c["display"], "PCT/US2021/059064")
+        self.assertEqual(c["meta"].get("office"), "US")
+
+    def test_pct_cn_receiving_office(self):
+        for text in ("PCTCN202312345678", "PCT/CN2023/12345678"):
+            c = _top(text)
+            self.assertEqual(c["id_type"], "pct")
+            self.assertEqual(c["meta"].get("office"), "CN")
+            self.assertIn("/CN2023/12345678", c["display"])
+
+    def test_pct_spaced_does_not_fall_to_bare_us(self):
+        # 回归红线: 显式 PCT 优先于裸数字兜底。
+        c = _top("帮我看看 PCT US2021 059064 的同族")
+        self.assertEqual(c["id_type"], "pct")
+
+
+class TestWoIdentifiers(unittest.TestCase):
+    def test_wo_concatenated(self):
+        c = _top("WO2021059064")
+        self.assertEqual(c["id_type"], "wo")
+        self.assertEqual(c["display"], "WO2021/059064")
+        self.assertEqual(c["country"], "WO")
+        self.assertIn("WO2021059064", c["lookups"])
+
+    def test_wo_slashed(self):
+        c = _top("WO2021/059064")
+        self.assertEqual(c["id_type"], "wo")
+        self.assertEqual(c["display"], "WO2021/059064")
+        self.assertIn("WO2021059064", c["lookups"])
+
+    def test_wo_with_kind(self):
+        c = _top("WO2021/059064A1")
+        self.assertEqual(c["id_type"], "wo")
+        self.assertEqual(c["display"], "WO2021/059064")
+        self.assertIn("WO2021059064", c["lookups"])
+
+    def test_wo_spaced(self):
+        c = _top("WO2021 059064")
+        self.assertEqual(c["id_type"], "wo")
+        self.assertEqual(c["display"], "WO2021/059064")
+
+
+class TestBareLengthGuard(unittest.TestCase):
+    # 规格 §5.1: ≥9 位非 CN 裸数字 → unsupported(不再 US ambiguous)。
+    def test_bare_10digit_unsupported(self):
+        c = _top("2021059064")
+        self.assertEqual(c["id_type"], "unsupported")
+        self.assertEqual(c["country"], "")
+        self.assertEqual(c["lookups"], [])
+        self.assertNotEqual(c["id_type"], "ambiguous")
+
+    def test_bare_11digit_unsupported(self):
+        c = _top("12345678901")
+        self.assertEqual(c["id_type"], "unsupported")
+        self.assertEqual(c["lookups"], [])
+
+    def test_bare_9digit_not_cn_unsupported(self):
+        c = _top("202105906")
+        self.assertEqual(c["id_type"], "unsupported")
+        self.assertEqual(c["country"], "")
+
+
+class TestNewGuidanceAndRouting(unittest.TestCase):
+    def test_guidance_pct_offers_readback(self):
+        out = parse_patent_identifiers("PCTUS2021059064")
+        text = format_number_guidance(out, lang="zh")
+        self.assertIn("PCT/", text)
+        self.assertIn("国际申请", text)
+
+    def test_guidance_unsupported_offers_prefix_completion(self):
+        out = parse_patent_identifiers("2021059064")
+        text = format_number_guidance(out, lang="zh")
+        self.assertIn("WO", text)
+        self.assertIn("前缀", text)
+
+    def test_guidance_wo(self):
+        out = parse_patent_identifiers("WO2021/059064A1")
+        self.assertIn("WO2021/059064", format_number_guidance(out, lang="zh"))
+
+    def test_pct_does_not_force_single_source(self):
+        out = parse_patent_identifiers("PCTUS2021059064")
+        self.assertIsNone(decide_number_source(out))
+
+    def test_wo_does_not_force_single_source(self):
+        out = parse_patent_identifiers("WO2021059064")
+        self.assertIsNone(decide_number_source(out))
+
+
 if __name__ == "__main__":
     unittest.main()

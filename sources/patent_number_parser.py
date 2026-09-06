@@ -37,7 +37,7 @@ NUMBER_PARSE_ENABLED = os.getenv("REACT_NUMBER_PARSE_ENABLED", "1") == "1"
 #   display    — canonical readable form (e.g. "CN1xxxxxxxxA" shape)
 #   country    — "CN" | "US" | "EP" | "WO" | "JP" | "" (unknown)
 #   id_type    — publication | grant | utility | design | application
-#                | reissue | unsupported | ambiguous
+#                | reissue | unsupported | ambiguous | pct | wo
 #   confidence — "high" | "medium" | "low"
 #   reason     — zh explanation used verbatim in the guidance block
 #   lookups    — ordered strings to try against data sources
@@ -202,7 +202,11 @@ def _us_design(digits: str, s_flag: bool) -> dict:
 
 
 def _external(prefix: str, digits: str, kind: str | None) -> dict:
-    """EP/WO/JP: 识别但本期不接入检索 → 诚实降级, 不进自动复核源。"""
+    """EP/WO/JP: 识别但本期不接入检索 → 诚实降级, 不进自动复核源。
+
+    Note: the WO branch (prefix == "WO") no longer routes here — it is a
+    real par-form (``_wo``).  This remains for EP/JP and any other prefix.
+    """
     return {
         "raw": f"{prefix}{digits}",
         "display": f"{prefix}{digits}{kind or ''}",
@@ -211,6 +215,39 @@ def _external(prefix: str, digits: str, kind: str | None) -> dict:
         "confidence": "low",
         "reason": f"{prefix} 专利号（当前未接入该源，仅作提示）",
         "lookups": [],
+    }
+
+
+def _pct(office: str, year: str, serial: str, spaced: bool) -> dict:
+    """PCT 国际申请号: 剥离 PCT 头后按 {RO}{YYYY}{NNNNNN} 校验。
+
+    country 沿用文献国别语义填 WO; 受理局(office) 记入 meta。
+    """
+    display = f"PCT/{office}{year}/{serial}"
+    return {
+        "raw": f"PCT{office}{year}{serial}",
+        "display": display,
+        "country": "WO",
+        "id_type": "pct",
+        "confidence": "high" if not spaced else "medium",
+        "reason": ("PCT 国际申请号（受理局"
+                   + f"{office}，年份 {year}、流水 {serial}）"
+                   + "；家族分析需公开号形态，请提供 WO 公开号或国家阶段申请号"),
+        "lookups": [],
+        "meta": {"office": office},
+    }
+
+
+def _wo(year: str, serial: str) -> dict:
+    """WO 公开号: WO{YYYY}/{NNNNNN}, docdb 候选 kind 可省(待实证)。"""
+    return {
+        "raw": f"WO{year}{serial}",
+        "display": f"WO{year}/{serial}",
+        "country": "WO",
+        "id_type": "wo",
+        "confidence": "high",
+        "reason": f"WO 国际公开号（年份 {year}、公开序号 {serial}）",
+        "lookups": [f"WO{year}{serial}"],
     }
 
 
@@ -230,10 +267,46 @@ _PREFIXED_RE = re.compile(
 _BARE_TOKEN_RE = re.compile(
     r"(?<![\d.])([0-9][0-9,\./ ]{4,14}[0-9]|[0-9]{5,13})(?![\d.])")
 
+# 局间分隔符 (空格/斜杠, 可重复或整付缺省 → 连写)。
+_PCT_SEP = r"[\s/]*"
+# PCT[头] {RO 两字母} {YYYY 4位} {NNNNNN 序号≥5位}; 显式头优先于裸数字兜底。
+_PCT_HEAD_RE = re.compile(
+    r"\bPCT"
+    + _PCT_SEP + r"([A-Za-z]{2})"
+    + _PCT_SEP + r"((?:19|20)\d{2})"
+    + _PCT_SEP + r"(\d{5,15})",
+    re.IGNORECASE)
+# WO {YYYY} {NNNNNN}([A-Z]\d* 文献类型可省)。
+_WO_RE = re.compile(
+    r"\bWO"
+    + _PCT_SEP + r"((?:19|20)\d{2})"
+    + _PCT_SEP + r"(\d{2,12})"
+    + _PCT_SEP + r"([A-Z]\d*)?" ,
+    re.IGNORECASE)
+
 
 def _scan_tokens(text: str) -> list[tuple]:
-    """Collect (kind_hint, start, end) spans from *text* in order."""
+    """Collect (kind_hint, start, end) spans from *text* in order.
+
+    PCT/WO international shapes run first so the later prefix/bare scans
+    skip them (spec §5.1): their regions are marked consumed before the
+    generic registry, else ``PCTUS…``/``PCT US2021 059064`` fall apart into
+    a bare US number.
+    """
     spans: list = []
+    for m in _PCT_HEAD_RE.finditer(text):
+        office, year, serial = m.group(1).upper(), m.group(2), m.group(3)
+        # 连写(无任何分隔)时串首即 office 判断; 分词一致按显式 PCT 处理。
+        spaced = bool(re.search(r"[ /]", m.group(0)))
+        spans.append((("pct", office, year, serial.rstrip(), spaced),
+                      m.start(), m.end()))
+    for m in _WO_RE.finditer(text):
+        year, serial = m.group(1), _clean_digits(m.group(2))
+        if len(serial) >= 5:  # 公开序号 ≥5 位才算真 WO 号。
+            spans.append((("wo", year, serial), m.start(), m.end()))
+
+    # 下文既有精确形态(design/cnapp/usslash)本不相交; 但要保证它们不吞国际串,
+    # 故国际 span 一并计入前期 consumed, 让 prefix/bare 跳过重叠区。
     for m in _DESIGN_RE.finditer(text):
         spans.append((("design", m.group(1), bool(m.group(2))),
                       m.start(), m.end()))
@@ -265,6 +338,10 @@ def _scan_tokens(text: str) -> list[tuple]:
 
 def _token_to_candidates(kind_hint: tuple) -> list[dict]:
     head = kind_hint[0]
+    if head == "pct":
+        return [_pct(*kind_hint[1:])]
+    if head == "wo":
+        return [_wo(*kind_hint[1:])]
     if head == "design":
         return [_us_design(kind_hint[1], kind_hint[2])]
     if head == "cnapp":
@@ -346,6 +423,18 @@ def _classify_bare(token: str) -> dict | None:
                        "（公开号形如 CN1xxxxxxxxA）；若为美国专利号通常为 8 位"),
             "lookups": [f"CN{digits}A", f"CN{digits}", digits],
         }
+    # 长度守卫(置于 CN 分支之后, spec §5.1): ≥9 位其余裸数字长度不符美国号段
+    # (美国授权号通常 ≤8 位), 疑似残缺国际申请号/含 PCT/WO 前缀 → unsupported,
+    # 不再产 US ambiguous 白跑 USPTO。
+    if n >= 9:
+        return {
+            "raw": token, "display": digits,
+            "country": "", "id_type": "unsupported",
+            "confidence": "low",
+            "reason": ("数字长度不符美国授权/申请号段（美国通常 6-8 位），"
+                       "疑似残缺国际申请号或含 PCT/WO 前缀，请补全（如 WO…）后再查"),
+            "lookups": [],
+        }
     # 其余 6-8 位: 美国授权号/申请号歧义, 同一数字按引用检索。
     return {
         "raw": token, "display": f"US{digits}",
@@ -425,7 +514,8 @@ def format_number_guidance(
     steps.
     """
     candidates = [c for c in (candidates or [])
-                  if c.get("country") in ("CN", "US")]
+                  if c.get("country") in ("CN", "US", "WO")
+                  or c.get("id_type") == "unsupported"]
     if not candidates:
         return ""
     lines = []
