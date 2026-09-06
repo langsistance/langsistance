@@ -102,6 +102,53 @@ class TestNarrowGatePredicate(unittest.TestCase):
                  "WO2021059064 across jurisdictions")
         self.assertTrue(_should_route_family_analysis(_cands("wo"), query))
 
+    # F3 · T6 search-verb robustness + retrieval delegation (general word
+    # classes, never user-query vocabulary).
+    def test_en_bare_find_search_phrasing_not_routed(self):
+        # Regression: the old table stored ``"find "`` (trailing space) so a
+        # bare leading "find …" was missed and wrongly routed.  A \b word
+        # boundary must catch "find US12506212 family members".
+        query = "find US12506212 family members"
+        self.assertFalse(_should_route_family_analysis(_cands("wo"), query))
+
+    def test_en_look_up_search_phrasing_not_routed(self):
+        query = "look up the family members of WO2021059064"
+        self.assertFalse(_should_route_family_analysis(_cands("wo"), query))
+
+    def test_zh_trailing_punctuation_search_not_routed(self):
+        # "检索一下…" embeds the search verb 检索 — substring match must still
+        # reject even with trailing punctuation / particles.
+        query = "检索一下 WO2021059064 的同族成员"
+        self.assertFalse(_should_route_family_analysis(_cands("wo"), query))
+
+    def test_retrieval_document_wording_not_routed(self):
+        # delegated to react_tools._is_retrieval_request (verb ∧ document
+        # object) — "获取…" + "…文件" must never take the analysis route.
+        query = "获取该号的 WO 公开号完整文件，列出同族各国公开文档"
+        self.assertFalse(_should_route_family_analysis(_cands("pct"), query))
+
+    # F5 · T6 candidate mixing + EN negatives.
+    def test_mixed_us_grant_and_wo_candidates_still_routes(self):
+        # any()-semantics anchor (review F5 · T6): a wo present among mixed
+        # US-grant + WO candidates keeps the gate open for a genuine ANALYSIS
+        # ask — one narrow id suffices, per the window's definition.
+        query = ("分析 US12506212 及其同族、对照 WO2021/059064 的审查差异")
+        self.assertTrue(
+            _should_route_family_analysis(_cands("grant", "wo"), query))
+
+    def test_bare_us_grant_en_family_analysis_not_routed(self):
+        # A resolved US grant (id_type=grant) is NOT a pct/wo/unsupported
+        # candidate → gate stays closed even under English family-analysis
+        # wording.
+        query = ("Analyze the prosecution differences of US12506212 "
+                 "and its family")
+        self.assertFalse(_should_route_family_analysis(_cands("grant"), query))
+
+    def test_pct_candidate_en_search_phrasing_not_routed(self):
+        # pct candidate + English search wording → member search, not ANALYSIS.
+        query = "search for the granted US family members of PCTUS2021059064"
+        self.assertFalse(_should_route_family_analysis(_cands("pct"), query))
+
 
 class TestNarrowGateWiring(unittest.TestCase):
     """create_agent routes a pct/wo ask to the families intent WITHOUT running
@@ -266,24 +313,68 @@ class TestResumeDispatchByTaskType(unittest.TestCase):
     def tearDown(self):
         _reset_celery()
 
-    def test_family_analysis_task_dispatches_family_executor(self):
+    # F1: single-patent rows (family/prosecution/china/ep/jp) persist a
+    # singular ``patent_id`` in MySQL input_params — resume must forward it.
+    def test_family_single_patent_task_keeps_patent_id(self):
+        # Real stored shape: singular patent_id, NO patent_ids key.
         import json
-        conn = self._mk_conn(json.dumps({"query": "分析同族", "patent_ids": []}))
+        conn = self._mk_conn(json.dumps({"query": "分析同族",
+                                         "patent_id": "US12506212"}))
         self._dispatch(conn)
-        self.assertTrue(_fake_celery.execute_family_analysis.delay.called)
+        delay = _fake_celery.execute_family_analysis.delay
+        self.assertTrue(delay.called)
         self.assertFalse(_fake_celery.execute_patent_analysis.delay.called)
+        _, kwargs = delay.call_args
+        dispat_params = kwargs["params"]
+        # resume must survive the singular field the executor reads.
+        self.assertIsNotNone(dispat_params.get("patent_id"))
+        self.assertNotEqual(str(dispat_params.get("patent_id", "")).strip(), "")
+        self.assertEqual(dispat_params["patent_id"], "US12506212")
+
+    def test_family_row_without_patent_ids_key_still_resumes(self):
+        # Regression guard (F1): stored family rows must not rely on a
+        # ``patent_ids`` key being present.
+        import json
+        conn = self._mk_conn(json.dumps({"query": "帮我分析审查差异",
+                                         "patent_id": "17429113"}))
+        self._dispatch(conn)
+        delay = _fake_celery.execute_family_analysis.delay
+        self.assertTrue(delay.called)
+        _, kwargs = delay.call_args
+        self.assertNotEqual(
+            str(kwargs["params"].get("patent_id", "")).strip(), "")
+
+    def test_prosecution_single_patent_task_forwards_patent_id(self):
+        import json
+        conn = self._mk_conn(json.dumps({"query": "审查历史",
+                                         "patent_id": "17429113"}),
+                             task_type="prosecution_analysis")
+        self._dispatch(conn)
+        delay = _fake_celery.execute_prosecution_analysis.delay
+        self.assertTrue(delay.called)
+        _, kwargs = delay.call_args
+        self.assertEqual(kwargs["params"].get("patent_id"), "17429113")
 
     def test_batch_task_dispatches_batch_executor(self):
+        # Batch rows carry the plural multi-value patent_ids (unchanged).
         import json
-        conn = self._mk_conn(json.dumps({"query": "q", "patent_ids": []}),
+        conn = self._mk_conn(json.dumps({"query": "q",
+                                         "patent_ids": ["17429113",
+                                                        "18012525"]}),
                              task_type="patent_analysis")
         self._dispatch(conn)
-        self.assertTrue(_fake_celery.execute_patent_analysis.delay.called)
+        delay = _fake_celery.execute_patent_analysis.delay
+        self.assertTrue(delay.called)
         self.assertFalse(_fake_celery.execute_family_analysis.delay.called)
+        _, kwargs = delay.call_args
+        self.assertIsNone(kwargs["params"].get("patent_id"))
+        self.assertEqual(kwargs["params"].get("patent_ids"),
+                         ["17429113", "18012525"])
 
     def test_missing_task_type_defaults_to_batch(self):
         import json
-        conn = self._mk_conn(json.dumps({"query": "q", "patent_ids": []}),
+        conn = self._mk_conn(json.dumps({"query": "q",
+                                         "patent_ids": ["17429113"]}),
                              task_type=None)
         self._dispatch(conn)
         self.assertTrue(_fake_celery.execute_patent_analysis.delay.called)

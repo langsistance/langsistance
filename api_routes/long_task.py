@@ -41,6 +41,12 @@ def _dispatch_from_mysql(user_id: str, task_id: str, logger) -> None:
             stored = _json.loads(input_params) if isinstance(input_params, str) else input_params
             next_params = {
                 'query': stored.get('query', ''),
+                # Single-patent tasks (family/prosecution/china/ep/jp) persist a
+                # *singular* ``patent_id`` (no ``patent_ids`` key) in MySQL
+                # input_params — forward it verbatim or the resumed executor
+                # reads ``params.get('patent_id')`` == '' and flags the task
+                # failed.  Batch rows carry ``patent_ids`` only.
+                'patent_id': stored.get('patent_id'),
                 'patent_ids': stored.get('patent_ids', []),
                 'patent_source': stored.get('patent_source', 'auto'),
                 'session_id': row.get('session_id') or '',

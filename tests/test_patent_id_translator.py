@@ -19,6 +19,7 @@ from sources.patent_id_translator import (
     TranslateResult,
     resolve_us_pub_number,
     translate,
+    unresolvable_gate_error,
     verdict_of,
     _us_docdb_candidates,
     _us_resolver_id_type,
@@ -154,6 +155,54 @@ class TestUsResolverIdTypeMapping(unittest.TestCase):
             _awaited(translate("US9019058B2"))
         m.assert_awaited_once_with(
             "US9019058B2", tid="", id_type="grant_number")
+
+
+class TestUnresolvableGateError(unittest.TestCase):
+    """review F2 · T7: the fail-open A6 gate boundary (guide vs delegate).
+
+    unresolvable_gate_error is a *fail-open special case* — only a PCT
+    international number (id_type=pct) and a bare unsupported shape with no
+    recognisable office country (≥9-digit run / gibberish) are guided.  An
+    unsupported id whose country is a recognisable office (EP/JP/DE/GB/…) or a
+    resolvable one (US/CN/WO) returns ``""`` for cross-office EPO delegation.
+    These direct-helper assertions cover the bare-≥9 path that the EP/JP
+    resolvers cannot reach (their local short-circuit regexes swallow any bare
+    digit run before the gate).
+    """
+
+    def assert_pass(self, pid):
+        self.assertEqual(unresolvable_gate_error(pid), "")
+
+    def assert_guide(self, pid):
+        self.assertNotEqual(unresolvable_gate_error(pid), "")
+
+    # guide: pct
+    def test_pct_guides(self):
+        self.assert_guide("PCTUS2021059064")
+
+    # guide: bare unsupported, no recognisable office prefix
+    def test_bare_ge9_digits_guide(self):
+        self.assert_guide("2021059064")
+        self.assert_guide("12345678901")
+
+    # delegate: unsupported but country / recognisable office prefix present
+    def test_recognizable_office_prefix_delegates(self):
+        self.assert_pass("EP09123456")
+        self.assert_pass("JP2019061234")
+        self.assert_pass("DE102018123456")
+        self.assert_pass("GB12345678")
+
+    # delegate: fully resolvable (US/CN/WO)
+    def test_resolvable_delegates(self):
+        self.assert_pass("US12506212")
+        self.assert_pass("WO2021059064")
+        self.assert_pass("WO2021/059064")
+
+    def test_translator_exception_is_fail_open_pass(self):
+        # a translator fault must not turn a resolvable id into a guide.
+        with mock.patch("sources.patent_id_translator.verdict_of",
+                        side_effect=ValueError("boom")):
+            self.assertEqual(unresolvable_gate_error("US12506212"), "")
 
 
 class TestUsDocdbOrdering(unittest.TestCase):

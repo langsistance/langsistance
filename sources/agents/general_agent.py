@@ -406,13 +406,36 @@ _NARROW_FAMILY_ID_TYPES = ("pct", "wo", "unsupported")
 _FAMILY_ANALYSIS_VERBS_ZH = ("审查", "授权", "驳回", "差异", "分析")
 _FAMILY_ANALYSIS_VERBS_EN = ("examin", "analy", "prosecut", "allowance",
                              "difference", "objection")
+# Search-semantics verbs only (review F3 · T6): document-retrieval wording
+# (获取/下载/查看/列出/导出 …) is NOT duplicated here — ``react_tools.
+# _is_retrieval_request`` (verb AND document-object) already owns that sense,
+# so this local table must stay purely "search members", never re-cover
+# retrieval.  Verbs carry no trailing space / punctuation; English words are
+# matched with a \b word boundary below so "find US12506212 …" is caught.
 _FAMILY_SEARCH_VERBS_ZH = ("检索", "搜索", "查找")
-_FAMILY_SEARCH_VERBS_EN = ("search", "look up", "find ")
+_FAMILY_SEARCH_VERBS_EN = ("search", "find", "look up")
 _FAMILY_GAPFILL_QUESTION = (
     "全球同族专利的跨国审查过程与差异分析")
 _FAMILY_GAPFILL_ANSWER = (
     "输入一个专利/申请号，分析其全球同族在各国的审查过程与差异。"
     "异步执行；任务完成后结果会出现在本会话。")
+
+
+def _has_search_verb(text: str) -> bool:
+    """Contain search-semantics wording (review F3 · T6).
+
+    English search verbs are matched with a ``\\b`` word boundary so a bare
+    "find US12506212 …" / "search …" is caught (the old ``"find "`` trailing
+    space form missed a bare leading "find"); Chinese search verbs are matched
+    by substring — single CJK words that legitimately embed inside a longer
+    turn ("检索一下…" still contains 检索).  Never user-query vocabulary.
+    """
+    if any(v in text for v in _FAMILY_SEARCH_VERBS_ZH):
+        return True
+    return any(
+        re.search(rf"\b{re.escape(v)}\b", text)
+        for v in _FAMILY_SEARCH_VERBS_EN
+    )
 
 
 def _should_route_family_analysis(candidates, query) -> bool:
@@ -425,11 +448,24 @@ def _should_route_family_analysis(candidates, query) -> bool:
     Rejections (each keeps false-positives low, table-tested in
     ``test_family_preroute``):
       - no narrow id candidate       → closed (covers a resolved US/CN id)
-      - search / retrieval phrasing  → closed ("检索/查找/下载…同族…" is the
-        search / document ladder's job)
+      - search wording               → closed ("检索/搜索/查找"; "search /
+        find / look up" — the search ladder's job)
+      - retrieval wording            → closed (delegated to
+        ``react_tools._is_retrieval_request``: 获取/下载/查看… of a document)
       - no genuine ANALYSIS sense    → closed (family keyword alone is not
         enough — a members-listing ask must not route into the families task)
+
     Returns a plain bool; safe for offline unit/integration tests.
+
+    Implementation note (review F4 · T6): a **pct** / bare-``unsupported``
+    candidate that triggers this gate is NOT unilaterally turned into a family
+    task.  The query still descends through the ``core`` scenario classifier
+    and the T3 pre-check gate afterwards, which for such an id route the ask to
+    a *guided publication-format reply* instead of building a task.  The narrow
+    gate's real value for pct/unsupported is skipping the ~16s ReAct idle so a
+    genuinely-unresolvable id reaches that pre-check guidance promptly; the
+    **wo** candidate is the branch that actually goes live toward a real
+    families executor task.
     """
     if not candidates:
         return False
@@ -437,9 +473,7 @@ def _should_route_family_analysis(candidates, query) -> bool:
                in _NARROW_FAMILY_ID_TYPES for c in candidates):
         return False
     text = str(query or "").lower()
-    if any(v in text for v in _FAMILY_SEARCH_VERBS_ZH):
-        return False
-    if any(v in text for v in _FAMILY_SEARCH_VERBS_EN):
+    if _has_search_verb(text):
         return False
     if _is_retrieval_request(text):
         return False

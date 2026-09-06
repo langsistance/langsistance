@@ -333,22 +333,61 @@ def verdict_of(patent_id: str, scenario: str = "") -> str | None:
     return _decide(candidate)["verdict"]
 
 
+_OFFICE_PREFIXED_RE = re.compile(r"(?i)^[a-z]{2}\d")
+
+
+def _looks_office_prefixed(raw: str) -> bool:
+    """Whether *raw* begins with a patent-office style two-letter country prefix
+    (e.g. ``DE102018123456``, ``EP09123456``, ``JP2019061234``) rather than a
+    bare digit run / opaque token.  Used so a non-local office id that the local
+    parser cannot fully classify (its narrow ``_PREFIXED_RE`` registry only keeps
+    CN|US|EP|WO|JP|RE|PP and drops e.g. a ``DE`` prefix to bare digits) is still
+    recognised as an office-bearing shape eligible for cross-office EPO
+    delegation."""
+    # PCTUS…/WO… etc. begin with letters too but are handled by id_type; the
+    # narrower guard below (`^[A-Za-z]{2}\\d`) is what decides office-format.
+    return _OFFICE_PREFIXED_RE.match(str(raw or "")) is not None
+
+
 def unresolvable_gate_error(patent_id: str) -> str:
     """A6 shared gate (spec §5.3): publication-format guidance text iff *patent_id*
     is a deterministically unresolvable shape; ``""`` means pass-through.
 
     One-line quick gate the CN / EP / JP examination resolvers place right
     before they delegate a non-local id to the EPO ``lookup_family`` remote call,
-    so a PCT / unsupported-bare / foreign office shape never white-sends a wasted
-    remote family query.  Fail-open contract (spec §7): returns ``""`` when
-    nothing deterministic can be asserted (no recognisable number → None verdict)
-    or when the translator itself raises — in both cases callers keep their legacy
-    delegation unchanged.  Purely local / offline; builds generic next-step copy
-    from ``failure_guidance`` (reason_code ERR_UNRESOLVABLE_ID, spec §5.4).
+    so a PCT / bare unsupported shape never white-sends a wasted remote family
+    query.
+
+    **Fail-open special case** (review F2 · T7): unlike the translator's upper
+    layer ``translate()`` / ``verdict_of`` (whose unresolvable verdict is a
+    hard fail-closed guide), this helper is deliberately *fail-open* — it only
+    emits guidance for shapes that no local resolver *or* EPO cross-office
+    lookup could meaningfully consume:
+      - ``id_type == "pct"``  → guide (a PCT international number carries no
+        single EPO-docdb representative; guided, never a WO direct guess).
+      - ``id_type == "unsupported"`` with **no** recognisable office country
+        (bare ≥9-digit run / gibberish) → guide.
+    Every other unresolvable shape — notably an unsupported id whose country is
+    a recognisable office (EP / JP / DE / GB / FR / …) — returns ``""``  and is
+    **delegated** to EPO ``lookup_family`` (the EPO OPS accepts these foreign
+    docdb numbers and can return their family members for the calling office).
+
+    Fail-open contract (spec §7): returns ``""`` when nothing deterministic can
+    be asserted (no recognisable number → None verdict) or when the translator
+    itself raises — in both cases callers keep their legacy delegation
+    unchanged.  Purely local / offline; builds generic next-step copy from
+    ``failure_guidance`` (reason_code ERR_UNRESOLVABLE_ID, spec §5.4).
     """
     try:
         if verdict_of(patent_id) != "unresolvable":
             return ""
+        candidate = _top_candidate(patent_id)
+        id_type = (candidate or {}).get("id_type")
+        country = str((candidate or {}).get("country") or "")
+        # Only PCT and bare unsupported (no recognisable office) are guided.
+        if id_type != "pct":
+            if country or _looks_office_prefixed(patent_id):
+                return ""
     except Exception:
         _log().warning(
             f"A6 gate — verdict_of raised for {patent_id!r}; pass-through")
