@@ -82,3 +82,6 @@ def seller_design_clearance_gate(scene, file_refs, query) -> bool:
     return has_design_cue(query) or any(
         has_design_cue(str(r.get("filename") or ""))
         for r in (file_refs or []) if isinstance(r, dict))
+
+# 公开别名：core 挂载点按此名导入（c03bccf 遗留缺口修复）。
+DESIGN_CLEARANCE_CUES = _DESIGN_CLEARANCE_CUES
