@@ -31,7 +31,7 @@ def _dispatch_from_mysql(user_id: str, task_id: str, logger) -> None:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT input_params, session_id, scene_id
+                """SELECT input_params, session_id, scene_id, task_type
                    FROM long_tasks WHERE task_id = %s""",
                 (task_id,),
             )
@@ -51,9 +51,11 @@ def _dispatch_from_mysql(user_id: str, task_id: str, logger) -> None:
             }
             if stored.get('patent_texts'):
                 next_params['patent_texts'] = stored['patent_texts']
-            # Lazy import to avoid circular dependency at module level
-            from celery_worker import execute_patent_analysis
-            execute_patent_analysis.delay(task_id=task_id, params=next_params)
+            # Dispatch by the stored task_type (A9): a paused family_analysis
+            # must resume on the family executor, never the batch one.  Missing
+            # type falls back to the batch executor (historical default).
+            task_type = str(row.get('task_type') or 'patent_analysis')
+            _dispatch_retry_task(task_type, task_id, next_params)
             logger.info(f"DISPATCHED task {task_id} via Celery")
     except Exception as e:
         logger.error(f"Failed to dispatch task {task_id}: {e}")

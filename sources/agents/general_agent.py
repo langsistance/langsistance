@@ -35,7 +35,11 @@ from sources.agents.react_tools import (
     make_action_executor,
     _match_long_task_intent,
     _tool_to_bind_dict,
+    _is_retrieval_request,
+    _FAMILY_INTENT_KEYWORDS_EN,
+    _FAMILY_INTENT_KEYWORDS_ZH,
 )
+from types import SimpleNamespace
 from sources.http_outbound import outbound_http
 
 from langchain_core.tools import StructuredTool
@@ -385,6 +389,67 @@ def _build_long_task_intent(knowledge_item, tool_info) -> dict:
         'knowledge': knowledge_item,
         'tool_info': tool_info,
     }
+
+
+# ── §5.5b family gap-fill narrow gate (plan Task 6) ──
+# When a user's registry has no tailored type-3 family KB item (fresh user /
+# scene without it), a pct/wo/unsupported candidate + a real family-ANALYSIS
+# ask would otherwise spin ~16s in the ReAct loop with only the generic
+# deep-analysis tool (knowledge=None, excluded from the deterministic
+# pre-route) reachable.  These id types are the *trigger*:
+_NARROW_FAMILY_ID_TYPES = ("pct", "wo", "unsupported")
+
+# The discriminator must tell a true proceedings-ANALYSIS turn apart from a
+# plain member *search* / document *retrieval* ("检索…同族…已授权" is the
+# search ladder's job).  Gates are generic word classes — never user-query
+# vocabulary baked in.
+_FAMILY_ANALYSIS_VERBS_ZH = ("审查", "授权", "驳回", "差异", "分析")
+_FAMILY_ANALYSIS_VERBS_EN = ("examin", "analy", "prosecut", "allowance",
+                             "difference", "objection")
+_FAMILY_SEARCH_VERBS_ZH = ("检索", "搜索", "查找")
+_FAMILY_SEARCH_VERBS_EN = ("search", "look up", "find ")
+_FAMILY_GAPFILL_QUESTION = (
+    "全球同族专利的跨国审查过程与差异分析")
+_FAMILY_GAPFILL_ANSWER = (
+    "输入一个专利/申请号，分析其全球同族在各国的审查过程与差异。"
+    "异步执行；任务完成后结果会出现在本会话。")
+
+
+def _should_route_family_analysis(candidates, query) -> bool:
+    """Predicate for the §5.5b gap-fill narrow route.
+
+    True only when the (post type-3-filter) window is entered: the parser
+    surfaced a pct/wo/unsupported id AND the ask actually ANALYSES the
+    family's worldwide examination, not a search/retrieval of members.
+
+    Rejections (each keeps false-positives low, table-tested in
+    ``test_family_preroute``):
+      - no narrow id candidate       → closed (covers a resolved US/CN id)
+      - search / retrieval phrasing  → closed ("检索/查找/下载…同族…" is the
+        search / document ladder's job)
+      - no genuine ANALYSIS sense    → closed (family keyword alone is not
+        enough — a members-listing ask must not route into the families task)
+    Returns a plain bool; safe for offline unit/integration tests.
+    """
+    if not candidates:
+        return False
+    if not any(str(c.get("id_type") or "")
+               in _NARROW_FAMILY_ID_TYPES for c in candidates):
+        return False
+    text = str(query or "").lower()
+    if any(v in text for v in _FAMILY_SEARCH_VERBS_ZH):
+        return False
+    if any(v in text for v in _FAMILY_SEARCH_VERBS_EN):
+        return False
+    if _is_retrieval_request(text):
+        return False
+    has_family_zh = any(k in text for k in _FAMILY_INTENT_KEYWORDS_ZH)
+    has_family_en = any(k in text for k in _FAMILY_INTENT_KEYWORDS_EN)
+    has_analysis_zh = any(v in text for v in _FAMILY_ANALYSIS_VERBS_ZH)
+    has_analysis_en = any(v in text for v in _FAMILY_ANALYSIS_VERBS_EN)
+    if not (has_family_zh or has_family_en):
+        return False
+    return (has_analysis_zh or has_analysis_en)
 
 
 def _json_len(obj) -> int:
@@ -2077,6 +2142,26 @@ Begin your response now:
                     "Long task intent routed by query match — returning intent")
                 return _build_long_task_intent(
                     matched.knowledge, matched.tool_info)
+
+        # ── §5.5b family gap-fill narrow gate (plan Task 6) ──
+        # Reached only when NO tailored type-3 route matched above, so it never
+        # pre-empts a real KB family item.  It guides a pct/wo/unsupported
+        # candidate that genuinely asks for a family *examination analysis*
+        # straight to a families intent, skipping the ~16s ReAct spin a user
+        # without a tailored family KB entry would otherwise incur.  The core
+        # resolvability pre-check still guides deterministically-unresolvable
+        # (pct / unsupported) ids with a template reply.  Gated on
+        # ``allow_long_task`` so a chat_fallback rerun (long tasks disabled)
+        # is never pushed back into a families deep task.
+        if allow_long_task and _should_route_family_analysis(
+                getattr(self, "_number_candidates", []) or [], prompt):
+            gapfill_knowledge = SimpleNamespace(
+                type=3, scene_id=None,
+                question=_FAMILY_GAPFILL_QUESTION,
+                answer=_FAMILY_GAPFILL_ANSWER)
+            self.logger.info(
+                "Family intent routed by pct/wo narrow gate → families")
+            return _build_long_task_intent(gapfill_knowledge, None)
 
         loop = ReActLoop(
             llm_call=make_llm_call(self.llm, wrapped),
