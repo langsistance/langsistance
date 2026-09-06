@@ -15,14 +15,14 @@ const TABS: { key: SceneMode; label: string }[] = [
 /**
  * Scene switcher (专业工作台 ⇄ 卖家安全台).
  *
- * DeepSeek instant-expert / WorkBuddy 式页签: 灰底浅容器内, 激活项呈
- * 悬浮白卡 + 品牌色文字(teal), 未激活项静默灰字。纯 UI 状态, 不改变 URL;
+ * 工作台页签: 底部品牌色指示条 + 激活项浅 teal 底, 未激活项静默灰字——
+ * 与整体"台"概念一致, 视觉明显区别于分段小开关。纯 UI 状态, 不改变 URL;
  * 流式发送时读持久化 scene(lib/useChatStream -> lib/sceneStore)。
  */
 export default function SceneBar({ mode, onChange }: SceneBarProps) {
   return (
     <div
-      className="inline-flex items-center gap-1 rounded-2xl border border-gray-200/80 bg-gray-100/80 p-1.5"
+      className="inline-flex items-center gap-1 border-b border-gray-200"
       role="tablist"
       aria-label="工作台场景"
     >
@@ -35,10 +35,10 @@ export default function SceneBar({ mode, onChange }: SceneBarProps) {
             role="tab"
             aria-selected={active}
             onClick={() => onChange(tab.key)}
-            className={`rounded-xl px-5 py-2.5 text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/50 ${
+            className={`-mb-px rounded-t-lg border-b-2 px-6 py-2.5 text-sm transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/50 ${
               active
-                ? 'bg-white text-teal-700 shadow-sm ring-1 ring-gray-200'
-                : 'text-gray-500 hover:bg-white/60 hover:text-gray-800'
+                ? 'border-teal-600 bg-teal-50/70 font-semibold text-teal-700'
+                : 'border-transparent text-gray-500 hover:bg-gray-50 hover:text-gray-800'
             }`}
           >
             {tab.label}
