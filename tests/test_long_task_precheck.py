@@ -142,6 +142,15 @@ class TestFamiliesPrecheckGuidance(unittest.TestCase):
         self.assertFalse(handled)
         self.assertEqual(events, [])
 
+    # verdict None (no recognisable number — review T3 MEDIUM-1) → gate falls
+    # through to the legacy path; a bare token must NOT be blocked as
+    # "unresolvable".
+    def test_verdict_none_not_handled(self):
+        handled, events = self._call(
+            "families", ["some-bare-token"], verdict=None)
+        self.assertFalse(handled)
+        self.assertEqual(events, [])
+
 
 if __name__ == "__main__":
     unittest.main()
