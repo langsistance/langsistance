@@ -19,6 +19,7 @@ from celery import Celery
 from sources.logger import Logger
 from sources.analytics import track_event
 from sources.patent_id_utils import extract_us_patent_digits
+from sources.patent_id_translator import resolve_us_pub_number
 
 _pipeline_logger = Logger("long_task_pipeline.log")
 
@@ -1811,113 +1812,9 @@ def execute_family_analysis(self, task_id: str, params: dict):
                 'error': 'EPO credentials not configured'}
 
     # ── USPTO → publication number resolution (EPO fallback) ────────────────
-
-    async def _resolve_us_app_to_pub_number(
-        app_id: str, tid: str, id_type: str = 'application_number',
-    ) -> tuple[str | None, str | None, str | None]:
-        """Resolve a US patent ID → (pub_number, appNumberText, grant_number).
-
-        Searches USPTO by the field appropriate for *id_type*:
-        - application_number → applicationNumberText
-        - publication_number → earliestPublicationNumber
-        - grant_number → patentNumber
-
-        Returns a 3-tuple.  Any element may be None if not found.
-        """
-        try:
-            import json as _json, re as _re, os as _os_fb
-            import httpx as _httpx
-
-            # Normalise to the format USPTO expects for each field:
-            # - earliestPublicationNumber → WITH "US" prefix + kind code
-            # - patentNumber → bare digits (no prefix, no kind code)
-            # - applicationNumberText → bare digits
-            _up = app_id.upper()
-            _digits = extract_us_patent_digits(_up)
-            if not _digits or len(_digits) < 6:
-                return None, None, None
-
-            _esc = lambda s: _re.sub(
-                r'(["\\+\-!(){}[\]^~*?:/]|&&|\|\|)', r'\\\1', s,
-            )
-
-            if id_type == 'grant_number':
-                _query = f'applicationMetaData.patentNumber:"{_esc(_digits)}"'
-            elif id_type == 'publication_number':
-                # Publication number WITH US prefix + kind code (e.g. US20220294065A1)
-                _pub_full = _up if _up.startswith('US') else f'US{_up}'
-                _pub_digits = f'US{_digits}'
-                _query = (
-                    f'applicationMetaData.earliestPublicationNumber:"{_esc(_pub_full)}"'
-                    f' OR applicationMetaData.earliestPublicationNumber:"{_esc(_pub_digits)}"'
-                )
-            else:
-                _query = f'applicationNumberText:"{_esc(_digits)}"'
-            # Always include applicationNumberText as fallback
-            if 'applicationNumberText' not in _query:
-                _query += f' OR applicationNumberText:"{_esc(_digits)}"'
-
-            _body = {
-                "q": _query,
-                "pagination": {"offset": 0, "limit": 1},
-                "fields": [
-                    "applicationNumberText",
-                    "applicationMetaData.patentNumber",
-                    "applicationMetaData.earliestPublicationNumber",
-                    "applicationMetaData.inventionTitle",
-                ],
-            }
-            _hdrs = {'Content-Type': 'application/json', 'Accept': 'application/json'}
-            _uk = _os_fb.getenv('USPTO_API_KEY', '')
-            if _uk:
-                _hdrs['X-API-Key'] = _uk
-
-            async with _httpx.AsyncClient(timeout=15) as _cl:
-                _resp = await _cl.post(
-                    "https://api.uspto.gov/api/v1/patent/applications/search",
-                    headers=_hdrs, json=_body,
-                )
-            _pipeline_logger.info(
-                f"[task={tid}] uspto_search — status={_resp.status_code}, "
-                f"id_type={id_type}, digits={_digits}"
-            )
-            if _resp.status_code != 200:
-                _pipeline_logger.warning(
-                    f"[task={tid}] uspto_search failed — status={_resp.status_code}"
-                )
-                return None, None, None
-
-            _data = _resp.json() if _resp.text else {}
-            _results = (
-                _data.get('patentFileWrapperDataBag', None)
-                or _data.get('results', None)
-                or _data.get('patentFileBag', [])
-            )
-            if not _results:
-                return None, None, None
-
-            _hit = _results[0] if isinstance(_results, list) else _results
-            _app_text = _hit.get('applicationNumberText', '') or ''
-            # patentNumber may be at top level OR nested in applicationMetaData
-            _pub = (
-                _hit.get('applicationMetaData', {}).get('earliestPublicationNumber', '')
-                if isinstance(_hit, dict) else ''
-            ) or ''
-            _grant = (
-                _hit.get('patentNumber', '')  # top-level first
-                or (_hit.get('applicationMetaData', {}).get('patentNumber', '')
-                    if isinstance(_hit, dict) else '')
-            ) or ''
-            _pipeline_logger.info(
-                f"[task={tid}] uspto_search result — "
-                f"pub={_pub}, grant={_grant}, app_text={_app_text}"
-            )
-            return _pub or None, _app_text or None, _grant or None
-        except Exception as _fe:
-            _pipeline_logger.warning(
-                f"[task={tid}] uspto_search error — {type(_fe).__name__}: {_fe}"
-            )
-            return None, None, None
+    # Shared with the translator: identical semantics, defined centrally in
+    # sources/patent_id_translator.resolve_us_pub_number (was the local
+    # _resolve_us_app_to_pub_number here — extracted without behaviour change).
 
     # ── Run pipeline ─────────────────────────────────────────────────────────
     async def _run():
@@ -1941,7 +1838,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
         # For any USPTO ID type, try to find the grant number via USPTO search.
         # Grant numbers are the most reliable format for EPO DOCDB lookups.
         if patent_source == 'uspto':
-            _pub_number, _app_text, _grant_number = await _resolve_us_app_to_pub_number(
+            _pub_number, _app_text, _grant_number = await resolve_us_pub_number(
                 patent_id, task_id, patent_id_type,
             )
             import re as _re_epo
