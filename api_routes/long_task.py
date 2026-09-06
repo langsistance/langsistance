@@ -10,8 +10,14 @@ import re
 
 from fastapi import APIRouter, Query, HTTPException, Request
 from fastapi.responses import Response
-from sources.long_task.status_manager import get_task_status, lookup_query_task
+from sources.long_task.status_manager import (
+    ERR_UNRESOLVABLE_ID,
+    failure_guidance,
+    get_task_status,
+    lookup_query_task,
+)
 from sources.long_task.storage import create_storage, get_storage_config, LocalReportStorage
+from sources.patent_id_translator import verdict_of
 from sources.patent_id_utils import extract_us_patent_digits, kind_code_of
 from sources.user.passport import verify_firebase_token
 
@@ -125,6 +131,42 @@ def _dispatch_retry_task(task_type: str, task_id: str, params: dict) -> None:
         execute_patent_analysis.delay(task_id=task_id, params=params)
 
 
+_UNRESOLVABLE_ERROR_ZH = "该专利号无法解析为可执行的分析任务。"
+_UNRESOLVABLE_ERROR_EN = "This patent number cannot be resolved to a runnable analysis task."
+
+
+def _unresolvable_response_detail(lang: str = "zh") -> dict:
+    """Structured 422 body (detail) for a pre-check refusal (spec §5.3).
+
+    Ruling ①: pre-check refusals produce an error-with-guidance, never a task
+    row / Celery dispatch / analytics event.  ``guidance`` carries the shared
+    ``failure_guidance`` template so submit/retry/detail present the same
+    next-step as the chat main chain.
+    """
+    lang = lang if lang in ("zh", "en") else "zh"
+    return {
+        "error": _UNRESOLVABLE_ERROR_ZH if lang != "en" else _UNRESOLVABLE_ERROR_EN,
+        "code": ERR_UNRESOLVABLE_ID,
+        "guidance": failure_guidance("family", ERR_UNRESOLVABLE_ID, lang=lang),
+    }
+
+
+def _verdict_of(*args, **kwargs):
+    # Thin indirection so the pre-check gates read naturally and translator
+    # faults decompose to "unknown" (fail-open per spec §7) at each call site.
+    try:
+        return verdict_of(*args, **kwargs)
+    except Exception:
+        return None
+
+
+def _is_unresolvable_id(number: str) -> bool:
+    """Whether *number* is *deterministically* unusable by any deep-analysis
+    executor (PCT international number, unsupported/foreign prefix).  None /
+    US grant-or-publication are fine; a translator fault is ``None`` (pass)."""
+    return _verdict_of(number) == "unresolvable"
+
+
 def _normalize_submit_patent_id(raw: str, scenario: str) -> str:
     """Validate and normalize a patent ID for the submit endpoint.
 
@@ -225,6 +267,18 @@ def register_long_task_routes(logger, config):
             else f"分析 {patent_id} 及其全球同族的审查差异"
         )
         lang = body.get("lang") if body.get("lang") in ("zh", "en") else "zh"
+
+        # Resolvability pre-check (spec §5.3 入口2, ruling ①).  A family submit
+        # whose id can never start an analysis (PCT international number,
+        # unsupported/foreign prefix) refuses with guidance *before* any DB row /
+        # Celery dispatch.  Prosecution is already constrained to an 8-digit US
+        # application by ``_normalize_submit_patent_id`` above; a WO US-grant is
+        # a valid family seed and passes.
+        if scenario == "family" and _is_unresolvable_id(patent_id):
+            raise HTTPException(
+                status_code=422,
+                detail=_unresolvable_response_detail(lang),
+            )
 
         from sources.knowledge.knowledge import get_db_connection
         from sources.long_task.user_queue import try_start_user_task
@@ -370,6 +424,20 @@ def register_long_task_routes(logger, config):
                 task_type = row.get("task_type") or "patent_analysis"
                 stored = row.get("input_params")
                 input_params = _json.loads(stored) if isinstance(stored, str) else (stored or {})
+
+                # Resolvability pre-check on retry (spec §5.3 入口3, ruling ①).
+                # Retrying a family deep-analysis whose seed id can never resolve
+                # (again a deterministically-unresolvable number) is refused here,
+                # ABOVE the new-task INSERT — so no replacement pending row is
+                # created and the stored original failed task is left untouched.
+                if task_type == "family_analysis":
+                    fam_target = (input_params or {}).get("patent_id")
+                    if fam_target and _is_unresolvable_id(str(fam_target)):
+                        _lang = (input_params or {}).get("lang") or "zh"
+                        raise HTTPException(
+                            status_code=422,
+                            detail=_unresolvable_response_detail(_lang),
+                        )
 
                 new_task_id = f"lt_{_uuid.uuid4().hex[:12]}"
                 cur.execute(

@@ -88,6 +88,14 @@ class PatentDetailError(Exception):
     """Base error for patent detail fetch failures."""
 
 
+class PatentFormatError(PatentDetailError):
+    """A *format*-level refusal: the id cannot be a USPTO file-wrapper number.
+
+    Distinct from an upstream miss.  The detail routes surface this error's own
+    (guidance) message verbatim so a foreign / WO / PCT id reaches the user with
+    concrete next-step text instead of the generic "unavailable" phrasing."""
+
+
 def build_claims_payload(claims: list[str]) -> dict:
     """Build the claims response payload; independence follows the opener."""
     if not claims:
@@ -574,6 +582,29 @@ async def _fetch_baiten_claims(patent_id: str) -> dict:
         f"No claims available for Baiten patent {patent_id}")
 
 
+def _uspto_guidance_reason(patent_id: str) -> str | None:
+    """Guidance block when *id* cannot be a USPTO file-wrapper application.
+
+    These detail endpoints resolve a *US* application/publication number only.
+    A foreign / WO / PCT / standalone unsupported figure must never be stripped
+    of its prefix and sent to ``resolve_application_number`` (it would dissolve
+    into a bogus numeric query → 403/404, spec §5.3 入口4).  Unrecognisable
+    free-text yields no parser candidate → None → legacy pass-through.  The
+    ``verdict_of`` *family* gate marks a user WO as resolvable (EPO seed) — that
+    is the correct call for submit/retry but wrong for a US-only document lookup,
+    so this helper keys purely off parser country rather than that shared verdict.
+    """
+    from sources.long_task.status_manager import ERR_UNRESOLVABLE_ID, failure_guidance
+    from sources.patent_number_parser import parse_patent_identifiers
+
+    parsed = parse_patent_identifiers(str(patent_id or "").strip())
+    top = parsed[0] if parsed else None
+    if top is None or top.get("country") == "US":
+        return None
+    guide = failure_guidance("detail", ERR_UNRESOLVABLE_ID)
+    return f"{ERR_UNRESOLVABLE_ID}: {guide}"
+
+
 async def _fetch_spec_pdf(source: str, patent_id: str,
                           pub_date: str = "") -> dict:
     """Resolve the specification PDF and return its proxy URL.
@@ -585,6 +616,9 @@ async def _fetch_spec_pdf(source: str, patent_id: str,
     """
     if source == "baiten" or _is_cn_patent_id(patent_id):
         return await _fetch_baiten_spec(patent_id, pub_date)
+    _reason = _uspto_guidance_reason(patent_id)
+    if _reason:
+        raise PatentFormatError(_reason)
     from sources import uspto_download
     from sources import uspto_download
     from sources.dynamic_tool_params import _build_uspto_download_proxy_url
@@ -638,6 +672,9 @@ async def _fetch_claims(source: str, patent_id: str) -> dict:
     """
     if source == "baiten" or _is_cn_patent_id(patent_id):
         return await _fetch_baiten_claims(patent_id)
+    _reason = _uspto_guidance_reason(patent_id)
+    if _reason:
+        raise PatentFormatError(_reason)
     from sources import uspto_download
     from sources.dynamic_tool_params import _build_uspto_download_proxy_url
     from sources.long_task.text_extractor import (
@@ -729,6 +766,10 @@ def register_patent_detail_routes(logger, config):
             raise HTTPException(status_code=400, detail="Invalid patent_id")
         try:
             payload = await _fetch_spec_pdf(source, patent_id, pub_date)
+        except PatentFormatError as exc:
+            # Format refusal — surface the guidance message verbatim.
+            logger.error(f"spec format-refused — source={source}, id={patent_id}: {exc}")
+            return {"success": False, "message": str(exc)}
         except PatentDetailError as exc:
             logger.error(f"spec fetch failed — source={source}, id={patent_id}: {exc}")
             # Expected upstream misses are data conditions, not server
@@ -748,6 +789,10 @@ def register_patent_detail_routes(logger, config):
             raise HTTPException(status_code=400, detail="Invalid patent_id")
         try:
             payload = await _fetch_claims(source, patent_id)
+        except PatentFormatError as exc:
+            # Format refusal — surface the guidance message verbatim.
+            logger.error(f"claims format-refused — source={source}, id={patent_id}: {exc}")
+            return {"success": False, "message": str(exc)}
         except PatentDetailError as exc:
             logger.error(f"claims fetch failed — source={source}, id={patent_id}: {exc}")
             return {"success": False, "message": "Patent claims unavailable"}

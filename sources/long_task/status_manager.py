@@ -225,24 +225,67 @@ def _lookup_task_session_id(task_id: str) -> str | None:
         return ''
 
 
-def notify_terminal_failure(task_id: str, error: str) -> None:
-    """Mark *task_id* failed AND surface the failure in its conversation.
+def classify_failure_reason_code(error: str) -> str:
+    """Map a worker terminal error to a structured ``reason_code`` (spec §5.4).
+
+    Fallback classifier used by :func:`notify_terminal_failure` when the
+    caller did not supply an explicit structured code.  It keys off stable
+    framework / server markers only — HTTP status ranges, EPO semantic codes,
+    transport-timeout terms, auth tokens — never arbitrary user-query text,
+    so it stays deterministic for the classes the templates document:
+
+    - InvalidCountryCode / a docdb 404 (publication-format id unresolvable)
+      → :data:`ERR_UNRESOLVABLE_ID`;
+    - 5xx / timeouts / connectivity / credentials-token → :data:`ERR_EPO_REMOTE`;
+    - anything else → :data:`ERR_OTHER`.
+    """
+    import re as _re
+    text = str(error or "")
+    if not text:
+        return ERR_OTHER
+    # remote / transient first (5xx, transport timeouts, auth token issues)
+    if (_re.search(r"\bHTTP\s*5\d\d\b", text, _re.IGNORECASE)
+            or _re.search(r"(?i)time.?out", text)
+            or _re.search(r"(?i)could not connect|connection (reset|refused)|"
+                          r"network is unreachable", text)
+            or _re.search(r"(?i)\b401\b|\b403\b|OAuth|access_token|invalid_grant|"
+                          r"credential", text)):
+        return ERR_EPO_REMOTE
+    # unresolvable publication-format id / country-code (EPO semantic + 404).
+    if (_re.search(r"(?i)invalidcountrycode|invalid country(code)?|"
+                   r"could not resolve", text)
+            or _re.search(r"\b404\b", text)):
+        return ERR_UNRESOLVABLE_ID
+    return ERR_OTHER
+
+
+def notify_terminal_failure(
+    task_id: str,
+    error: str,
+    *,
+    reason_code: str | None = None,
+    task_type: str = "",
+    lang: str = "zh",
+) -> None:
+    """Mark *task_id* failed AND surface a guidance message in its conversation.
 
     Only call at TERMINAL failure points (retries exhausted, hard stop,
     an explicit failed pipeline result) — ``set_task_failed`` alone is
     also used on retryable attempts and must NOT spam the conversation.
-    The failed message carries the reason (bounded) so the user sees why
-    instead of a silent "task submitted" that never resolves.
+
+    The conversation message is composed from :func:`failure_guidance` keyed
+    by a structured ``reason_code``.  ``reason_code`` should be supplied by the
+    call site when it knows the failure class; otherwise
+    :func:`classify_failure_reason_code` classifies the worker's *error* text
+    (never matching user-query vocabulary).  The message leads with the
+    actionable next-step rather than mechanically re-printing the raw error
+    (spec §1.3 / §5.4).  ``set_task_failed`` fires the analytics failure event
+    exactly once here for each failed task.
     """
     set_task_failed(task_id, error)
-    reason = str(error or "")[:500]
-    if not reason:
-        reason = "未知错误"
-    content = (
-        "批量分析任务执行失败。\n\n"
-        f"失败原因：{reason}\n\n"
-        "可在任务面板点击重试，或重新描述需求后再试。"
-    )
+    code = reason_code or classify_failure_reason_code(error)
+    lang = lang if lang in ("zh", "en") else "zh"
+    content = failure_guidance(task_type, code, error=error, lang=lang)
     try:
         from sources.long_task.task_messages import append_task_message
         append_task_message(task_id, event='failed', content=content)
