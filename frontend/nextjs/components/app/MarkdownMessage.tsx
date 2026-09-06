@@ -300,6 +300,19 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
           )}
         </div>
       )}
+      {showWaiting && !hasSteps && stepsToShow.length === 0 && (
+        <div className="assistant-waiting" role="status" aria-live="polite" aria-label={t('chat.processing')}>
+          <span className="assistant-waiting-orbit" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+          <span className="assistant-waiting-copy">
+            <span className="assistant-waiting-title">{t('chat.processing')}</span>
+          </span>
+          <span className="assistant-waiting-scan" aria-hidden="true" />
+        </div>
+      )}
       {shouldShowStatusSteps(stepsToShow, streaming) && (
         <div className="assistant-status-steps" role="status" aria-live="polite">
           {stepsToShow.map((step) => (
@@ -315,19 +328,6 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
               )}
             </div>
           ))}
-        </div>
-      )}
-      {showWaiting && (
-        <div className="assistant-waiting" role="status" aria-live="polite" aria-label={t('chat.processing')}>
-          <span className="assistant-waiting-orbit" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-          </span>
-          <span className="assistant-waiting-copy">
-            <span className="assistant-waiting-title">{t('chat.processing')}</span>
-          </span>
-          <span className="assistant-waiting-scan" aria-hidden="true" />
         </div>
       )}
       {(content.includes('🔬') || content.includes('✅') || content.includes('❌') || content.includes('⏸') || content.includes('⏹') || /\[\d+%\]/.test(content)) ? (
