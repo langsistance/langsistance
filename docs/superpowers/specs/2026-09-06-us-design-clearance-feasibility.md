@@ -109,16 +109,62 @@ US design 授权累计约 **100 万件级**（D 号段已过 D1,0xx,xxx；近年
 
 ---
 
-## 6. 开放决策点（实测后定）
+## 5.5 V1–V5 实测回填（2026-09-06 服务器两轮探针，`scripts/design_feasibility_probe.py` v2）
 
-1. **L1 主源**：R2 Google XHR（服务器已验证通，著录+图同源）vs R1 USPTO（官方、与现 resolve 同 API）vs 双源合并去重（成本 +~1 查询/件）
-2. **USPC-D 广度策略**：品名命中不足时是否按 D 子类翻页穷举（子类件数若 >500 则需次级排序，判定预算线性涨）
-3. **L3 批量**：1 件/批（准）vs 2–4 件/批（省）——UAT 定
-4. **报告形态**：沿用结果卡+artifact 下载（多图并排对比需前端小改）还是先纯文本+链接
-5. 是否二期立项：图像反查桥（L1-b）与 CN/欧盟第三方 A 方案路由
+### V1 · USPTO search 对 D 号段 —— **定案：可用，形态=D 前缀查询；无分类字段**
+
+| 探针 | 结果 | 结论 |
+|---|---|---|
+| `patentNumber:"D504889"`（带 D） | **200 命中 1 件**（patentNumber=D504889，title=ELECTRONIC DEVICE） | D 号**必须带前缀**查询，形态 `D`+数字无逗号 |
+| `patentNumber:"504889"`（纯 digits） | **404 = 0 命中** | 纯数字查不到 design（与 utility 段 digits 冲突问题不存在） |
+| `inventionTitle:"toy"` | 200 命中（限制 3） | title 文本可检 |
+
+**关键局限**：返回 `applicationMetaData` 仅含 `inventionTitle/patentNumber`，**无任何分类字段**（meta_classification_present=false）→ USPTO search 通道拿不到 USPC-D/Locarno，**只支持 title/品名词检索**。
+
+### V2 · Google Patents 设计页与 XHR —— **定案：type=DESIGN 过滤可用；设计页主资源是 PDF**
+
+- XHR 设计号查询：`USD504889S` → 唯一命中 id=`patent/USD504889S1/en`（**S1 后缀**），pub=`USD504889S1`，title=Electronic device
+- 设计页（`USD504889S1/en`）200；**页面无 Locarno/USPC 文本**（has_locarno/uspc=false）
+- **过滤试探（决定性）**：`toy snake` 纯词 6286 条 → `type:DESIGN` token 3923 → **`&type=DESIGN` 独立参数 270 条** → XHR **支持 type=DESIGN 限定设计库**（数量级收窄 ~23×）
+- V4 佐证：不过滤时 Top10 几乎无设计件（robot toy/bottle=0、office chair 8 全 EM、desk lamp 6 全 EM）→ **L1 必须带 type=DESIGN**
+
+### V3 · 附图直链 —— **定案：PDF 直链 200，架构级利好**
+
+- 设计页首资源 = `https://patentimages.storage.googleapis.com/…/USD504889.pdf` → **直链 200、203KB、application/pdf**
+- 含义：设计附图以**整本 PDF** 提供（多视图在 PDF 页内）→ L2 取图 = 拿 PDF 直链 → **复用既有 `text_extractor` PDF→页图→vision 扫描件管道**，无需新图像管线，单件 <250KB 低内存合规
+
+### V4 · 品名词 design 召回 —— **定案：需过滤后测；EM/CN 设计在 XHR 可见（多区扩展通道）**
+
+- 不过滤时 top10 设计占比 ≈0（EM 例外 6-8 件）；US 设计在 5 词 × top10 仅 1 件 → **纯词排序对设计无效，type=DESIGN 是硬前提**；US-only 是否另有 `country=` 过滤参数**未验（V4′，入 spec UAT）**
+
+### V5 · 老设计图覆盖 —— **降级为低优先（term 推导自动过滤老件）**
+
+- 年代过滤可用但需叠加 type=DESIGN（首轮未叠加导致 top10 全 utility，无设计件样本）
+- **风险场景只关心授权 ≤15 年件**（法律状态=日期推导）→ 有效区间 2010+，其图通道与 2005 样本同源已证 → V5 老件覆盖不再阻塞
+
+### 遗留微探针（可并入 spec UAT，不阻塞设计）
+V4′：`type=DESIGN` + `country=US`（参数名待验）下 5 品名词的 US 设计召回占比 → 决定 L1 是否需要 US 限定与 Top-N 默认值。
 
 ---
 
-## 7. 结论
+## 6. 开放决策点（实测后定）
 
-B 方案（US 外观、无向量库、LLM 判定）**技术上可行**：检索/取图/判定三环均有可达通道与现成基建可复用，主要不确定性集中在 V1–V5 五个数据/接口行为点上，30 分钟服务器脚本可全部消除。在 V1–V5 通过前不建议写死设计（L1 主源与字段体系依赖其结果）；通过后即可进入正式 spec 设计。
+1. **L1 主源**：**R2 Google XHR 为主**（type=DESIGN 过滤已证；设计号/PDF 同源）——R1 USPTO search 降为 title 检索备选（无分类字段、无 PDF 直链便利）；V4′ 若 `country=US` 不可用则考虑 XHR 结果侧按 US 过滤或 USPTO title 检索补 US 命中。双源合并去重（成本 +~1 查询/件）留二期
+2. **USPC-D 广度策略**：因 USPTO 无分类字段、Google 页无 USPC 文本 → **放弃分类穷举路线**，召回 = 品名词/特征词阶梯 + type=DESIGN（0 命中阶梯放宽与 utility 同构）
+3. **L3 批量**：1 件/批（准）vs 2–4 件/批（省）——UAT 定
+4. **报告形态**：沿用结果卡+artifact 下载（对比图并排需前端小改）还是先纯文本+PDF 链接——UAT 定
+5. 是否二期立项：图像反查桥（L1-b）、CN/欧盟路由（XHR 已见 EM/CN S 号，未来可扩区）、`country=` 参数若无效时 US 收窄策略
+
+---
+
+## 7. 结论（实测后更新）
+
+B 方案（US 外观、无向量库、LLM 判定）**技术上可行，且主链路已实证打通**：
+
+- **L1 召回** = Google XHR `q=品名词阶梯 + type=DESIGN`（已证可收窄至设计库）；USPTO search 仅作 title 备选（D 前缀形态已证、无分类字段）
+- **L2 取图** = 设计 PDF 直链（200 实证，203KB/件）→ 复用既有 PDF→页图→vision 管道（**架构级利好：无新图像管线**）
+- **L3 判定** = 复用 `analyze_patent_with_vision`（vision_provider/model 可配；服务器当前 minimax/MiniMax-M3，deepseek-v4-flash-vision-exp 属候选）
+- 法律状态 = 授权日 + 15 年推导（无状态 API 依赖）；老件（>15 年）自动失效过滤，规避老图覆盖风险
+- 唯一未验项 V4′（`country=US` 参数与 US 设计召回占比）降级为 **spec 内 UAT 项**，不再阻塞设计
+
+在 V1–V5 全部定案的基础上，可直接进入正式 spec 设计（范围：US 外观防侵权询检，B 方案主链路，报告含视觉对比与 0.7 风险口径）。
