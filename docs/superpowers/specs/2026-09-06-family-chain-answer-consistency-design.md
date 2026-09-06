@@ -156,11 +156,12 @@ USPTO 项经 `build_candidates` 才有 abstract。现有唯一聚类骨架 =
 轨迹复跑（部署后人工核对日志，参考 09-04 现场）：
 - [ ] 输入「分析 PCTUS2021059064 及其全球同族申请的审查差异」：日志出现 PCT 识别（非 US ambiguous）；
 - [ ] KB 无家族项时该请求**不再经 claims 403/404 + 关键词 16s 空转**（预路由窄门或预检引导先达）；
-- [ ] 反查通道（默认关）未解锁前：本轮直接以「请提供 WO 公开号或美国国家阶段申请号」类引导答复
-  收尾（无任务创建、无 `long_task:fail`）；用户补充 WO 号重问 → 走通解析路径；
-- [ ] 反查/直猜通道 UAT 实证通过后：families 以合法 docdb 号进入 EPO 并产出家族结果（WO 直猜须
-  先以 1 个真实样本验证「申请流水 ≠ WO 公开序号」命题后再定真伪，见 §11）；
-- [ ] 用户改提供 WO 公开号（如 WO2021/xxxxx）重问 → 直猜/解析路径走通 EPO（OPS 接受 kind-less 与否
+- [ ] 反查通道（flag 默认关，Phase A 后实现）未解锁前：本轮直接以「请提供 WO 公开号或美国国家阶段
+  申请号」类引导答复收尾（无任务创建、无 `long_task:fail`）；用户补充 WO 号重问 → 走通解析路径；
+- [ ] 反查通道 spike 已证可行（2026-09-06：PCTUS2021059064 → WO2023075806A1 唯一命中）；WO→EPO
+  docdb kind-less 接受度 UAT（服务器凭据试发 `WO2023075806` vs `WO2023075806A1`）确认后，
+  families 以合法 docdb 号进入 EPO 并产出家族结果；
+- [ ] 用户改提供 WO 公开号（如 WO2021/xxxxx）重问 → 解析路径走通 EPO（OPS 接受 kind-less 与否
   一并实测）；
 - [ ] detail 路由对 PCT 号点击 → 返回号码引导而非 403/404 空转；
 - [ ] 概念组检索轮终稿如提及检索概况，与 `patent_search_notes` 当轮真值一致（不再声称 CN 不可用）；
@@ -224,8 +225,8 @@ query_stream ─ create_agent
 core _classify/_prepare → scenario=families, patent_ids=[PCTUS2021059064], source=auto
    ▼
 [预检门] translator.translate("PCTUS2021059064", scenario=families)
-   ├─ WO 直猜通道(实验): 命中即候选；反查 flag ON 且确认到 WO 公开号 → 候选集 {epo_docdb:"WO…"}
-   │     → 提交 celery，families Phase 0 改用翻译候选
+   ├─ 反查 flag ON 且确认到 WO 公开号（spike 已证可行）→ 候选集 {epo_docdb:"WO2023075806A1…"}
+   │     → 提交 celery，families Phase 0 改用翻译候选（无直猜通道）
    ├─ 均未确认 → verdict=unresolvable → 本轮以模板引导答复收尾（INSERT 前拦截，不建任务）：
    │     「我识别到 PCT/US2021/059064 是国际申请号，家族分析需要其公开号形态。
    │      请提供 WO 公开号（如 WO2021/xxxxx）或美国国家阶段申请号，我将直接为您分析；
@@ -296,17 +297,21 @@ def verdict_of(patent_id: str, scenario: str) -> str | None   # 同步快速门�
 | US 申请号（series/serial） | ✓（documents 反查） | 仅当有 grant 产出 | — | resolvable（epo 缺则标 low confidence，仍放行） |
 | CN 申请/公开号 | —（引导改源） | 经 CN 成员 | ✓ | resolvable（regional executor 自管） |
 | **WO 公开号** | ✗ | ✓（docdb `WO{YYYY}{NNNNNN}`，kind 可省待 UAT 实证） | — | **resolvable*（带实证标记）** |
-| **PCT（受理局 US/任意）** | ✗（无国家阶段号） | **WO 直猜 = best-effort 候选**（申请流水 ≠ WO 公开序号，命中是巧合不是规则） | 经国家阶段 | reverse_lookup=False → **unresolvable + 引导**；=True 且反查确认 WO pub → resolvable |
+| **PCT（受理局 US/任意）** | ✗（无国家阶段号） | ✗（**直猜已实证证伪**，2026-09-06，见 §11——不再构造直猜候选） | 经国家阶段 | reverse_lookup=False → **unresolvable + 引导**；=True 且反查确认 WO pub → resolvable（evidence=reverse_lookup） |
 | 未知前缀/≥9 位裸数字 | ✗ | ✗ | ✗ | **unresolvable + 引导** |
 | translator 内部异常 | — | — | — | 抛给上层 → 放行旧行为 |
 
 实现要点：
-- EPO docdb 候选构造（无网络）：US grant `f"US{n}"`、WO pub `f"WO{YYYY}{NNNNNN}"`；
-  判为 `resolvable` 的 WO 候选带 `evidence="direct_guess"`（供验收/日志区分实验命中）；
-- **PCT→WO 自动反查（实验通道，flag `REACT_PCT_REVERSE_LOOKUP` 默认 `"0"`）**：需**新增**
-  `GooglePatentsClient` 检索方法（按 PCT 号构造查询，取 WO 公开号/同族区块）——评审确认该类现无
-  任何反查/同族解析方法、families CN 腿也从未做过此类反查，**这是新增能力而非复用**；实现前先以
-  1 个真实样本 spike 验证可抓取性；反查失败抛 `unresolvable`（fail-closed）；
+- EPO docdb 候选构造（无网络）：US grant `f"US{n}"`；用户**直接提供**的 WO 公开号（id_type=wo）
+  `f"WO{YYYY}{NNNNNN}"`（evidence=local）。**不再对 PCT 构造直猜候选**——2026-09-06 服务器实证：
+  真实公开号 WO2023075806A1（2023-05-04 公布）≠ 直猜 WO2021059064（ABB 充电案，2021-04-01），
+  恒等命题证伪；PCT 自动解析只走反查通道（evidence=reverse_lookup）；
+- **PCT→WO 自动反查（flag `REACT_PCT_REVERSE_LOOKUP` 默认 `"0"`，实现排 Phase A 后）**：
+  2026-09-06 服务器 spike **已实证通道可行**——XHR 端点 `https://patents.google.com/xhr/query?url=q%3D{PCT号}`
+  对 `PCTUS2021059064` 返回唯一命中 `WO2023075806A1`（filing_date 2021-11-12 与申请号吻合；
+  JSON 直接含 publication_number + family_metadata，比页面抓取稳定）；实现 = 新增
+  `GooglePatentsClient` 检索方法（该类现无任何反查方法，属**新增能力**），0 条/多条无法消歧 →
+  unresolvable（fail-closed）；
 - **双反查差异注**：`resolve_application_number`（uspto_download.py，PEDS documents 直查）与
   `_resolve_us_app_to_pub_number`（celery_worker.py，USPTO search 反查 grant 三元组）是**两套不同
   语义的反查**；translator 只收敛后者进 docdb 候选，前者保持 detail 路由既有用法——勿合并抽错对象；
@@ -433,7 +438,7 @@ ERR_OTHER                                   → 维持现模板 + 「可在任�
 ```text
 TranslateResult { patent_id, verdict(resolvable|unresolvable),
                   candidates{epo_docdb[], uspto[], cnipa[]},
-                  evidence: "direct_guess" | "reverse_lookup" | "local" | "", reason, confidence }
+                  evidence: "reverse_lookup" | "local" | "", reason, confidence }   # 无 direct_guess：恒等已证伪
 ```
 
 ### 6.3 失败与引导（复用既有消息通道，无新存储）
@@ -532,10 +537,10 @@ worker 执行失败(任务已建): append_task_message(event='failed', content=�
     celery 双 fail/非终态）——不可解析案件统一以引导答复收尾；
 - **Phase B（P1：建议② = 需求 26）** `[本次检索]` 行 + notes 收敛 + 一致性规则句（顺 A 同分支）；
 - **Phase C（P2：建议⑤ = 技术簇分组）** flag 门控独立合入（同分支顺延）；
-- **实验通道 spike（裁决：提前到 Phase A 实施期间并行）**：以 1 个真实 PCT 号手动验证
-  「WO 直猜序号是否等于公开号」与「patents.google.com 按 PCT 号反查 WO 公开号」两条通道的真伪
-  （~1 小时级，curl 即可）；结论只影响实验通道设计（flag 仍默认关），不阻塞 A/B 交付；
-  spike 证实后按证据升级 §5.2/验收口径，证伪则引导路径为最终答案；
+- **实验通道 spike（已完成，2026-09-06 服务器侧）**：实证结论——①Google XHR 按 PCT 号反查可行：
+  `PCTUS2021059064` → 唯一命中 `WO2023075806A1`（XHR JSON 含 publication_number/family，比页面抓取稳）；
+  ②直猜恒等命题**证伪**：`WO2021059064` 属 ABB 充电他案 → translator 不再直猜。剩余 UAT：
+  真实 WO 号送 EPO OPS 的 docdb **kind-less 接受度**（服务器凭据试发 `WO2023075806` vs `WO2023075806A1`）；
 - 收尾：全量回归 + 终审（code-review）→ 服务器部署 → §2.3 轨迹复跑验收 → 需求列表证据回填。
 
 分支建议：执行从 `feat/baiten-dual-source`（= main 4efa3df）继续或拉 `feat/family-resolve-consistency`；
@@ -547,7 +552,7 @@ seller 线并行不动。
 
 | 项 | 说明 | 处置 |
 |---|---|---|
-| **WO docdb 直猜恒等命题** | 「PCT 申请流水(059064) = WO 公开序号」不恒等，属两套编号序列——直猜命中是巧合 | UAT 首个实证样本（取任一 PCT 号验证其 WO 公开号序号）；未证实前 PCT 案件默认引导路径（fail-closed） |
+| **WO docdb 直猜恒等命题（已实证证伪）** | 2026-09-06 服务器样本：PCT/US2021/059064 真实公开号 WO2023075806A1（2023-05-04 公布）≠ 直猜 WO2021059064（ABB 充电案，2021-04-01 公布） | translator **不再构造直猜候选**；PCT 自动解析只走反查通道（spike 已证可行，flag 默认关，Phase A 后实现） |
 | **WO kind-less 是否被 OPS 接受** | 仓库无任何 WO→EPO 先例/测试 | UAT 实测；不接受则要求带 kind（A1）形态再送 |
 | **Google 反查（实验通道）** | `GooglePatentsClient` 现无按号反查方法——**新增能力**，抓取可被限流/改版 | spike 先行 + flag 默认关 + fail-closed；不阻塞主链路 |
 | PCT country 语义（受理局 vs 文献国别） | parser `country` 填 WO、office 记受理局 | §5.1 注；UAT 核对前端/检索路由读取 |
@@ -570,7 +575,7 @@ seller 线并行不动。
 | R1 | **CRITICAL**：claims/spec detail 路由不受预检门约束，任何外文号剥前缀复现 403/404 | 已修：§5.3 第四入口 + §8 列 patent_detail.py + 验收 2.3/3 |
 | R2 | **HIGH**：executor 删 `_update_mysql_progress` 后 MySQL 停非终态（外层 returned-failed 只 notify） | 已修：§5.4 单点出口（外层 notify+MySQL 成对），与其余 executor 惯例一致 |
 | R3 | **HIGH**：GooglePatentsClient「复用做 PCT→WO 反查」是不存在的方法假设 | 已修：§1.5/§5.2 降为「新增方法 + 实验通道 flag 默认关 + spike 先行」 |
-| R4 | **HIGH**：WO 直猜混淆申请流水与公开号两套编号，判定表把推测当 resolvable | 已修：§5.2 判 PCT 默认 unresolvable+引导；直猜仅 best-effort + evidence 标记 + UAT 实证 |
+| R4 | **HIGH**：WO 直猜混淆申请流水与公开号两套编号，判定表把推测当 resolvable | 已修：§5.2 判 PCT 默认 unresolvable+引导；**2026-09-06 spike 实证证伪恒等**（WO2021059064=ABB 他案 vs 真实 WO2023075806A1）→ 判定表移除直猜，evidence 枚举删 direct_guess |
 | R5 | **HIGH**：预路由扩展撞 knowledge=None 防呆护栏（过度路由 EVERYTHING）；16s 消灭依赖 KB 前提未声明 | 已修：§5.5b 窄门设计（pct/wo 候选 ∧ 分析意图 ∧ KB 无项）；§2.1 G2/验收措辞条件化 |
 | R6 | **MEDIUM**：幂等相等去重与「并发窗口接受」自相矛盾（单点出口后本无双发） | 已修：§5.4 删除相等去重，§7.5 改「单 setter 自然单发」 |
 | R7 | **MEDIUM**：Phase A/B 同文件可并行表述自相矛盾 | 已修：§10 同分支顺序合入，不做并行分支 |
@@ -586,7 +591,9 @@ seller 线并行不动。
    retry 拦同号、detail 格式门——均不产生任务行与失败事件，无统计噪音；"面板重试对格式错无意义"
    的问题随不建任务而消失（worker 执行失败的重试路径保持既有语义）。相关修订：§2.1 G2、§2.3、
    §3、§4、§5.3、§5.4、§6.3、§7、§8、§9、§10、§11、§12 R10；
-2. **PCT→WO 实证 spike 提前到 Phase A 实施期间并行**（选 C）：1 个真实样本验证「WO 直猜序号恒等」
-   与「Google 按 PCT 号反查」真伪（~1 小时级），结论只影响实验通道（flag 默认关），不阻塞 A/B；
+2. **PCT→WO 实证 spike 提前并行**（选 C）——**已完成（2026-09-06 服务器侧）**：Google XHR 按 PCT 号
+   反查**可行**（PCTUS2021059064 → 唯一命中 WO2023075806A1）；直猜恒等命题**证伪**（WO2021059064
+   属 ABB 他案）→ §5.2 移除直猜、evidence 删 direct_guess；反查实现排 Phase A 后（flag 默认关）；
+   剩余 UAT：WO→EPO docdb kind-less 接受度；
 3. **A6 共享门必做 + 细则表按预算 DEFER**：三 examination resolver 前置 `verdict_of()` 一行门计入
    Phase A 必做项；仅各源本地号格式细则表超预算时 DEFER（放行原则兜底），验收口径注明。
