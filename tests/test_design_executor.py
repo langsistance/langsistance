@@ -98,5 +98,31 @@ class TestDesignFailedTerminal(unittest.TestCase):
         self.assertEqual(calls["mysql"][0][1:], ("failed", 0))
 
 
+# ── core plug point: design-clearance intent detector (additive, pure) ──
+
+from sources.design.clearance_intent import (
+    has_design_cue, design_clearance_intent)  # noqa: E402 — firebase-free module
+
+
+class TestDesignClearanceIntentDetector(unittest.TestCase):
+    def test_image_required(self):
+        # image is the hinge: query-only, no upload, cannot drive visual clearance
+        self.assertFalse(design_clearance_intent("外观专利比对", []))
+        self.assertFalse(design_clearance_intent("外观专利比对", None))
+
+    def test_design_cue_required(self):
+        # image present but no appearance-design cue word → not clearance-routed
+        self.assertFalse(design_clearance_intent("帮我看看这张图", ["p.jpg"]))
+
+    def test_image_plus_cue_matches(self):
+        self.assertTrue(
+            design_clearance_intent("请做外观侵权比对", ["pic.png", " b.jpg "]))
+
+    def test_has_design_cue_domain_terms(self):
+        self.assertTrue(has_design_cue("此产品的外观设计专利情况"))
+        self.assertTrue(has_design_cue("检查这杯子的设计专利"))
+        self.assertFalse(has_design_cue("帮我查这个号码的审查流程"))
+
+
 if __name__ == "__main__":
     unittest.main()

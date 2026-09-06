@@ -17,6 +17,9 @@ from sources.knowledge.knowledge import get_knowledge_tool
 from sources.patent_id_translator import verdict_of
 from sources.user.passport import verify_firebase_token, check_and_increase_usage
 from sources.callback.sse_callback import SSECallbackHandler
+# US design-clearance upload-intent detector (design P1 T7b plug point).
+from sources.design.clearance_intent import (       # noqa: E402
+    DESIGN_CLEARANCE_CUES, design_clearance_intent, has_design_cue)
 
 router = APIRouter()
 
