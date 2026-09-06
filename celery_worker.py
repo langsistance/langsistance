@@ -2894,6 +2894,250 @@ def execute_family_analysis(self, task_id: str, params: dict):
         loop.close()
 
 
+# ── US design-clearance executor (design P1 T7b) ───────────────────────────────
+#
+# Thin celery shell over ``sources.design.design_pipeline.run`` (the P1
+# orchestrator at 205b551).  Real Google page/search fetch and patentimages pdf
+# fetch are injected here (wire#4/#6); every injected fetcher is wrapped so a
+# network error degrades to ``(0, ...)`` which the design contracts treat as a
+# fail-open skip, never a hard crash.  Mirror of the families single-exit /
+# set_task_completed-with-anchor semantics.  Additive only — nothing below
+# alters neighbouring executors.
+
+
+@app.task(bind=True, max_retries=2, default_retry_delay=60,
+          time_limit=1800, soft_time_limit=1770)
+def execute_design_clearance(self, task_id: str, params: dict):
+    """Design-clearance shell: delegate to design_pipeline.run, map exits.
+
+    Success → set_task_completed(anchor_payload=built from digest);
+    DesignNeedClarification → clarification guidance failure;
+    DesignRuntimeError (rate_limited) → retry-later guidance failure;
+    any other / missing input / retry-exhaustion → single terminal exit.
+    """
+    import asyncio as _asyncio
+
+    retry_count = self.request.retries
+    product_text = str(params.get('product_text') or '').strip()
+    refs = list(params.get('product_image_refs') or [])
+    source = str(params.get('source') or 'us_design')
+    user_id = params.get('user_id', '')
+    query = str(params.get('query') or '')[:120]
+
+    _pipeline_logger.info(
+        f"[task={task_id}] DESIGN CLEARANCE START — source={source}, "
+        f"refs={len(refs)}, text={product_text[:80]!r}, "
+        f"retry={retry_count}/{self.max_retries}"
+    )
+
+    if retry_count >= self.max_retries:
+        _pipeline_logger.error(
+            f"[task={task_id}] DESIGN HARD_STOP — "
+            f"retry_count={retry_count} >= {self.max_retries}")
+        if user_id:
+            from sources.long_task.user_queue import complete_user_task
+            try:
+                complete_user_task(str(user_id), task_id)
+            except Exception:
+                pass
+        _notify_terminal_failure(
+            task_id, f'Max retries ({self.max_retries}) exceeded')
+        return {'status': 'failed', 'task_id': task_id,
+                'error': f'Max retries ({self.max_retries}) exceeded'}
+
+    if not refs and not product_text:
+        _pipeline_logger.error(
+            f"[task={task_id}] DESIGN no image/text input")
+        _update_mysql_progress(task_id, 'failed', 0)
+        return {'status': 'failed', 'task_id': task_id,
+                'error': 'No product image or text provided'}
+
+    async def _run():
+        from sources.design import design_pipeline
+        from sources.design.design_pipeline import (
+            run, DesignNeedClarification, DesignRuntimeError,
+        )
+        from sources.long_task.status_manager import update_task_status
+        # Real fetch injection (seam wire#4/#6): design_pipeline drives the
+        # module-global ``_google_fetch`` for L1 (search XHR) and L2 (patent page
+        # HTML).  Replace it on this live run only so a real task genuinely hits
+        # Google / patentimages; offline tests mock ``run`` and never touch it.
+        design_pipeline._google_fetch = _design_google_fetch
+        ctx = _DesignCtx(task_id, update_task_status)
+        try:
+            result = await run(params, ctx)
+        except DesignNeedClarification as e:
+            raise _DesignClarificationExit(str(e)) from e
+        except DesignRuntimeError as e:
+            raise _DesignRuntimeExit(str(e)) from e
+        # Non-raise result is a normal/degraded success shape.
+        _design_complete(task_id, result, params, user_id)
+        return {'status': 'completed', 'task_id': task_id}
+
+    loop = _asyncio.new_event_loop()
+    try:
+        _task_result = loop.run_until_complete(_run())
+        if (isinstance(_task_result, dict)
+                and _task_result.get('status') == 'failed'):
+            _design_exception_hard_stop(task_id, user_id,
+                                        str(_task_result.get('error')
+                                            or '任务失败'))
+        return _task_result
+    except _DesignClarificationExit as e:
+        # Clarification guidance → terminal failure with actionable prompt.
+        _design_exception_hard_stop(task_id, user_id, str(e))
+        return {'status': 'failed', 'task_id': task_id,
+                'error': str(e)}
+    except _DesignRuntimeExit as e:
+        # rate_limited etc → retry-later message.
+        _design_exception_hard_stop(
+            task_id, user_id, '服务暂不可用，请稍后重试。')
+        return {'status': 'failed', 'task_id': task_id,
+                'error': str(e)}
+    except Exception as e:  # noqa: BLE001
+        import traceback
+        _pipeline_logger.error(
+            f"[task={task_id}] DESIGN UNHANDLED_ERROR — "
+            f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+        if user_id:
+            from sources.long_task.user_queue import complete_user_task
+            try:
+                complete_user_task(str(user_id), task_id)
+            except Exception:
+                pass
+        _notify_terminal_failure(task_id, f"{type(e).__name__}: {e}")
+        _update_mysql_progress(task_id, 'failed', 0)
+        return {'status': 'failed', 'task_id': task_id,
+                'error': f'{type(e).__name__}: {e}'}
+    finally:
+        loop.close()
+
+
+class _DesignClarificationExit(Exception):
+    """Carry the pipeline's clarification text out of the async _run."""
+
+
+class _DesignRuntimeExit(Exception):
+    """Carry the pipeline's runtime-hard-error text out of the async _run."""
+
+
+class _DesignCtx:
+    """Minimal ctx the design_pipeline expects (progress/warning).
+
+    Each progress/warning forwards into ``update_task_status`` with a monotonic
+    percentage so the SSE progress bar never regresses; a failure to reach Redis
+    must never abort the pipeline (progress is advisory).
+    """
+
+    _MAX = 96  # leave the last 4% for the terminal 100 in set_task_completed
+
+    def __init__(self, task_id, update_task_status):
+        self._task_id = task_id
+        self._update = update_task_status
+        self._pct = 0
+        self._phase = 'searching'
+
+    def progress(self, msg):
+        step = min(self._MAX, self._pct + 4)
+        self._pct = step
+        try:
+            self._update(self._task_id, 'running_design', step,
+                         str(msg)[:120])
+        except Exception:
+            pass  # progress must never break the pipeline
+
+    def warning(self, msg):
+        try:
+            self._update(self._task_id, 'running_design',
+                         max(self._pct, 1),
+                         f"注意：{str(msg)[:110]}")
+        except Exception:
+            pass
+
+
+# ── Design helper (mirror of _family_failed_terminal / single-exit) ────────────
+async def _design_google_fetch(resource):
+    """Real design fetch for the pipeline L1/L2 seam (wire#4/#6).
+
+    Dispatches on the resource form: a Google XHR search query body
+    (``q=…&type=DESIGN``) → the XHR endpoint; anything else → a US-design patent
+    page (``patents.google.com/patent/<pid>/en``).  Every error is masked to a
+    ``(0, "")`` tuple which the design contracts treat as fail-open (skip / no
+    structured hit), never a hard crash.
+    """
+    import urllib.parse as _urlparse
+
+    from sources.design.design_image import DESIGN_PAGE_URL
+    text = str(resource or "")
+    if text.startswith("q=") and "type=DESIGN" in text:
+        url = ("https://patents.google.com/xhr/query?url="
+               + _urlparse.quote(text, safe="=&"))
+    else:
+        url = DESIGN_PAGE_URL.format(pid=text)
+    try:
+        import httpx
+        headers = {"User-Agent": _DESIGN_UA}
+        async with httpx.AsyncClient(
+                headers=headers, timeout=30.0, follow_redirects=True) as _cl:
+            resp = await _cl.get(url)
+        return resp.status_code, resp.text
+    except Exception as e:  # noqa: BLE001 —— fail-open degrade
+        _pipeline_logger.warning(
+            f"DESIGN fetch degrades {text[:40]!r}: {type(e).__name__}: {e}")
+        return 0, ""
+
+
+_DESIGN_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/120 Safari/537.36")
+
+
+def _design_exception_hard_stop(task_id: str, user_id: str, error: str) -> None:
+    """Single terminal exit for a failed design run.
+
+    On the analytics/metrics-charge path only *some* failures write MySQL failed;
+    to stay consistent with every other executor and avoid spurious columns for a
+    genuine runtime error we still pair conversation-notify + MySQL marker exactly
+    like ``_family_failed_terminal``.  Complete the user queue item so a queued
+    successor may start.
+    """
+    if user_id:
+        try:
+            from sources.long_task.user_queue import complete_user_task
+            complete_user_task(str(user_id), task_id)
+        except Exception:
+            pass
+    _notify_terminal_failure(task_id, error)
+    _update_mysql_progress(task_id, 'failed', 0)
+
+
+def _design_complete(task_id: str, result: dict, params: dict,
+                     user_id: str) -> None:
+    """Persist a successful/ degraded design outcome (set_task_completed + anchor)."""
+    from sources.long_task.status_manager import set_task_completed
+    digest = dict(result.get('digest') or {})
+    anchor_payload = None
+    if isinstance(digest, dict) and digest.get('target'):
+        anchor_payload = {
+            'anchor_type': 'topic',
+            'target': str(digest.get('target'))[:120],
+            'target_summary': '',
+            'source': str(params.get('source') or 'us_design') or '',
+            'result_ids': list(digest.get('result_ids') or [])[:50],
+            'result_titles': None,
+            'task_id': task_id,
+        }
+    set_task_completed(task_id, [],
+                       patent_ids=list(digest.get('result_ids')
+                                       or [])[:50],
+                       anchor_payload=anchor_payload)
+    if user_id:
+        from sources.long_task.user_queue import complete_user_task
+        try:
+            complete_user_task(str(user_id), task_id)
+        except Exception:
+            pass
+
+
 # ── Family helpers ─────────────────────────────────────────────────────────────
 
 
