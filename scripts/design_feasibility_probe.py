@@ -233,8 +233,51 @@ async def v4_v5(client: httpx.AsyncClient) -> dict:
     return {"v4_term_sample": terms, "v5_era_pages": eras}
 
 
+async def v_extra_locarno(client: httpx.AsyncClient) -> dict:
+    """V6 微探针: US 设计侧 LOC 到底存不存在(定 spec 字段用)。
+
+    a) XHR 专利对象全键名(找 locarno/classification 类字段);
+    b) 设计页分类区实际文案(大小写不敏感扫分类关键词并取样)。
+    """
+    log("V6 LOC 微探针…")
+    out: dict = {}
+    try:
+        resp = await client.get(GP_XHR, params={"url": "q=USD504889S", "exp": ""},
+                                headers={"User-Agent": UA})
+        if resp.status_code == 200:
+            data = resp.json()
+            pat = ((((data.get("results") or {}).get("cluster") or [{}])[0]
+                    .get("result") or [{}])[0].get("patent") or {})
+            out["xhr_patent_keys"] = sorted(pat.keys())
+            for k in ("classifications", "locarno", "uspc", "cpc",
+                      "classification"):
+                if k in pat:
+                    out[f"xhr_{k}"] = pat[k]
+    except Exception as exc:  # noqa: BLE001
+        out["xhr_error"] = f"{type(exc).__name__}: {exc}"
+    try:
+        resp = await client.get(
+            "https://patents.google.com/patent/USD504889S1/en",
+            headers={"User-Agent": UA})
+        html = resp.text if resp.status_code == 200 else ""
+        hits = {}
+        for kw in ("locarno", "classification", "USPC", "D21", "CLAS"):
+            idxs = [m.start() for m in re.finditer(kw, html, re.I)][:2]
+            hits[kw] = idxs
+        out["page_kw_hit_positions"] = hits
+        m = re.search(
+            r"(?i)(Classifications|Locarno|USPC|United States Patent).{0,500}",
+            html, re.S)
+        out["classification_snippet"] = (
+            re.sub(r"<[^>]+>", " ", m.group(0))[:500] if m else None)
+    except Exception as exc:  # noqa: BLE001
+        out["page_error"] = f"{type(exc).__name__}: {exc}"
+    return out
+
+
 async def main(out_path: str) -> None:
-    results: dict = {"vision_config": {}, "v1": {}, "v2_v3": {}, "v4_v5": {}}
+    results: dict = {"vision_config": {}, "v1": {}, "v2_v3": {}, "v4_v5": {},
+                     "v6_locarno": {}}
     try:
         import configparser
         cfg = configparser.ConfigParser()
@@ -253,6 +296,7 @@ async def main(out_path: str) -> None:
         results["v1"] = await v1(client)
         results["v2_v3"] = await v2_v3(client)
         results["v4_v5"] = await v4_v5(client)
+        results["v6_locarno"] = await v_extra_locarno(client)
 
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(results, fh, ensure_ascii=False, indent=2)
