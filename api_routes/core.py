@@ -14,6 +14,7 @@ from sources.logger import Logger
 from sources.analytics import track_event
 from api_routes.models import QueryRequest, QuestionRequest
 from sources.knowledge.knowledge import get_knowledge_tool
+from sources.patent_id_translator import verdict_of
 from sources.user.passport import verify_firebase_token, check_and_increase_usage
 from sources.callback.sse_callback import SSECallbackHandler
 
@@ -594,6 +595,51 @@ def _prepare_long_task_inputs(
         "patent_id_type": patent_id_type,
         "patent_texts": patent_texts,
     }
+
+
+async def _families_precheck_guidance(
+    *, scenario: str, patent_ids: list, query: str, queue, app_logger=None,
+) -> bool:
+    """Chat main-chain resolvability pre-check gate (spec §5.3 入口1).
+
+    Runs only for ``scenario == "families"`` with at least one id.  When the
+    first id is *deterministically* unresolvable (PCT / unsupported shapes —
+    not a mere ambiguity), this ends the turn with a template guidance reply
+    streamed on ``queue`` and returns ``True`` so the caller returns before the
+    task is created/dispatched: no task row, no Celery, no ``long_task:submit``
+    / ``long_task:queued`` / ``long_task:fail`` event (ruling ①: guidance
+    reply, no task).  The gateway does no DB / Redis / network work itself.
+
+    Returns ``False`` (gate inactive → caller keeps legacy INSERT + dispatch)
+    for a resolvable id, a non-families scenario, empty patent_ids, or when the
+    translator raises — the latter falls through to the old behaviour with the
+    worker as the backstop (spec §7 fail-open).  If fired, content is charged to
+    the caller and flushed by the SSE consumer exactly like an assistant reply.
+    """
+    if scenario != "families" or not patent_ids:
+        return False
+    try:
+        verdict = verdict_of(str(patent_ids[0]).strip(), "families")
+    except Exception as e:  # translator failure → fall through (old path)
+        if app_logger is not None:
+            app_logger.warning(f"Families pre-check skipped (translator error): {e}")
+        return False
+    if verdict != "unresolvable":
+        return False
+    from sources.long_task.status_manager import (
+        failure_guidance, ERR_UNRESOLVABLE_ID,
+    )
+    lang = _detect_query_language(query or "") or "zh"
+    body = (
+        "未能启动该分析任务：号码无法解析。\n\n"
+        + failure_guidance("families", ERR_UNRESOLVABLE_ID, lang=lang)
+    )
+    if app_logger is not None:
+        app_logger.info(
+            "Families pre-check: unresolvable id -> template guidance reply")
+    await queue.put({"type": "token", "content": body})
+    await queue.put({"type": "end", "content": "[DONE]"})
+    return True
 
 
 def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, config_ref, is_generating_flag, think_wrapper_func, create_agent_func):
@@ -1331,6 +1377,24 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                 await queue.put({'type': 'end'})
                             finally:
                                 handler.queue.put_nowait({'type': 'done'})
+                            return
+
+                        # ── Resolvability pre-check (ruling ① / spec §5.3 入口1) ──
+                        # A "families" query whose id is deterministically
+                        # unresolvable (e.g. a PCT international application that
+                        # is not itself a resolvable publication) ends the turn
+                        # with a template guidance *reply* — no task row, no
+                        # Celery dispatch, no long_task:submit/fail event.  When
+                        # the gate fires it streams SSE then returns, so nothing
+                        # below (DB insert / dispatch / tracking) runs.
+                        gate_handled = await _families_precheck_guidance(
+                            scenario=scenario,
+                            patent_ids=patent_ids,
+                            query=request.query,
+                            queue=queue,
+                            app_logger=app_logger,
+                        )
+                        if gate_handled:
                             return
 
                         conn = get_db_connection()

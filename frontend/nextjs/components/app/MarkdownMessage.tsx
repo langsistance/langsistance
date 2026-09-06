@@ -124,16 +124,21 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
   const latestStreamingRef = useRef(streaming)
   const messageContentRef = useRef<HTMLDivElement | null>(null)
   const showWaiting = shouldShowAssistantWaiting(content, streaming)
-  const stepsToShow = statusSteps ?? ctxStatusSteps
-  const elapsed = statusElapsed ?? ctxStatusElapsed
-  const runningSteps = stepsToShow?.some((s) => s.state === 'running')
-  const runningElapsed = runningSteps ? elapsed : 0
-  const currentRunningStep = stepsToShow && runningSteps ? stepsToShow[stepsToShow.length - 1] : undefined
-
   const steps = agentSteps ?? []
   const hasSteps = steps.length > 0
   const doneSteps = steps.filter((s) => s.status === 'done')
   const runningStep = steps.find((s) => s.status === 'running')
+
+  // 单列时间序（2026-09-06）：工具步由 agentSteps 轨呈现，status 轨只保留
+  // 进度类消息——同一工具调用的后端双发（step + status 同文案）在此去重，
+  // 避免「第 N 步 · 正在调用」在气泡内出现两份。
+  const stepThoughts = new Set(steps.map((s) => (s.thought ?? '').trim()))
+  const rawStatusSteps = statusSteps ?? ctxStatusSteps ?? []
+  const stepsToShow = rawStatusSteps.filter((s) =>
+    !(hasSteps && stepThoughts.has(String(s.message ?? '').trim())))
+  const elapsed = statusElapsed ?? ctxStatusElapsed
+  const runningSteps = stepsToShow.some((s) => s.state === 'running')
+  const runningElapsed = runningSteps ? elapsed : 0
 
   const doRender = useCallback((text: string, isStreaming: boolean) => {
     // 需求 4: 存量消息中的内部标记 (<Knowledge tool not logged in>)
@@ -238,6 +243,19 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
 
   return (
     <div ref={messageContentRef} className={`chat-message assistant${showWaiting ? ' assistant-is-waiting' : ''}`}>
+      {showWaiting && (
+        <div className="assistant-waiting" role="status" aria-live="polite" aria-label={t('chat.processing')}>
+          <span className="assistant-waiting-orbit" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+          <span className="assistant-waiting-copy">
+            <span className="assistant-waiting-title">{t('chat.processing')}</span>
+          </span>
+          <span className="assistant-waiting-scan" aria-hidden="true" />
+        </div>
+      )}
       {streaming && hasSteps && (
         <div className="agent-steps" role="status" aria-live="polite">
           {doneSteps.map((step) => (
@@ -295,24 +313,6 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
           )}
         </div>
       )}
-      {showWaiting && (
-        <div className="assistant-waiting" role="status" aria-live="polite" aria-label={t('chat.processing')}>
-          <span className="assistant-waiting-orbit" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-          </span>
-          <span className="assistant-waiting-copy">
-            <span className="assistant-waiting-title">{t('chat.processing')}</span>
-          </span>
-          <span className="assistant-waiting-scan" aria-hidden="true" />
-        </div>
-      )}
-      {(content.includes('🔬') || content.includes('✅') || content.includes('❌') || content.includes('⏸') || content.includes('⏹') || /\[\d+%\]/.test(content)) ? (
-        <LongTaskProgress content={content} resultSummary={resultSummary} streaming={streaming} analysisType={analysisType} tableColumns={tableColumns} familyOverview={familyOverview} jurisdictions={jurisdictions} onRetry={onRetry} />
-      ) : (
-        <div dangerouslySetInnerHTML={{ __html: html || '▋' }} />
-      )}
       {shouldShowStatusSteps(stepsToShow, streaming) && (
         <div className="assistant-status-steps" role="status" aria-live="polite">
           {stepsToShow.map((step) => (
@@ -329,6 +329,11 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
             </div>
           ))}
         </div>
+      )}
+      {(content.includes('🔬') || content.includes('✅') || content.includes('❌') || content.includes('⏸') || content.includes('⏹') || /\[\d+%\]/.test(content)) ? (
+        <LongTaskProgress content={content} resultSummary={resultSummary} streaming={streaming} analysisType={analysisType} tableColumns={tableColumns} familyOverview={familyOverview} jurisdictions={jurisdictions} onRetry={onRetry} />
+      ) : (
+        <div dangerouslySetInnerHTML={{ __html: html || '▋' }} />
       )}
       {showActions && (
         <div className="message-action-buttons assistant-message-action-buttons">

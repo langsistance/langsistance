@@ -10,8 +10,14 @@ import re
 
 from fastapi import APIRouter, Query, HTTPException, Request
 from fastapi.responses import Response
-from sources.long_task.status_manager import get_task_status, lookup_query_task
+from sources.long_task.status_manager import (
+    ERR_UNRESOLVABLE_ID,
+    failure_guidance,
+    get_task_status,
+    lookup_query_task,
+)
 from sources.long_task.storage import create_storage, get_storage_config, LocalReportStorage
+from sources.patent_id_translator import verdict_of
 from sources.patent_id_utils import extract_us_patent_digits, kind_code_of
 from sources.user.passport import verify_firebase_token
 
@@ -25,7 +31,7 @@ def _dispatch_from_mysql(user_id: str, task_id: str, logger) -> None:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT input_params, session_id, scene_id
+                """SELECT input_params, session_id, scene_id, task_type
                    FROM long_tasks WHERE task_id = %s""",
                 (task_id,),
             )
@@ -35,6 +41,12 @@ def _dispatch_from_mysql(user_id: str, task_id: str, logger) -> None:
             stored = _json.loads(input_params) if isinstance(input_params, str) else input_params
             next_params = {
                 'query': stored.get('query', ''),
+                # Single-patent tasks (family/prosecution/china/ep/jp) persist a
+                # *singular* ``patent_id`` (no ``patent_ids`` key) in MySQL
+                # input_params — forward it verbatim or the resumed executor
+                # reads ``params.get('patent_id')`` == '' and flags the task
+                # failed.  Batch rows carry ``patent_ids`` only.
+                'patent_id': stored.get('patent_id'),
                 'patent_ids': stored.get('patent_ids', []),
                 'patent_source': stored.get('patent_source', 'auto'),
                 'session_id': row.get('session_id') or '',
@@ -45,9 +57,11 @@ def _dispatch_from_mysql(user_id: str, task_id: str, logger) -> None:
             }
             if stored.get('patent_texts'):
                 next_params['patent_texts'] = stored['patent_texts']
-            # Lazy import to avoid circular dependency at module level
-            from celery_worker import execute_patent_analysis
-            execute_patent_analysis.delay(task_id=task_id, params=next_params)
+            # Dispatch by the stored task_type (A9): a paused family_analysis
+            # must resume on the family executor, never the batch one.  Missing
+            # type falls back to the batch executor (historical default).
+            task_type = str(row.get('task_type') or 'patent_analysis')
+            _dispatch_retry_task(task_type, task_id, next_params)
             logger.info(f"DISPATCHED task {task_id} via Celery")
     except Exception as e:
         logger.error(f"Failed to dispatch task {task_id}: {e}")
@@ -123,6 +137,42 @@ def _dispatch_retry_task(task_type: str, task_id: str, params: dict) -> None:
         execute_china_examination_analysis.delay(task_id=task_id, params=params)
     else:
         execute_patent_analysis.delay(task_id=task_id, params=params)
+
+
+_UNRESOLVABLE_ERROR_ZH = "该专利号无法解析为可执行的分析任务。"
+_UNRESOLVABLE_ERROR_EN = "This patent number cannot be resolved to a runnable analysis task."
+
+
+def _unresolvable_response_detail(lang: str = "zh") -> dict:
+    """Structured 422 body (detail) for a pre-check refusal (spec §5.3).
+
+    Ruling ①: pre-check refusals produce an error-with-guidance, never a task
+    row / Celery dispatch / analytics event.  ``guidance`` carries the shared
+    ``failure_guidance`` template so submit/retry/detail present the same
+    next-step as the chat main chain.
+    """
+    lang = lang if lang in ("zh", "en") else "zh"
+    return {
+        "error": _UNRESOLVABLE_ERROR_ZH if lang != "en" else _UNRESOLVABLE_ERROR_EN,
+        "code": ERR_UNRESOLVABLE_ID,
+        "guidance": failure_guidance("family", ERR_UNRESOLVABLE_ID, lang=lang),
+    }
+
+
+def _verdict_of(*args, **kwargs):
+    # Thin indirection so the pre-check gates read naturally and translator
+    # faults decompose to "unknown" (fail-open per spec §7) at each call site.
+    try:
+        return verdict_of(*args, **kwargs)
+    except Exception:
+        return None
+
+
+def _is_unresolvable_id(number: str) -> bool:
+    """Whether *number* is *deterministically* unusable by any deep-analysis
+    executor (PCT international number, unsupported/foreign prefix).  None /
+    US grant-or-publication are fine; a translator fault is ``None`` (pass)."""
+    return _verdict_of(number) == "unresolvable"
 
 
 def _normalize_submit_patent_id(raw: str, scenario: str) -> str:
@@ -225,6 +275,18 @@ def register_long_task_routes(logger, config):
             else f"分析 {patent_id} 及其全球同族的审查差异"
         )
         lang = body.get("lang") if body.get("lang") in ("zh", "en") else "zh"
+
+        # Resolvability pre-check (spec §5.3 入口2, ruling ①).  A family submit
+        # whose id can never start an analysis (PCT international number,
+        # unsupported/foreign prefix) refuses with guidance *before* any DB row /
+        # Celery dispatch.  Prosecution is already constrained to an 8-digit US
+        # application by ``_normalize_submit_patent_id`` above; a WO US-grant is
+        # a valid family seed and passes.
+        if scenario == "family" and _is_unresolvable_id(patent_id):
+            raise HTTPException(
+                status_code=422,
+                detail=_unresolvable_response_detail(lang),
+            )
 
         from sources.knowledge.knowledge import get_db_connection
         from sources.long_task.user_queue import try_start_user_task
@@ -370,6 +432,20 @@ def register_long_task_routes(logger, config):
                 task_type = row.get("task_type") or "patent_analysis"
                 stored = row.get("input_params")
                 input_params = _json.loads(stored) if isinstance(stored, str) else (stored or {})
+
+                # Resolvability pre-check on retry (spec §5.3 入口3, ruling ①).
+                # Retrying a family deep-analysis whose seed id can never resolve
+                # (again a deterministically-unresolvable number) is refused here,
+                # ABOVE the new-task INSERT — so no replacement pending row is
+                # created and the stored original failed task is left untouched.
+                if task_type == "family_analysis":
+                    fam_target = (input_params or {}).get("patent_id")
+                    if fam_target and _is_unresolvable_id(str(fam_target)):
+                        _lang = (input_params or {}).get("lang") or "zh"
+                        raise HTTPException(
+                            status_code=422,
+                            detail=_unresolvable_response_detail(_lang),
+                        )
 
                 new_task_id = f"lt_{_uuid.uuid4().hex[:12]}"
                 cur.execute(

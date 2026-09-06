@@ -116,6 +116,16 @@ async def resolve_ep_application_number(
         )
         return raw, {"direct_ep": True, "input_id": patent_id}
 
+    # A6 shared resolvability gate (spec §5.3) — a deterministically-unresolvable
+    # id (PCT / unsupported / foreign shape) must not white-send to the EPO family
+    # API; route it through this module's existing ValueError failure channel with
+    # generic publication-format guidance.  Fail-open: resolvable / None / a
+    # translator exception keeps the legacy delegation below.
+    from sources.patent_id_translator import unresolvable_gate_error
+    _gate = unresolvable_gate_error(patent_id)
+    if _gate:
+        raise ValueError(f"无法启动 EP 审查分析：号码无法解析。{_gate}")
+
     # EPO family lookup
     family = None
     try:

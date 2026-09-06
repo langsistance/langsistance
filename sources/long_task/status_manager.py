@@ -4,6 +4,47 @@ TASK_STATUS_PREFIX = "lt"
 TASK_CHECKPOINT_PREFIX = "lt"
 TASK_STATUS_TTL = 86400  # 24 hours
 
+# ── Structured failure reason codes (spec §5.4) ─────────────────────────────
+# Shared by the resolvability pre-check gates (chat main chain / submit /
+# retry / detail routes) and the worker terminal-failure writer.  Task 4
+# (submit/retry/detail gates) and Task 5 (worker single-point exit) reference
+# these same constants + failure_guidance(); do not rename here without
+# updating those callers.
+ERR_UNRESOLVABLE_ID = "ERR_UNRESOLVABLE_ID"
+ERR_EPO_REMOTE = "ERR_EPO_REMOTE"
+ERR_OTHER = "ERR_OTHER"
+
+# ── Generic guidance segments (no user-query vocabulary allowed) ────────────
+# These are format-level suggestions only — never embed a concrete query word.
+# Spec §5.4 template; zh + en.
+_GUIDE_SEG = {
+    ERR_UNRESOLVABLE_ID: {
+        "zh": (
+            "该分析需要公开号格式的号码。请提供 WO 公开号（如 WO2021/xxxxx）、"
+            "美国授权/公开号或国家阶段申请号后重发；也可改为按申请人/优先权检索。"
+        ),
+        "en": (
+            "This analysis needs a publication-format number. Please provide a "
+            "WO publication number (e.g. WO2021/xxxxx), a US grant/publication "
+            "number or a national-phase application number, and retry; or search "
+            "by applicant / priority instead."
+        ),
+    },
+    ERR_EPO_REMOTE: {
+        "zh": "外部服务暂时不可用，请稍后在任务面板点击重试。",
+        "en": "The external service is temporarily unavailable. Please retry from "
+              "the task panel shortly.",
+    },
+    ERR_OTHER: {
+        "zh": "可在任务面板点击重试，或重新描述需求后再试。",
+        "en": "Please retry from the task panel, or restate your request and try "
+              "again.",
+    },
+}
+# Fall back to ERR_OTHER for any unrecognised reason_code (fail-closed to a
+# generic next-step that never crashes).
+_GUIDE_DEFAULT_CODE = ERR_OTHER
+
 # Fields that persist across update_task_status calls.
 # Once set by any call, they survive subsequent calls that don't include them.
 # This prevents Redis-key-overwrite from losing metadata set by earlier phases.
@@ -184,29 +225,96 @@ def _lookup_task_session_id(task_id: str) -> str | None:
         return ''
 
 
-def notify_terminal_failure(task_id: str, error: str) -> None:
-    """Mark *task_id* failed AND surface the failure in its conversation.
+def classify_failure_reason_code(error: str) -> str:
+    """Map a worker terminal error to a structured ``reason_code`` (spec §5.4).
+
+    Fallback classifier used by :func:`notify_terminal_failure` when the
+    caller did not supply an explicit structured code.  It keys off stable
+    framework / server markers only — HTTP status ranges, EPO semantic codes,
+    transport-timeout terms, auth tokens — never arbitrary user-query text,
+    so it stays deterministic for the classes the templates document:
+
+    - InvalidCountryCode / a docdb 404 (publication-format id unresolvable)
+      → :data:`ERR_UNRESOLVABLE_ID`;
+    - 5xx / timeouts / connectivity / credentials-token → :data:`ERR_EPO_REMOTE`;
+    - anything else → :data:`ERR_OTHER`.
+    """
+    import re as _re
+    text = str(error or "")
+    if not text:
+        return ERR_OTHER
+    # remote / transient first (5xx, transport timeouts, auth token issues)
+    if (_re.search(r"\bHTTP\s*5\d\d\b", text, _re.IGNORECASE)
+            or _re.search(r"(?i)time.?out", text)
+            or _re.search(r"(?i)could not connect|connection (reset|refused)|"
+                          r"network is unreachable", text)
+            or _re.search(r"(?i)\b401\b|\b403\b|OAuth|access_token|invalid_grant|"
+                          r"credential", text)):
+        return ERR_EPO_REMOTE
+    # unresolvable publication-format id / country-code (EPO semantic + 404).
+    if (_re.search(r"(?i)invalidcountrycode|invalid country(code)?|"
+                   r"could not resolve", text)
+            or _re.search(r"\b404\b", text)):
+        return ERR_UNRESOLVABLE_ID
+    return ERR_OTHER
+
+
+def notify_terminal_failure(
+    task_id: str,
+    error: str,
+    *,
+    reason_code: str | None = None,
+    task_type: str = "",
+    lang: str = "zh",
+) -> None:
+    """Mark *task_id* failed AND surface a guidance message in its conversation.
 
     Only call at TERMINAL failure points (retries exhausted, hard stop,
     an explicit failed pipeline result) — ``set_task_failed`` alone is
     also used on retryable attempts and must NOT spam the conversation.
-    The failed message carries the reason (bounded) so the user sees why
-    instead of a silent "task submitted" that never resolves.
+
+    The conversation message is composed from :func:`failure_guidance` keyed
+    by a structured ``reason_code``.  ``reason_code`` should be supplied by the
+    call site when it knows the failure class; otherwise
+    :func:`classify_failure_reason_code` classifies the worker's *error* text
+    (never matching user-query vocabulary).  The message leads with the
+    actionable next-step rather than mechanically re-printing the raw error
+    (spec §1.3 / §5.4).  ``set_task_failed`` fires the analytics failure event
+    exactly once here for each failed task.
     """
     set_task_failed(task_id, error)
-    reason = str(error or "")[:500]
-    if not reason:
-        reason = "未知错误"
-    content = (
-        "批量分析任务执行失败。\n\n"
-        f"失败原因：{reason}\n\n"
-        "可在任务面板点击重试，或重新描述需求后再试。"
-    )
+    code = reason_code or classify_failure_reason_code(error)
+    lang = lang if lang in ("zh", "en") else "zh"
+    content = failure_guidance(task_type, code, error=error, lang=lang)
     try:
         from sources.long_task.task_messages import append_task_message
         append_task_message(task_id, event='failed', content=content)
     except Exception:
         pass  # conversation write-back must never break task state
+
+
+def failure_guidance(
+    task_type: str, reason_code: str, error: str = "", lang: str = "zh",
+) -> str:
+    """Compose the generic next-step guidance for a blocked / failed flow.
+
+    Shared (spec §5.4, §6.3) by the resolvability pre-check replies (chat
+    main chain / submit / retry / detail routes — produced as a guidance
+    reply or error, never a task) and by the worker terminal-failure message
+    (Task 5 references this same function).
+
+    ``reason_code`` selects the guidance segment; any unrecognised code falls
+    back to :data:`ERR_OTHER` (never raises).  ``error`` is only echoed for the
+    generic ERR_OTHER tail and is bounded to 500 chars so an oversized worker
+    error cannot blow up the message nor misbehave.  The returned text carries
+    no user-query vocabulary — it only states next-step options.
+    """
+    del task_type  # template is task-type-agnostic for now.
+    code = reason_code if reason_code in _GUIDE_SEG else _GUIDE_DEFAULT_CODE
+    seg = _GUIDE_SEG[code].get(lang if lang in ("zh", "en") else "zh")
+    head = "批量分析失败。\n\n" if code is ERR_OTHER else ""
+    tail = f"失败原因：{str(error)[:500]}" if (code is ERR_OTHER and error) else ""
+    return head + seg + (f"\n\n{tail}" if tail else "")
 
 
 def _lookup_task_user_id(task_id: str) -> str | None:

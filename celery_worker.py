@@ -19,6 +19,9 @@ from celery import Celery
 from sources.logger import Logger
 from sources.analytics import track_event
 from sources.patent_id_utils import extract_us_patent_digits
+# The families Phase 0 EPO DOCDB candidate list is now delegated to the shared
+# translator (sources/patent_id_translator.translate); the US reverse lookup it
+# performs internally no longer needs a direct import here (spec §5.2).
 
 _pipeline_logger = Logger("long_task_pipeline.log")
 
@@ -303,6 +306,48 @@ def _update_mysql_progress(task_id: str, current_phase: str, progress: int, resu
             conn.close()
     except Exception:
         pass  # Non-fatal: MySQL update failure should not break the pipeline
+
+
+# ── Family-task terminal helpers (spec §5.4 — single-point failure exit) ─────
+# The family executor's in-_run fail branches return {'status':'failed'} only;
+# the *single* place that writes Redis failed + analytics + the MySQL terminal
+# marker is this pair, invoked from the outer returned-failed gate.  This makes
+# ``long_task:fail`` fire exactly once per failed task (no executor inner write
+# double-fires it) and keeps MySQL consistent under resume / panel reads.
+
+
+async def _family_epo_docdb_candidates(patent_id: str) -> list:
+    """Ordered EPO DOCDB candidate list for families Phase 0 (spec §5.2).
+
+    Delegates candidate selection to the shared translator's
+    ``candidates.epo_docdb`` (for a US id that performs the USPTO grant /
+    publication reverse lookup this Phase 0 used to inline).  Returns the
+    translator order unchanged; falls back to ``[patent_id]`` (the historical
+    default) when the translator yields an empty list or raises.
+    """
+    try:
+        from sources.patent_id_translator import translate
+        result = await translate(patent_id, scenario="families")
+        candidates = list((result.candidates or {}).get('epo_docdb') or [])
+        return candidates if candidates else [patent_id]
+    except Exception as exc:  # translator fail-open → original id as the base
+        _pipeline_logger.warning(
+            f"FAMILY PHASE0 translator_candidates_fallback — "
+            f"raw={patent_id}, err={type(exc).__name__}: {exc}"
+        )
+        return [patent_id]
+
+
+def _family_failed_terminal(task_id: str, error: str) -> None:
+    """Single terminal exit for a failed family result dict.
+
+    Pairs a terminal conversation notification (Redis failed + analytics
+    ``long_task:fail`` once) with the MySQL terminal marker — mirroring every
+    other executor's exception branch.  Must be called from the returned-failed
+    gate only; executor fail branches never write failed themselves.
+    """
+    _notify_terminal_failure(task_id, error)
+    _update_mysql_progress(task_id, 'failed', 0)
 
 
 # ── Status message translations ──
@@ -1811,113 +1856,9 @@ def execute_family_analysis(self, task_id: str, params: dict):
                 'error': 'EPO credentials not configured'}
 
     # ── USPTO → publication number resolution (EPO fallback) ────────────────
-
-    async def _resolve_us_app_to_pub_number(
-        app_id: str, tid: str, id_type: str = 'application_number',
-    ) -> tuple[str | None, str | None, str | None]:
-        """Resolve a US patent ID → (pub_number, appNumberText, grant_number).
-
-        Searches USPTO by the field appropriate for *id_type*:
-        - application_number → applicationNumberText
-        - publication_number → earliestPublicationNumber
-        - grant_number → patentNumber
-
-        Returns a 3-tuple.  Any element may be None if not found.
-        """
-        try:
-            import json as _json, re as _re, os as _os_fb
-            import httpx as _httpx
-
-            # Normalise to the format USPTO expects for each field:
-            # - earliestPublicationNumber → WITH "US" prefix + kind code
-            # - patentNumber → bare digits (no prefix, no kind code)
-            # - applicationNumberText → bare digits
-            _up = app_id.upper()
-            _digits = extract_us_patent_digits(_up)
-            if not _digits or len(_digits) < 6:
-                return None, None, None
-
-            _esc = lambda s: _re.sub(
-                r'(["\\+\-!(){}[\]^~*?:/]|&&|\|\|)', r'\\\1', s,
-            )
-
-            if id_type == 'grant_number':
-                _query = f'applicationMetaData.patentNumber:"{_esc(_digits)}"'
-            elif id_type == 'publication_number':
-                # Publication number WITH US prefix + kind code (e.g. US20220294065A1)
-                _pub_full = _up if _up.startswith('US') else f'US{_up}'
-                _pub_digits = f'US{_digits}'
-                _query = (
-                    f'applicationMetaData.earliestPublicationNumber:"{_esc(_pub_full)}"'
-                    f' OR applicationMetaData.earliestPublicationNumber:"{_esc(_pub_digits)}"'
-                )
-            else:
-                _query = f'applicationNumberText:"{_esc(_digits)}"'
-            # Always include applicationNumberText as fallback
-            if 'applicationNumberText' not in _query:
-                _query += f' OR applicationNumberText:"{_esc(_digits)}"'
-
-            _body = {
-                "q": _query,
-                "pagination": {"offset": 0, "limit": 1},
-                "fields": [
-                    "applicationNumberText",
-                    "applicationMetaData.patentNumber",
-                    "applicationMetaData.earliestPublicationNumber",
-                    "applicationMetaData.inventionTitle",
-                ],
-            }
-            _hdrs = {'Content-Type': 'application/json', 'Accept': 'application/json'}
-            _uk = _os_fb.getenv('USPTO_API_KEY', '')
-            if _uk:
-                _hdrs['X-API-Key'] = _uk
-
-            async with _httpx.AsyncClient(timeout=15) as _cl:
-                _resp = await _cl.post(
-                    "https://api.uspto.gov/api/v1/patent/applications/search",
-                    headers=_hdrs, json=_body,
-                )
-            _pipeline_logger.info(
-                f"[task={tid}] uspto_search — status={_resp.status_code}, "
-                f"id_type={id_type}, digits={_digits}"
-            )
-            if _resp.status_code != 200:
-                _pipeline_logger.warning(
-                    f"[task={tid}] uspto_search failed — status={_resp.status_code}"
-                )
-                return None, None, None
-
-            _data = _resp.json() if _resp.text else {}
-            _results = (
-                _data.get('patentFileWrapperDataBag', None)
-                or _data.get('results', None)
-                or _data.get('patentFileBag', [])
-            )
-            if not _results:
-                return None, None, None
-
-            _hit = _results[0] if isinstance(_results, list) else _results
-            _app_text = _hit.get('applicationNumberText', '') or ''
-            # patentNumber may be at top level OR nested in applicationMetaData
-            _pub = (
-                _hit.get('applicationMetaData', {}).get('earliestPublicationNumber', '')
-                if isinstance(_hit, dict) else ''
-            ) or ''
-            _grant = (
-                _hit.get('patentNumber', '')  # top-level first
-                or (_hit.get('applicationMetaData', {}).get('patentNumber', '')
-                    if isinstance(_hit, dict) else '')
-            ) or ''
-            _pipeline_logger.info(
-                f"[task={tid}] uspto_search result — "
-                f"pub={_pub}, grant={_grant}, app_text={_app_text}"
-            )
-            return _pub or None, _app_text or None, _grant or None
-        except Exception as _fe:
-            _pipeline_logger.warning(
-                f"[task={tid}] uspto_search error — {type(_fe).__name__}: {_fe}"
-            )
-            return None, None, None
+    # Shared with the translator: identical semantics, defined centrally in
+    # sources/patent_id_translator.resolve_us_pub_number (was the local
+    # _resolve_us_app_to_pub_number here — extracted without behaviour change).
 
     # ── Run pipeline ─────────────────────────────────────────────────────────
     async def _run():
@@ -1934,33 +1875,16 @@ def execute_family_analysis(self, task_id: str, params: dict):
             consumer_secret=epo_secret,
         )
 
-        # ── Normalise patent ID for EPO family lookup ──
-        # Try multiple formats in order until EPO accepts one.
-        _epo_candidates = [patent_id]  # start with the original (prefixed) ID
-
-        # For any USPTO ID type, try to find the grant number via USPTO search.
-        # Grant numbers are the most reliable format for EPO DOCDB lookups.
-        if patent_source == 'uspto':
-            _pub_number, _app_text, _grant_number = await _resolve_us_app_to_pub_number(
-                patent_id, task_id, patent_id_type,
-            )
-            import re as _re_epo
-            if _grant_number:
-                # Grant number is the most reliable format for EPO
-                _epo_candidates.append(f"US{_grant_number}")
-            if _pub_number:
-                _pipeline_logger.info(
-                    f"[task={task_id}] FAMILY PHASE0 resolved — "
-                    f"app={patent_id} → pub={_pub_number}, grant={_grant_number}"
-                )
-                _no_kind = _re_epo.sub(r'[A-Z]\d*$', '', _pub_number)
-                _kind = _pub_number[len(_no_kind):]
-                _dotted = f"US.{_no_kind[2:]}.{_kind}" if _kind else f"US.{_no_kind[2:]}"
-                for _c in (_no_kind, _pub_number, _dotted):
-                    if _c not in _epo_candidates:
-                        _epo_candidates.append(_c)
-            if _app_text and _app_text not in _epo_candidates:
-                _epo_candidates.append(_app_text)
+        # ── Choose the ordered EPO DOCDB candidate list for family lookup ──
+        # Try multiple formats in order until EPO accepts one.  Candidate
+        # selection is delegated to the shared translator (spec §5.2) — for a US
+        # id it performs the grant / publication reverse lookup these lines used
+        # to inline; for other shapes it yields the historical [patent_id] base.
+        _epo_candidates = await _family_epo_docdb_candidates(patent_id)
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE0 docdb_candidates — "
+            f"patent_id={patent_id}, order={_epo_candidates}"
+        )
 
         family = None
         _last_error = None
@@ -1978,12 +1902,9 @@ def execute_family_analysis(self, task_id: str, params: dict):
                 )
 
         if family is None:
-            set_task_failed(
-                task_id,
-                f"EPO family lookup failed for all formats "
-                f"({_epo_candidates}): {_last_error}"
-            )
-            _update_mysql_progress(task_id, 'failed', 0)
+            # Terminal failure — surface + MySQL are owned by the returned-failed
+            # single exit (_family_failed_terminal); do not write failed here
+            # (double-fires analytics, spec §5.4).
             return {'status': 'failed', 'task_id': task_id,
                     'error': str(_last_error)}
 
@@ -2012,8 +1933,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
                     f"No US family member found for {patent_id} in the EPO "
                     f"family database. Jurisdictions found: {', '.join(family.jurisdictions)}."
                 )
-            set_task_failed(task_id, msg)
-            _update_mysql_progress(task_id, 'failed', 0)
+            # Terminal failure — single-exit writes failed (spec §5.4).
             return {'status': 'failed', 'task_id': task_id, 'error': msg}
 
         us_pub_number = us_member.pub_number
@@ -2038,8 +1958,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
                 msg = f"无法从EPO同族数据中提取有效的美国专利申请号 (原始: {us_member.app_number})"
             else:
                 msg = f"Cannot extract valid US application number from EPO family data (raw: {us_member.app_number})"
-            set_task_failed(task_id, msg)
-            _update_mysql_progress(task_id, 'failed', 0)
+            # Terminal failure — single-exit writes failed (spec §5.4).
             return {'status': 'failed', 'task_id': task_id, 'error': msg}
 
         # Update status with family overview for frontend
@@ -2478,8 +2397,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
             _pipeline_logger.error(
                 f"[task={task_id}] FAMILY PHASE0 doc_list_failed — status={resp.status_code}"
             )
-            set_task_failed(task_id, f"USPTO API returned HTTP {resp.status_code}")
-            _update_mysql_progress(task_id, 'failed', 0)
+            # Terminal failure — single-exit writes failed (spec §5.4).
             return {'status': 'failed', 'task_id': task_id,
                     'error': f'USPTO API status {resp.status_code}'}
 
@@ -2494,8 +2412,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
                 msg = f"USPTO未返回专利申请 {us_app_number} 的任何文件。可能原因：申请号不存在、无权访问、或尚未公开。"
             else:
                 msg = f"USPTO returned no documents for application {us_app_number}. The application may not exist, may not be accessible, or may not yet be published."
-            set_task_failed(task_id, msg)
-            _update_mysql_progress(task_id, 'failed', 0)
+            # Terminal failure — single-exit writes failed (spec §5.4).
             return {'status': 'failed', 'task_id': task_id, 'error': msg}
 
         manifest = classify_prosecution_documents(documents)
@@ -2517,8 +2434,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
                 msg = "未找到可分析的审查文件（无 Office Action、Response 或 Amendment）。可能该专利尚未进入实质审查阶段。"
             else:
                 msg = "No analyzable prosecution documents found (no Office Actions, Responses, or Amendments). The patent may not have entered substantive examination."
-            set_task_failed(task_id, msg)
-            _update_mysql_progress(task_id, 'failed', 0)
+            # Terminal failure — single-exit writes failed (spec §5.4).
             return {'status': 'failed', 'task_id': task_id, 'error': msg}
 
         # ═════════════════════════════════════════════════════════════════
@@ -2769,8 +2685,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
                 msg = "所有审查文件处理失败。文件可能是扫描件或加密PDF。"
             else:
                 msg = "All prosecution documents failed processing. Files may be scanned images or encrypted PDFs."
-            set_task_failed(task_id, msg)
-            _update_mysql_progress(task_id, 'failed', 0)
+            # Terminal failure — single-exit writes failed (spec §5.4).
             return {'status': 'failed', 'task_id': task_id, 'error': msg}
 
         # ═════════════════════════════════════════════════════════════════
@@ -2953,9 +2868,11 @@ def execute_family_analysis(self, task_id: str, params: dict):
         _task_result = loop.run_until_complete(_run())
         if (isinstance(_task_result, dict)
                 and _task_result.get('status') == 'failed'):
-            _notify_terminal_failure(
-                task_id,
-                str(_task_result.get('error') or '任务失败'))
+            # Single terminal exit: conversation notify (Redis failed +
+            # analytics long_task:fail once) AND the MySQL terminal marker,
+            # paired like every other executor's exception branch (spec §5.4).
+            _family_failed_terminal(
+                task_id, str(_task_result.get('error') or '任务失败'))
         return _task_result
     except Exception as e:
         import traceback
