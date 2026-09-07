@@ -190,3 +190,43 @@ def test_search_empty_parse_env_returns_empty():
     assert res["candidates"] == []
     assert res["em_cn"] == []
     assert res["rate_limited"] is False
+
+
+def test_cooldown_final_attempt_rescues_burst_throttle(monkeypatch):
+    """2026-09-07: 单发 200、管线却限流 → Google XHR 突发 429 数秒回落。
+    退避耗尽后冷却终试一次: 终试 200 → 不判 rate_limited, 命中照常解析。"""
+    async def no_sleep(seconds):
+        return None
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+
+    xhr = json.dumps({"results": {"cluster": [{"result": [
+        _hit("USD9", "USD9S", "2022-03-01", "Robot"),
+    ]}]}})
+    calls = {"n": 0}
+
+    async def fetch(url_query):
+        calls["n"] += 1
+        if calls["n"] <= 4:                     # 退避 3 次重试仍 429 (共 4 次请求)
+            return 429, "burst"
+        return 200, xhr                         # 冷却后终试回 200
+
+    res = _run(fetch, "Robot toy", [])
+    assert calls["n"] == 5                      # 4 次退避 + 1 次冷却终试
+    assert res["rate_limited"] is False
+    assert [c.pub for c in res["candidates"]] == ["USD9S"]
+
+
+def test_cooldown_still_blocked_then_rate_limited(monkeypatch):
+    async def no_sleep(seconds):
+        return None
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+
+    calls = {"n": 0}
+
+    async def fetch(url_query):
+        calls["n"] += 1
+        return 503, "still down"
+
+    res = _run(fetch, "Robot toy", [])
+    assert calls["n"] == 5                      # 4 次退避 + 1 次冷却终试仍 503
+    assert res["rate_limited"] is True

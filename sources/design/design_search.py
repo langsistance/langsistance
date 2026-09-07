@@ -5,8 +5,9 @@
 - parse_design_hits: 从 XHR JSON 抽 US 件 (id patent/USD 开头), EM/CN 记日志项不返回。
   US 件带 status: 有 grant/publication 日期 → "active" (由调用方/risk 以 today 判届满);
   缺日期 → "unknown", 设计上不参与 active 判定 (Task 7 按 active-only 留省)。
-- search_designs: 阶梯逐阶 fetch, 命中 US 即停; 503/429 逐阶内退避重试 ≤2,
-  全败该阶置 rate_limited=True 上抛终止。
+- search_designs: 阶梯逐阶 fetch (阶间 1s 节奏), 命中 US 即停; 503/429 逐阶内
+  指数退避重试 ≤3, 仍耗尽再冷却 _COOLDOWN 终试一次 (突发限流数秒回落, 避免
+  误判服务不可用); 终试仍 429/503 → 该阶 rate_limited=True 上抛终止。
 fetch 由调用方注入 (真实 httpx 包装在 Task 7); 本模块只拼 query 串并 await fetch。
 仅标准库, 纯函数无 IO (退避用 asyncio.sleep, jitter 由调用侧放缩)。零产品词固化。
 """
@@ -18,8 +19,10 @@ from sources.design.design_risk import DesignCandidate
 
 _CAP = 6           # 阶梯最大阶数 (spec §5.3 ≤6)
 _RETRYABLE = {429, 503}
-_DELAYS = (1.0, 3.0)   # 指数退避基数 (s), 乘 jitter 后实际睡
-_MAX_RETRIES = 2       # ≤2 次重试 = 单阶至多 3 次请求
+_DELAYS = (2.0, 4.0, 8.0)   # 指数退避基数 (s), 乘 jitter 后实际睡
+_MAX_RETRIES = 3            # ≤3 次重试 = 单阶至多 4 次请求
+_COOLDOWN = 12.0            # 单阶耗尽后的冷却终试 (突发限流常于数秒内回落)
+_STEP_PACE = 1.0            # 阶间节奏 (s), 避免阶梯突发打满 Google XHR 限流
 
 
 def build_ladder(en_name: str, keywords: list[str]) -> list[str]:
@@ -122,11 +125,13 @@ async def _fetch_once(fetch, query: str):
 
 
 async def _run_query(fetch, query: str, jitter: float):
-    """单阶请求循环: 幂等 → 拿到 200 即停 (匹配解析); 否则退避重试 ≤_MAX_RETRIES。
+    """单阶请求循环: 拿到 200 即停 (匹配解析); 否则退避重试 ≤_MAX_RETRIES,
+    仍耗尽再冷却 _COOLDOWN 后终试一次 —— 突发限流 (Google XHR 对单 IP 短窗
+    突发常 429) 在数秒内回落, 冷却终试可消除误判"服务不可用"。
 
     返回 (cands, em_cn, ok, rate_limited)。
     - ok: 拿到 200 并成功解析 (即使 0 命中)。
-    - rate_limited: 本阶最终以 429/503 耗尽 (仍需给定重试额度), 用于置整次限流标志。
+    - rate_limited: 退避+冷却终试后仍以 429/503 收尾, 置整次限流标志。
     - 非 200 且非 429/503 (如 500/404) 不强推, 归为"该阶请求未获结构化数据", 不判定限流。
     """
     retryable = False
@@ -139,6 +144,14 @@ async def _run_query(fetch, query: str, jitter: float):
             retryable = True
             if attempt < _MAX_RETRIES:
                 await asyncio.sleep(_DELAYS[attempt] * jitter)
+    if retryable:
+        await asyncio.sleep(_COOLDOWN * jitter)
+        status, text = await _fetch_once(fetch, query)
+        if status == 200:
+            cands, em_cn, ok = _to_hits(text)
+            return cands, em_cn, ok, False
+        if status not in _RETRYABLE:
+            return [], [], False, False   # 冷却后非可重试码 → 该阶无结构化数据
     return [], [], False, retryable
 
 
@@ -161,8 +174,10 @@ async def search_designs(
     em_cn_all: list[dict] = []
     rate_limited = False
     used = 0
-    for term in ladder:
+    for idx, term in enumerate(ladder):
         used += 1
+        if idx > 0 and _STEP_PACE > 0:
+            await asyncio.sleep(_STEP_PACE * jitter)   # 阶间节奏防突发限流
         query = _build_query(term, country_param)
         cands, em_cn, ok, limited = await _run_query(fetch, query, jitter)
         for hit in em_cn:
