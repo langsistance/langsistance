@@ -153,3 +153,73 @@ def test_call_vision_returns_exact_extracted_text():
 
     out = asyncio.run(call_vision(["aGVsbG8="], "describe", post=fake_post))
     assert out == "exact text"
+
+
+# ---------- 2026-09-07: deepseek 视觉 provider (deepseek-v4-flash-vision-exp) ----------
+
+def test_deepseek_provider_defaults_to_flash_vision_model(tmp_path):
+    ini = tmp_path / "cfg.ini"
+    ini.write_text("[LONG_TASK]\nvision_provider = deepseek\n", encoding="utf-8")
+    out = load_vision_config(str(ini))
+    assert out["provider"] == "deepseek"
+    assert out["model"] == "deepseek-v4-flash-vision-exp"
+    assert out["enabled"] is True
+
+
+def test_deepseek_explicit_model_wins(tmp_path):
+    ini = tmp_path / "cfg.ini"
+    ini.write_text(
+        "[LONG_TASK]\nvision_provider = deepseek\n"
+        "vision_model = custom-vision-1\n",
+        encoding="utf-8",
+    )
+    out = load_vision_config(str(ini))
+    assert out["model"] == "custom-vision-1"
+
+
+def test_deepseek_api_key_from_env(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-ds")
+    assert dv._resolve_api_key("deepseek") == "sk-ds"
+
+
+def test_deepseek_api_key_missing_required_raises(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    try:
+        dv._resolve_api_key("deepseek", require=True)
+        assert False, "should raise"
+    except DesignVisionError as exc:
+        assert "key" in str(exc).lower()
+    assert dv._resolve_api_key("deepseek", require=False) == ""
+
+
+def test_deepseek_chat_url_default(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_BASE", raising=False)
+    assert dv._resolve_chat_url("deepseek") == \
+        "https://api.deepseek.com/chat/completions"
+
+
+def test_deepseek_chat_url_env_override(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_BASE", "https://x.deepseek.com/v1")
+    assert dv._resolve_chat_url("deepseek") == \
+        "https://x.deepseek.com/v1/chat/completions"
+
+
+def test_unknown_vision_provider_raises():
+    try:
+        dv._resolve_chat_url("nope")
+        assert False, "should raise"
+    except DesignVisionError:
+        pass
+    try:
+        dv._resolve_api_key("nope", require=False)
+        assert False, "should raise"
+    except DesignVisionError:
+        pass
+
+
+def test_apply_config_explicit_model_wins(tmp_path):
+    ini = tmp_path / "cfg.ini"
+    ini.write_text("[LONG_TASK]\nvision_provider = deepseek\n", encoding="utf-8")
+    out = dv._apply_config({"provider": "deepseek", "model": "custom"})
+    assert out["model"] == "custom"
+    assert out["provider"] == "deepseek"

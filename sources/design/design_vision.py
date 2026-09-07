@@ -22,7 +22,20 @@ import json
 
 _DEFAULT_PROVIDER = "minimax"
 _DEFAULT_MODEL = "MiniMax-M3"
-_DEFAULT_CHAT_URL = "https://api.minimaxi.com/v1/chat/completions"
+# 每 provider 的 OpenAI 兼容端点/默认模型/鉴权与端点 env 名 (deepseek 的
+# 视觉模型 deepseek-v4-flash-vision-exp 走 DEEPSEEK_API_KEY + 官方兼容端点)。
+_DEFAULT_CHAT_URLS = {
+    "minimax": "https://api.minimaxi.com/v1/chat/completions",
+    "deepseek": "https://api.deepseek.com/chat/completions",
+}
+_DEFAULT_MODEL_BY_PROVIDER = {
+    "minimax": "MiniMax-M3",
+    "deepseek": "deepseek-v4-flash-vision-exp",
+}
+_ENV_NAMES_BY_PROVIDER = {
+    "minimax": ("MINIMAX_API_KEY", "MINIMAX_API_BASE"),
+    "deepseek": ("DEEPSEEK_API_KEY", "DEEPSEEK_API_BASE"),
+}
 _DEFAULT_TIMEOUT = 90
 _MAX_TOKENS = 4096
 _MAX_PREVIEW = 300   # 错误信息里截断响应体预览长度
@@ -54,7 +67,12 @@ def load_vision_config(config_path: str = "config.ini") -> dict:
         provider = cfg.get("LONG_TASK", "vision_provider", fallback=_DEFAULT_PROVIDER)
         model = cfg.get("LONG_TASK", "vision_model", fallback=_DEFAULT_MODEL)
         enabled = cfg.getboolean("LONG_TASK", "vision_enabled", fallback=True)
-    return {"provider": provider.strip(), "model": model.strip(), "enabled": enabled}
+    provider = provider.strip().lower()
+    if not model or model == _DEFAULT_MODEL:
+        # 未显式指定模型 → 按 provider 取默认 (deepseek 默认
+        # deepseek-v4-flash-vision-exp), 文件显式 vision_model 优先。
+        model = _DEFAULT_MODEL_BY_PROVIDER.get(provider, _DEFAULT_MODEL)
+    return {"provider": provider, "model": model.strip(), "enabled": enabled}
 
 
 def _apply_config(config: dict | None) -> dict:
@@ -126,35 +144,39 @@ async def call_vision(
     return _extract_content(text, model)
 
 
+def _provider_env_names(provider: str) -> tuple:
+    names = _ENV_NAMES_BY_PROVIDER.get(provider)
+    if not names:
+        raise DesignVisionError(f"unsupported vision provider '{provider}'")
+    return names
+
+
 def _resolve_api_key(provider: str, require: bool = True) -> str:
-    """OpenAI 兼容鉴权来源 (本项目 minimax 用 MINIMAX_API_KEY)。
+    """OpenAI 兼容鉴权来源 (minimax→MINIMAX_API_KEY; deepseek→DEEPSEEK_API_KEY)。
 
     require=False (post 注入的测试场景) 查到即用, 查不到返回空壳不阻断 —— 测试禁真实外呼,
     不会用到真实密钥。require=True (生产 default-httpx) 缺失密钥 → 报错, 不做外呼。
     """
-    env_names = {"minimax": ("MINIMAX_API_KEY",)}
-    names = env_names.get(provider)
-    if not names:
-        raise DesignVisionError(f"unsupported vision provider '{provider}'")
-    for name in names:
-        candidate = os.getenv(name, "").strip()
-        if candidate:
-            return candidate
+    key_env, _ = _provider_env_names(provider)
+    candidate = os.getenv(key_env, "").strip()
+    if candidate:
+        return candidate
     if require:
         raise DesignVisionError(f"missing vision API key env for provider '{provider}'")
     return ""
 
 
 def _resolve_chat_url(provider: str) -> str:
-    """OpenAI 兼容端 (本项目 minimax 用 MINIMAX_API_BASE)。"""
-    env_names = {"minimax": ("MINIMAX_API_BASE",)}
-    names = env_names.get(provider)
-    if not names:
-        raise DesignVisionError(f"unsupported vision provider '{provider}'")
-    override = os.getenv(names[0], "").strip()
+    """OpenAI 兼容端 (minimax→MINIMAX_API_BASE; deepseek→DEEPSEEK_API_BASE 可覆盖)。"""
+    _, base_env = _provider_env_names(provider)
+    override = os.getenv(base_env, "").strip()
     if override:
-        return override if override.endswith("/chat/completions") else override.rstrip("/") + "/chat/completions"
-    return _DEFAULT_CHAT_URL
+        return (override if override.endswith("/chat/completions")
+                else override.rstrip("/") + "/chat/completions")
+    default = _DEFAULT_CHAT_URLS.get(provider)
+    if not default:
+        raise DesignVisionError(f"unsupported vision provider '{provider}'")
+    return default
 
 
 async def _http_post(url, headers, json, timeout):
