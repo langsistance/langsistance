@@ -2935,10 +2935,13 @@ def execute_design_clearance(self, task_id: str, params: dict):
         f"retry={retry_count}/{self.max_retries}"
     )
 
-    if retry_count >= self.max_retries:
+    # Celery 语义: retry_count==max_retries 是"最后一次允许的尝试", 必须执行;
+    # 只有超过预算 (守卫异常/计数器错乱) 才 HARD_STOP。原先 >= 会在最后一搏
+    # 开始前误杀 (2026-09-07 观察: retry=2/2 START 后立即 HARD_STOP, 第三搏没跑)。
+    if retry_count > self.max_retries:
         _pipeline_logger.error(
             f"[task={task_id}] DESIGN HARD_STOP — "
-            f"retry_count={retry_count} >= {self.max_retries}")
+            f"retry_count={retry_count} > {self.max_retries}")
         if user_id:
             from sources.long_task.user_queue import complete_user_task
             try:
