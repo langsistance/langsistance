@@ -202,6 +202,81 @@ def destructure_uspto_query(q: str) -> str:
     return q[:DEFAULT_QUERY_MAX_LENGTH]
 
 
+# ── applications/search query dialect (probed 2026-09-07) ────────────────────
+# The endpoint searches a TITLE-level corpus with real boolean support up
+# to a hard stop: queries carrying 3+ AND operators 404 with "No matching
+# records found" regardless of parens/quoting (E2 `(a AND b AND c AND d)`
+# 404, A7 bare chain 404, A3 `(a AND b) AND c` = 2 ANDs OK), while OR is
+# unrestricted and quoted phrases AND fine.  Space-joined words are OR
+# semantics, NOT implicit AND (single-word counts wafer=25k temperature=
+# 61k vs `wafer temperature`=86k ≈ their union) — flattening a query to
+# space-joined words loosens it to OR, it does not rescue AND meaning.
+
+MAX_USPTO_AND_OPS = 2
+
+_AND_OP_RE = re.compile(r"\bAND\b", re.IGNORECASE)
+
+
+def uspto_and_op_count(q: str) -> int:
+    """Count AND operators outside double quotes (phrases like
+    "wear and tear" do not count as conjunctions)."""
+    count = 0
+    for m in _AND_OP_RE.finditer(q or ""):
+        if not _inside_quotes(q, m.start()):
+            count += 1
+    return count
+
+
+def _inside_quotes(q: str, pos: int) -> bool:
+    """True when *pos* lies inside a double-quoted span of *q*."""
+    quote_on = False
+    for i, ch in enumerate(q):
+        if ch == '"':
+            quote_on = not quote_on
+        elif i == pos:
+            return quote_on
+    return False
+
+
+def trim_uspto_and_overflow(q: str, max_and_ops: int = MAX_USPTO_AND_OPS) -> str:
+    """Drop trailing AND-conjuncts until the query fits the endpoint's
+    AND-operator budget (2).  Quotes are skipped; a dropped tail that
+    leaves an unclosed paren group is rebalanced.  Returns the query
+    unchanged when it already fits.  Pure.
+    """
+    if uspto_and_op_count(q) <= max_and_ops:
+        return q
+    parts = _top_level_and_split(q)
+    while uspto_and_op_count(q) > max_and_ops and len(parts) > 1:
+        parts.pop()
+        rebuilt = " AND ".join(parts)
+        opens = rebuilt.count("(") - rebuilt.count(")")
+        if opens > 0:
+            rebuilt += ")" * opens
+        q = rebuilt
+    return q
+
+
+def _top_level_and_split(q: str) -> list:
+    """Split *q* on AND operators outside quotes (paren depth does not
+    matter — nested ANDs count toward the budget, matching the endpoint).
+    """
+    parts: list = []
+    cur = ""
+    i = 0
+    while i < len(q):
+        m = _AND_OP_RE.match(q, i)
+        if m and not _inside_quotes(q, m.start()):
+            parts.append(cur.strip())
+            cur = ""
+            i = m.end()
+            continue
+        cur += q[i]
+        i += 1
+    parts.append(cur.strip())
+    return parts
+
+
 def _validated_rewrite(raw: Any) -> dict:
     """Validate and sanitize LLM output into the canonical rewrite dict."""
     if not isinstance(raw, dict):
@@ -213,7 +288,7 @@ def _validated_rewrite(raw: Any) -> dict:
     for q in queries:
         q = sanitize_uspto_query(str(q)) if isinstance(q, str) else ""
         if q:
-            cleaned.append(q)
+            cleaned.append(trim_uspto_and_overflow(q))
     return {"concepts": raw.get("concepts") or [], "queries": cleaned}
 
 
@@ -330,6 +405,9 @@ async def build_search_queries(query: str, provider: Any) -> dict:
         # Legacy fallback: a provider that still returns hand-written
         # queries keeps working.
         queries = _validated_rewrite(result)["queries"]
+    # The endpoint 404s queries carrying 3+ AND operators (probed
+    # 2026-09-07) — trim every assembled query to the dialect budget.
+    queries = [trim_uspto_and_overflow(q) for q in queries]
     return {"concepts": concepts, "queries": queries}
 
 
@@ -398,7 +476,13 @@ def _render_ladder_guidance(rewrite: dict, lang: str, cn: bool) -> str:
             "not just word forms), and only loosen by dropping a "
             "constraint if same-level substitutions still fail; aim for "
             "hits in the 10-300 range and tighten by adding constraints "
-            "when hits are too many:\n"
+            "when hits are too many.\n"
+            "Endpoint dialect (title-level search): a query must carry at "
+            "most 2 AND operators (3 AND-joined groups) — more ANDs 404 "
+            "as \"no matching records\" whatever the parentheses.  OR "
+            "synonyms inside parentheses and quoted phrases are fine. "
+            "Space-joined words are OR semantics (they loosen, never "
+            "tighten):\n"
         )
     else:
         header = (
@@ -409,7 +493,11 @@ def _render_ladder_guidance(rewrite: dict, lang: str, cn: bool) -> str:
             "（命中少于 10 条时，先保持当前层级、优先用概念词库中的"
             "「载体词」整组替换直译词重试，仍不足再换同义表述/词形变体，"
             "最后才去掉某组限定放宽；目标命中区间 10-300，命中过多则"
-            "添加限定收紧）：\n"
+            "添加限定收紧）。\n"
+            "接口方言（标题域检索）：一条检索式的 AND 连接算子不得超过"
+            "2 个（即最多 3 个 AND 连接组），再多无论括号怎么套都会"
+            "404「无命中」；括号内 OR 同义词、加引号的短语不受限。"
+            "多个词直接空格连接是 OR（放宽）语义，不能用来收紧：\n"
         )
     lines = [header]
     for i, q in enumerate(queries, start=1):

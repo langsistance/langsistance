@@ -5,6 +5,8 @@ from sources.long_task.search_query_builder import (
     assemble_query,
     build_search_queries,
     sanitize_uspto_query,
+    trim_uspto_and_overflow,
+    uspto_and_op_count,
 )
 
 
@@ -68,6 +70,60 @@ class TestSanitizeUsptoQuery(unittest.TestCase):
 
     def test_empty_input(self):
         self.assertEqual(sanitize_uspto_query(""), "")
+
+
+class TestUsptoQueryDialect(unittest.TestCase):
+    """Endpoint dialect probed 2026-09-07: queries with ≤2 AND operators
+    parse and count; 3+ ANDs 404 whatever the parentheses (nested ANDs
+    inside one paren group count too); quoted phrases and OR groups are
+    unrestricted; space-joined words are OR, not AND."""
+
+    def test_and_count_bare_chain(self):
+        self.assertEqual(uspto_and_op_count("a AND b AND c"), 2)
+        self.assertEqual(uspto_and_op_count("a AND b"), 1)
+
+    def test_and_count_ignores_quoted_phrases(self):
+        self.assertEqual(uspto_and_op_count('"wear and tear" AND wafer'), 1)
+
+    def test_and_count_nested_parens_count(self):
+        self.assertEqual(uspto_and_op_count("(a AND b AND c AND d)"), 3)
+
+    def test_trim_bare_chain(self):
+        self.assertEqual(
+            trim_uspto_and_overflow(
+                "wafer AND temperature AND pressure AND control"),
+            "wafer AND temperature AND pressure")
+
+    def test_trim_paren_chain_drops_trailing_group(self):
+        self.assertEqual(
+            trim_uspto_and_overflow(
+                '("process chamber" AND "wafer temperature") '
+                'AND (manometer OR "pressure transducer") '
+                'AND (heater OR lamp)'),
+            '("process chamber" AND "wafer temperature") '
+            'AND (manometer OR "pressure transducer")')
+
+    def test_trim_within_budget_unchanged(self):
+        q = "(a AND b) AND c"
+        self.assertEqual(trim_uspto_and_overflow(q), q)
+
+    def test_trim_single_nested_group_rebalances(self):
+        # A single paren group holding 3 inner ANDs is trimmed inside the
+        # group, rebalancing the closing paren: (a AND b AND c AND d) →
+        # (a AND b AND c) — the E2 probe shape that 404s drops to the
+        # 2-AND form that parses.
+        self.assertEqual(
+            trim_uspto_and_overflow("(a AND b AND c AND d)"),
+            "(a AND b AND c)")
+
+    def test_trim_mixed_nested_chain_rebalances(self):
+        self.assertEqual(
+            trim_uspto_and_overflow("(a AND b) AND (c AND d AND e)"),
+            "(a AND b) AND (c)")
+
+    def test_trim_quoted_and_not_treated_as_conjunct(self):
+        q = '"wear and tear" AND wafer AND control'
+        self.assertEqual(trim_uspto_and_overflow(q), q)
 
 
 class TestBuildSearchQueries(unittest.IsolatedAsyncioTestCase):
@@ -136,6 +192,22 @@ class TestBuildSearchQueries(unittest.IsolatedAsyncioTestCase):
         for i in range(5):
             self.assertIn(f"very long keyword phrase number {i}", q3)
         self.assertLessEqual(len(q3), 250)
+
+    async def test_four_concepts_capped_to_two_and_ops(self):
+        # 4+ concepts would assemble 3+ AND operators — the endpoint
+        # 404s those (probed 2026-09-07), so every assembled query must
+        # be trimmed to the 2-AND budget (trailing conjuncts dropped).
+        provider = _FakeProvider({
+            "concepts": [
+                {"concept": f"c{i}", "keywords": [f"k{i}"]}
+                for i in range(4)
+            ],
+        })
+        result = await build_search_queries("q", provider)
+        for q in result["queries"]:
+            self.assertLessEqual(uspto_and_op_count(q), 2)
+        # tightest level keeps only the first 3 concepts
+        self.assertEqual(result["queries"][0], "(k0) AND (k1) AND (k2)")
 
     async def test_single_concept_gives_single_query(self):
         provider = _FakeProvider({

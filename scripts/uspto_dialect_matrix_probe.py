@@ -2,23 +2,22 @@
 """Probe which query dialect the USPTO applications/search API actually
 understands.
 
-Background (2026-09-03 / 2026-09-07 production logs): the endpoint
-answers many parenthesized/phrase AND-OR queries — and bare multi-term
-AND chains — with HTTP 404 "No matching records found" (a FALSE zero:
-the same words space-joined return 200), while other shapes work.
-The query ladder is generated in a PPS-style dialect (parens, quotes,
-explicit AND/OR) that this endpoint partially rejects, so a whole
-recall ladder can collapse into false zeros.
+Background (probed 2026-09-07; production logs 2026-09-03/07): the
+endpoint searches a TITLE-level corpus with real boolean support up to
+a hard stop — queries carrying 3+ AND operators 404 with "No matching
+records found" whatever the parentheses; OR groups and quoted phrases
+are fine.  Space-joined words are OR semantics, NOT implicit AND
+(single-word counts wafer=25k temperature=61k pressure=80k control=431k
+sum to the space-join counts wafer temperature=86k / 4-word=580k), so
+flattening a query to space-joined words loosens it to OR noise and can
+never rescue AND meaning.  Field tags (TTL/ABST/SPEC/inventionTitle)
+are rejected.  The production recall ladder died rung by rung because
+every rung carried 4+ AND conjuncts while only ≤2-AND queries parse and
+count.
 
 This script POSTs a dialect matrix and prints status/count per query.
-The result decides how the ladder generator (search_query_builder)
-should phrase queries:
-
-  - space-joined plain words returning 200 with counts => the generator
-    should emit that shape (or the flatten fallback must always fire);
-  - TTL:/ABST:/SPEC: field qualification working => phrase the ladder
-    with field tags for precision;
-  - phrase queries ("...") working only space-joined => drop quotes.
+Rows A-C were the first round; D/E (single-word baselines + poison
+isolation + safe dialect shapes) the second.
 
 Usage (anywhere with a valid key — e.g. the backend server):
     USPTO_API_KEY=... python scripts/uspto_dialect_matrix_probe.py
@@ -142,20 +141,18 @@ def main() -> int:
         print(f"{pid:<5}{label:<28}{r['status']!s:<8}"
               f"{str(r['count']):<12}{r.get('detail', '')}")
     print()
-    print("Reading (compare counts against the D1-D4 single-word baselines):")
-    print("  Space-join count growing as words are added (A13 < A6 < A1) means"
-          " spaces are OR-like, NOT AND — flattened word bags are noise, not")
-    print("  a precision rescue.")
-    print("  D-baselines vs A13/A6: if single-word counts are small and the")
-    print("  space-join count exceeds any single word's, space is OR.")
-    print("  E1/E8 zero while E2/E3/E9 (paren forms, same words) hit -> the")
-    print("  bare >=3 AND chain is the only parser poison; emit paren groups.")
-    print("  E5>0 and E6/E11 zero while E7 hits -> quotes+AND is poison;")
-    print("  wrap phrases in their own parens or space-join them.")
-    print("  E2/E3/E4/E9/E10 200 with small counts -> these paren-group AND")
-    print("  dialects are the safe multi-concept form for the ladder.")
-    print("  C1/C2 404 -> genuine zero on clean queries: keep 404-as-zero-hit")
-    print("  only for shapes proven clean above.")
+    print("Reading (2026-09-07 matrix results, both rounds):")
+    print("  A5/A4=7609 and A3=84 (2 ANDs parse and count precisely);")
+    print("  A2/A7/E2/E4 (3+ ANDs in any paren layout) all 404 -> the")
+    print("  endpoint's hard stop is 2 AND operators; OR groups (A12) and")
+    print("  quoted phrases (E5=136, E11=9) are fine inside that budget.")
+    print("  E6/E7 404s are genuine title-corpus zeros, not parser poison.")
+    print("  D1-D4 sum to the A13/A6 space-join counts -> space = OR, so")
+    print("  space-flattening a query is loosening to noise, never a")
+    print("  precision rescue.")
+    print("  B1-B6 all 404 -> field tags are unsupported: TTL/ABST/SPEC")
+    print("  cannot force full-text search; the corpus is title-level.")
+    print("  C1/C2 404 -> genuine zero on clean single-token queries.")
     return 0
 
 

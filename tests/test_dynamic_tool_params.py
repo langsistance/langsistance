@@ -768,12 +768,12 @@ class TestUspto404RetryWithNormalizedQuery(unittest.TestCase):
         self.assertEqual(mock_req.call_args[1]["params"]["q"], '"wafer"')
         self.assertIsNone(mock_req.call_args[1]["json"])
 
-    def test_flatten_retry_get_style_rewrites_params_q(self):
+    def test_trim_retry_get_style_rewrites_params_q(self):
         from unittest.mock import patch
-        from sources.dynamic_tool_params import _retry_flattened_uspto_query
+        from sources.dynamic_tool_params import _retry_uspto_query_trimmed
         with patch("sources.dynamic_tool_params.outbound_http.request",
                    return_value=self._ok_response()) as mock_req:
-            result = _retry_flattened_uspto_query(
+            result = _retry_uspto_query_trimmed(
                 "GET",
                 "https://api.uspto.gov/api/v1/patent/applications/search",
                 {"q": "wafer AND temperature AND pressure AND control",
@@ -781,61 +781,89 @@ class TestUspto404RetryWithNormalizedQuery(unittest.TestCase):
         self.assertEqual(result["data"]["count"], 1)
         self.assertEqual(
             mock_req.call_args[1]["params"]["q"],
-            "wafer temperature pressure control")
+            "wafer AND temperature AND pressure")
         self.assertEqual(mock_req.call_args[1]["params"]["_t"], "1")
         self.assertIsNone(mock_req.call_args[1]["json"])
 
-    def test_404_after_request_time_normalization_does_not_double_retry(self):
+    def test_trim_retry_within_and_budget_no_retry(self):
+        from unittest.mock import MagicMock, patch
+        from sources.dynamic_tool_params import _retry_uspto_query_trimmed
+        with patch("sources.dynamic_tool_params.outbound_http.request",
+                   return_value=MagicMock()) as mock_req:
+            result = _retry_uspto_query_trimmed(
+                "POST",
+                "https://api.uspto.gov/api/v1/patent/applications/search",
+                {}, {"q": '(a AND b) AND c'}, {}, 30)
+        self.assertIsNone(result)
+        mock_req.assert_not_called()
+
+    def test_404_after_request_time_normalization_no_more_retries(self):
         # The request-time normalization already replaced fullwidth
         # punctuation before the wire — the normalized-query retry must
-        # NOT fire again (idempotency backstop).  Structure still remains
-        # (quotes), so the separate bracket-flatten retry fires once.
-        not_found2 = self._not_found_response()
-        result, mock_req = self._run('“visual servoing” robot',
-                                     first_extra=[not_found2])
-        self.assertEqual(mock_req.call_count, 2)
+        # NOT fire again (idempotency backstop).  The trimmed retry also
+        # stays silent: the halfwidth query carries no AND operators
+        # (quotes do not count), so the 404 is a genuine zero hit.
+        result, mock_req = self._run('“visual servoing” robot')
+        self.assertEqual(mock_req.call_count, 1)
         self.assertEqual(
             mock_req.call_args_list[0][1]["json"]["q"],
             '"visual servoing" robot')
-        self.assertEqual(
-            mock_req.call_args_list[1][1]["json"]["q"],
-            "visual servoing robot")
         self.assertIsInstance(result["data"], dict)
         self.assertEqual(result["data"].get("count"), 0)
 
-    def test_bracket_query_404_retries_flattened_and_returns_hits(self):
-        # 2026-09-03 / 2026-09-07 production observations: applications/
-        # search 404s parenthesized/phrase AND-OR queries while the same
-        # words space-joined return 200.  A bracket 404 must fall back to
-        # the flattened word form instead of declaring zero hits.
+    def test_three_and_bracket_query_404_retries_trimmed_and_returns_hits(self):
+        # Probed 2026-09-07: applications/search 404s queries carrying 3+
+        # AND operators whatever the parentheses; ≤2 ANDs parse and count.
+        # The retry must drop the trailing conjunct (keeping AND
+        # semantics), never space-flatten — space-joined words are OR.
         result, mock_req = self._run(
             '("process chamber" AND "wafer temperature") '
-            'AND (manometer OR "pressure transducer")')
+            'AND (manometer OR "pressure transducer") '
+            'AND (throttle valve OR heater)')
         self.assertEqual(mock_req.call_count, 2)
         self.assertEqual(
             mock_req.call_args_list[1][1]["json"]["q"],
-            "process chamber wafer temperature manometer pressure transducer")
+            '("process chamber" AND "wafer temperature") '
+            'AND (manometer OR "pressure transducer")')
         self.assertEqual(len(result["raw_items"]), 3)
 
     def test_plain_word_query_404_no_retry(self):
-        # No bracket/quoted/operator structure — nothing to flatten, the
-        # 404 is a genuine zero hit.
+        # No AND operators — nothing to trim; the 404 is a genuine zero
+        # hit (space-joined words are OR and were never the rescue).
         result, mock_req = self._run("wafer temperature")
         self.assertEqual(mock_req.call_count, 1)
         self.assertIsInstance(result["data"], dict)
         self.assertEqual(result["data"].get("count"), 0)
 
-    def test_bare_and_chain_404_retries_flattened(self):
-        # Bare multi-term AND chains (no parentheses) 404 too — observed
-        # 2026-09-07: "wafer AND temperature AND pressure AND control"
-        # returned zero while the plain words would hit.  Flattened retry
-        # must fire for operator-bearing queries as well.
-        result, mock_req = self._run("wafer AND temperature AND pressure AND control")
+    def test_two_and_query_404_no_retry(self):
+        # Within the 2-AND budget: a 404 here is a genuine zero (title
+        # corpus), not an endpoint dialect artifact.
+        result, mock_req = self._run(
+            '"wafer temperature" AND pressure')
+        self.assertEqual(mock_req.call_count, 1)
+        self.assertIsInstance(result["data"], dict)
+        self.assertEqual(result["data"].get("count"), 0)
+
+    def test_bare_and_chain_404_retries_trimmed(self):
+        # A 3-AND bare chain (observed 2026-09-07: 404) is retried with
+        # the trailing conjunct dropped — AND semantics preserved, not
+        # flattened into OR noise.
+        result, mock_req = self._run(
+            "wafer AND temperature AND pressure AND control")
         self.assertEqual(mock_req.call_count, 2)
         self.assertEqual(
             mock_req.call_args_list[1][1]["json"]["q"],
-            "wafer temperature pressure control")
+            "wafer AND temperature AND pressure")
         self.assertEqual(len(result["raw_items"]), 3)
+
+    def test_trimmed_retry_still_404_declares_zero(self):
+        not_found2 = self._not_found_response()
+        result, mock_req = self._run(
+            "wafer AND temperature AND pressure AND control",
+            first_extra=[not_found2])
+        self.assertEqual(mock_req.call_count, 2)
+        self.assertIsInstance(result["data"], dict)
+        self.assertEqual(result["data"].get("count"), 0)
 
 
 class TestStringQueryKeyEnvelopeCollision(unittest.TestCase):
