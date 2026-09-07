@@ -43,6 +43,10 @@ def _sample_xml():
   <classification-symbol>H05B45/20</classification-symbol>
   <class-title><title-part><text>Controlling the colour of the light</text></title-part></class-title>
 </classification-item>
+<classification-item breakdown-code="true" not-allocatable="false" additional-only="true" level="6" sort-key="H05B4521">
+  <classification-symbol>H05B45/21</classification-symbol>
+  <class-title><title-part><text>Thermal sensing arrangements for LED control</text></title-part></class-title>
+</classification-item>
 </class-scheme>
 """
 
@@ -77,6 +81,27 @@ class TestParseCpcZip(unittest.TestCase):
             entries = parse_cpc_zip(_sample_zip(tmp), main_groups_only=True)
         codes = {e["code"] for e in entries}
         self.assertEqual(codes, {"H05B45/00"})
+
+    def test_exclude_indexing_drops_additional_only_items(self):
+        # Indexing codes (additional-only="true") restate sensor/control
+        # vocabulary across unrelated domains — they must not enter the
+        # runtime corpus the semantic matcher ranks against.
+        with tempfile.TemporaryDirectory() as tmp:
+            entries = parse_cpc_zip(
+                _sample_zip(tmp), main_groups_only=False,
+                exclude_indexing=True)
+        codes = {e["code"] for e in entries}
+        self.assertIn("H05B45/00", codes)
+        self.assertIn("H05B45/20", codes)
+        self.assertNotIn("H05B45/21", codes)
+
+    def test_default_keeps_indexing_and_tags_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            entries = parse_cpc_zip(_sample_zip(tmp), main_groups_only=False)
+        by_code = {e["code"]: e for e in entries}
+        self.assertIn("H05B45/21", by_code)
+        self.assertFalse(by_code["H05B45/00"]["additional_only"])
+        self.assertTrue(by_code["H05B45/21"]["additional_only"])
 
     def test_title_takes_first_title_part_only(self):
         with tempfile.TemporaryDirectory() as tmp:

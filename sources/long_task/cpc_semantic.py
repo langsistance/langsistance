@@ -54,13 +54,21 @@ def cpc_paths_for_level(level: str = "") -> tuple:
 MAIN_GROUP_RE = re.compile(r"^[A-HY]\d{2}[A-Z]\d{1,4}/00$")
 
 
-def parse_cpc_zip(zip_path: str, main_groups_only: bool = True) -> list:
+def parse_cpc_zip(zip_path: str, main_groups_only: bool = True,
+                  exclude_indexing: bool = False) -> list:
     """Extract (code, title) entries from a CPC scheme zip.
 
     Only the FIRST title-part text of each classification item is kept —
     later title parts carry reference lists, not the title itself.
     *main_groups_only* keeps /00 groups only (the coarse domain level,
-    ~14k entries).  Never raises: unreadable archives yield [].
+    ~14k entries).  *exclude_indexing* drops CPC indexing codes
+    (classification-item additional-only="true"): their titles restate
+    sensor/control vocabulary across unrelated domains, so they dominate
+    title-cosine matches for carrier-word queries — observed 2026-09-07,
+    a wafer process-control question matched B60G2800/F01N2240/B65H2553/
+    F25J2280 index codes whose titles literally say the carrier terms.
+    Every kept entry carries additional_only (False) for diagnostics.
+    Never raises: unreadable archives yield [].
     """
     entries: list = []
     try:
@@ -73,6 +81,10 @@ def parse_cpc_zip(zip_path: str, main_groups_only: bool = True) -> list:
                 except ET.ParseError:
                     continue
                 for item in root.iter("classification-item"):
+                    additional_only = (
+                        item.attrib.get("additional-only") == "true")
+                    if exclude_indexing and additional_only:
+                        continue
                     symbol_el = item.find("classification-symbol")
                     if symbol_el is None or not (symbol_el.text or "").strip():
                         continue
@@ -88,7 +100,8 @@ def parse_cpc_zip(zip_path: str, main_groups_only: bool = True) -> list:
                         continue
                     title = " ".join(text_el.text.split())
                     if title:
-                        entries.append({"code": code, "title": title})
+                        entries.append({"code": code, "title": title,
+                                        "additional_only": additional_only})
     except (OSError, zipfile.BadZipFile):
         logger.warning(f"CPC scheme zip unavailable: {zip_path}")
         return []
