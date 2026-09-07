@@ -751,10 +751,17 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
             # USPTO search reports zero hits as HTTP 404 — surface it as
             # a zero-hit result (not an API failure) so the search ladder
             # discipline (substitute vocabulary before loosening) kicks in.
-            # Some query-syntax rejections (fullwidth punctuation that
-            # escaped normalization) carry the same 404 — retry once with
-            # the normalized query before declaring zero hits.
+            # Two query shapes draw the same 404 although genuine matches
+            # exist — retry once each before declaring zero hits:
+            #   1. fullwidth punctuation that escaped normalization;
+            #   2. parenthesized/quoted structure and bare AND/OR chains,
+            #      which the endpoint misparses as zero while the same
+            #      words space-joined return 200 (2026-09-03/07 logs).
             retried = _retry_cleaned_uspto_query(
+                method, url, request_params, request_body, headers, timeout)
+            if retried is not None:
+                return retried
+            retried = _retry_flattened_uspto_query(
                 method, url, request_params, request_body, headers, timeout)
             if retried is not None:
                 return retried
@@ -853,6 +860,50 @@ def _retry_cleaned_uspto_query(method: str, url: str, request_params: dict,
         retry_body["q"] = cleaned
     logger.info(
         f"uspto 404 retry — normalized query: {cleaned[:200]}")
+    resp = outbound_http.request(
+        method, url, purpose="backend_tool",
+        params=request_params, headers=headers,
+        json=retry_body, timeout=timeout)
+    if resp.status_code != 200:
+        return None
+    return _parse_ok_response(resp, url)
+
+
+def _retry_flattened_uspto_query(method: str, url: str, request_params: dict,
+                                 request_body: Any, headers: dict,
+                                 timeout: float) -> Dict[str, Any] | None:
+    """Retry a USPTO search once with bracket/quoted structure removed.
+
+    applications/search answers most parenthesized/phrase AND-OR queries
+    — and bare multi-term AND chains (observed 2026-09-07) — with the
+    same 404 "No matching records found" it uses for genuine zero hits,
+    while the same words space-joined return 200.  De-bracket the query
+    to its plain space-joined word form (destructure_uspto_query) and
+    re-POST once.  Returns the parsed {data, raw_items} on a successful
+    retry; None when the query has no structure to remove or the retry
+    still fails (the caller surfaces the original 404 as a zero-hit
+    result).
+    """
+    q_value = None
+    if isinstance(request_body, dict) and isinstance(request_body.get("q"), str):
+        q_value = request_body["q"]
+    elif isinstance(request_params, dict) and isinstance(request_params.get("q"), str):
+        q_value = request_params["q"]
+    if not q_value:
+        return None
+    try:
+        from sources.long_task.search_query_builder import (
+            destructure_uspto_query)
+        flat = destructure_uspto_query(q_value)
+    except Exception:
+        return None
+    if not flat or flat == q_value:
+        return None
+    retry_body = dict(request_body) if isinstance(request_body, dict) else request_body
+    if isinstance(retry_body, dict):
+        retry_body["q"] = flat
+    logger.info(
+        f"uspto 404 retry — bracket fallback, flattened query: {flat[:200]}")
     resp = outbound_http.request(
         method, url, purpose="backend_tool",
         params=request_params, headers=headers,
