@@ -2905,12 +2905,14 @@ def execute_family_analysis(self, task_id: str, params: dict):
 # alters neighbouring executors.
 
 
-# 外观管线限流重试冷却 (s): Google XHR 配额按窗回落, 秒级退避无效,
-# 按 2/4 分钟两档等待; 预算耗尽后转"服务暂不可用"提示 (2026-09-07 观察)。
-DESIGN_RATE_RETRY_COUNTDOWN = 120
+# 外观管线限流重试 (Google XHR 对出口 IP 是分钟级窗封锁, 2026-09-07 观察):
+# 单阶内不再连环重试(design_search 首发+1 短退避), 长等待放这里 —— 每档
+# 5 分钟冷却, max_retries=3 允许 4 次尝试(0..3), 总等待上限 ~15 分钟;
+# 预算耗尽后转"服务暂不可用"提示。
+DESIGN_RATE_RETRY_COUNTDOWN = 300
 
 
-@app.task(bind=True, max_retries=2, default_retry_delay=60,
+@app.task(bind=True, max_retries=3, default_retry_delay=60,
           time_limit=1800, soft_time_limit=1770)
 def execute_design_clearance(self, task_id: str, params: dict):
     """Design-clearance shell: delegate to design_pipeline.run, map exits.

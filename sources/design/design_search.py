@@ -5,9 +5,9 @@
 - parse_design_hits: 从 XHR JSON 抽 US 件 (id patent/USD 开头), EM/CN 记日志项不返回。
   US 件带 status: 有 grant/publication 日期 → "active" (由调用方/risk 以 today 判届满);
   缺日期 → "unknown", 设计上不参与 active 判定 (Task 7 按 active-only 留省)。
-- search_designs: 阶梯逐阶 fetch (阶间 1s 节奏), 命中 US 即停; 503/429 逐阶内
-  指数退避重试 ≤3, 仍耗尽再冷却 _COOLDOWN 终试一次 (突发限流数秒回落, 避免
-  误判服务不可用); 终试仍 429/503 → 该阶 rate_limited=True 上抛终止。
+- search_designs: 阶梯逐阶 fetch (阶间 1s 节奏), 命中 US 即停; 单阶 429/503
+  首发+3s 短退避重试一次, 仍失败 → rate_limited=True 上抛终止 (Google XHR
+  窗级风控, 连环重试只会把 IP 锤进 "Sorry" 封锁, 长等待交任务级重试)。
 fetch 由调用方注入 (真实 httpx 包装在 Task 7); 本模块只拼 query 串并 await fetch。
 仅标准库, 纯函数无 IO (退避用 asyncio.sleep, jitter 由调用侧放缩)。零产品词固化。
 """
@@ -19,10 +19,8 @@ from sources.design.design_risk import DesignCandidate
 
 _CAP = 6           # 阶梯最大阶数 (spec §5.3 ≤6)
 _RETRYABLE = {429, 503}
-_DELAYS = (2.0, 4.0, 8.0)   # 指数退避基数 (s), 乘 jitter 后实际睡
-_MAX_RETRIES = 3            # ≤3 次重试 = 单阶至多 4 次请求
-_COOLDOWN = 12.0            # 单阶耗尽后的冷却终试 (突发限流常于数秒内回落)
-_STEP_PACE = 1.0            # 阶间节奏 (s), 避免阶梯突发打满 Google XHR 限流
+_FIRST_RETRY_DELAY = 3.0   # 首发失败后的单次短退避 (s), 乘 jitter 后实际睡
+_STEP_PACE = 1.0           # 阶间节奏 (s), 避免阶梯突发打满 Google XHR 限流
 
 
 def build_ladder(en_name: str, keywords: list[str]) -> list[str]:
@@ -125,34 +123,30 @@ async def _fetch_once(fetch, query: str):
 
 
 async def _run_query(fetch, query: str, jitter: float):
-    """单阶请求循环: 拿到 200 即停 (匹配解析); 否则退避重试 ≤_MAX_RETRIES,
-    仍耗尽再冷却 _COOLDOWN 后终试一次 —— 突发限流 (Google XHR 对单 IP 短窗
-    突发常 429) 在数秒内回落, 冷却终试可消除误判"服务不可用"。
+    """单阶请求循环: 首发 + 一次 3s 短退避重试; 仍 429/503 → 该阶限流上抛。
+
+    2026-09-07 观察: Google XHR 对出口 IP 是"窗级"风控——安静窗单发 200,
+    一旦被打即转入分钟级 "Sorry" 封锁, 阶内连环重试 (2/4/8s+12s 冷却) 只会
+    把 IP 越锤越死且拖慢判定。因此命中 429/503 后至多重试一次, 不再连环锤;
+    长等待交给任务级重试 (executor countdown)。
 
     返回 (cands, em_cn, ok, rate_limited)。
     - ok: 拿到 200 并成功解析 (即使 0 命中)。
-    - rate_limited: 退避+冷却终试后仍以 429/503 收尾, 置整次限流标志。
+    - rate_limited: 首发+短退避后仍 429/503, 置整次限流标志 (调用方上抛终止)。
     - 非 200 且非 429/503 (如 500/404) 不强推, 归为"该阶请求未获结构化数据", 不判定限流。
     """
-    retryable = False
-    for attempt in range(_MAX_RETRIES + 1):
+    for attempt in range(2):
         status, text = await _fetch_once(fetch, query)
         if status == 200:
             cands, em_cn, ok = _to_hits(text)
             return cands, em_cn, ok, False
         if status in _RETRYABLE:
-            retryable = True
-            if attempt < _MAX_RETRIES:
-                await asyncio.sleep(_DELAYS[attempt] * jitter)
-    if retryable:
-        await asyncio.sleep(_COOLDOWN * jitter)
-        status, text = await _fetch_once(fetch, query)
-        if status == 200:
-            cands, em_cn, ok = _to_hits(text)
-            return cands, em_cn, ok, False
-        if status not in _RETRYABLE:
-            return [], [], False, False   # 冷却后非可重试码 → 该阶无结构化数据
-    return [], [], False, retryable
+            if attempt == 0:
+                await asyncio.sleep(_FIRST_RETRY_DELAY * jitter)
+                continue
+            return [], [], False, True
+        return [], [], False, False
+    return [], [], False, False  # pragma: no cover —— 循环必 return
 
 
 async def search_designs(

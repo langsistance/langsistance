@@ -192,31 +192,32 @@ def test_search_empty_parse_env_returns_empty():
     assert res["rate_limited"] is False
 
 
-def test_cooldown_final_attempt_rescues_burst_throttle(monkeypatch):
-    """2026-09-07: 单发 200、管线却限流 → Google XHR 突发 429 数秒回落。
-    退避耗尽后冷却终试一次: 终试 200 → 不判 rate_limited, 命中照常解析。"""
+def test_single_retry_rescues_transient_503(monkeypatch):
+    """首发 503 → 3s 短退避重试一次 → 200: 瞬时限流被救回, 请求数=2。"""
     async def no_sleep(seconds):
         return None
     monkeypatch.setattr(asyncio, "sleep", no_sleep)
 
     xhr = json.dumps({"results": {"cluster": [{"result": [
-        _hit("USD9", "USD9S", "2022-03-01", "Robot"),
+        _hit("USD8A", "USD8AS", "2022-02-01", "Robot"),
     ]}]}})
     calls = {"n": 0}
 
     async def fetch(url_query):
         calls["n"] += 1
-        if calls["n"] <= 4:                     # 退避 3 次重试仍 429 (共 4 次请求)
-            return 429, "burst"
-        return 200, xhr                         # 冷却后终试回 200
+        if calls["n"] == 1:
+            return 503, "blocked"
+        return 200, xhr
 
     res = _run(fetch, "Robot toy", [])
-    assert calls["n"] == 5                      # 4 次退避 + 1 次冷却终试
+    assert calls["n"] == 2
     assert res["rate_limited"] is False
-    assert [c.pub for c in res["candidates"]] == ["USD9S"]
+    assert [c.pub for c in res["candidates"]] == ["USD8AS"]
 
 
-def test_cooldown_still_blocked_then_rate_limited(monkeypatch):
+def test_blocked_window_marks_limited_without_hammering(monkeypatch):
+    """窗级封锁(2026-09-07): 首发+一次短退避仍 503 → rate_limited 上抛,
+    绝不连环锤 Google —— 请求总数恰为 2。"""
     async def no_sleep(seconds):
         return None
     monkeypatch.setattr(asyncio, "sleep", no_sleep)
@@ -225,8 +226,9 @@ def test_cooldown_still_blocked_then_rate_limited(monkeypatch):
 
     async def fetch(url_query):
         calls["n"] += 1
-        return 503, "still down"
+        return 503, "sorry"
 
     res = _run(fetch, "Robot toy", [])
-    assert calls["n"] == 5                      # 4 次退避 + 1 次冷却终试仍 503
+    assert calls["n"] == 2
     assert res["rate_limited"] is True
+    assert res["candidates"] == []
