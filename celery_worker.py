@@ -2905,6 +2905,11 @@ def execute_family_analysis(self, task_id: str, params: dict):
 # alters neighbouring executors.
 
 
+# 外观管线限流重试冷却 (s): Google XHR 配额按窗回落, 秒级退避无效,
+# 按 2/4 分钟两档等待; 预算耗尽后转"服务暂不可用"提示 (2026-09-07 观察)。
+DESIGN_RATE_RETRY_COUNTDOWN = 120
+
+
 @app.task(bind=True, max_retries=2, default_retry_delay=60,
           time_limit=1800, soft_time_limit=1770)
 def execute_design_clearance(self, task_id: str, params: dict):
@@ -2995,7 +3000,12 @@ def execute_design_clearance(self, task_id: str, params: dict):
         return {'status': 'failed', 'task_id': task_id,
                 'error': str(e)}
     except _DesignRuntimeExit as e:
-        # rate_limited etc → retry-later message.
+        # rate_limited 等 → 配额型限流: 预算内按长冷却自动重试 (Google XHR
+        # 配额按时间窗回落, 秒级退避解决不了窗级配额; 观察 2026-09-07:
+        # 单发 200 但阶梯连发后持续 429 ~30s+), 耗尽预算后仍以"稍后重试"
+        # 收尾, 不无限拖。
+        if retry_count < self.max_retries:
+            raise self.retry(exc=e, countdown=DESIGN_RATE_RETRY_COUNTDOWN)
         _design_exception_hard_stop(
             task_id, user_id, '服务暂不可用，请稍后重试。')
         return {'status': 'failed', 'task_id': task_id,
@@ -3086,6 +3096,11 @@ async def _design_google_fetch(resource):
         async with httpx.AsyncClient(
                 headers=headers, timeout=30.0, follow_redirects=True) as _cl:
             resp = await _cl.get(url)
+        if resp.status_code != 200:
+            # 非 200 不再哑火: 记录状态码与体长供限流/风控排障
+            _pipeline_logger.warning(
+                f"DESIGN xhr non-200 status={resp.status_code} "
+                f"len={len(resp.text)} q={text[:80]!r}")
         return resp.status_code, resp.text
     except Exception as e:  # noqa: BLE001 —— fail-open degrade
         _pipeline_logger.warning(
@@ -3108,6 +3123,10 @@ async def _design_pdf_fetch(url: str):
         async with httpx.AsyncClient(
                 headers=headers, timeout=30.0, follow_redirects=True) as _cl:
             resp = await _cl.get(url)
+        if resp.status_code != 200:
+            _pipeline_logger.warning(
+                f"DESIGN pdf non-200 status={resp.status_code} "
+                f"len={len(resp.content)} url={url[:80]!r}")
         return resp.status_code, resp.content
     except Exception as e:  # noqa: BLE001 —— fail-open degrade
         _pipeline_logger.warning(
