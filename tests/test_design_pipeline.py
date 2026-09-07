@@ -240,3 +240,99 @@ def test_pure_image_vision_l0_failure_still_clarifies():
     finally:
         for ph in h:
             ph.stop()
+
+
+# ── 2026-09-07 修复: 图+文本时视觉 L0 为准, 请求语不再当产品名检索 ──────
+# 线上: 传图 + "帮我看这个产品有没有外观专利风险" → product_text 非空走文本
+# 纯函数 → 整句中文当 en_name → L1 空检零命中 (1.6s 完成)。修复后: 有图 →
+# 视觉 L0 (文本仅作参考并入提示); 视觉拿不到且文本像英文品名才兜底文本。
+
+def _patch_text_vision_l0(call_vision, search=None):
+    """装配"图+文本"L0 桩: _to_product_images→data-uri; call_vision→给定;
+    search 捕获参数; L2/L3 stub。返回 (handles, captured)。"""
+    import sources.design.design_pipeline as dp
+    captured = {}
+    if search is None:
+        async def _search(*a, **k):
+            captured["en_name"] = a[1] if len(a) > 1 else None
+            return {"candidates": [_cand()], "rate_limited": False}
+        search = _search
+    hs = [
+        mock.patch.object(dp, "_to_product_images", return_value=[_VISION_URI]),
+        mock.patch.object(dp.design_vision, "call_vision", new=call_vision),
+        mock.patch.object(dp.design_search, "search_designs", new=search),
+        mock.patch.object(dp.design_image, "fetch_design_pdf", new=_ok_pdf),
+        mock.patch.object(dp.design_judge, "judge_product", new=_judge_ok),
+    ]
+    for h in hs:
+        h.start()
+    return hs, captured
+
+
+def test_text_image_vision_l0_wins_over_request_sentence():
+    """请求语 + 图: 视觉 en_name 驱动检索, 中文请求语不进 L1。"""
+    ctx = _Ctx()
+    seen_prompt = {}
+
+    async def _ok_vision(images_base64, prompt, post=None, timeout=90, *,
+                         config=None):
+        seen_prompt["prompt"] = prompt
+        return ('{"en_name": "insulated mug", "keywords": ["mug", "cup"], '
+                '"visual_features": [], "suggested_locarno": []}')
+
+    h, captured = _patch_text_vision_l0(_ok_vision)
+    try:
+        out = asyncio.run(run(
+            {"product_image_refs": ["p.png"],
+             "product_text": "帮我看这个产品有没有外观专利风险",
+             "source": "us_design"}, ctx))
+    finally:
+        for ph in h:
+            ph.stop()
+    # 视觉被调用, 提示含用户文本作参考
+    assert "帮我看这个产品" in seen_prompt["prompt"]
+    # L1 用的是视觉 en_name, 不是请求语
+    assert captured.get("en_name") == "insulated mug"
+    assert "USD1A" in out["digest"]["result_ids"]
+
+
+def test_text_image_vision_clarify_cjk_text_still_clarifies():
+    """视觉说需澄清 + 文本仅中文请求语(无英文品名) → 仍澄清而非垃圾检索。"""
+    ctx = _Ctx()
+
+    async def _clarify_vision(images_base64, prompt, post=None, timeout=90, *,
+                              config=None):
+        return ('{"en_name": "", "keywords": [], "visual_features": [], '
+                '"suggested_locarno": [], "needs_clarification": true}')
+
+    h, _ = _patch_text_vision_l0(_clarify_vision)
+    try:
+        with pytest.raises(DesignNeedClarification):
+            asyncio.run(run(
+                {"product_image_refs": ["p.png"],
+                 "product_text": "帮我看这个产品有没有外观专利风险",
+                 "source": "us_design"}, ctx))
+    finally:
+        for ph in h:
+            ph.stop()
+
+
+def test_text_image_vision_fails_english_name_falls_back_to_text():
+    """视觉不可用 + 文本首段是英文品名 → 兜底文本画像继续检索。"""
+    ctx = _Ctx()
+
+    async def _fail_vision(images_base64, prompt, post=None, timeout=90, *,
+                           config=None):
+        raise DesignVisionError("vision down")
+
+    h, captured = _patch_text_vision_l0(_fail_vision)
+    try:
+        out = asyncio.run(run(
+            {"product_image_refs": ["p.png"],
+             "product_text": "Insulated travel mug 500ml",
+             "source": "us_design"}, ctx))
+    finally:
+        for ph in h:
+            ph.stop()
+    assert captured.get("en_name") == "Insulated travel mug 500ml"
+    assert "USD1A" in out["digest"]["result_ids"]

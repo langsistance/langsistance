@@ -98,42 +98,68 @@ def _target(prof: dict) -> str:
 
 
 async def _l0_resolve(product_text: str, image_refs, ctx) -> dict:
-    """L0: 目标产品画像。纯图入口(uploaded eye) 走视觉 L0; 文本/en 种子沿用纯函数。
+    """L0: 目标产品画像。有产品图时以视觉 L0 为准; 无图走文本纯函数。
 
-    纯图入口: product_text 空 + 带了产品图 → _vision_resolve 拿 L0 JSON (不再 P1 恒
-    clarify)。文本存在 (含"图+文本")仍走 l0_product_from_text/parse_l0_json 纯函数路径
-    P1 无自动中译英, 不改。(en 种子并入视觉结果的交叉属可选增强, 判断无需双 LLM 时
-    保持单一通道。)
+    有图 + 有文本: 用户文本常是请求语("帮我看…有没有外观专利风险")而非
+    产品描述——整句当 en_name 检索只会零命中 (2026-09-07 线上 1.6s 空检)。
+    因此文本仅作参考并入视觉提示(含英文品名时提示模型复用), 产品画像以
+    图为准; 视觉拿不到 (clarify/失败) 且文本首段确像英文品名 (ASCII 字母
+    过半) 才兜底文本, 否则澄清。无图: 维持文本解析路径不变。
     """
     product_images = _to_product_images(image_refs)
-    if not product_text and product_images:
-        prof = await _vision_resolve(product_images)
+    if product_images:
+        prof = await _vision_resolve(product_images, product_text)  # None=视觉失败
+        if (prof is None
+                or prof.get("needs_clarification")
+                or not prof.get("en_name")):
+            prof = _english_text_profile(product_text) or prof
     else:
         prof = design_query.l0_product_from_text(product_text)
         if prof.get("needs_clarification") or not prof.get("en_name"):
             prof = design_query.parse_l0_json(product_text or "")
-    if prof.get("needs_clarification"):
+    if (prof is None
+            or prof.get("needs_clarification")
+            or not prof.get("en_name")):
         ctx.warning("请补充说明单一目标产品(名称/SKU)后再检。")
         raise DesignNeedClarification(
             "需澄清目标产品: 请说明是单一产品并上传其产品图。")
     return prof
 
 
-async def _vision_resolve(product_images) -> dict:
-    """纯图 L0: design_vision.call_vision 对产品图取 L0 JSON → parse 容错。
-
-    call_vision 对视觉调用方 (design_vision) 异常 → DesignVisionError: 该输入无文本
-    锚点, degrade 为澄清引导信号 (非硬失败)。parse_l0_json 同文本解析容错 (围栏/缺键/
-    坏 JSON → 空 en_name needs_clarification)。生产零外呼在测试禁密 —— 测试整模块
-    mock design_vision.call_vision。
+def _english_text_profile(product_text: str) -> dict | None:
+    """文本兜底画像: 仅当文本首段像英文产品名(ASCII 字母过半)才可作 L1
+    检索词; 中文请求语整句当产品名只会产出垃圾检索。返回 None 表示不可用。
     """
+    if not (product_text or "").strip():
+        return None
+    prof = design_query.l0_product_from_text(product_text)
+    name = str(prof.get("en_name") or "").strip()
+    if not name:
+        return None
+    letters = sum(1 for ch in name if ch.isascii() and ch.isalpha())
+    if letters < len(name) * 0.5:
+        return None
+    return prof
+
+
+async def _vision_resolve(product_images, product_text: str = "") -> dict:
+    """视觉 L0: call_vision 对产品图取 L0 JSON → parse 容错。
+
+    用户文本作为参考并入提示(若含英文品名提示复用; 若是请求语则忽略)。
+    call_vision 异常 → DesignVisionError → 澄清引导 (非硬失败)。
+    parse_l0_json 同文本解析容错 (围栏/缺键/坏 JSON → needs_clarification)。
+    生产零外呼在测试禁密 —— 测试整模块 mock design_vision.call_vision。
+    """
+    prompt = design_query.L0_PROMPT_ZH
+    if (product_text or "").strip():
+        prompt += (
+            "\n用户附带文本(仅参考: 若其中给出该产品的英文名或品名请复用,"
+            " 若是泛指请求语则忽略): " + product_text.strip()[:120])
     try:
-        raw = await design_vision.call_vision(
-            product_images, design_query.L0_PROMPT_ZH)
+        raw = await design_vision.call_vision(product_images, prompt)
     except design_vision.DesignVisionError as exc:
         logger.warning("design_pipeline L0 vision degrade: %s", exc)
-        raise DesignNeedClarification(
-            "需澄清目标产品: 请说明是单一产品并上传其产品图。") from exc
+        return None  # 交给 _l0_resolve: 英文品名文本兜底, 否则澄清
     return design_query.parse_l0_json(raw)
 
 
