@@ -741,6 +741,50 @@ class TestUspto404RetryWithNormalizedQuery(unittest.TestCase):
         self.assertIsNone(result)
         mock_req.assert_not_called()
 
+    def _ok_response(self):
+        import json
+        from unittest.mock import MagicMock
+        ok = MagicMock()
+        ok.status_code = 200
+        ok.headers = {"Content-Type": "application/json"}
+        ok.content = b'{"count": 1}'
+        ok.text = '{"count": 1}'
+        ok.json = lambda: {"count": 1}
+        return ok
+
+    def test_cleaned_retry_get_style_rewrites_params_q(self):
+        # GET-style tools carry q in request_params (body is None) — the
+        # cleaned query must reach the wire there, not vanish into a
+        # body that is never sent.
+        from unittest.mock import patch
+        from sources.dynamic_tool_params import _retry_cleaned_uspto_query
+        with patch("sources.dynamic_tool_params.outbound_http.request",
+                   return_value=self._ok_response()) as mock_req:
+            result = _retry_cleaned_uspto_query(
+                "GET",
+                "https://api.uspto.gov/api/v1/patent/applications/search",
+                {"q": "“wafer”", "_t": "1"}, None, {}, 30)
+        self.assertEqual(result["data"]["count"], 1)
+        self.assertEqual(mock_req.call_args[1]["params"]["q"], '"wafer"')
+        self.assertIsNone(mock_req.call_args[1]["json"])
+
+    def test_flatten_retry_get_style_rewrites_params_q(self):
+        from unittest.mock import patch
+        from sources.dynamic_tool_params import _retry_flattened_uspto_query
+        with patch("sources.dynamic_tool_params.outbound_http.request",
+                   return_value=self._ok_response()) as mock_req:
+            result = _retry_flattened_uspto_query(
+                "GET",
+                "https://api.uspto.gov/api/v1/patent/applications/search",
+                {"q": "wafer AND temperature AND pressure AND control",
+                 "_t": "1"}, None, {}, 30)
+        self.assertEqual(result["data"]["count"], 1)
+        self.assertEqual(
+            mock_req.call_args[1]["params"]["q"],
+            "wafer temperature pressure control")
+        self.assertEqual(mock_req.call_args[1]["params"]["_t"], "1")
+        self.assertIsNone(mock_req.call_args[1]["json"])
+
     def test_404_after_request_time_normalization_does_not_double_retry(self):
         # The request-time normalization already replaced fullwidth
         # punctuation before the wire — the normalized-query retry must

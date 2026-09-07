@@ -231,6 +231,12 @@ def match_query_to_cpc(query_text: str, top_k: int = 8,
         vectors = np.asarray(vectors, dtype=np.float32)
     except ImportError:
         pass
+    if len(entries) != len(vectors):
+        # json (.npy rebuild lag) drifted — the matcher will return []
+        # silently; make the ops gap audible instead.
+        logger.warning(
+            f"cpc json/npy mismatch — titles={len(entries)} vectors="
+            f"{len(vectors)}; rebuild with scripts/build_cpc_vectors.py")
     texts = [query_text]
     if isinstance(extra_terms, (list, tuple)):
         texts.extend(str(t).strip() for t in extra_terms if str(t).strip())

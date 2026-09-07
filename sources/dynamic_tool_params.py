@@ -855,18 +855,32 @@ def _retry_cleaned_uspto_query(method: str, url: str, request_params: dict,
     cleaned = _normalize_query_punctuation(q_value)
     if cleaned == q_value:
         return None
-    retry_body = dict(request_body) if isinstance(request_body, dict) else request_body
-    if isinstance(retry_body, dict):
-        retry_body["q"] = cleaned
+    retry_params, retry_body = _retry_transport(
+        cleaned, request_params, request_body)
     logger.info(
         f"uspto 404 retry — normalized query: {cleaned[:200]}")
     resp = outbound_http.request(
         method, url, purpose="backend_tool",
-        params=request_params, headers=headers,
+        params=retry_params, headers=headers,
         json=retry_body, timeout=timeout)
     if resp.status_code != 200:
         return None
     return _parse_ok_response(resp, url)
+
+
+def _retry_transport(q: str, request_params: dict,
+                     request_body: Any) -> tuple:
+    """Copy the transport that actually carries the query and replace q.
+
+    body.q for POST-style tools; request_params q for GET-style tools
+    (their body is None/empty — rewriting body alone would re-send the
+    original structured q in params and waste the retry).
+    """
+    if isinstance(request_body, dict) and isinstance(request_body.get("q"), str):
+        return request_params, dict(request_body, q=q)
+    retry_params = dict(request_params)
+    retry_params["q"] = q
+    return retry_params, request_body
 
 
 def _retry_flattened_uspto_query(method: str, url: str, request_params: dict,
@@ -896,17 +910,18 @@ def _retry_flattened_uspto_query(method: str, url: str, request_params: dict,
             destructure_uspto_query)
         flat = destructure_uspto_query(q_value)
     except Exception:
+        logger.warning(
+            "uspto 404 flatten failed — destructure_uspto_query error")
         return None
     if not flat or flat == q_value:
         return None
-    retry_body = dict(request_body) if isinstance(request_body, dict) else request_body
-    if isinstance(retry_body, dict):
-        retry_body["q"] = flat
+    retry_params, retry_body = _retry_transport(
+        flat, request_params, request_body)
     logger.info(
         f"uspto 404 retry — bracket fallback, flattened query: {flat[:200]}")
     resp = outbound_http.request(
         method, url, purpose="backend_tool",
-        params=request_params, headers=headers,
+        params=retry_params, headers=headers,
         json=retry_body, timeout=timeout)
     if resp.status_code != 200:
         return None
