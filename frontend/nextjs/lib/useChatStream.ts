@@ -64,12 +64,21 @@ export function useChatStream() {
 
   const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
   const MAX_FILE_COUNT = 100
-  const ALLOWED_EXTENSIONS = ['.pdf', '.docx', '.xml']
+  // Patent documents + product images: the seller scene's design-clearance
+  // flow is image-gated (backend sources/design/clearance_intent.py), so
+  // images must reach the chat upload alongside PDF/DOCX/XML.
+  const ALLOWED_EXTENSIONS = [
+    '.pdf', '.docx', '.xml',
+    '.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif',
+    '.heic', '.heif', '.avif',
+  ]
   const ALLOWED_MIMES = [
     'application/pdf',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'application/xml',
     'text/xml',
+    'image/jpeg', 'image/png', 'image/webp', 'image/bmp', 'image/gif',
+    'image/heic', 'image/heif', 'image/avif',
   ]
 
   function addFiles(files: FileList | File[]) {

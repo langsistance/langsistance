@@ -81,6 +81,8 @@ export default function ChatComposer({
     const ext = '.' + file.name.split('.').pop()?.toLowerCase()
     if (ext === '.docx') return 'DOCX'
     if (ext === '.xml') return 'XML'
+    if (['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif',
+         '.heic', '.heif', '.avif'].includes(ext)) return 'IMG'
     return 'PDF'
   }
 
@@ -124,15 +126,15 @@ export default function ChatComposer({
           ref={fileInputRef}
           type="file"
           className="file-input-hidden"
-          accept=".pdf,.docx,.xml,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/xml,text/xml"
+          accept=".pdf,.docx,.xml,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/xml,text/xml,.jpg,.jpeg,.png,.webp,.bmp,.gif,.heic,.heif,.avif,image/jpeg,image/png,image/webp,image/bmp,image/gif,image/heic,image/heif,image/avif"
           multiple
           onChange={e => { if (e.target.files) addFiles(e.target.files); e.target.value = '' }}
         />
         <button
           className="file-upload-btn"
           onClick={openFilePicker}
-          aria-label="Attach patent files"
-          title={t('chat.attachFiles') || 'Attach patent specification files (PDF, DOCX, XML)'}
+          aria-label="Attach patent files or product images"
+          title={t('chat.attachFiles') || 'Attach patent files (PDF, DOCX, XML) or product images (JPG, PNG, WEBP)'}
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
