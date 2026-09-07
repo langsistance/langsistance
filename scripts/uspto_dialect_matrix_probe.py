@@ -65,6 +65,24 @@ PROBES = [
     # ── C. 404 semantics on clean queries ────────────────────────────
     ("C1",  "gibberish single word",   "zzqwxpqrsemifab"),
     ("C2",  "gibberish AND pair",      "zzqwxpqrsemifab AND wafer"),
+    # ── D. single-word baselines (pin space=OR vs AND semantics) ─────
+    ("D1",  "single word: wafer",      "wafer"),
+    ("D2",  "single word: temperature","temperature"),
+    ("D3",  "single word: pressure",   "pressure"),
+    ("D4",  "single word: control",    "control"),
+    # ── E. poison isolation & candidate safe dialects ────────────────
+    ("E1",  "bare 3-AND chain",        "wafer AND temperature AND pressure"),
+    ("E2",  "single paren 4-AND",      "(wafer AND temperature AND pressure AND control)"),
+    ("E3",  "chained parens 3-term",   "(wafer AND temperature) AND pressure"),
+    ("E4",  "chained parens 4-term",   "(wafer AND temperature) AND (pressure AND control)"),
+    ("E5",  "phrase alone",            '"wafer temperature"'),
+    ("E6",  "phrase AND word",         '"wafer temperature" AND pressure'),
+    ("E7",  "paren phrase AND word",   '("wafer temperature") AND pressure'),
+    ("E8",  "bare 3-AND w/ common word","semiconductor AND wafer AND control"),
+    ("E9",  "paren2 AND common word",  "(semiconductor AND wafer) AND control"),
+    ("E10", "nested parens",           "semiconductor AND (wafer AND control)"),
+    ("E11", "phrase AND word b",       '"closed loop" AND wafer'),
+    ("E12", "paren-OR 3-term",         "(temperature OR thermal) AND wafer"),
 ]
 
 
@@ -124,15 +142,20 @@ def main() -> int:
         print(f"{pid:<5}{label:<28}{r['status']!s:<8}"
               f"{str(r['count']):<12}{r.get('detail', '')}")
     print()
-    print("Reading:")
-    print("  A6/A1 200 but A7/A2 (explicit AND chain) 404 -> emit space-joined"
-          " word bags; explicit AND is the poison.")
-    print("  A8 404 but A9/A10 200 -> quotes break the endpoint; drop quotes.")
-    print("  B4 SPEC count ~millions -> full text exists and SPEC: works;")
-    print("    B5 SPEC AND-chain count > 0 -> use SPEC:(...) for multi-concept.")
-    print("  B1/B2/B3/B6 200 -> field tags work; use TTL:/ABST: to narrow.")
-    print("  C1/C2 404 with detail 'No matching records' -> genuine zero;")
-    print("    keep 404-as-zero-hit ONLY for shapes proven clean above.")
+    print("Reading (compare counts against the D1-D4 single-word baselines):")
+    print("  Space-join count growing as words are added (A13 < A6 < A1) means"
+          " spaces are OR-like, NOT AND — flattened word bags are noise, not")
+    print("  a precision rescue.")
+    print("  D-baselines vs A13/A6: if single-word counts are small and the")
+    print("  space-join count exceeds any single word's, space is OR.")
+    print("  E1/E8 zero while E2/E3/E9 (paren forms, same words) hit -> the")
+    print("  bare >=3 AND chain is the only parser poison; emit paren groups.")
+    print("  E5>0 and E6/E11 zero while E7 hits -> quotes+AND is poison;")
+    print("  wrap phrases in their own parens or space-join them.")
+    print("  E2/E3/E4/E9/E10 200 with small counts -> these paren-group AND")
+    print("  dialects are the safe multi-concept form for the ladder.")
+    print("  C1/C2 404 -> genuine zero on clean queries: keep 404-as-zero-hit")
+    print("  only for shapes proven clean above.")
     return 0
 
 
