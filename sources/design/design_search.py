@@ -93,8 +93,13 @@ def parse_design_hits(xhr_json: dict) -> tuple[list[DesignCandidate], list[dict]
 
 
 def _build_query(term: str, country_param: str) -> str:
-    """拼 XHR url 参数原文: q="{term}"&type=DESIGN (+country 由 flag 控制)。"""
-    q = f"q={quote('\"' + term + '\"')}&type=DESIGN"
+    """拼 XHR url 参数原文: q="{term}"&type=DESIGN (+country 由 flag 控制)。
+
+    NB: 表达式内的引号转义拆出行外计算——f-string 表达式部分在 Python
+    <3.12 不允许反斜杠(服务器 celery 跑 3.11, 曾致 import 即 SyntaxError)。
+    """
+    quoted_term = quote('"' + term + '"')
+    q = f"q={quoted_term}&type=DESIGN"
     if country_param:
         q += f"&country={quote(country_param)}"
     return q
