@@ -56,6 +56,22 @@ export const metadata: Metadata = {
   },
 }
 
+// 自托管 page_view beacon:匿名访客统计(方案二)。
+// 每次整页加载发一次 sendBeacon → api.copiioai.com/web/page_view,
+// 落服务器 analytics.log(event=page_view),与注册/登录同管道出日表访客列。
+// vid = localStorage 持久化的匿名浏览器 id;不与任何登录身份关联。
+const BEACON_JS = `
+(function(){try{
+  var K='copiioai_vid';var v=localStorage.getItem(K);
+  if(!v){v=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():('v'+Math.random().toString(36).slice(2)+Date.now().toString(36));localStorage.setItem(K,v);}
+  var p=location.pathname+location.search;var r=document.referrer||'';var s='';
+  var sm=new URLSearchParams(location.search).get('utm_source');if(sm){s=sm;}
+  var b='vid='+encodeURIComponent(v)+'&path='+encodeURIComponent(p)+'&ref='+encodeURIComponent(r)+'&src='+encodeURIComponent(s);
+  var u='https://api.copiioai.com/web/page_view';
+  if(navigator.sendBeacon){navigator.sendBeacon(u,b);}else{var im=new Image();im.src=u+'?'+b;}
+}catch(e){}})();
+`
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
@@ -79,6 +95,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             gtag('config', 'G-LLPQHRD2EZ');
           `}
         </Script>
+        <Script
+          id="copiioai-pageview-beacon"
+          strategy="afterInteractive"
+          dangerouslySetInnerHTML={{ __html: BEACON_JS }}
+        />
         {children}
       </body>
     </html>

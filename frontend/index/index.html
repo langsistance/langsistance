@@ -234,6 +234,28 @@
         gtag('js', new Date());
         gtag('config', 'G-XSVSX7LXK8');
     </script>
+    <!-- CopiioAI 自托管 page_view beacon (匿名访客统计, 落 api.copiioai.com analytics.log) -->
+    <script>
+        (function () {
+            try {
+                var K = 'copiioai_vid', v = localStorage.getItem(K);
+                if (!v) {
+                    v = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+                        : ('v' + Math.random().toString(36).slice(2) + Date.now().toString(36));
+                    localStorage.setItem(K, v);
+                }
+                var p = location.pathname + location.search;
+                var r = document.referrer || '', s = '';
+                var sm = new URLSearchParams(location.search).get('utm_source');
+                if (sm) { s = sm; }
+                var b = 'vid=' + encodeURIComponent(v) + '&path=' + encodeURIComponent(p)
+                    + '&ref=' + encodeURIComponent(r) + '&src=' + encodeURIComponent(s);
+                var u = 'https://api.copiioai.com/web/page_view';
+                if (navigator.sendBeacon) { navigator.sendBeacon(u, b); }
+                else { var im = new Image(); im.src = u + '?' + b; }
+            } catch (e) { }
+        })();
+    </script>
     <!-- Google Search Console Verification -->
     <meta name="google-site-verification" content="owVaf3LfHZSArXBhv1ECsB4DTbDu2vMGqBwSUsUQpiM" />
     <link rel="stylesheet" href="/styles.css">

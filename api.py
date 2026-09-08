@@ -11,7 +11,7 @@ from celery import Celery
 from dotenv import load_dotenv
 
 # Import route modules
-from api_routes import knowledge, tools, system, core, auth, uspto, feedback, scenes, patent, session, patent_detail, baiten, long_task as long_task_routes
+from api_routes import knowledge, tools, system, core, auth, uspto, feedback, scenes, patent, session, patent_detail, baiten, long_task as long_task_routes, web_track
 from api_routes.models import *
 
 # Import existing components
@@ -191,6 +191,8 @@ core_router = core.register_core_routes(logger, interaction, query_resp_history,
 api.include_router(core_router, tags=["core"])
 feedback_router = feedback.register_feedback_routes(logger, config)
 api.include_router(feedback_router, tags=["feedback"])
+web_track_router = web_track.register_web_track_routes(logger)
+api.include_router(web_track_router, tags=["web-tracking"])
 api.include_router(scenes.router, tags=["scenes"])
 api.include_router(patent.router, tags=["patent"])
 patent_detail_router = patent_detail.register_patent_detail_routes(logger, config)
