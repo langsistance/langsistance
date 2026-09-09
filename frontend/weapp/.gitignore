@@ -4,3 +4,6 @@ lib/
 .swc/
 .DS_Store
 *.log
+
+# 微信开发者工具私有文件
+project.private.config.json
