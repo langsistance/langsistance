@@ -134,6 +134,77 @@ class TestLookupPrimarySourceFirst(unittest.TestCase):
         um.assert_not_awaited()
 
 
+class TestCandidateConfirmationHints(unittest.TestCase):
+    """需求#24: a bare number must never close with plain "not found" —
+    surface what was tried and what the user may have meant."""
+
+    def test_zero_hit_observation_offers_candidates(self):
+        agent = _agent([{"country": "CN", "display": "CN117941643",
+                         "reason": "9 位纯数字以 1 开头，符合中国公开号核心号段",
+                         "lookups": ["CN117941643A", "CN117941643",
+                                     "117941643"]}])
+        with patch.object(react_tools, "_lookup_number_candidates",
+                          new=AsyncMock(return_value=([], ["Baiten 0 hits",
+                                                           "USPTO 0 hits"]))), \
+             patch.object(react_tools, "_merge_pending_items",
+                          side_effect=lambda ex, new: list(ex or []) + list(new)), \
+             patch.object(react_tools, "_rank_builtin_patent_pool",
+                          new=AsyncMock(side_effect=lambda a, items, lang: items)), \
+             patch.object(react_tools, "_order_pending_for_lang",
+                          side_effect=lambda items, lang: items):
+            obs = _run(react_tools._run_patent_number_resolve(
+                agent, {"number": "117941643"}, "zh"))
+        self.assertIn("未按该号码查到专利记录", obs["text"])
+        self.assertIn("您可能查的是", obs["text"])
+        self.assertIn("CN117941643", obs["text"])
+
+    def test_hit_observation_has_no_hint_section(self):
+        # Direct hits keep the existing digest — no candidate noise.
+        agent = _agent([{"country": "CN", "display": "CN117941643",
+                         "lookups": ["CN117941643A"]}])
+        with patch.object(react_tools, "_lookup_number_candidates",
+                          new=AsyncMock(return_value=([_BAITEN_ITEM],
+                                                       ["Baiten 1 hits"]))), \
+             patch.object(react_tools, "_merge_pending_items",
+                          side_effect=lambda ex, new: list(ex or []) + list(new)), \
+             patch.object(react_tools, "_rank_builtin_patent_pool",
+                          new=AsyncMock(side_effect=lambda a, items, lang: items)), \
+             patch.object(react_tools, "_order_pending_for_lang",
+                          side_effect=lambda items, lang: items):
+            obs = _run(react_tools._run_patent_number_resolve(
+                agent, {"number": "CN117941643"}, "zh"))
+        self.assertIn("CN117941643A", obs["text"])
+        self.assertNotIn("您可能查的是", obs["text"])
+
+    def test_hint_text_lists_candidates_bilingually(self):
+        cands = [{"country": "CN", "display": "CN114948588",
+                  "reason": "9 位纯数字以 1 开头，符合中国公开号核心号段",
+                  "lookups": ["CN114948588A"]},
+                 {"country": "US", "display": "US19511555",
+                  "reason": "纯数字无法区分美国授权号与申请号",
+                  "lookups": ["19511555"]}]
+        zh = react_tools._candidate_confirmation_hints(cands, "zh")
+        en = react_tools._candidate_confirmation_hints(cands, "en")
+        self.assertIn("您可能查的是", zh)
+        self.assertIn("CN114948588", zh)
+        self.assertIn("US19511555", zh)
+        self.assertIn("did you mean", en.lower())
+        self.assertIn("US19511555", en)
+        self.assertEqual(react_tools._candidate_confirmation_hints([], "zh"),
+                         "")
+
+    def test_unsupported_shape_hint_carries_parser_reason(self):
+        # ≥9-digit junk parses to id_type=unsupported with an actionable
+        # reason ("补全如 WO…") — the zero-hit card must surface it.
+        cands = [{"country": "", "display": "202399999999",
+                  "reason": "疑似残缺国际申请号，请补全后再查",
+                  "lookups": []}]
+        zh = react_tools._candidate_confirmation_hints(cands, "zh")
+        self.assertIn("您可能查的是", zh)
+        self.assertIn("202399999999", zh)
+        self.assertIn("疑似残缺", zh)
+
+
 class TestResolveToolObservation(unittest.TestCase):
     def _resolve(self, candidates, merged, notes):
         agent = _agent(candidates)

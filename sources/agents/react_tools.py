@@ -2879,6 +2879,33 @@ def _pool_candidates_for_items(items: list) -> list:
     return out
 
 
+def _candidate_confirmation_hints(candidates: list, lang: str) -> str:
+    """需求#24: zero-hit candidate card — never close a bare number with a
+    plain "not found".  Lists the parsed candidates that were tried (with
+    the parser's own country/reason wording) so the user can re-send an
+    exact form.  Returns "" when there is nothing worth listing.
+    """
+    cands = [c for c in (candidates or [])
+             if isinstance(c, dict) and str(c.get("display") or "").strip()]
+    if not cands:
+        return ""
+    head = (
+        "Did you mean one of these numbers? "
+        "Re-send the exact form (prefix and kind letter help):"
+        if lang == "en" else
+        "您可能查的是（请用完整号码重试，含 CN/US 前缀与类型字母更精确）：")
+    lines = [head]
+    for c in cands:
+        display = str(c.get("display") or "")
+        country = str(c.get("country") or "")
+        reason = str(c.get("reason") or "").strip()
+        if reason:
+            lines.append(f"- {display} — {country}: {reason}")
+        else:
+            lines.append(f"- {display} — {country}")
+    return "\n".join(lines)
+
+
 async def _run_patent_number_resolve(agent, args, lang: str) -> dict:
     """kind='patent_number' executor — deterministic dual-source lookup."""
     number_arg = str((args or {}).get("number") or "").strip()
@@ -2922,10 +2949,16 @@ async def _run_patent_number_resolve(agent, args, lang: str) -> dict:
     if not digest:
         checked = ("\n".join(f"- {n}" for n in notes)
                    if notes else "- (no source was queryable)")
-        digest = (
-            f"No records found for the number. Sources checked:\n{checked}"
-            if lang == "en"
-            else f"未按该号码查到专利记录。已核验的数据源：\n{checked}")
+        hints = _candidate_confirmation_hints(candidates, lang)
+        if lang == "en":
+            digest = (
+                f"No records found for the number. Sources checked:\n{checked}")
+            if hints:
+                digest += f"\n\n{hints}"
+        else:
+            digest = f"未按该号码查到专利记录。已核验的数据源：\n{checked}"
+            if hints:
+                digest += f"\n\n{hints}"
     return {"kind": "observation", "text": digest}
 
 
