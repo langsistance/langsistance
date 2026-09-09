@@ -40,6 +40,23 @@ def _register_long_task_for_recovery(
     from sources.long_task.status_manager import register_query_task
     register_query_task(str(user_id), query_id, task_id, session_id, queue_status)
 
+
+def _log_sse_task_crash(task, app_logger) -> None:
+    """Done-callback for the SSE pipeline task.
+
+    A cancelled task has no exception to inspect — calling ``.exception()``
+    on it RAISES CancelledError inside the callback (client disconnect
+    during SSE cancels the pipeline task mid-LLM-stream; that is expected
+    flow, not a crash), which uvicorn then logs as "Exception in callback".
+    Check ``cancelled()`` first, then read ``.exception()`` exactly once.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        app_logger.error(f"SSE background task crashed: {exc}")
+
+
 # Token cache with TTL
 _token_cache = {}
 _token_cache_lock = asyncio.Lock()
@@ -1668,11 +1685,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
 
             task = asyncio.create_task(run_pipeline())
             task.add_done_callback(
-                lambda t: (
-                    app_logger.error(f"SSE background task crashed: {t.exception()}")
-                    if t.exception() and not t.cancelled() else None
-                )
-            )
+                lambda t: _log_sse_task_crash(t, app_logger))
 
             # Optimize: Batch tokens to reduce serialization overhead
             token_buffer = []
