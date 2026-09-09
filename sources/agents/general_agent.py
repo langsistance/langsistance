@@ -620,6 +620,107 @@ def _large_list_summary_heading(lang: str, summarized: int, total: int) -> str:
     return f"## 结果摘要 ({summarized} / {total} 项)"
 
 
+# ── 需求#28: patentability / allowability consultation detection ─────────────
+# Generic intent wording only (same standing as the retrieval-verb lists in
+# react_tools) — never concrete user/query vocabulary.
+_PATENTABILITY_INTENT_PHRASES = (
+    "授权可能", "授权前景", "授权概率", "可专利性",
+    "能否授权", "能不能授权", "是否能授权", "可不可以授权",
+    "能否获得授权", "能不能获得授权", "能否拿到授权",
+    "是否有授权", "有没有授权", "会不会被驳回", "被驳回风险",
+    "能不能申请专利", "能否申请专利", "可不可以申请专利",
+    "申请前景", "申请下来",
+)
+# The subject must be a to-be-filed design / plan, not an existing patent's
+# licensing or legal-status record.
+_DESIGN_SUBJECT_NOUNS = (
+    "发明", "技术方案", "设计", "产品", "装置", "设备",
+    "系统", "方法", "材料", "结构", "工艺",
+)
+# Licensing / status / enforcement questions are NOT patentability
+# consultations — asking about an *existing* right's use or record.
+_NON_PATENTABILITY_CUES = (
+    "已授权", "授权了", "授权状态", "授权时间", "授权给",
+    "许可", "转让", "侵权", "无效",
+)
+
+
+def _is_patentability_request(query: str) -> bool:
+    """Whether *query* asks for a patentability / allowability assessment of
+    the user's OWN to-be-filed design ("申请...是否有授权可能性").
+
+    Distinct from: legal-status retrieval ("查这个专利是否已授权"),
+    licensing ("能否授权给他人"), enforcement ("侵权/无效"), and plain
+    searches.  Generic predicate — no user-specific vocabulary.
+    """
+    text = str(query or "").strip()
+    if not text:
+        return False
+    if any(cue in text for cue in _NON_PATENTABILITY_CUES):
+        return False
+    if not any(p in text for p in _PATENTABILITY_INTENT_PHRASES):
+        return False
+    if any(n in text for n in _DESIGN_SUBJECT_NOUNS):
+        return True
+    # Loose but safe fallback: an explicit "申请 ... 专利" phrasing counts as
+    # a design subject even without one of the nouns above.
+    return "申请" in text and "专利" in text
+
+
+def _patentability_guidance_for(query: str, lang: str = "zh") -> str:
+    """Seam helper: the patentability template, or "" when *query* is not a
+    patentability / allowability consultation.  ``create_agent`` appends the
+    result to the system prompt; tests drive this function directly.
+    """
+    if _is_patentability_request(query):
+        return _patentability_template_guidance(lang)
+    return ""
+
+
+def _patentability_template_guidance(lang: str = "zh") -> str:
+    """需求#28: structured delivery format for patentability assessments.
+
+    Appended to the system prompt ONLY when :func:`_is_patentability_request`
+    hits, so ordinary searches keep the plain Search-Result-Delivery format.
+    Mirrors the MANDATORY-section pattern of ``_loop_system_guidance``.
+    """
+    if lang == "en":
+        return (
+            "\n\n## Patentability Assessment Delivery Format "
+            "(MANDATORY — this turn asks for an allowability assessment)\n"
+            "Before answering you MUST have run at least one real search this "
+            "turn or have real prior-search candidates in this session — never "
+            "answer from general knowledge alone.\n"
+            "1. List the 3-5 closest prior applications (session-listed patent "
+            "numbers take priority, then this turn's most relevant real "
+            "candidates); each with number + title + one-sentence similarity "
+            "reason.\n"
+            "2. List the distinguishing technical features of the proposed "
+            "design against each listed prior application.\n"
+            "3. State the inventive-step / obviousness risk against the closest "
+            "prior application without asserting an absolute conclusion.\n"
+            "4. Suggest filing directions and claimable points.\n"
+            "5. Disclaimer: this is a search-level reference opinion, not legal "
+            "advice; a formal allowability opinion needs professional support "
+            "and an official search (SR/ISA).\n"
+            "Never cite a number that did not appear in real search results.\n"
+        )
+    return (
+        "\n\n## 可专利性/授权前景评估交付格式（本询问命中，强制）\n"
+        "作答前必须先完成至少一次真实检索（本会话前序结果或本轮检索均可），"
+        "不得仅凭一般知识作答。最终答复须按下列小节组织：\n"
+        "1. 最接近的在先申请 3-5 件——优先引用本会话前序检索已展示的专利号，"
+        "否则引用本轮真实检索的最相关候选；每件给出 专利号 + 标题 + 一句相似理由；\n"
+        "2. 你的方案相对上述各件的区别技术特征；\n"
+        "3. 基于最接近的在先申请的创造性/显而易见性风险判断，"
+        "不得武断给出绝对结论；\n"
+        "4. 建议的申请方向与可主张的权利要求要点；\n"
+        "5. 免责声明：本评估仅为检索层面参考意见，不构成法律意见；"
+        "正式授权判断需专业代理机构与官方检索（SR/ISA）支持。\n"
+        "禁止编造未在真实检索结果中出现的专利号。\n"
+    )
+
+
 # 瀹氫箟鍙傛暟妯″瀷
 class DynamicToolFunction(BaseModel):
     user_id: str = Field(description="user id (provided in the user prompt)")
@@ -2127,6 +2228,10 @@ Begin your response now:
                 getattr(self, "_number_candidates", []), lang)
         except Exception:
             number_guidance = ""
+        # 需求#28: patentability consultations get a structured delivery
+        # template appended (only when this turn asks for an allowability
+        # assessment — ordinary searches keep the plain format).
+        patentability_guidance = _patentability_guidance_for(prompt, lang)
         system_prompt = (
             self._get_fixed_system_prefix()
             + conversation_block
@@ -2135,6 +2240,7 @@ Begin your response now:
                 self._search_rewrite, lang,
                 cn_rewrite=self._search_rewrite_cn)
             + number_guidance
+            + patentability_guidance
         )
         self.memory.reset([
             {'role': 'user', 'content': user_prompt},
