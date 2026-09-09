@@ -1,4 +1,5 @@
 import json
+import re
 
 TASK_STATUS_PREFIX = "lt"
 TASK_CHECKPOINT_PREFIX = "lt"
@@ -257,6 +258,41 @@ def classify_failure_reason_code(error: str) -> str:
             or _re.search(r"\b404\b", text)):
         return ERR_UNRESOLVABLE_ID
     return ERR_OTHER
+
+
+# Transient markers recognised beyond the shared classifier's buckets —
+# plain-text transport / proxy / rate-limit wording that classify_failure_
+# reason_code() falls through to ERR_OTHER but that a retry CAN fix.
+_EXTRA_TRANSIENT_RE = re.compile(
+    r"(?i)bad gateway|gateway timeout|service unavailable|temporar[iy]ly?|"
+    r"too many requests|\b429\b|reset by peer|broken pipe|"
+    r"econnreset|econnrefused|i/o error|read error|"
+    r"tim(?:e|ed)\s?out")
+
+
+def is_retryable_failure(error: str, task_type: str = "") -> bool:
+    """Whether a worker failure is *transient* — worth a Celery retry.
+
+    需求#17: the batch executor used to ``raise self.retry`` on ANY
+    exception, so a deterministic failure (unresolvable id, parameter /
+    parse error) burned the whole retry budget before terminal failure.
+    Transient causes (remote 5xx, transport timeouts, credential errors —
+    retry can help) return True; everything else is treated as
+    deterministic and must terminate immediately.  Deterministic-first is
+    deliberate: an unclassifiable error retried once may succeed, but the
+    reported incidents (repeated same-cause failures) are exactly the
+    deterministic class this guard exists to stop.
+    """
+    del task_type  # policy is marker-based for now; type reserved for future.
+    text = str(error or "")
+    if not text:
+        return False
+    code = classify_failure_reason_code(text)
+    if code == ERR_EPO_REMOTE:
+        return True
+    if code == ERR_UNRESOLVABLE_ID:
+        return False
+    return bool(_EXTRA_TRANSIENT_RE.search(text))
 
 
 def notify_terminal_failure(

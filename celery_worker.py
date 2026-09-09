@@ -73,6 +73,70 @@ def _notify_terminal_failure(task_id, error):
     notify_terminal_failure(task_id, error)
 
 
+def _release_user_queue_and_notify(user_id: str, task_id: str, error: str) -> None:
+    """需求#17 terminal exit: release the user's queue lock, dispatch the next
+    queued task, then surface the terminal failure in the conversation.
+
+    Shared by the batch executor's deterministic-failure exit and its
+    exhausted-retries exit (previously inline in each MaxRetries branch).
+    """
+    if user_id:
+        try:
+            from sources.knowledge.knowledge import get_redis_connection
+            r = get_redis_connection()
+            running_key = f"lt:user:{user_id}:running"
+            r.delete(running_key)
+        except Exception:
+            pass
+        try:
+            from sources.long_task.user_queue import complete_user_task
+            next_id = complete_user_task(str(user_id), task_id)
+            if next_id:
+                _pipeline_logger.info(
+                    f"[task={task_id}] QUEUE_DISPATCHED_AFTER_FAILURE — "
+                    f"next_task_id={next_id}"
+                )
+        except Exception as qe:
+            _pipeline_logger.warning(
+                f"[task={task_id}] QUEUE_CLEANUP_FAILED — {qe}"
+            )
+    _notify_terminal_failure(task_id, error)
+
+
+def _handle_batch_failure(worker, task_id: str, params: dict, exc: Exception) -> dict:
+    """Batch-executor failure exit (需求#17: 同因失败不再原样重试).
+
+    Deterministic failures (unresolvable ids, parameter/parse errors) can
+    never succeed on retry — terminate immediately with the same queue
+    cleanup the exhausted-retries path performs.  Transient failures
+    (remote 5xx / transport / credentials) keep the existing Celery retry
+    budget via ``worker.retry``.  Never raises for the deterministic path;
+    the transient path raises exactly like the historical code.
+    """
+    _pipeline_logger.error(f"[task={task_id}] FAILED — error={exc}")
+    user_id = str((params or {}).get('user_id') or '')
+    from sources.long_task.status_manager import (
+        is_retryable_failure, set_task_failed)
+    if not is_retryable_failure(str(exc)):
+        _pipeline_logger.error(
+            f"[task={task_id}] DETERMINISTIC_FAILURE — terminal exit, "
+            f"skipping celery retry"
+        )
+        _release_user_queue_and_notify(user_id, task_id, str(exc))
+        return {'status': 'failed', 'task_id': task_id,
+                'error': str(exc)[:300], 'terminal': True}
+    # long_task:fail 事件由 set_task_failed 统一上报 (需求 4)
+    set_task_failed(task_id, str(exc))
+    try:
+        raise worker.retry(exc=exc)
+    except worker.MaxRetriesExceededError:
+        _pipeline_logger.error(
+            f"[task={task_id}] MAX_RETRIES_EXCEEDED — clearing user queue lock"
+        )
+        _release_user_queue_and_notify(user_id, task_id, str(exc))
+        raise
+
+
 @app.task(bind=True, max_retries=3, default_retry_delay=30, time_limit=3600, soft_time_limit=3540)
 def execute_patent_analysis(self, task_id: str, params: dict):
     """Batch patent analysis -- 4-phase serial pipeline with checkpointing."""
@@ -242,43 +306,7 @@ def execute_patent_analysis(self, task_id: str, params: dict):
         finally:
             loop.close()
     except Exception as e:
-        _pipeline_logger.error(
-            f"[task={task_id}] FAILED — error={e}"
-        )
-        # long_task:fail 事件由 set_task_failed 统一上报 (需求 4)
-        set_task_failed(task_id, str(e))
-        try:
-            raise self.retry(exc=e)
-        except self.MaxRetriesExceededError:
-            # Permanent failure — clear user's running key so queued tasks proceed.
-            # Delete the running key directly first (safety net), then try
-            # complete_user_task to dispatch the next queued task.
-            _pipeline_logger.error(
-                f"[task={task_id}] MAX_RETRIES_EXCEEDED — clearing user queue lock"
-            )
-            user_id = params.get('user_id', '')
-            if user_id:
-                try:
-                    from sources.knowledge.knowledge import get_redis_connection
-                    r = get_redis_connection()
-                    running_key = f"lt:user:{user_id}:running"
-                    r.delete(running_key)
-                except Exception:
-                    pass
-                try:
-                    from sources.long_task.user_queue import complete_user_task
-                    next_id = complete_user_task(str(user_id), task_id)
-                    if next_id:
-                        _pipeline_logger.info(
-                            f"[task={task_id}] QUEUE_DISPATCHED_AFTER_FAILURE — "
-                            f"next_task_id={next_id}"
-                        )
-                except Exception as qe:
-                    _pipeline_logger.warning(
-                        f"[task={task_id}] QUEUE_CLEANUP_FAILED — {qe}"
-                    )
-            _notify_terminal_failure(task_id, str(e))
-            raise
+        return _handle_batch_failure(self, task_id, params, e)
 
 
 def _update_mysql_progress(task_id: str, current_phase: str, progress: int, result_summary: str = None) -> None:

@@ -11,9 +11,11 @@ import re
 from fastapi import APIRouter, Query, HTTPException, Request
 from fastapi.responses import Response
 from sources.long_task.status_manager import (
+    ERR_OTHER,
     ERR_UNRESOLVABLE_ID,
     failure_guidance,
     get_task_status,
+    is_retryable_failure,
     lookup_query_task,
 )
 from sources.long_task.storage import create_storage, get_storage_config, LocalReportStorage
@@ -156,6 +158,30 @@ def _unresolvable_response_detail(lang: str = "zh") -> dict:
         "error": _UNRESOLVABLE_ERROR_ZH if lang != "en" else _UNRESOLVABLE_ERROR_EN,
         "code": ERR_UNRESOLVABLE_ID,
         "guidance": failure_guidance("family", ERR_UNRESOLVABLE_ID, lang=lang),
+    }
+
+
+_DETERMINISTIC_ERROR_ZH = "该任务上次失败的根因无法通过重试解决。"
+_DETERMINISTIC_ERROR_EN = ("The last failure of this task cannot be fixed "
+                           "by retrying.")
+
+
+def _deterministic_failure_detail(lang: str = "zh") -> dict:
+    """Structured 422 body for refusing to re-queue a deterministically
+    failed task (需求#17) — mirror shape of ``_unresolvable_response_detail``.
+    """
+    lang = lang if lang in ("zh", "en") else "zh"
+    guidance = (
+        "请核对输入的专利号或文件后重新发起分析；或换个方式描述需求。"
+        if lang != "en" else
+        "Please verify the patent number or file and resubmit the analysis, "
+        "or restate your request."
+    )
+    return {
+        "error": (_DETERMINISTIC_ERROR_ZH if lang != "en"
+                  else _DETERMINISTIC_ERROR_EN),
+        "code": ERR_OTHER,
+        "guidance": guidance,
     }
 
 
@@ -446,6 +472,28 @@ def register_long_task_routes(logger, config):
                             status_code=422,
                             detail=_unresolvable_response_detail(_lang),
                         )
+
+                # Deterministic-failure pre-check on retry (需求#17): a task
+                # that failed for a *structural* reason (unresolvable id,
+                # parameter/parse error) can never succeed by re-queuing —
+                # refuse above the new-task INSERT just like the family gate.
+                # The Redis status record carries the last error_message;
+                # absent/transient errors keep the historical retry path.
+                # Redis unavailability degrades to the historical path too —
+                # our own infra must never block a user retry.
+                old_error = ""
+                try:
+                    old_status = get_task_status(task_id)
+                    old_error = str((old_status or {}).get("error_message") or "")
+                except Exception:
+                    old_error = ""
+                if old_error and not is_retryable_failure(
+                        old_error, task_type):
+                    _lang = (input_params or {}).get("lang") or "zh"
+                    raise HTTPException(
+                        status_code=422,
+                        detail=_deterministic_failure_detail(_lang),
+                    )
 
                 new_task_id = f"lt_{_uuid.uuid4().hex[:12]}"
                 cur.execute(
