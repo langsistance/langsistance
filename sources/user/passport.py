@@ -38,6 +38,21 @@ def verify_firebase_token(auth_header: str):
 
     id_token = auth_header.split("Bearer ")[1]
 
+    # ── WeChat mini-program token (决策 D3, W3) ──
+    # wx_ 前缀 token 走 Redis 校验（wechat_login.issue_wechat_token 签发，
+    # 7 天 TTL），返回 uid=本地 user_id —— 与 Firebase 路径同一出口，
+    # 既有端点零改动即可服务小程序用户。
+    if id_token.startswith("wx_"):
+        from sources.user.wechat_login import verify_wechat_token
+
+        wx = verify_wechat_token(id_token)
+        if not wx:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        return {
+            "uid": int(wx["user_id"]),
+            "oauth_provider": wx.get("provider", "wechat"),
+        }
+
     try:
 
         decoded_token = auth.verify_id_token(id_token)
