@@ -413,6 +413,35 @@ def _is_us_patent_token(token: str) -> bool:
     return bool(_re.fullmatch(r"\d{8}", token or ""))
 
 
+# Scenarios that analyze a single patent (one patent_id, possibly empty
+# until the resolvability pre-check) — never refused as a *batch* noop.
+_SINGLE_PATENT_SCENARIOS = frozenset({
+    "prosecution", "families", "china_prosecution",
+    "epo_prosecution", "japan_prosecution",
+})
+
+
+def _is_noop_batch_intent(scenario: str, patent_ids: list,
+                          patent_texts) -> bool:
+    """True when a *batch* analysis intent carries zero patent references.
+
+    Batch scenarios (direct_ids / conversation_refs / …) with neither ids
+    nor pasted patent text have nothing for the long task to analyze.
+    _prepare_long_task_inputs documents an empty direct_ids list as
+    "should fall through to search mode", but nothing downstream does
+    that — without this guard the intent branch would insert a DB row and
+    dispatch an empty Celery batch (the historical minutes-long empty
+    pipeline).  Single-patent scenarios keep their existing behavior.
+    """
+    if scenario in _SINGLE_PATENT_SCENARIOS:
+        return False
+    if patent_ids:
+        return False
+    if patent_texts:
+        return False
+    return True
+
+
 def _prepare_long_task_inputs(
     query: str,
     conv_history: list,
@@ -1333,19 +1362,31 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                             f"'{request.session_id}', resolved='{session_id}'"
                         )
 
-                        # ── Low-confidence refusal (chat_fallback) ──
+                        # ── Low-confidence / no-op refusal (chat_fallback) ──
                         # Scenario classification failed AND the regex
                         # fallback cannot route confidently (incident
                         # 2026-09-03: a CN-family question was guessed
                         # conversation_refs and swept 140 history ids into
-                        # the USPTO pipeline).  Do NOT insert DB rows or
-                        # start Celery: rerun the query through the normal
+                        # the USPTO pipeline).  Or a batch intent came back
+                        # with zero patent references (需求#1: the LLM
+                        # classified direct_ids but returned no ids — the
+                        # _prepare_long_task_inputs comment promises a
+                        # "search mode" fall-through that only this gate
+                        # realizes).  Do NOT insert DB rows or start
+                        # Celery: rerun the query through the normal
                         # chat/search path with long-task tools stripped.
-                        if scenario == "chat_fallback":
+                        noop_batch = _is_noop_batch_intent(
+                            scenario, patent_ids, patent_texts)
+                        if scenario == "chat_fallback" or noop_batch:
+                            refuse_reason = (
+                                "low-confidence classification"
+                                if scenario == "chat_fallback"
+                                else "batch intent without patent references")
                             app_logger.warning(
-                                "Long task refused (low confidence) — "
+                                "Long task refused (%s) — "
                                 "rerunning chat path. reasoning="
-                                f"{(llm_result or {}).get('reasoning', '')[:200]}"
+                                f"{(llm_result or {}).get('reasoning', '')[:200]}",
+                                refuse_reason,
                             )
                             track_event("long_task:refused",
                                         user_id=str(local_user_id),
