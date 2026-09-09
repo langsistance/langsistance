@@ -2,17 +2,39 @@
   "miniprogramRoot": "dist/",
   "projectname": "copiioai-weapp",
   "description": "CopiioAI 专利智能助手（微信小程序）",
-  "appid": "touristappid",
+  "appid": "wx0f0ddbb665354fff",
   "setting": {
     "urlCheck": false,
     "es6": false,
     "enhance": false,
     "compileHotReLoad": true,
     "postcss": false,
-    "minified": false
+    "minified": false,
+    "compileWorklet": false,
+    "uglifyFileName": false,
+    "uploadWithSourceMap": true,
+    "packNpmManually": false,
+    "packNpmRelationList": [],
+    "minifyWXSS": true,
+    "minifyWXML": true,
+    "localPlugins": false,
+    "disableUseStrict": false,
+    "useCompilerPlugins": false,
+    "condition": false,
+    "babelSetting": {
+      "ignore": [],
+      "disablePlugins": [],
+      "outputPath": ""
+    }
   },
   "compileType": "miniprogram",
   "libVersion": "3.5.0",
   "srcMiniprogramRoot": "dist/",
-  "condition": {}
+  "condition": {},
+  "simulatorPluginLibVersion": {},
+  "packOptions": {
+    "ignore": [],
+    "include": []
+  },
+  "editorSetting": {}
 }
