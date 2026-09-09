@@ -1,0 +1,51 @@
+/**
+ * CopiioAI 小程序品牌 token —— 对齐 web 端配色（primary #10A37F 系）。
+ * 全局注入，页面样式直接引用变量。
+ */
+page {
+  --c-primary: #10a37f;
+  --c-primary-deep: #0d8f6f;
+  --c-primary-soft: #e6f4f0;
+  --c-bg: #f6f8fa;
+  --c-surface: #ffffff;
+  --c-border: #e1e4e8;
+  --c-text: #1f2328;
+  --c-text-muted: #6e7781;
+  --c-danger: #d32f2f;
+  --c-warn: #f57c00;
+
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-size: 28px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 通用卡片/按钮基元（小程序样式以 class 组合使用） */
+.card {
+  background: var(--c-surface);
+  border-radius: 20px;
+  box-shadow: 0 2px 12px rgba(31, 35, 40, 0.04);
+}
+
+.btn-primary {
+  background: var(--c-primary);
+  color: #ffffff;
+  border-radius: 999px;
+  font-size: 32px;
+  font-weight: 500;
+  text-align: center;
+
+  &::after {
+    border: none;
+  }
+
+  &:active {
+    background: var(--c-primary-deep);
+  }
+}
+
+.text-muted {
+  color: var(--c-text-muted);
+}
