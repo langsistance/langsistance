@@ -25,10 +25,12 @@ import {
   renameSession,
   SessionItem,
 } from '../../services/sessions'
+import AttachmentBar from '../../components/AttachmentBar'
 import NavBar from '../../components/NavBar'
 import SessionDrawer from '../../components/SessionDrawer'
 import RenameModal from '../../components/RenameModal'
 import PrivacyPopup from '../../components/PrivacyPopup'
+import { pickFile, PickedFile } from '../../services/upload'
 import {
   abandonPrivacy,
   resolvePrivacy,
@@ -60,6 +62,9 @@ export default function ChatPage() {
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
   const [anchor, setAnchor] = useState('')
+
+  // 附件（本轮待上传文件，Task 9 接入发送分支后才真正上传）
+  const [attachedFile, setAttachedFile] = useState<PickedFile | null>(null)
 
   // 隐私授权浮层
   const [privacyVisible, setPrivacyVisible] = useState(false)
@@ -327,6 +332,11 @@ export default function ChatPage() {
     }
   }
 
+  async function addAttachment() {
+    const picked = await pickFile()
+    if (picked) setAttachedFile(picked)
+  }
+
   function copyPatent(pid: string) {
     Taro.setClipboardData({ data: pid })
   }
@@ -423,6 +433,13 @@ export default function ChatPage() {
           ) : null}
         </View>
       </ScrollView>
+
+      <AttachmentBar
+        file={attachedFile}
+        busy={sending}
+        onAdd={addAttachment}
+        onRemove={() => setAttachedFile(null)}
+      />
 
       <View className='chat-inputbar'>
         <Textarea
