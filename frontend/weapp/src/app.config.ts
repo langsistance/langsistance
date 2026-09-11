@@ -2,8 +2,7 @@
 // （taro build 按约定读取默认导出对象作为 app 配置）。
 const config = {
   pages: [
-    'pages/index/index', // 会话列表（首页）
-    'pages/chat/index',  // 对话页（M2）
+    'pages/chat/index',  // 对话页（形态一：首页即对话页）
     'pages/login/index', // 微信登录（M1）
   ],
   window: {

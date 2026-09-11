@@ -20,7 +20,7 @@ export default function LoginPage() {
     try {
       await wechatLogin()
       Taro.navigateBack({
-        fail: () => Taro.reLaunch({ url: '/pages/index/index' }),
+        fail: () => Taro.reLaunch({ url: '/pages/chat/index' }),
       })
     } catch (err) {
       setError(errorText(err, '登录失败，请稍后重试'))
