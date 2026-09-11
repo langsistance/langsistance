@@ -1,4 +1,7 @@
 import { Button, Text, View } from '@tarojs/components'
+// 只引这一个常量：同意按钮 id 与 resolvePrivacy 的默认 id 一旦漂移，
+// 微信会判定同意无效（核验 buttonId 确实被点击过），且静默失败。
+import { PRIVACY_AGREE_BUTTON_ID } from '../../services/privacy'
 import './index.scss'
 
 type Props = {
@@ -27,6 +30,7 @@ export default function PrivacyPopup({ visible, onAgree, onDecline }: Props) {
             暂不同意
           </Button>
           <Button
+            id={PRIVACY_AGREE_BUTTON_ID}
             className='privacy-btn privacy-btn-primary'
             openType='agreePrivacyAuthorization'
             onAgreePrivacyAuthorization={onAgree}

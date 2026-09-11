@@ -39,8 +39,13 @@ export function subscribePrivacy(cb: (visible: boolean) => void): () => void {
   }
 }
 
-/** 用户在浮层上的选择。agree 取自 <button open-type="agreePrivacyAuthorization">。 */
-export function resolvePrivacy(agree: boolean, buttonId = ''): void {
+/** 同意按钮的 id。微信要求 event==='agree' 时 buttonId 必填，且会核验该按钮
+ *  确实被点击过——所以这个 id 必须与 PrivacyPopup 里按钮的 id 一致。 */
+export const PRIVACY_AGREE_BUTTON_ID = 'privacy-agree-btn'
+
+/** 用户在浮层上的选择。agree 取自 <button open-type="agreePrivacyAuthorization">。
+ *  buttonId 默认即 PRIVACY_AGREE_BUTTON_ID；调用方无需手动传。 */
+export function resolvePrivacy(agree: boolean, buttonId = PRIVACY_AGREE_BUTTON_ID): void {
   const resolve = pendingResolve
   pendingResolve = null
   listener?.(false)

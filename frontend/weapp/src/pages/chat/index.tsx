@@ -802,6 +802,8 @@ export default function ChatPage() {
 
       <PrivacyPopup
         visible={privacyVisible}
+        // buttonId 由 resolvePrivacy 的默认参数提供（PRIVACY_AGREE_BUTTON_ID），
+        // 必须与 PrivacyPopup 按钮的 id 一致，微信才会放行
         onAgree={() => resolvePrivacy(true)}
         onDecline={() => resolvePrivacy(false)}
       />
