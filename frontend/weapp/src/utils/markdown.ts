@@ -57,8 +57,13 @@ export function parseMarkdown(md: string): MdSegment[] {
   const flushHtml = () => {
     const text = buffer.join('\n')
     buffer = []
-    if (text.trim()) {
-      segments.push({ kind: 'html', html: renderHtml(text) })
+    // 按空行切成独立段落块。
+    // 关键：小程序 <rich-text> 支持的 CSS 是白名单制的，margin 不在其中，
+    // 所以「段落间距」无法靠 rich-text 内部样式实现，必须在外面用原生 View 撑开。
+    for (const block of text.split(/\n{2,}/)) {
+      if (block.trim()) {
+        segments.push({ kind: 'html', html: renderHtml(block) })
+      }
     }
   }
 

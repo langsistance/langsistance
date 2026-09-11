@@ -97,17 +97,22 @@
   font-family: inherit;
 }
 
-.chat-msg-body rich-text p {
-  font-size: var(--fs-body);
-  line-height: 1.75;
-  letter-spacing: 0.3px;
-  /* 段落间距必须显著大于行间距：行高 1.75×30 = 52.5px，
-     36px 的段间距让段间总间隙约为行距的 1.7 倍，一眼能分辨段落边界。 */
-  margin: 0 0 36px;
+/* 段落块间距。
+   <rich-text> 支持的 CSS 是白名单制的，margin 不在其中——写在 rich-text 内部
+   的段落 margin 一律无效。所以段落间距由外层这个原生 View 承担。 */
+.chat-md-block {
+  margin-bottom: 28px;
 
   &:last-child {
     margin-bottom: 0;
   }
+}
+
+.chat-msg-body rich-text p {
+  font-size: var(--fs-body);
+  line-height: 1.75;
+  letter-spacing: 0.3px;
+  /* 此处的 margin 不生效（见上），字号/行高/字间距是白名单内的，仍然有效 */
 }
 
 .chat-msg-body rich-text h1,

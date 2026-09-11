@@ -349,7 +349,9 @@ export default function ChatPage() {
                 <View className='chat-msg-body'>
                   {parseMarkdown(m.content).map((seg, si) =>
                     seg.kind === 'html' ? (
-                      <RichText key={si} nodes={seg.html} />
+                      <View key={si} className='chat-md-block'>
+                        <RichText nodes={seg.html} />
+                      </View>
                     ) : (
                       <View key={si} className='chat-table'>
                         <View className='chat-table-row chat-table-head'>
