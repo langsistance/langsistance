@@ -25,14 +25,14 @@
 }
 
 .chat-welcome-title {
-  font-size: 40px;
+  font-size: var(--fs-title);
   font-weight: 600;
 }
 
 .chat-welcome-sub,
 .chat-welcome-example {
   margin-top: 16px;
-  font-size: 26px;
+  font-size: var(--fs-meta);
 }
 
 /* ── 消息气泡 ── */
@@ -46,7 +46,7 @@
   max-width: 100%;
   padding: 22px 26px;
   border-radius: 20px;
-  font-size: 30px;
+  font-size: var(--fs-body);
   line-height: 1.75;
   letter-spacing: 0.3px;
   word-break: break-word;
@@ -74,17 +74,36 @@
 }
 
 .chat-msg-text {
-  font-size: 30px;
+  font-size: var(--fs-body);
   line-height: 1.75;
   letter-spacing: 0.3px;
 }
 
-/* ── 富文本排版（对齐 DeepSeek App 的疏朗观感）── */
+/* ── 富文本排版 ──
+   小程序 <rich-text> 的内部节点不继承 page 的 font-family，会退回系统默认
+   字体，导致同一气泡里正文与表格/其他文本是两种字体。这里显式向下继承。 */
+.chat-msg-body rich-text,
+.chat-msg-body rich-text p,
+.chat-msg-body rich-text span,
+.chat-msg-body rich-text div,
+.chat-msg-body rich-text li,
+.chat-msg-body rich-text h1,
+.chat-msg-body rich-text h2,
+.chat-msg-body rich-text h3,
+.chat-msg-body rich-text h4,
+.chat-msg-body rich-text strong,
+.chat-msg-body rich-text em,
+.chat-msg-body rich-text a {
+  font-family: inherit;
+}
+
 .chat-msg-body rich-text p {
-  font-size: 30px;
+  font-size: var(--fs-body);
   line-height: 1.75;
   letter-spacing: 0.3px;
-  margin: 0 0 20px;
+  /* 段落间距必须显著大于行间距：行高 1.75×30 = 52.5px，
+     36px 的段间距让段间总间隙约为行距的 1.7 倍，一眼能分辨段落边界。 */
+  margin: 0 0 36px;
 
   &:last-child {
     margin-bottom: 0;
@@ -95,11 +114,12 @@
 .chat-msg-body rich-text h2,
 .chat-msg-body rich-text h3,
 .chat-msg-body rich-text h4 {
-  font-size: 32px;
+  /* 标题与正文同字号，靠字重与间距分层级——避免字号种类过多 */
+  font-size: var(--fs-body);
   font-weight: 600;
   line-height: 1.5;
   letter-spacing: 0.3px;
-  margin: 28px 0 14px;
+  margin: 36px 0 18px;
 
   &:first-child {
     margin-top: 0;
@@ -107,15 +127,16 @@
 }
 
 .chat-msg-body rich-text li {
-  font-size: 30px;
+  font-size: var(--fs-body);
   line-height: 1.75;
   letter-spacing: 0.3px;
-  margin: 8px 0;
+  margin: 10px 0;
 }
 
 .chat-msg-body rich-text pre,
 .chat-msg-body rich-text code {
-  font-size: 26px;
+  /* 代码保留等宽（功能性），但压到元信息档，避免正文里 code 跳跃过大 */
+  font-size: var(--fs-meta);
   line-height: 1.7;
   letter-spacing: 0;
 }
@@ -151,7 +172,7 @@
   flex: 1;
   min-width: 0;
   padding: 14px 16px;
-  font-size: 24px;
+  font-size: var(--fs-meta);
   line-height: 1.5;
   color: var(--c-text);
   word-break: break-word;
@@ -179,14 +200,14 @@
 }
 
 .chat-patent-id {
-  font-size: 26px;
+  font-size: var(--fs-meta);
   font-weight: 500;
   color: var(--c-primary-deep);
 }
 
 .chat-patent-copy {
   margin-left: 12px;
-  font-size: 22px;
+  font-size: var(--fs-meta);
   color: var(--c-text-muted);
 }
 
@@ -206,7 +227,7 @@
 .chat-status-text {
   flex: 1;
   min-width: 0;
-  font-size: 26px;
+  font-size: var(--fs-meta);
   line-height: 1.6;
   letter-spacing: 0.2px;
   color: var(--c-text-muted);
@@ -215,7 +236,7 @@
 
 .chat-status-time {
   margin-left: 16px;
-  font-size: 26px;
+  font-size: var(--fs-meta);
   line-height: 1.6;
   color: var(--c-primary-deep);
 }
@@ -226,7 +247,7 @@
   border-radius: 12px;
   background: #fdecea;
   color: var(--c-danger);
-  font-size: 26px;
+  font-size: var(--fs-meta);
   line-height: 1.5;
 }
 
@@ -247,7 +268,7 @@
   box-sizing: border-box;
   background: var(--c-bg);
   border-radius: 20px;
-  font-size: 30px;
+  font-size: var(--fs-body);
   line-height: 1.5;
 }
 
@@ -263,7 +284,7 @@
   background: var(--c-primary);
   color: #fff;
   border-radius: 999px;
-  font-size: 28px;
+  font-size: var(--fs-meta);
 
   &::after {
     border: none;

@@ -14,11 +14,19 @@ page {
   --c-danger: #d32f2f;
   --c-warn: #f57c00;
 
+  /* 字号刻度：全局只用三档，避免字号杂乱（正文/元信息/大标题） */
+  --fs-title: 40px;
+  --fs-body: 30px;
+  --fs-meta: 26px;
+
   background: var(--c-bg);
   color: var(--c-text);
-  font-size: 28px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue',
-    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  font-size: var(--fs-body);
+  /* 中文优先：iOS 走 PingFang，鸿蒙/安卓走系统中文黑体，Windows 兜底雅黑。
+     英文数字由前面的 system-ui 系承担，避免中文衬线字体被选中。 */
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC',
+    'HarmonyOS Sans SC', 'Source Han Sans SC', 'Noto Sans CJK SC',
+    'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
