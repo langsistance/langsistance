@@ -219,13 +219,15 @@ def test_endpoints_filter_by_owner(client, mock_db, method, path, body):
     assert any(TEST_UID in p for p in _executed_params(cursor))
 
 
-def test_ownership_uses_authenticated_uid(client, mock_db):
+@pytest.mark.parametrize('method,path,body', PROTECTED)
+def test_ownership_uses_authenticated_uid(client, mock_db, method, path, body):
     """用第二个用户的 token 请求时，SQL 参数里必须是他的 uid(456)，不能是别人的(123)。"""
     _, cursor = mock_db
     cursor.fetchone.return_value = None
     cursor.rowcount = 0
+    kwargs = {'json': body} if body is not None else {}
 
-    response = client.get('/session/sess_001', headers=OTHER_AUTH)
+    response = getattr(client, method)(path, headers=OTHER_AUTH, **kwargs)
 
     assert response.status_code == 404
     params = _executed_params(cursor)

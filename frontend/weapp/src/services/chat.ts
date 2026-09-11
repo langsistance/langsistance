@@ -1,4 +1,5 @@
 import { request } from './api'
+import { MAX_TITLE_LEN } from './sessions'
 
 /** 会话消息（与后端 conversations.messages 结构一致）。 */
 export interface ChatMsg {
@@ -23,7 +24,7 @@ export async function createSession(
     '/session',
     {
       method: 'POST',
-      data: { scene_id: 1, title: title.slice(0, 60), messages },
+      data: { scene_id: 1, title: title.slice(0, MAX_TITLE_LEN), messages },
     },
   )
   return body.session_id
@@ -46,7 +47,7 @@ export async function saveMessages(
 ): Promise<void> {
   await request(`/session/${sessionId}/messages`, {
     method: 'PUT',
-    data: { messages, title: title.slice(0, 60) },
+    data: { messages, title: title.slice(0, MAX_TITLE_LEN) },
   })
 }
 

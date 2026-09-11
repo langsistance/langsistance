@@ -21,6 +21,7 @@ import { isLoggedIn } from '../../services/auth'
 import {
   archiveSession,
   fetchSessions,
+  MAX_TITLE_LEN,
   renameSession,
   SessionItem,
 } from '../../services/sessions'
@@ -67,7 +68,7 @@ export default function ChatPage() {
 
   const scrollToBottom = () => setAnchor(`msg-${Date.now()}`)
 
-  // 首页必须自己把门（原 pages/index 的职责搬来）
+  // 首页必须自己把门（登录态检查从已删除的会话列表页搬来）
   useDidShow(() => {
     if (!isLoggedIn()) {
       Taro.navigateTo({ url: '/pages/login/index' })
@@ -169,7 +170,10 @@ export default function ChatPage() {
           // 删的正好是当前会话 → 回空态，避免停在已归档会话上
           if (session.session_id === sessionIdRef.current) resetToNewChat()
         } catch (err) {
-          setListError(errorText(err, '删除失败，请重试'))
+          Taro.showToast({
+            title: errorText(err, '删除失败，请重试'),
+            icon: 'none',
+          })
         }
       },
     })
@@ -229,7 +233,7 @@ export default function ChatPage() {
       if (!sid) {
         sid = await createSession(text, [...history, userMsg])
         sessionIdRef.current = sid
-        setSessionTitle(text.slice(0, 60))
+        setSessionTitle(text.slice(0, MAX_TITLE_LEN))
       }
       setMsgs((prev) => [...prev, { role: 'user', content: text }])
       scrollToBottom()

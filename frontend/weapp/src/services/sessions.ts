@@ -9,6 +9,9 @@ export interface SessionItem {
   update_time?: string | null
 }
 
+/** 会话标题客户端上限（与后端 256 的列宽守卫不同，这是产品口径）。 */
+export const MAX_TITLE_LEN = 60
+
 /** GET /sessions —— 当前用户会话列表（按 update_time 倒序，后端已排）。 */
 export async function fetchSessions(): Promise<SessionItem[]> {
   const body = await request<{ success: boolean; sessions: SessionItem[] }>(
@@ -24,7 +27,7 @@ export async function renameSession(
 ): Promise<void> {
   await request(`/session/${sessionId}/title`, {
     method: 'PUT',
-    data: { title: title.slice(0, 60) },
+    data: { title: title.slice(0, MAX_TITLE_LEN) },
   })
 }
 

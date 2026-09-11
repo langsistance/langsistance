@@ -7,7 +7,7 @@ import './index.scss'
 
 /**
  * M1 登录页：微信一键登录。
- * 成功后回首页（会话列表）；AppID 未就绪时给出可读错误。
+ * 成功后回首页（对话页）；AppID 未就绪时给出可读错误。
  */
 export default function LoginPage() {
   const [loading, setLoading] = useState(false)
