@@ -111,7 +111,15 @@ export async function uploadQuery(
     task.onProgressUpdate((r) => onProgress(r.progress))
   }
 
-  const res = await task
+  let res: Taro.uploadFile.SuccessCallbackResult
+  try {
+    res = await task
+  } catch (err: any) {
+    // Taro 的 promise 包装在失败时 reject 的是微信原始 fail 对象（不是 Error），
+    // 其上**没有 statusCode**——若直接往下走，401 与 >=400 两个判断都是 false，
+    // 会一路落到"未返回任务号"，把网络失败报成假的成功，且 401 分支永远不可达。
+    throw new Error((err && err.errMsg) || '网络错误，请检查连接后重试')
+  }
   const raw = String(res.data || '')
 
   if (res.statusCode === 401) clearAuthAndRedirect()
@@ -120,7 +128,8 @@ export async function uploadQuery(
     let detail = ''
     try {
       const parsed = JSON.parse(raw)
-      detail = parsed.detail || parsed.message || ''
+      // 后端 HTTPException 用 detail；文件上传分支的 500 用 error（core.py:1233-1242）
+      detail = parsed.detail || parsed.message || parsed.error || ''
     } catch {
       detail = ''
     }
@@ -129,8 +138,13 @@ export async function uploadQuery(
 
   for (const ev of new SseParser().push(raw)) {
     if (ev.type === 'long_task_created') {
+      const taskId = String(ev.task_id || '')
+      if (!taskId) {
+        // 帧畸形：返回空 taskId 会让调用方去轮询一个不存在的任务号
+        throw new Error('后端未返回任务号，请稍后在历史会话中查看')
+      }
       return {
-        taskId: String(ev.task_id || ''),
+        taskId,
         sessionId: String(ev.session_id || ''),
         patentCount: Number(ev.patent_count || 0),
       }
