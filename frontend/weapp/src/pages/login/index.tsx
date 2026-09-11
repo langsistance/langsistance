@@ -50,7 +50,13 @@ export default function LoginPage() {
 
       {error ? <Text className='login-error'>{error}</Text> : null}
       <Text className='login-legal text-muted'>
-        登录即代表同意《用户协议》与《隐私政策》
+        登录即代表同意
+        <Text
+          className='login-legal-link'
+          onClick={() => Taro.navigateTo({ url: '/pages/privacy/index' })}
+        >
+          《隐私政策》
+        </Text>
       </Text>
     </View>
   )

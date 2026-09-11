@@ -1,0 +1,36 @@
+.privacy-page {
+  height: 100vh;
+  background: var(--c-bg);
+}
+
+.privacy-doc {
+  padding: 32px 36px 80px;
+  display: flex;
+  flex-direction: column;
+}
+
+.privacy-doc-title {
+  font-size: var(--fs-title);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.privacy-doc-date {
+  margin-top: 12px;
+  font-size: var(--fs-meta);
+  color: var(--c-text-muted);
+}
+
+.privacy-h {
+  margin-top: 44px;
+  font-size: var(--fs-msg);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.privacy-p {
+  margin-top: 16px;
+  font-size: var(--fs-body);
+  line-height: 1.75;
+  color: var(--c-text);
+}
