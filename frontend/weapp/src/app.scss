@@ -14,11 +14,13 @@ page {
   --c-danger: #d32f2f;
   --c-warn: #f57c00;
 
-  /* 字号刻度：正文与元信息同档（26px），仅大标题另设一档。
-     正文原先 30px 偏大——正文与表格并排时落差明显。 */
-  --fs-title: 40px;
-  --fs-body: 26px;
-  --fs-meta: 26px;
+  /* 字号刻度：正文与元信息同档，仅大标题另设一档。
+     26 → 22rpx（≈11pt）：整轮排版按观感整体调小一档。
+     注意 rpx 是相对屏宽的，22rpx 已接近中文可读下限，
+     再往下调请先在真机上确认。 */
+  --fs-title: 34px;
+  --fs-body: 22px;
+  --fs-meta: 22px;
 
   background: var(--c-bg);
   color: var(--c-text);
