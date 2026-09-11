@@ -430,3 +430,31 @@
 .chat-send-head-right {
   transform: rotate(45deg);
 }
+
+/* ── 结果集入口 ── */
+.chat-result-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding: 20px 24px;
+  border-radius: 12px;
+  background: var(--c-primary-soft);
+  border: 1px solid rgba(16, 163, 127, 0.25);
+
+  &:active {
+    background: #d8ece6;
+  }
+}
+
+.chat-result-entry-label {
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  color: var(--c-primary-deep);
+}
+
+.chat-result-entry-arrow {
+  font-size: 32px;
+  line-height: 1;
+  color: var(--c-primary-deep);
+}

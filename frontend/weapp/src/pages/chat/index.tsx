@@ -58,6 +58,8 @@ import {
   subscribePrivacy,
 } from '../../services/privacy'
 import { parseMarkdown } from '../../utils/markdown'
+import { decodeArtifactChunks, ResultsPayload } from '../../utils/results'
+import { resultsStore } from '../../services/resultsStore'
 import './index.scss'
 
 interface MsgView {
@@ -67,6 +69,8 @@ interface MsgView {
   patents?: string[]
   /** 本轮回答附带的可下载工件（CSV/XLSX…），收齐后一次性挂上 */
   artifacts?: CompletedArtifact[]
+  /** 本轮结果集的引用。json 工件的 base64 解码入库后就不再留在消息里。 */
+  resultSet?: { setId: string; rowCount: number }
   streaming?: boolean
   /** 长任务状态（上传分支专用）。不走 web 的标记编码 + 正则反解——
       小程序的消息本来就是结构化对象。 */
@@ -409,13 +413,30 @@ export default function ChatPage() {
   // 必须用函数式 setMsgs 拿最新一条，否则会把并发写入的正文覆盖回去。
   const onArtifactsReady = useCallback((items: CompletedArtifact[]) => {
     if (items.length === 0) return
+    // 先分流：json 是结果集的载体，走 store；其余是下载工件，留在消息上
+    let resultSet: { setId: string; rowCount: number } | null = null
+    const downloadable: CompletedArtifact[] = []
+    for (const it of items) {
+      if (it.format === 'json') {
+        const decoded = decodeArtifactChunks(it.chunks)
+        if (decoded) {
+          decoded.setId = it.artifactId
+          resultsStore.put(decoded)
+          resultSet = { setId: it.artifactId, rowCount: decoded.rows.length }
+        }
+        // 解码失败的 json 直接丢——留着只占内存，没有任何消费方
+      } else {
+        downloadable.push(it)
+      }
+    }
     setMsgs((prev) => {
       const next = prev.slice()
       const last = next[next.length - 1]
       if (last && last.role === 'assistant') {
         next[next.length - 1] = {
           ...last,
-          artifacts: [...(last.artifacts || []), ...items],
+          artifacts: [...(last.artifacts || []), ...downloadable],
+          ...(resultSet ? { resultSet } : {}),
         }
       }
       return next
@@ -519,12 +540,22 @@ export default function ChatPage() {
           completed = true
           finalizeAssistant()
         }
-        // 终稿落库（web 同款持久化）
+        // 带上 resultSetId：后端对消息数组是逐字透传（session.py:202-224），
+        // 加字段不需要改后端。历史会话靠它找回本地结果集。
+        const lastResultSet = lastAssistantResultSet()
         const assistantMsg: ChatMsg = {
           role: 'assistant',
           content: assistantRef.current,
+          ...(lastResultSet ? { set_id: lastResultSet.setId } : {}),
         }
         await saveMessages(sid, [...history, userMsg, assistantMsg])
+        // 结果集落盘（裁剪版），供重开小程序后回看
+        if (lastResultSet) {
+          resultsStore.persist(resultSetPayload(lastResultSet.setId), {
+            sessionId: sid,
+            queryText: text,
+          })
+        }
       }
     } catch (err) {
       setError(errorText(err))
@@ -619,6 +650,22 @@ export default function ChatPage() {
     }
   }
 
+  /** 最新一条助手消息上的结果集引用（落库与持久化都要用）。 */
+  function lastAssistantResultSet(): { setId: string; rowCount: number } | null {
+    for (let i = msgsRef.current.length - 1; i >= 0; i--) {
+      const m = msgsRef.current[i]
+      if (m.role === 'assistant' && m.resultSet) return m.resultSet
+    }
+    return null
+  }
+
+  /** 从 store 取回刚入库的完整载荷；还没入库就返回 null。 */
+  function resultSetPayload(setId: string): ResultsPayload {
+    const found = resultsStore.get(setId)
+    if (found) return found
+    return { setId, source: 'uspto', columns: [], rows: [] }
+  }
+
   function copyPatent(pid: string) {
     Taro.setClipboardData({ data: pid })
   }
@@ -683,6 +730,21 @@ export default function ChatPage() {
                       </View>
                     ),
                   )}
+                </View>
+              ) : null}
+              {m.role === 'assistant' && m.resultSet ? (
+                <View
+                  className='chat-result-entry'
+                  onClick={() =>
+                    Taro.navigateTo({
+                      url: `/pages/results/index?set=${encodeURIComponent(m.resultSet!.setId)}`,
+                    })
+                  }
+                >
+                  <Text className='chat-result-entry-label'>
+                    查看全部 {m.resultSet.rowCount} 项结果
+                  </Text>
+                  <Text className='chat-result-entry-arrow'>›</Text>
                 </View>
               ) : null}
               {m.role === 'assistant' &&
