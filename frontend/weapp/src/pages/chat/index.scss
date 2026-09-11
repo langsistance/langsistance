@@ -116,12 +116,22 @@
   color: var(--c-text-muted);
 }
 
-/* ── 状态与错误行 ── */
+/* ── 处理中卡片（等待期显示当前步骤，对齐 web 端的处理态观感）── */
 .chat-status {
-  padding: 8px 4px;
+  display: flex;
+  align-items: center;
+  margin: 4px 0 16px;
+  padding: 18px 22px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-left: 6px solid var(--c-primary);
+  border-radius: 14px;
+  box-shadow: 0 2px 10px rgba(31, 35, 40, 0.04);
 
   Text {
-    font-size: 24px;
+    font-size: 26px;
+    color: var(--c-text-muted);
+    line-height: 1.5;
   }
 }
 

@@ -24,6 +24,7 @@ interface SseEvent {
   type?: string
   content?: string
   message?: string
+  thought?: string
   [key: string]: any
 }
 
@@ -199,7 +200,13 @@ function handleEvent(
       cb.onToken?.(ev.content || '')
       break
     case 'status':
-      cb.onStatus?.(ev.content || '')
+      // 状态帧的载荷字段是 message（不是 content）——读 content 会恒为空串，
+      // 等待期界面上什么都看不到。
+      cb.onStatus?.(ev.message || ev.content || '')
+      break
+    case 'step':
+      // 步骤帧是等待期信息量最大的一条：第 N 步 · 正在调用「工具名」
+      if (ev.thought) cb.onStatus?.(String(ev.thought))
       break
     case 'error': {
       const msg = (ev.message || ev.content || '服务出错，请重试') as string
