@@ -74,6 +74,14 @@ interface MsgView {
 }
 
 /**
+ * 可下载的工件。json 是给结果页用的内部数据，不展示下载入口
+ * —— 对齐 web 的 MarkdownMessage.tsx:239-241。
+ */
+function downloadableArtifacts(m: MsgView): CompletedArtifact[] {
+  return (m.artifacts || []).filter((a) => a.format !== 'json')
+}
+
+/**
  * 形态一：首页即对话页（DeepSeek App 式）。
  * 左上角 ☰ 呼出抽屉收历史，抽屉内可新建/切换/重命名/删除。
  * 富文本经 <RichText> 渲染（weapp 正确原语；内容来自自有后端，用户输入恒为纯文本）。
@@ -678,34 +686,31 @@ export default function ChatPage() {
                 </View>
               ) : null}
               {m.role === 'assistant' &&
-              (m.artifacts || []).filter((a) => a.format !== 'json').length > 0 ? (
+              (downloadableArtifacts(m).length > 0 || m.content) ? (
                 <View className='chat-msg-artifacts'>
-                  {(m.artifacts || [])
-                    .filter((a) => a.format !== 'json')
-                    .map((a) => (
-                      <View
-                        key={a.artifactId}
-                        className='chat-artifact'
-                        onClick={() => handleDownloadArtifact(a)}
-                      >
-                        <Text className='chat-artifact-badge'>
-                          {a.format.toUpperCase()}
-                        </Text>
-                        <Text className='chat-artifact-label'>
-                          {a.format === 'csv' ? '下载 CSV' : '下载 Excel'}
-                        </Text>
-                      </View>
-                    ))}
-                </View>
-              ) : null}
-
-              {m.role === 'assistant' && m.content ? (
-                <View
-                  className='chat-artifact chat-artifact-plain'
-                  onClick={() => handleExportMarkdown(m)}
-                >
-                  <Text className='chat-artifact-badge'>MD</Text>
-                  <Text className='chat-artifact-label'>下载原文</Text>
+                  {downloadableArtifacts(m).map((a) => (
+                    <View
+                      key={a.artifactId}
+                      className='chat-artifact'
+                      onClick={() => handleDownloadArtifact(a)}
+                    >
+                      <Text className='chat-artifact-badge'>
+                        {a.format.toUpperCase()}
+                      </Text>
+                      <Text className='chat-artifact-label'>
+                        {a.format === 'csv' ? '下载 CSV' : '下载 Excel'}
+                      </Text>
+                    </View>
+                  ))}
+                  {m.content ? (
+                    <View
+                      className='chat-artifact'
+                      onClick={() => handleExportMarkdown(m)}
+                    >
+                      <Text className='chat-artifact-badge'>MD</Text>
+                      <Text className='chat-artifact-label'>下载原文</Text>
+                    </View>
+                  ) : null}
                 </View>
               ) : null}
               {m.role === 'assistant' && m.patents && m.patents.length > 0 ? (

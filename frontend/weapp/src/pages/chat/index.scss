@@ -254,12 +254,6 @@
   color: var(--c-primary-deep);
 }
 
-/* 「导出原文」单独一行，与工件按钮拉开距离 */
-.chat-artifact-plain {
-  align-self: flex-start;
-  margin-top: 12px;
-}
-
 /* ── 处理中卡片（等待期显示当前步骤，对齐 web 端的处理态观感）── */
 .chat-status {
   display: flex;
