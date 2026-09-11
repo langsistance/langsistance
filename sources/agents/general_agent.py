@@ -1,6 +1,6 @@
 from typing import Dict, Any
 import json
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from bs4 import BeautifulSoup
 
 from sources.long_task.candidate_metadata import is_documents_tool
@@ -748,6 +748,18 @@ class DynamicBackendToolFunction(BaseModel):
             "Legacy JSON strings are also accepted."
         )
     )
+
+    @field_validator("user_id", "query_id", mode="before")
+    @classmethod
+    def _id_fields_to_str(cls, v):
+        """id 类字段一律归一为字符串。
+
+        微信用户的 user_id 是 19-20 位纯数字，LLM 在提示里看到的是数字，
+        便按 JSON 数字（int）传参；而 Pydantic v2 不做 int→str 隐式转换，
+        工具调用在参数校验阶段即被拒绝，检索从未真正执行。
+        Firebase 的 uid 含字母，天然是字符串，所以此前从未暴露。
+        """
+        return str(v) if v is not None else v
 
 
 class _ResponseCollector(BaseCallbackHandler):

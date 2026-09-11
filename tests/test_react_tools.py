@@ -2819,6 +2819,32 @@ class TestApplyLadderCap(unittest.TestCase):
             importlib.reload(rt)
 
 
+class TestDynamicToolIdCoercion(unittest.TestCase):
+    """回归：微信用户的 user_id 是纯数字，LLM 按 int 传参导致工具调用被拒。"""
+
+    def test_numeric_user_id_coerced_to_str(self):
+        from sources.agents.general_agent import DynamicBackendToolFunction
+
+        obj = DynamicBackendToolFunction(
+            user_id=17644934271033136191,
+            query_id="mini_x_1",
+            params={"q": "x"},
+        )
+        self.assertEqual(obj.user_id, "17644934271033136191")
+        self.assertIsInstance(obj.user_id, str)
+
+    def test_string_ids_pass_through_unchanged(self):
+        from sources.agents.general_agent import DynamicBackendToolFunction
+
+        obj = DynamicBackendToolFunction(
+            user_id="abc123",
+            query_id="mini_x_2",
+            params="{}",
+        )
+        self.assertEqual(obj.user_id, "abc123")
+        self.assertEqual(obj.query_id, "mini_x_2")
+
+
 class TestEnvelopeInvokeSchema(unittest.TestCase):
     def test_payload_matches_real_schema(self):
         from sources.agents.general_agent import DynamicBackendToolFunction
