@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import {
   Button,
   RichText,
@@ -7,7 +7,7 @@ import {
   Textarea,
   View,
 } from '@tarojs/components'
-import Taro, { useRouter } from '@tarojs/taro'
+import Taro, { useDidShow } from '@tarojs/taro'
 import {
   ChatMsg,
   createSession,
@@ -17,6 +17,16 @@ import {
 } from '../../services/chat'
 import { streamQuery } from '../../services/chatStream'
 import { errorText } from '../../services/api'
+import { isLoggedIn } from '../../services/auth'
+import {
+  archiveSession,
+  fetchSessions,
+  renameSession,
+  SessionItem,
+} from '../../services/sessions'
+import NavBar from '../../components/NavBar'
+import SessionDrawer from '../../components/SessionDrawer'
+import RenameModal from '../../components/RenameModal'
 import { markdownToHtml } from '../../utils/markdown'
 import './index.scss'
 
@@ -29,40 +39,141 @@ interface MsgView {
 }
 
 /**
- * M2 对话页：SSE 流式对话（/query_stream, enableChunked）
- * + 专利号结果卡（过渡版：提取自助手终稿文本；完整面板随结果事件通道落地）。
+ * 形态一：首页即对话页（DeepSeek App 式）。
+ * 左上角 ☰ 呼出抽屉收历史，抽屉内可新建/切换/重命名/删除。
  * 富文本经 <RichText> 渲染（weapp 正确原语；内容来自自有后端，用户输入恒为纯文本）。
  */
 export default function ChatPage() {
-  const router = useRouter()
-  const sessionIdRef = useRef(router.params.session_id || '')
+  const sessionIdRef = useRef('')
   const assistantRef = useRef('') // 最新一轮助手全文（落库用，防闭包过期）
   const [msgs, setMsgs] = useState<MsgView[]>([])
+  const [sessionTitle, setSessionTitle] = useState('')
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
   const [anchor, setAnchor] = useState('')
 
+  // 抽屉
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [sessions, setSessions] = useState<SessionItem[]>([])
+  const [listLoading, setListLoading] = useState(false)
+  const [listError, setListError] = useState('')
+
+  // 重命名弹窗
+  const [renameTarget, setRenameTarget] = useState<SessionItem | null>(null)
+  const [renaming, setRenaming] = useState(false)
+  const [renameError, setRenameError] = useState('')
+
   const scrollToBottom = () => setAnchor(`msg-${Date.now()}`)
 
-  // 载入历史会话
-  useEffect(() => {
-    const sid = sessionIdRef.current
-    if (!sid) return
-    fetchSession(sid)
-      .then((detail) => {
-        const history: MsgView[] = (detail.messages || [])
-          .filter((m) => m.role === 'user' || m.role === 'assistant')
-          .map((m: ChatMsg) => ({
-            role: m.role as 'user' | 'assistant',
-            content: m.content || '',
-          }))
-        setMsgs(history)
-        scrollToBottom()
-      })
-      .catch((err) => setError(errorText(err, '历史会话加载失败')))
+  // 首页必须自己把门（原 pages/index 的职责搬来）
+  useDidShow(() => {
+    if (!isLoggedIn()) {
+      Taro.navigateTo({ url: '/pages/login/index' })
+    }
+  })
+
+  const loadSessions = useCallback(async () => {
+    setListLoading(true)
+    setListError('')
+    try {
+      setSessions(await fetchSessions())
+    } catch (err) {
+      setListError(errorText(err, '会话列表加载失败'))
+    } finally {
+      setListLoading(false)
+    }
   }, [])
+
+  function openDrawer() {
+    setDrawerOpen(true)
+    loadSessions()
+  }
+
+  function resetToNewChat() {
+    sessionIdRef.current = ''
+    assistantRef.current = ''
+    setMsgs([])
+    setSessionTitle('')
+    setError('')
+    setStatus('')
+  }
+
+  /** ＋ 新对话：只重置本地状态，不立刻建会话（否则每点一次留一条空会话）。 */
+  function newChat() {
+    resetToNewChat()
+    setDrawerOpen(false)
+  }
+
+  async function selectSession(sessionId: string) {
+    setDrawerOpen(false)
+    if (sessionId === sessionIdRef.current) return
+
+    sessionIdRef.current = sessionId
+    setError('')
+    setMsgs([])
+    try {
+      const detail = await fetchSession(sessionId)
+      const history: MsgView[] = (detail.messages || [])
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .map((m: ChatMsg) => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content || '',
+        }))
+      setMsgs(history)
+      setSessionTitle(detail.title || '')
+      scrollToBottom()
+    } catch (err) {
+      // 顺序要紧：resetToNewChat() 内部会 setError('')，
+      // 必须先重置再设错误，否则错误提示会被同批 state 更新覆盖掉。
+      resetToNewChat()
+      setError(errorText(err, '历史会话加载失败'))
+    }
+  }
+
+  async function confirmRename(title: string) {
+    const target = renameTarget
+    if (!target) return
+    setRenaming(true)
+    setRenameError('')
+    try {
+      await renameSession(target.session_id, title)
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.session_id === target.session_id ? { ...s, title } : s,
+        ),
+      )
+      if (target.session_id === sessionIdRef.current) setSessionTitle(title)
+      setRenameTarget(null)
+    } catch (err) {
+      setRenameError(errorText(err, '重命名失败，请重试'))
+    } finally {
+      setRenaming(false)
+    }
+  }
+
+  function removeSession(session: SessionItem) {
+    Taro.showModal({
+      title: '删除对话',
+      content: `确定删除「${session.title || '未命名对话'}」吗？`,
+      confirmText: '删除',
+      confirmColor: '#d32f2f',
+      success: async (res) => {
+        if (!res.confirm) return
+        try {
+          await archiveSession(session.session_id)
+          setSessions((prev) =>
+            prev.filter((s) => s.session_id !== session.session_id),
+          )
+          // 删的正好是当前会话 → 回空态，避免停在已归档会话上
+          if (session.session_id === sessionIdRef.current) resetToNewChat()
+        } catch (err) {
+          setListError(errorText(err, '删除失败，请重试'))
+        }
+      },
+    })
+  }
 
   const appendToken = useCallback((chunk: string) => {
     assistantRef.current += chunk
@@ -118,6 +229,7 @@ export default function ChatPage() {
       if (!sid) {
         sid = await createSession(text, [...history, userMsg])
         sessionIdRef.current = sid
+        setSessionTitle(text.slice(0, 60))
       }
       setMsgs((prev) => [...prev, { role: 'user', content: text }])
       scrollToBottom()
@@ -162,6 +274,8 @@ export default function ChatPage() {
 
   return (
     <View className='chat'>
+      <NavBar title={sessionTitle || '新对话'} onMenuClick={openDrawer} />
+
       <ScrollView
         className='chat-scroll'
         scrollY
@@ -246,6 +360,31 @@ export default function ChatPage() {
           {sending ? '…' : '发送'}
         </Button>
       </View>
+
+      <SessionDrawer
+        visible={drawerOpen}
+        sessions={sessions}
+        currentSessionId={sessionIdRef.current}
+        loading={listLoading}
+        error={listError}
+        onClose={() => setDrawerOpen(false)}
+        onSelect={selectSession}
+        onNew={newChat}
+        onRename={(s) => {
+          setRenameError('')
+          setRenameTarget(s)
+        }}
+        onDelete={removeSession}
+      />
+
+      <RenameModal
+        visible={renameTarget !== null}
+        initialTitle={renameTarget?.title || ''}
+        busy={renaming}
+        error={renameError}
+        onCancel={() => setRenameTarget(null)}
+        onConfirm={confirmRename}
+      />
     </View>
   )
 }
