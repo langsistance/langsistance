@@ -1,0 +1,97 @@
+.ltcard {
+  margin-top: 16px;
+  padding: 24px 26px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-left: 6px solid var(--c-primary);
+  border-radius: 14px;
+}
+
+.ltcard-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.ltcard-title {
+  font-size: var(--fs-msg);
+  font-weight: 600;
+}
+
+.ltcard-pct {
+  font-size: var(--fs-meta);
+  color: var(--c-primary-deep);
+}
+
+.ltcard-bar {
+  margin-top: 18px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--c-bg);
+  overflow: hidden;
+}
+
+.ltcard-bar-fill {
+  height: 100%;
+  background: var(--c-primary);
+  border-radius: 4px;
+}
+
+.ltcard-step {
+  display: block;
+  margin-top: 14px;
+  font-size: var(--fs-meta);
+  line-height: 1.6;
+  color: var(--c-text-muted);
+}
+
+.ltcard-error {
+  display: block;
+  margin-top: 14px;
+  font-size: var(--fs-meta);
+  line-height: 1.6;
+  color: var(--c-danger);
+}
+
+.ltcard-retry {
+  margin-top: 18px;
+  align-self: flex-start;
+  display: inline-block;
+  padding: 12px 32px;
+  border-radius: 999px;
+  background: var(--c-primary);
+  color: #fff;
+  font-size: var(--fs-meta);
+}
+
+.ltcard-files {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 20px;
+  gap: 16px;
+}
+
+.ltcard-file {
+  display: flex;
+  align-items: center;
+  padding: 12px 22px;
+  border-radius: 12px;
+  background: var(--c-primary-soft);
+  border: 1px solid rgba(16, 163, 127, 0.25);
+
+  &:active {
+    background: #d8ece6;
+  }
+}
+
+.ltcard-file-badge {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--c-primary-deep);
+}
+
+.ltcard-file-label {
+  margin-left: 12px;
+  font-size: var(--fs-meta);
+  color: var(--c-primary-deep);
+}

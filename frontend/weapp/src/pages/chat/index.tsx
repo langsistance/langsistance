@@ -7,7 +7,7 @@ import {
   Textarea,
   View,
 } from '@tarojs/components'
-import Taro, { useDidShow } from '@tarojs/taro'
+import Taro, { useDidHide, useDidShow } from '@tarojs/taro'
 import {
   ChatMsg,
   createSession,
@@ -25,7 +25,17 @@ import {
   renameSession,
   SessionItem,
 } from '../../services/sessions'
+import {
+  MAX_POLL_FAILURES,
+  POLL_INTERVAL_MS,
+  isTerminal,
+  pollTasks,
+  retryTask,
+  TaskState,
+} from '../../services/longTask'
+import { uploadQuery } from '../../services/upload'
 import AttachmentBar from '../../components/AttachmentBar'
+import LongTaskCard from '../../components/LongTaskCard'
 import NavBar from '../../components/NavBar'
 import SessionDrawer from '../../components/SessionDrawer'
 import RenameModal from '../../components/RenameModal'
@@ -45,6 +55,9 @@ interface MsgView {
   html?: string
   patents?: string[]
   streaming?: boolean
+  /** 长任务状态（上传分支专用）。不走 web 的标记编码 + 正则反解——
+      小程序的消息本来就是结构化对象。 */
+  task?: TaskState
 }
 
 /**
@@ -65,6 +78,10 @@ export default function ChatPage() {
 
   // 附件（本轮待上传文件，Task 9 接入发送分支后才真正上传）
   const [attachedFile, setAttachedFile] = useState<PickedFile | null>(null)
+
+  // 长任务轮询：taskId → 连续失败次数
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pollFailRef = useRef<Record<string, number>>({})
 
   // 隐私授权浮层
   const [privacyVisible, setPrivacyVisible] = useState(false)
@@ -107,10 +124,83 @@ export default function ChatPage() {
     }
   }
 
-  // 卸载时清理：停计时器 + 结算可能悬着的隐私授权等待
+  function stopPolling() {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current)
+      pollTimerRef.current = null
+    }
+  }
+
+  /** 收集当前仍未结束的任务号。 */
+  function activeTaskIds(): string[] {
+    return msgs
+      .filter((m) => m.task && !isTerminal(m.task.status))
+      .map((m) => m.task!.taskId)
+  }
+
+  function applyTaskStates(states: Record<string, TaskState>) {
+    setMsgs((prev) =>
+      prev.map((m) =>
+        m.task && states[m.task.taskId]
+          ? { ...m, task: states[m.task.taskId] }
+          : m,
+      ),
+    )
+  }
+
+  function startPolling() {
+    if (pollTimerRef.current) return
+    pollTimerRef.current = setInterval(async () => {
+      const ids = activeTaskIds()
+      if (ids.length === 0) {
+        stopPolling()
+        return
+      }
+      try {
+        const states = await pollTasks(ids)
+        pollFailRef.current = {}
+        applyTaskStates(states)
+        if (ids.every((id) => states[id] && isTerminal(states[id].status))) {
+          stopPolling()
+        }
+      } catch {
+        // 连续失败才判死，避免一次抖动就把卡片钉在"状态获取失败"
+        const ids2 = activeTaskIds()
+        for (const id of ids2) {
+          pollFailRef.current[id] = (pollFailRef.current[id] || 0) + 1
+        }
+        const dead = ids2.filter(
+          (id) => pollFailRef.current[id] >= MAX_POLL_FAILURES,
+        )
+        if (dead.length) {
+          setMsgs((prev) =>
+            prev.map((m) =>
+              m.task && dead.indexOf(m.task.taskId) >= 0
+                ? { ...m, task: { ...m.task, status: 'unknown' as const } }
+                : m,
+            ),
+          )
+        }
+        if (
+          ids2.every((id) => (pollFailRef.current[id] || 0) >= MAX_POLL_FAILURES)
+        ) {
+          stopPolling()
+        }
+      }
+    }, POLL_INTERVAL_MS)
+  }
+
+  // 离开页面停止轮询；回来对未完成任务恢复
+  useDidHide(() => stopPolling())
+  useDidShow(() => {
+    if (activeTaskIds().length > 0) startPolling()
+  })
+
+  // 卸载时清理：停计时器与轮询 + 结算可能悬着的隐私授权等待
   useEffect(
     () => () => {
       stopTimer()
+      stopPolling()
       abandonPrivacy()
     },
     [],
@@ -281,6 +371,10 @@ export default function ChatPage() {
       }))
       const userMsg: ChatMsg = { role: 'user', content: text }
 
+      // 本轮是否走上传分支。发送开始时快照：上传期间若用户又点了 ＋，
+      // 不应影响已经开始的本轮。
+      const file = attachedFile
+
       // 首条消息建会话（scene 1 = 专利检索默认场景）
       let sid = sessionIdRef.current
       if (!sid) {
@@ -292,36 +386,78 @@ export default function ChatPage() {
       scrollToBottom()
 
       startAssistant()
-      let completed = false
-      try {
-        await streamQuery(text, history, {
-          onStatus: (s) => {
-            if (completed) return
-            // 状态文字变化 → 计时归零（重复的同一条状态不重置，避免抖动）
-            if (s && s !== statusRef.current) {
-              statusRef.current = s
-              restartTimer()
+
+      if (file) {
+        // ── 上传分支：单文件 → 长任务 ──
+        // conversation_history 必须包含本轮新提问：后端会把它直接写成会话的
+        // messages（api_routes/core.py:1041），不含新提问则该轮不落库。
+        const outcome = await uploadQuery(
+          file,
+          text,
+          [...history, userMsg],
+          newQueryId(),
+          sid,
+        )
+        // 后端可能复用/新建了别的 session_id，以它为准
+        if (outcome.sessionId) sessionIdRef.current = outcome.sessionId
+        setMsgs((prev) => {
+          const next = prev.slice()
+          const last = next[next.length - 1]
+          if (last && last.role === 'assistant') {
+            next[next.length - 1] = {
+              ...last,
+              streaming: false,
+              task: {
+                taskId: outcome.taskId,
+                status: 'queued',
+                phase: '',
+                progress: 0,
+                step: '',
+                reportFiles: [],
+                error: '',
+              },
             }
-            setStatus(s)
-          },
-          onToken: (chunk) => {
-            if (!completed) {
-              setStatus('')
-              appendToken(chunk)
-            }
-          },
-          onError: (message) => setError(message),
+          }
+          return next
         })
-      } finally {
-        completed = true
-        finalizeAssistant()
+        setAttachedFile(null)
+        startPolling()
+        // ⚠️ 此处**不调用 saveMessages**：后端已在本次请求内把
+        // conversation_history 写进会话，随后还会追加 created/completed/
+        // failed 消息。小程序若再 PUT /messages 会整体重写数组，抹掉它们。
+      } else {
+        // ── 普通问答分支 ──
+        let completed = false
+        try {
+          await streamQuery(text, history, {
+            onStatus: (s) => {
+              if (completed) return
+              // 状态文字变化 → 计时归零（重复的同一条状态不重置，避免抖动）
+              if (s && s !== statusRef.current) {
+                statusRef.current = s
+                restartTimer()
+              }
+              setStatus(s)
+            },
+            onToken: (chunk) => {
+              if (!completed) {
+                setStatus('')
+                appendToken(chunk)
+              }
+            },
+            onError: (message) => setError(message),
+          })
+        } finally {
+          completed = true
+          finalizeAssistant()
+        }
+        // 终稿落库（web 同款持久化）
+        const assistantMsg: ChatMsg = {
+          role: 'assistant',
+          content: assistantRef.current,
+        }
+        await saveMessages(sid, [...history, userMsg, assistantMsg])
       }
-      // 终稿落库（web 同款持久化）
-      const assistantMsg: ChatMsg = {
-        role: 'assistant',
-        content: assistantRef.current,
-      }
-      await saveMessages(sid, [...history, userMsg, assistantMsg])
     } catch (err) {
       setError(errorText(err))
     } finally {
@@ -335,6 +471,45 @@ export default function ChatPage() {
   async function addAttachment() {
     const picked = await pickFile()
     if (picked) setAttachedFile(picked)
+  }
+
+  function newQueryId(): string {
+    return `mini_${Date.now().toString(36)}_${Math.floor(
+      Math.random() * 1e6,
+    ).toString(36)}`
+  }
+
+  async function handleRetryTask(taskId: string) {
+    try {
+      const newId = await retryTask(taskId)
+      setMsgs((prev) =>
+        prev.map((m) =>
+          m.task && m.task.taskId === taskId
+            ? {
+                ...m,
+                task: {
+                  taskId: newId,
+                  status: 'queued' as const,
+                  phase: '',
+                  progress: 0,
+                  step: '',
+                  reportFiles: [],
+                  error: '',
+                },
+              }
+            : m,
+        ),
+      )
+      pollFailRef.current = {}
+      startPolling()
+    } catch (err) {
+      Taro.showToast({ title: errorText(err, '重试失败'), icon: 'none' })
+    }
+  }
+
+  function handleDownloadReport(_taskId: string, format: string) {
+    // Task 10 实现真实下载（届时接上 _taskId → /long_task/{id}/report）
+    Taro.showToast({ title: `${format} 下载待实现`, icon: 'none' })
   }
 
   function copyPatent(pid: string) {
@@ -416,6 +591,15 @@ export default function ChatPage() {
                     </View>
                   ))}
                 </View>
+              ) : null}
+              {m.role === 'assistant' && m.task ? (
+                <LongTaskCard
+                  task={m.task}
+                  onRetry={() => handleRetryTask(m.task!.taskId)}
+                  onDownload={(format) =>
+                    handleDownloadReport(m.task!.taskId, format)
+                  }
+                />
               ) : null}
             </View>
           ))}
