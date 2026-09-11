@@ -1236,6 +1236,20 @@ input[type="checkbox"] {
   font-weight: 600;
   transition: all 0.2s;
   border: 1px solid;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.lt-dl-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.lt-dl-error {
+  flex-basis: 100%;
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: #dc2626;
 }
 
 .lt-dl-btn.pdf {

@@ -277,6 +277,22 @@ export function getLongTaskReportUrl(taskId: string, format: 'pdf' | 'docx' = 'p
   return `${BASE_URL}/long_task/${taskId}/report?format=${format}`
 }
 
+/**
+ * 下载长任务报告。必须走 fetch 而非 <a href>：报告端点有归属校验，
+ * 需要 Authorization 头，而浏览器导航带不上自定义头。
+ */
+export async function downloadLongTaskReport(
+  taskId: string,
+  format: 'pdf' | 'docx' = 'pdf',
+): Promise<Blob> {
+  const headers = await authHeaders()
+  const res = await fetch(getLongTaskReportUrl(taskId, format), { headers })
+  if (!res.ok) {
+    throw new Error(`报告下载失败(${res.status})`)
+  }
+  return res.blob()
+}
+
 export async function recoverLongTaskByQueryId(queryId: string): Promise<{
   success: boolean
   found: boolean

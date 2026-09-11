@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { useI18n } from '@/lib/app-i18n'
 import { renderMarkdownToHtml } from '@/lib/markdownRender'
 import { failureHint } from '@/lib/messagePresentation'
+import { downloadLongTaskReport } from '@/services/api'
 
 interface JurisdictionStatus {
   code: string
@@ -33,7 +34,9 @@ interface TaskState {
   progress: number
   stepLabel: string
   errorMessage?: string
-  reportLinks?: { label: string; url: string }[]
+  /** Report formats parsed from the ✅ message. The download URL is rebuilt with
+   *  auth via downloadLongTaskReport — the inlined links cannot carry a header. */
+  reportLinks?: { label: string }[]
   message: string
 }
 
@@ -101,10 +104,10 @@ function parseTaskContent(content: string): TaskState | null {
   // Completed state
   if (content.includes('✅')) {
     const linkRegex = /\[(DOCX|PDF)\]\(([^)]+)\)/g
-    const reportLinks: { label: string; url: string }[] = []
+    const reportLinks: { label: string }[] = []
     let m
     while ((m = linkRegex.exec(content)) !== null) {
-      reportLinks.push({ label: m[1], url: m[2] })
+      reportLinks.push({ label: m[1] })
     }
     return {
       phase: 'completed',
@@ -332,6 +335,8 @@ export default function LongTaskProgress({ content, resultSummary, streaming, an
   const state = parseTaskContent(content)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [retrying, setRetrying] = useState(false)
+  const [downloadingLabel, setDownloadingLabel] = useState<string | null>(null)
+  const [downloadError, setDownloadError] = useState('')
   const summaryHtml = useMemo(
     () => (resultSummary ? renderMarkdownToHtml(resultSummary) : ''),
     [resultSummary],
@@ -397,6 +402,33 @@ export default function LongTaskProgress({ content, resultSummary, streaming, an
 
   const phases = isFamily ? FAMILY_PHASES : STANDARD_PHASES
   const visiblePhases = phases.filter(p => !('fileUploadOnly' in p) || !p.fileUploadOnly || isFileUploadMode(content))
+
+  async function handleReportDownload(label: string, taskId: string) {
+    if (downloadingLabel) return
+    if (!taskId) {
+      setDownloadError(t('longTask.downloadFailed'))
+      return
+    }
+    setDownloadingLabel(label)
+    setDownloadError('')
+    try {
+      const format = label.toLowerCase() === 'docx' ? 'docx' : 'pdf'
+      const blob = await downloadLongTaskReport(taskId, format)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      // 文件名与后端 Content-Disposition 一致（api_routes/long_task.py:638）
+      a.download = `patent_analysis_${taskId}.${format}`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : '下载失败，请重试')
+    } finally {
+      setDownloadingLabel(null)
+    }
+  }
 
   return (
     <div className="lt-progress-card">
@@ -645,12 +677,12 @@ export default function LongTaskProgress({ content, resultSummary, streaming, an
       {state.phase === 'completed' && state.reportLinks && (
         <div className="lt-downloads">
           {state.reportLinks.map((link) => (
-            <a
+            <button
               key={link.label}
-              href={link.url}
+              type="button"
               className={`lt-dl-btn ${link.label.toLowerCase()}`}
-              target="_blank"
-              rel="noopener noreferrer"
+              onClick={() => handleReportDownload(link.label, state.taskId)}
+              disabled={downloadingLabel !== null}
             >
               <span className="lt-dl-icon">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -661,13 +693,18 @@ export default function LongTaskProgress({ content, resultSummary, streaming, an
                 </svg>
               </span>
               <span className="lt-dl-label">
-                {t('longTask.downloadLabel', { format: link.label })}
+                {downloadingLabel === link.label
+                  ? t('longTask.downloading')
+                  : t('longTask.downloadLabel', { format: link.label })}
               </span>
               <svg className="lt-dl-arrow" viewBox="0 0 16 16" fill="none" strokeWidth="2" strokeLinecap="round">
                 <path d="M8 3v8M4 8l4 4 4-4" />
               </svg>
-            </a>
+            </button>
           ))}
+          {downloadError ? (
+            <p className="lt-dl-error">{downloadError}</p>
+          ) : null}
         </div>
       )}
 

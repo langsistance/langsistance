@@ -231,6 +231,8 @@ export default {
     // Status labels
     cancelledLabel: '此任务已永久停止',
     downloadLabel: '下载 {format}',
+    downloading: '下载中…',
+    downloadFailed: '下载失败，请重试',
     submittedMessage: '正在后台执行分析任务，您可以继续对话...',
     retry: '重试',
     retrying: '正在重新提交...',

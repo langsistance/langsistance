@@ -231,6 +231,8 @@ export default {
     // Status labels
     cancelledLabel: 'This task has been permanently stopped',
     downloadLabel: 'Download {format}',
+    downloading: 'Downloading…',
+    downloadFailed: 'Download failed, please retry',
     submittedMessage: 'Analysis is running in background, you can continue the conversation...',
     retry: 'Retry',
     retrying: 'Re-submitting...',
