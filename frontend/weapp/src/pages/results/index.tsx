@@ -60,8 +60,15 @@ export default function ResultsPage() {
         })}
       </ScrollView>
 
+      {/*
+        key 绑 activeIndex：换一行就换一个实例，ResultDetail 内部按行缓存的
+        tab / claims / claimsPdf / error 随旧实例一起销毁。否则实例被复用，
+        claims 不再是 null，切到「权利要求」不会重新拉取，会显示上一件专利的
+        权利要求正文；说明书也会因 claims(失败时仍为 null) 的连带判断重复下载。
+      */}
       {row ? (
         <ResultDetail
+          key={activeIndex}
           payload={payload}
           row={row}
           visible
