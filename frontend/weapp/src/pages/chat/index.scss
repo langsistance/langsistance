@@ -99,11 +99,17 @@
   font-family: inherit;
 }
 
-/* 段落块容器：只做包裹，不设外边距。
-   段落/标题/列表项的间距由 utils/markdown.ts 内联进 HTML——页面 WXSS 的
-   子孙选择器够不到 rich-text 内部节点，这里再加边距会与内联值叠加。 */
+/* 段落间距的**唯一**承担者。
+   rich-text 内部不吃盒模型属性（margin/padding 一律无效，实测把段落 margin
+   从 28rpx 翻倍到 56rpx 页面毫无变化），字号/字重/行高/字间距那类文本属性
+   则有效。所以垂直节奏只能由这个原生 View 撑开，切勿再加内联 margin——
+   两者会叠加。 */
 .chat-md-block {
-  margin: 0;
+  margin-bottom: 56rpx;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
 }
 
 .chat-msg-body rich-text p {
