@@ -1444,8 +1444,10 @@ export default function ChatPage() {
       setSessionTitle(detail.title || '')
       scrollToBottom()
     } catch (err) {
-      setError(errorText(err, '历史会话加载失败'))
+      // 顺序要紧：resetToNewChat() 内部会 setError('')，
+      // 必须先重置再设错误，否则错误提示会被同批 state 更新覆盖掉。
       resetToNewChat()
+      setError(errorText(err, '历史会话加载失败'))
     }
   }
 
