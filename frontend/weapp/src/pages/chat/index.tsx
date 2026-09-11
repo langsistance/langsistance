@@ -79,6 +79,11 @@ export default function ChatPage() {
   // 附件（本轮待上传文件，Task 9 接入发送分支后才真正上传）
   const [attachedFile, setAttachedFile] = useState<PickedFile | null>(null)
 
+  // msgs 的镜像。轮询回调闭包捕获的是某一次渲染的 msgs，而 startPolling 在
+  // send() 里被同步调用——那时 setMsgs 还没提交，闭包里看不到刚挂上的 task，
+  // 首次 tick 会得到空 id 列表并立刻自停，卡片就此冻结到下次进入页面。
+  const msgsRef = useRef<MsgView[]>([])
+
   // 长任务轮询：taskId → 连续失败次数
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const pollFailRef = useRef<Record<string, number>>({})
@@ -131,9 +136,9 @@ export default function ChatPage() {
     }
   }
 
-  /** 收集当前仍未结束的任务号。 */
+  /** 收集当前仍未结束的任务号。读 msgsRef 而非 msgs —— 见 msgsRef 的注释。 */
   function activeTaskIds(): string[] {
-    return msgs
+    return msgsRef.current
       .filter((m) => m.task && !isTerminal(m.task.status))
       .map((m) => m.task!.taskId)
   }
@@ -208,6 +213,11 @@ export default function ChatPage() {
 
   // 订阅隐私浮层显隐（App 级监听在 app.ts 注册）
   useEffect(() => subscribePrivacy(setPrivacyVisible), [])
+
+  // 把已提交的 msgs 同步进 msgsRef，供轮询回调读取最新任务列表
+  useEffect(() => {
+    msgsRef.current = msgs
+  }, [msgs])
 
   // 首页必须自己把门（登录态检查从已删除的会话列表页搬来）
   useDidShow(() => {
