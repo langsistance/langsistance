@@ -83,6 +83,43 @@
   line-height: 1.6;
 }
 
+/* ── 表格卡片（<rich-text> 不支持 table 标签，改由 View 渲染）── */
+.chat-table {
+  margin: 12px 0;
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.chat-table-row {
+  display: flex;
+  align-items: flex-start;
+  border-top: 1px solid var(--c-border);
+
+  &:first-child {
+    border-top: none;
+  }
+}
+
+.chat-table-head {
+  background: var(--c-primary-soft);
+
+  .chat-table-cell {
+    font-weight: 600;
+    color: var(--c-primary-deep);
+  }
+}
+
+.chat-table-cell {
+  flex: 1;
+  min-width: 0;
+  padding: 14px 16px;
+  font-size: 24px;
+  line-height: 1.5;
+  color: var(--c-text);
+  word-break: break-word;
+}
+
 /* ── 专利号卡（助手气泡下）── */
 .chat-msg-patents {
   display: flex;

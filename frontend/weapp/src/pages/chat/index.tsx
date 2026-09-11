@@ -28,7 +28,7 @@ import {
 import NavBar from '../../components/NavBar'
 import SessionDrawer from '../../components/SessionDrawer'
 import RenameModal from '../../components/RenameModal'
-import { markdownToHtml } from '../../utils/markdown'
+import { parseMarkdown } from '../../utils/markdown'
 import './index.scss'
 
 interface MsgView {
@@ -306,7 +306,30 @@ export default function ChatPage() {
             >
               {m.role === 'assistant' && m.content ? (
                 <View className='chat-msg-body'>
-                  <RichText nodes={markdownToHtml(m.content)} />
+                  {parseMarkdown(m.content).map((seg, si) =>
+                    seg.kind === 'html' ? (
+                      <RichText key={si} nodes={seg.html} />
+                    ) : (
+                      <View key={si} className='chat-table'>
+                        <View className='chat-table-row chat-table-head'>
+                          {seg.table.headers.map((h, hi) => (
+                            <Text key={hi} className='chat-table-cell'>
+                              {h}
+                            </Text>
+                          ))}
+                        </View>
+                        {seg.table.rows.map((row, ri) => (
+                          <View key={ri} className='chat-table-row'>
+                            {row.map((cell, ci) => (
+                              <Text key={ci} className='chat-table-cell'>
+                                {cell}
+                              </Text>
+                            ))}
+                          </View>
+                        ))}
+                      </View>
+                    ),
+                  )}
                 </View>
               ) : (
                 <View className='chat-msg-body'>
