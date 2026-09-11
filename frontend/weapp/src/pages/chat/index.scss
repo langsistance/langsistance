@@ -309,6 +309,36 @@
   border-top: 1px solid var(--c-border);
 }
 
+/* 「＋」附件按钮：与输入框**同一行**、居左，对齐 ChatGPT / DeepSeek 的回形针位置。
+   此前它是独立一行挂在输入框上方，没选文件时也会在输入框上留一条空横条。
+   align-self 由 .chat-inputbar 的 flex-end 决定，与发送按钮底边对齐。 */
+.chat-attach {
+  flex-shrink: 0;
+  width: 80px;
+  height: 80px;
+  margin-right: 16px;
+  border-radius: 50%;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  &:active {
+    background: var(--c-primary-soft);
+  }
+}
+
+.chat-attach-busy {
+  opacity: 0.45;
+}
+
+.chat-attach-icon {
+  font-size: 40px;
+  line-height: 1;
+  color: var(--c-text-muted);
+}
+
 .chat-textarea {
   flex: 1;
   min-height: 80px;

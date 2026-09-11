@@ -750,12 +750,16 @@ export default function ChatPage() {
 
       <AttachmentBar
         file={attachedFile}
-        busy={sending}
-        onAdd={addAttachment}
         onRemove={() => setAttachedFile(null)}
       />
 
       <View className='chat-inputbar'>
+        <View
+          className={`chat-attach${sending ? ' chat-attach-busy' : ''}`}
+          onClick={sending ? undefined : addAttachment}
+        >
+          <Text className='chat-attach-icon'>＋</Text>
+        </View>
         <Textarea
           className='chat-textarea'
           value={input}

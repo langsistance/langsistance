@@ -4,8 +4,6 @@ import './index.scss'
 
 type Props = {
   file: PickedFile | null
-  busy?: boolean
-  onAdd: () => void
   onRemove: () => void
 }
 
@@ -24,25 +22,23 @@ export function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export default function AttachmentBar({ file, busy, onAdd, onRemove }: Props) {
+/**
+ * 已选文件的 chip 条，挂在输入框**上方**，只在有文件时渲染——没文件时
+ * 整条不出现（此前这里还兼着「＋」按钮，于是空着时也留一条空横条）。
+ * 「＋」按钮现在在输入框左侧同一行，见 pages/chat 的 .chat-attach。
+ */
+export default function AttachmentBar({ file, onRemove }: Props) {
+  if (!file) return null
   return (
     <View className='attach-bar'>
-      <View
-        className={`attach-btn${busy ? ' attach-btn-busy' : ''}`}
-        onClick={busy ? undefined : onAdd}
-      >
-        <Text className='attach-btn-icon'>＋</Text>
+      <View className='attach-chip'>
+        <Text className='attach-chip-badge'>{fileBadge(file.name)}</Text>
+        <Text className='attach-chip-name'>{file.name}</Text>
+        <Text className='attach-chip-size'>{formatFileSize(file.size)}</Text>
+        <Text className='attach-chip-remove' onClick={onRemove}>
+          ✕
+        </Text>
       </View>
-      {file ? (
-        <View className='attach-chip'>
-          <Text className='attach-chip-badge'>{fileBadge(file.name)}</Text>
-          <Text className='attach-chip-name'>{file.name}</Text>
-          <Text className='attach-chip-size'>{formatFileSize(file.size)}</Text>
-          <Text className='attach-chip-remove' onClick={onRemove}>
-            ✕
-          </Text>
-        </View>
-      ) : null}
     </View>
   )
 }

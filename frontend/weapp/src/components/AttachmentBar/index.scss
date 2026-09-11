@@ -1,3 +1,4 @@
+/* 只在有附件时渲染，所以这里不需要为空态留位 */
 .attach-bar {
   display: flex;
   align-items: center;
@@ -5,38 +6,11 @@
   background: var(--c-surface);
 }
 
-.attach-btn {
-  flex-shrink: 0;
-  width: 64px;
-  height: 64px;
-  border-radius: 50%;
-  background: var(--c-bg);
-  border: 1px solid var(--c-border);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  &:active {
-    background: var(--c-primary-soft);
-  }
-}
-
-.attach-btn-busy {
-  opacity: 0.45;
-}
-
-.attach-btn-icon {
-  font-size: 36px;
-  line-height: 1;
-  color: var(--c-text-muted);
-}
-
 .attach-chip {
   flex: 1;
   min-width: 0;
   display: flex;
   align-items: center;
-  margin-left: 16px;
   padding: 12px 18px;
   background: var(--c-primary-soft);
   border-radius: 14px;
