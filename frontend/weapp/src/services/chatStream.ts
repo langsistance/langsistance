@@ -50,14 +50,6 @@ function decodeChunk(buf: ArrayBuffer): string {
   }
 }
 
-/** enableChunked 流监听（@tarojs/taro 类型缺失, 运行时 weapp 基础库提供）。 */
-interface ChunkListenerApi {
-  onChunkReceived(cb: (res: { data: ArrayBuffer }) => void): void
-  offChunkReceived(cb: (res: { data: ArrayBuffer }) => void): void
-}
-
-const chunkApi = Taro as unknown as ChunkListenerApi
-
 type ChunkCallback = (res: { data: ArrayBuffer }) => void
 
 /** 增量 SSE 解析器：跨 chunk 的帧/多字节字符安全。 */
@@ -117,7 +109,6 @@ export function streamQuery(
       else resolve()
     }
 
-    // 全局 chunk 监听（enableChunked 需要 onChunkReceived 收流）
     const onChunk: ChunkCallback = (res) => {
       try {
         const raw = decodeChunk(res.data)
@@ -128,11 +119,6 @@ export function streamQuery(
         finish(e instanceof Error ? e : new Error('响应解析失败'))
       }
     }
-    chunkApi.onChunkReceived(onChunk)
-    const timer = setTimeout(() => {
-      chunkApi.offChunkReceived(onChunk)
-      finish(new Error('请求超时，请重试'))
-    }, 150000)
 
     const req = Taro.request({
       url: `${API_BASE}/query_stream`,
@@ -152,6 +138,16 @@ export function streamQuery(
         conversation_history: conversationHistory,
       },
     })
+
+    // enableChunked 的流式监听必须挂在本次请求的 RequestTask 上：
+    // onChunkReceived/offChunkReceived 是 RequestTask 的方法（Taro.request()
+    // 的返回值），Taro 命名空间上没有这两个 API。
+    req.onChunkReceived(onChunk)
+
+    const timer = setTimeout(() => {
+      req.offChunkReceived(onChunk)
+      finish(new Error('请求超时，请重试'))
+    }, 150000)
 
     req
       .then((resp) => {
@@ -178,7 +174,7 @@ export function streamQuery(
       })
       .finally(() => {
         clearTimeout(timer)
-        chunkApi.offChunkReceived(onChunk)
+        req.offChunkReceived(onChunk)
       })
   })
 }
