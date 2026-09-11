@@ -312,10 +312,20 @@ export default function ChatPage() {
       const detail = await fetchSession(sessionId)
       const history: MsgView[] = (detail.messages || [])
         .filter((m) => m.role === 'user' || m.role === 'assistant')
-        .map((m: ChatMsg) => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.content || '',
-        }))
+        .map((m: ChatMsg) => {
+          const view: MsgView = {
+            role: m.role as 'user' | 'assistant',
+            content: m.content || '',
+          }
+          // 消息里存了 set_id 且本机还有这份结果 → 复原入口。
+          // 换设备/清过缓存时本地没有，就不显示入口（而不是给个点不开的按钮）。
+          const setId = String((m as any).set_id || '')
+          if (setId) {
+            const found = resultsStore.get(setId) || resultsStore.load(setId)
+            if (found) view.resultSet = { setId, rowCount: found.rows.length }
+          }
+          return view
+        })
       setMsgs(history)
       setSessionTitle(detail.title || '')
       scrollToBottom()
