@@ -260,3 +260,63 @@ def test_save_messages_omits_title_when_blank(client, mock_db):
 
     assert response.status_code == 200
     assert 'title = %s' not in _executed_sql(cursor).lower()
+
+
+# ── 专用改名端点 PUT /session/{id}/title ─────────────────────
+
+def test_rename_session(client, mock_db):
+    """正常路径：改标题成功，且 SQL 带 user_id 归属过滤。"""
+    _, cursor = mock_db
+    cursor.rowcount = 1
+
+    response = client.put('/session/sess_001/title',
+                          json={'title': '折叠桌专利检索'},
+                          headers=AUTH)
+
+    assert response.status_code == 200
+    assert response.json()['success'] is True
+    sql = _executed_sql(cursor)
+    assert 'user_id' in sql
+    assert 'title' in sql
+
+
+def test_rename_session_not_owner(client, mock_db):
+    """非本人会话 → 404（不暴露"存在但不属于你"）。"""
+    _, cursor = mock_db
+    cursor.rowcount = 0
+
+    response = client.put('/session/sess_001/title',
+                          json={'title': 'x'}, headers=AUTH)
+
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize('bad_title', ['', '   '])
+def test_rename_session_rejects_blank_title(client, mock_db, bad_title):
+    """空标题在 SQL 之前就被拒，不进数据库。"""
+    _, cursor = mock_db
+    cursor.rowcount = 1
+
+    response = client.put('/session/sess_001/title',
+                          json={'title': bad_title}, headers=AUTH)
+
+    assert response.status_code == 400
+    assert cursor.execute.call_count == 0
+
+
+def test_rename_session_requires_auth(client):
+    """缺 Authorization → 401。"""
+    response = client.put('/session/sess_001/title', json={'title': 'x'})
+    assert response.status_code == 401
+
+
+def test_rename_session_does_not_touch_messages(client, mock_db):
+    """专用端点只写 title 列，绝不触碰 messages —— 这是它存在的理由。"""
+    _, cursor = mock_db
+    cursor.rowcount = 1
+
+    client.put('/session/sess_001/title', json={'title': 'abc'}, headers=AUTH)
+
+    sql = _executed_sql(cursor).lower()
+    assert 'update conversations set title' in sql
+    assert 'messages' not in sql

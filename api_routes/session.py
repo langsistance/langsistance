@@ -35,6 +35,10 @@ class SaveMessagesRequest(BaseModel):
     title: str = ""
 
 
+class RenameSessionRequest(BaseModel):
+    title: str
+
+
 def register_session_routes(logger, config):
     """Register session CRUD routes with dependency injection."""
     router = APIRouter()
@@ -224,6 +228,39 @@ def register_session_routes(logger, config):
                     params)
                 conn.commit()
             logger.info(f"Session messages saved: {session_id}, count={len(req.messages)}")
+            return {"success": True}
+        finally:
+            conn.close()
+
+    @router.put("/session/{session_id}/title")
+    async def rename_session(session_id: str, req: RenameSessionRequest,
+                             http_request: Request):
+        """只改 title 列，不碰 messages。
+
+        专用端点而非复用 PUT /messages：后者会重写整个 messages 数组，
+        流式对话落库期间改名会丢消息。
+        """
+        auth_header = http_request.headers.get("Authorization")
+        user = verify_firebase_token(auth_header)
+        user_id = int(user['uid'])
+
+        title = req.title.strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="Title must not be empty")
+        if len(title) > 256:
+            raise HTTPException(status_code=400, detail="Title too long")
+
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE conversations SET title = %s
+                       WHERE session_id = %s AND user_id = %s AND status != 2""",
+                    (title, session_id, user_id))
+                if cur.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Session not found")
+                conn.commit()
+            logger.info(f"Session renamed: {session_id}")
             return {"success": True}
         finally:
             conn.close()
