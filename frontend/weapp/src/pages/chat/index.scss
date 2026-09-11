@@ -123,8 +123,9 @@
 .chat-msg-body rich-text h2,
 .chat-msg-body rich-text h3,
 .chat-msg-body rich-text h4 {
-  /* 标题与正文同字号，靠字重与间距分层级——避免字号种类过多 */
-  font-size: var(--fs-body);
+  /* 标题比正文小一档（28px→28rpx），靠字重与间距分层级——避免字号种类过多。
+     与 utils/markdown.ts 的 BLOCK_STYLE.h1..h4 同值，两处需同步。 */
+  font-size: 28px;
   font-weight: 600;
   line-height: 1.5;
   letter-spacing: 0.3px;

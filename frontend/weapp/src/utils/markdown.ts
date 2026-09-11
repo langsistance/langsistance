@@ -57,14 +57,13 @@ function isSeparatorRow(cells: string[]): boolean {
  */
 const BLOCK_STYLE: Record<string, string> = {
   p: 'font-size:32rpx;line-height:1.75;letter-spacing:1rpx;',
-  // 标题带上间距：标题与**上方内容**之间的距离同样属于段落间距，
-  // 只给下间距会让标题和上一段黏在一起。
+  // 标题比正文小一档（32→28rpx，与 code/pre 同档），不再靠"放大"来分层级。
   // 字重统一 600——strong 默认是 700，标题 600，正文 400 三档混在一起
   // 会让同一段里的粗体忽重忽轻。
-  h1: 'font-size:32rpx;font-weight:600;line-height:1.5;',
-  h2: 'font-size:32rpx;font-weight:600;line-height:1.5;',
-  h3: 'font-size:32rpx;font-weight:600;line-height:1.5;',
-  h4: 'font-size:32rpx;font-weight:600;line-height:1.5;',
+  h1: 'font-size:28rpx;font-weight:600;line-height:1.5;',
+  h2: 'font-size:28rpx;font-weight:600;line-height:1.5;',
+  h3: 'font-size:28rpx;font-weight:600;line-height:1.5;',
+  h4: 'font-size:28rpx;font-weight:600;line-height:1.5;',
   ul: 'padding-left:56rpx;',
   ol: 'padding-left:56rpx;',
   // 列表项间距也属于段落级间距——同样只能内联才生效
