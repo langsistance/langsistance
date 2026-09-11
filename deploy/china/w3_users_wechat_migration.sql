@@ -7,13 +7,11 @@
 
 -- 1) firebase_uid 允许 NULL(微信行无 Firebase 账号)
 ALTER TABLE users
-    MODIFY COLUMN firebase_uid VARCHAR(128) NULL,
-    ALGORITHM=INPLACE, LOCK=NONE;
+    MODIFY COLUMN firebase_uid VARCHAR(128) NULL;
 
 -- 2) email 允许 NULL(微信行无邮箱)
 ALTER TABLE users
-    MODIFY COLUMN email VARCHAR(255) NULL,
-    ALGORITHM=INPLACE, LOCK=NONE;
+    MODIFY COLUMN email VARCHAR(255) NULL;
 
 -- 3) 微信身份唯一键: (oauth_provider, oauth_provider_id)
 --    先清可能的历史重复再建唯一索引(重复时先人工合并)
