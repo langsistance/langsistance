@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "description": "CopiioAI 微信小程序（Taro + React + TS，国内微信用户）",
+  "imports": {
+    "#utils/*": "./dist-test/src/utils/*.js"
+  },
   "templateInfo": {
     "name": "default",
     "typescript": true,
@@ -12,7 +15,7 @@
     "dev:weapp": "taro build --type weapp --watch",
     "build:weapp": "taro build --type weapp",
     "tsc": "tsc --noEmit",
-    "test": "tsc -p tsconfig.test.json && node --test dist-test/**/*.test.mjs"
+    "test": "tsc -p tsconfig.test.json && bash -c \"shopt -s globstar; set -- dist-test/**/*.test.mjs; if [ ! -e \\\"$1\\\" ]; then echo 'No compiled test files matched dist-test/**/*.test.mjs' >&2; exit 1; fi; node --test \\\"$@\\\"\""
   },
   "browserslist": [
     "last 3 versions",
