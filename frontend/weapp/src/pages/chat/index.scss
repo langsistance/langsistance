@@ -46,7 +46,9 @@
   max-width: 100%;
   padding: 22px 26px;
   border-radius: 20px;
-  font-size: var(--fs-body);
+  /* 消息内容档：用户气泡与助手正文同号（助手正文的内联样式见
+     utils/markdown.ts 的 BLOCK_STYLE，两处需同步） */
+  font-size: var(--fs-msg);
   line-height: 1.75;
   letter-spacing: 0.3px;
   word-break: break-word;
@@ -74,7 +76,7 @@
 }
 
 .chat-msg-text {
-  font-size: var(--fs-body);
+  font-size: var(--fs-msg);
   line-height: 1.75;
   letter-spacing: 0.3px;
 }

@@ -14,10 +14,16 @@ page {
   --c-danger: #d32f2f;
   --c-warn: #f57c00;
 
-  /* 字号刻度：正文与元信息同档（26px），仅大标题另设一档。 */
+  /* 字号刻度：
+       --fs-msg    消息内容（用户提问气泡 + 助手回答正文）——比界面外壳小一档
+       --fs-body   界面外壳正文（输入框、表格、状态、列表项）
+       --fs-meta   元信息（状态文字、时间、提示）
+       --fs-title  大标题
+     消息内容单独成档：用户提问与助手回答是同一种内容，两者必须同号。 */
   --fs-title: 40px;
   --fs-body: 26px;
   --fs-meta: 26px;
+  --fs-msg: 22px;
 
   background: var(--c-bg);
   color: var(--c-text);
