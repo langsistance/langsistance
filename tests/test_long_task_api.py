@@ -37,8 +37,9 @@ def client():
 
 def test_get_task_status_unknown(client):
     """GET status for unknown task returns unknown status."""
-    with patch('api_routes.long_task.get_task_status') as mock_get,          patch('api_routes.long_task.verify_firebase_token') as mock_auth:
+    with patch('api_routes.long_task.get_task_status') as mock_get,          patch('api_routes.long_task.verify_firebase_token') as mock_auth,          patch('api_routes.long_task._task_owned_by') as mock_owned:
         mock_auth.return_value = {"uid": "1"}
+        mock_owned.return_value = True
         mock_get.return_value = {'task_id': 'lt_unknown', 'status': 'unknown'}
         response = client.get("/long_task/lt_unknown/status")
         assert response.status_code == 200
@@ -48,8 +49,9 @@ def test_get_task_status_unknown(client):
 
 def test_get_task_status_running(client):
     """GET status for running task returns full status."""
-    with patch('api_routes.long_task.get_task_status') as mock_get,          patch('api_routes.long_task.verify_firebase_token') as mock_auth:
+    with patch('api_routes.long_task.get_task_status') as mock_get,          patch('api_routes.long_task.verify_firebase_token') as mock_auth,          patch('api_routes.long_task._task_owned_by') as mock_owned:
         mock_auth.return_value = {"uid": "1"}
+        mock_owned.return_value = True
         mock_get.return_value = {
             'task_id': 'lt_001', 'status': 'running',
             'current_phase': 'analyzing', 'progress': 45,
@@ -217,3 +219,77 @@ def test_get_report_ownership_check_uses_token_uid(client):
 
     assert response.status_code == 200
     mock_owned.assert_called_once_with("lt_mine", 12345)
+
+
+# ── 越权修复: status / batch_status 端点归属校验 ──
+
+def test_status_other_users_task_returns_404(client):
+    """他人任务的状态查询 → 404。"""
+    with patch('api_routes.long_task.verify_firebase_token') as mock_auth, \
+         patch('api_routes.long_task._task_owned_by') as mock_owned:
+        mock_auth.return_value = {"uid": "12345"}
+        mock_owned.return_value = False
+        response = client.get("/long_task/lt_other/status")
+        assert response.status_code == 404
+
+
+def test_batch_status_filters_to_owned_only(client):
+    """批量查询只返回本人的任务，不报错（避免被用来枚举 task_id 存在性）。"""
+    with patch('api_routes.long_task.verify_firebase_token') as mock_auth, \
+         patch('api_routes.long_task._task_owned_by') as mock_owned, \
+         patch('api_routes.long_task.get_task_status') as mock_get:
+        mock_auth.return_value = {"uid": "12345"}
+        mock_owned.side_effect = lambda tid, uid: tid == "lt_mine"
+        mock_get.return_value = {'task_id': 'lt_mine', 'status': 'running'}
+
+        response = client.post("/long_task/batch_status",
+                               json={"task_ids": ["lt_mine", "lt_other"]})
+
+    assert response.status_code == 200
+    statuses = response.json()["statuses"]
+    assert "lt_mine" in statuses
+    assert "lt_other" not in statuses
+    # 只对本人任务查了状态
+    mock_get.assert_called_once_with("lt_mine")
+
+
+def test_batch_status_rejects_non_list_task_ids(client):
+    """task_ids 不是数组时安全降级为空结果，不抛异常。"""
+    with patch('api_routes.long_task.verify_firebase_token') as mock_auth:
+        mock_auth.return_value = {"uid": "12345"}
+        response = client.post("/long_task/batch_status", json={"task_ids": "lt_x"})
+    assert response.status_code == 200
+    assert response.json()["statuses"] == {}
+
+
+# ── 越权修复: _task_owned_by helper 本体（其余测试都把它整体 mock 了） ──
+
+def test_task_owned_by_binds_both_columns(client):
+    """归属查询必须同时约束 task_id 与 user_id —— 只约束其一即等于无归属校验。
+    直接测 helper 本体（其余测试都把它整体 mock 了，SQL 从不执行）。"""
+    with patch('sources.knowledge.knowledge.get_db_connection') as mock_db:
+        mock_conn = MagicMock()
+        cur = mock_conn.cursor.return_value.__enter__.return_value
+        cur.fetchone.return_value = {"1": 1}
+        mock_db.return_value = mock_conn
+
+        from api_routes.long_task import _task_owned_by
+        result = _task_owned_by("lt_mine", 12345)
+
+    assert result is True
+    sql, params = cur.execute.call_args.args
+    assert "WHERE task_id = %s AND user_id = %s" in " ".join(sql.split())
+    assert params == ("lt_mine", 12345)
+    mock_conn.close.assert_called_once()
+
+
+def test_task_owned_by_returns_false_when_no_row(client):
+    """查不到行 → False（调用方据此给 404）。"""
+    with patch('sources.knowledge.knowledge.get_db_connection') as mock_db:
+        mock_conn = MagicMock()
+        cur = mock_conn.cursor.return_value.__enter__.return_value
+        cur.fetchone.return_value = None
+        mock_db.return_value = mock_conn
+
+        from api_routes.long_task import _task_owned_by
+        assert _task_owned_by("lt_other", 12345) is False

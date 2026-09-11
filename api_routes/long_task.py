@@ -577,7 +577,10 @@ def register_long_task_routes(logger, config):
     async def task_status(task_id: str, http_request: Request):
         """Poll the current status of a long-running task."""
         auth_header = http_request.headers.get("Authorization")
-        verify_firebase_token(auth_header)  # Auth gate — any valid user
+        user = verify_firebase_token(auth_header)
+        user_id = int(user['uid'])
+        if not _task_owned_by(task_id, user_id):
+            raise HTTPException(status_code=404, detail="Task not found")
         logger.info(f"Status poll for task: {task_id}")
         status = get_task_status(task_id)
         return {"success": True, **status}
@@ -586,7 +589,8 @@ def register_long_task_routes(logger, config):
     async def batch_task_status(http_request: Request):
         """Poll status for multiple long-running tasks in one request."""
         auth_header = http_request.headers.get("Authorization")
-        verify_firebase_token(auth_header)
+        user = verify_firebase_token(auth_header)
+        user_id = int(user['uid'])
         body = await http_request.json()
         task_ids = body.get("task_ids", []) or []
         if not isinstance(task_ids, list):
@@ -595,6 +599,10 @@ def register_long_task_routes(logger, config):
         task_ids = task_ids[:20]
         statuses = {}
         for tid in task_ids:
+            # 非本人的任务直接略过（不报错、不返回 unknown）——
+            # 报错或返回 unknown 都会变成 task_id 存在性的探针
+            if not _task_owned_by(tid, user_id):
+                continue
             statuses[tid] = get_task_status(tid)
         return {"success": True, "statuses": statuses}
 
