@@ -23,7 +23,9 @@ page {
   --fs-title: 40px;
   --fs-body: 26px;
   --fs-meta: 26px;
-  --fs-msg: 22px;
+  /* 与 NavBar 的 .navbar-title 同号（32px）——用户要求消息文字的
+     字号与顶部会话标题一致 */
+  --fs-msg: 32px;
 
   background: var(--c-bg);
   color: var(--c-text);
