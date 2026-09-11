@@ -81,7 +81,17 @@ class SseParser {
     }
     if (!data) return null
     try {
-      return JSON.parse(data) as SseEvent
+      const parsed = JSON.parse(data)
+      // 正文 token 与其余事件的线路格式不同：
+      //   token           → 裸 JSON 字符串，如 data:"##"
+      //                      （后端 core.py 对缓冲后的正文做 json.dumps(字符串)）
+      //   status/step/... → 带 type 的对象
+      // 因此字符串载荷要归一成 {type:'token', content} 再交给 handleEvent，
+      // 否则会落进 default 分支被静默丢弃（正文永远为空）。
+      if (typeof parsed === 'string') {
+        return { type: 'token', content: parsed }
+      }
+      return parsed as SseEvent
     } catch {
       return null
     }
