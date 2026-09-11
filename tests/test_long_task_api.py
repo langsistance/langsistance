@@ -67,7 +67,11 @@ def test_get_task_status_running(client):
 
 def test_get_report_not_found(client):
     """GET report for unknown task returns 404."""
-    with patch('api_routes.long_task.create_storage') as mock_create:
+    with patch('api_routes.long_task.verify_firebase_token') as mock_auth, \
+         patch('api_routes.long_task._task_owned_by') as mock_owned, \
+         patch('api_routes.long_task.create_storage') as mock_create:
+        mock_auth.return_value = {"uid": "1"}
+        mock_owned.return_value = True
         mock_storage = MagicMock()
         mock_storage.get = AsyncMock(side_effect=FileNotFoundError("no file"))
         mock_create.return_value = mock_storage
@@ -78,7 +82,11 @@ def test_get_report_not_found(client):
 
 def test_get_report_success(client):
     """GET report for completed task returns file."""
-    with patch('api_routes.long_task.create_storage') as mock_create:
+    with patch('api_routes.long_task.verify_firebase_token') as mock_auth, \
+         patch('api_routes.long_task._task_owned_by') as mock_owned, \
+         patch('api_routes.long_task.create_storage') as mock_create:
+        mock_auth.return_value = {"uid": "1"}
+        mock_owned.return_value = True
         mock_storage = MagicMock()
         mock_storage.get = AsyncMock(return_value=b"fake pdf content")
         mock_create.return_value = mock_storage
@@ -174,3 +182,38 @@ def test_retry_patent_analysis_uses_search_scenario(client):
     call_args = mock_dispatch.call_args
     assert call_args.args[0] == "patent_analysis"
     assert call_args.args[2]["scenario"] == "search"
+
+
+# ── 越权修复: report 端点鉴权与归属校验 ──
+
+def test_get_report_requires_auth(client):
+    """无 Authorization 头 → 401（修复前该端点完全无鉴权）。"""
+    response = client.get("/long_task/lt_001/report?format=pdf")
+    assert response.status_code == 401
+
+
+def test_get_report_other_users_task_returns_404(client):
+    """他人任务 → 404（不是 403，不暴露"存在但不属于你"）。"""
+    with patch('api_routes.long_task.verify_firebase_token') as mock_auth, \
+         patch('api_routes.long_task._task_owned_by') as mock_owned:
+        mock_auth.return_value = {"uid": "12345"}
+        mock_owned.return_value = False
+        response = client.get("/long_task/lt_other/report?format=pdf")
+        assert response.status_code == 404
+
+
+def test_get_report_ownership_check_uses_token_uid(client):
+    """归属查询必须用 token 里的 uid，且带上 task_id —— 断言实际绑定参数，
+    不只断言状态码（否则参数传错也能过）。"""
+    with patch('api_routes.long_task.verify_firebase_token') as mock_auth, \
+         patch('api_routes.long_task._task_owned_by') as mock_owned:
+        mock_auth.return_value = {"uid": "12345"}
+        mock_owned.return_value = True
+        with patch('api_routes.long_task.create_storage') as mock_create:
+            mock_storage = MagicMock()
+            mock_storage.get = AsyncMock(return_value=b"fake pdf")
+            mock_create.return_value = mock_storage
+            response = client.get("/long_task/lt_mine/report?format=pdf")
+
+    assert response.status_code == 200
+    mock_owned.assert_called_once_with("lt_mine", 12345)

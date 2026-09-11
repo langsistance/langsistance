@@ -110,6 +110,30 @@ def _lookup_task_by_query_id_mysql(user_id: int, query_id: str) -> dict | None:
     return None
 
 
+def _task_owned_by(task_id: str, user_id: int) -> bool:
+    """True when *task_id* belongs to *user_id*.
+
+    安全闸口，失败时**保守拒绝**（返回 False → 调用方给 404）：DB 故障时
+    宁可拒绝合法请求，也不能放行越权读取。
+    """
+    if not task_id:
+        return False
+    try:
+        from sources.knowledge.knowledge import get_db_connection
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM long_tasks WHERE task_id = %s AND user_id = %s",
+                    (task_id, user_id),
+                )
+                return cur.fetchone() is not None
+        finally:
+            conn.close()
+    except Exception as e:
+        return False
+
+
 _TASK_TYPE_TO_SCENARIO = {
     "prosecution_analysis": "prosecution",
     "family_analysis": "families",
@@ -633,6 +657,12 @@ def register_long_task_routes(logger, config):
     @router.get("/long_task/{task_id}/report")
     async def download_report(task_id: str, format: str = Query(..., pattern="^(pdf|docx)$"), http_request: Request = None):
         """Download a completed report file for a task."""
+        auth_header = http_request.headers.get("Authorization")
+        user = verify_firebase_token(auth_header)
+        user_id = int(user['uid'])
+        if not _task_owned_by(task_id, user_id):
+            # 404 而非 403 —— 不暴露「存在但不属于你」
+            raise HTTPException(status_code=404, detail="Report not found")
         logger.info(f"Report download for task: {task_id}, format: {format}")
         storage = create_storage(get_storage_config())
         filename = f"report.{format}"
