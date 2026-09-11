@@ -1,0 +1,13 @@
+.rd {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  background: var(--c-surface);
+  padding: 60px 40px;
+  box-sizing: border-box;
+}
+
+.rd-placeholder {
+  font-size: var(--fs-body);
+  color: var(--c-text-muted);
+}

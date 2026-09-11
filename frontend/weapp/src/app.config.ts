@@ -5,6 +5,7 @@ const config = {
     'pages/chat/index',    // 对话页（形态一：首页即对话页）
     'pages/login/index',   // 微信登录（M1）
     'pages/privacy/index', // 隐私政策（M3）
+    'pages/results/index', // 专利结果列表（结果面板）
   ],
   window: {
     backgroundTextStyle: 'light',
