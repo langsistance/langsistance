@@ -7,7 +7,12 @@ import {
   Textarea,
   View,
 } from '@tarojs/components'
-import Taro, { useDidHide, useDidShow } from '@tarojs/taro'
+import Taro, {
+  useDidHide,
+  useDidShow,
+  useShareAppMessage,
+  useShareTimeline,
+} from '@tarojs/taro'
 import {
   ChatMsg,
   createSession,
@@ -208,6 +213,24 @@ export default function ChatPage() {
   useDidShow(() => {
     if (activeTaskIds().length > 0) startPolling()
   })
+
+  // 分享：只做转发卡片，path 指向首页。不做分享特定会话——会话有归属校验，
+  // 转发出去对方只会看到「会话不存在」。
+  useShareAppMessage(() => ({
+    title: sessionTitle ? `CopiioAI：${sessionTitle}` : 'CopiioAI 专利助手',
+    path: '/pages/chat/index',
+  }))
+
+  useShareTimeline(() => ({
+    title: sessionTitle ? `CopiioAI：${sessionTitle}` : 'CopiioAI 专利助手',
+    query: '',
+  }))
+
+  useEffect(() => {
+    Taro.showShareMenu({
+      showShareItems: ['shareAppMessage', 'shareTimeline'],
+    })
+  }, [])
 
   // 卸载时清理：停计时器与轮询 + 结算可能悬着的隐私授权等待
   useEffect(
