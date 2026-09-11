@@ -11,7 +11,8 @@
   "scripts": {
     "dev:weapp": "taro build --type weapp --watch",
     "build:weapp": "taro build --type weapp",
-    "tsc": "tsc --noEmit"
+    "tsc": "tsc --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/**/*.test.mjs"
   },
   "browserslist": [
     "last 3 versions",
