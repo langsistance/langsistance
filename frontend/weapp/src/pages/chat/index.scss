@@ -221,6 +221,45 @@
   color: var(--c-text-muted);
 }
 
+/* ── 结果工件（CSV/XLSX 下载）── */
+.chat-msg-artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  gap: 12px;
+}
+
+.chat-artifact {
+  display: flex;
+  align-items: center;
+  padding: 10px 18px;
+  border-radius: 12px;
+  background: var(--c-primary-soft);
+  border: 1px solid rgba(16, 163, 127, 0.25);
+
+  &:active {
+    background: #d8ece6;
+  }
+}
+
+.chat-artifact-badge {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--c-primary-deep);
+}
+
+.chat-artifact-label {
+  margin-left: 10px;
+  font-size: var(--fs-meta);
+  color: var(--c-primary-deep);
+}
+
+/* 「导出原文」单独一行，与工件按钮拉开距离 */
+.chat-artifact-plain {
+  align-self: flex-start;
+  margin-top: 12px;
+}
+
 /* ── 处理中卡片（等待期显示当前步骤，对齐 web 端的处理态观感）── */
 .chat-status {
   display: flex;

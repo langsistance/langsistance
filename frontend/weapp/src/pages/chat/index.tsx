@@ -15,7 +15,7 @@ import {
   fetchSession,
   saveMessages,
 } from '../../services/chat'
-import { streamQuery } from '../../services/chatStream'
+import { CompletedArtifact, streamQuery } from '../../services/chatStream'
 import { errorText } from '../../services/api'
 import { isLoggedIn } from '../../services/auth'
 import {
@@ -41,10 +41,12 @@ import SessionDrawer from '../../components/SessionDrawer'
 import RenameModal from '../../components/RenameModal'
 import PrivacyPopup from '../../components/PrivacyPopup'
 import { pickFile, PickedFile } from '../../services/upload'
-// 只引本页真正用到的两个。brief 多列的 exportMarkdown / saveBase64File
-// 本页无调用点，而 tsconfig 开了 noUnusedLocals，多引即编译失败：
-// exportMarkdown 由 Task 11 接，saveBase64File 由 Task 11 的 artifact 落盘接。
-import { downloadReport, openOrShareFile } from '../../services/download'
+import {
+  downloadReport,
+  exportMarkdown,
+  openOrShareFile,
+  saveBase64File,
+} from '../../services/download'
 import {
   abandonPrivacy,
   resolvePrivacy,
@@ -58,6 +60,8 @@ interface MsgView {
   content: string
   html?: string
   patents?: string[]
+  /** 本轮回答附带的可下载工件（CSV/XLSX…），收齐后一次性挂上 */
+  artifacts?: CompletedArtifact[]
   streaming?: boolean
   /** 长任务状态（上传分支专用）。不走 web 的标记编码 + 正则反解——
       小程序的消息本来就是结构化对象。 */
@@ -369,6 +373,24 @@ export default function ChatPage() {
     })
   }, [])
 
+  // 工件收齐回调（artifact_end 后一次性到达）。appendToken / finalizeAssistant
+  // 都是展开旧对象换新，artifacts 会被自动带过去；但这两处都在流中途发生，
+  // 必须用函数式 setMsgs 拿最新一条，否则会把并发写入的正文覆盖回去。
+  const onArtifactsReady = useCallback((items: CompletedArtifact[]) => {
+    if (items.length === 0) return
+    setMsgs((prev) => {
+      const next = prev.slice()
+      const last = next[next.length - 1]
+      if (last && last.role === 'assistant') {
+        next[next.length - 1] = {
+          ...last,
+          artifacts: [...(last.artifacts || []), ...items],
+        }
+      }
+      return next
+    })
+  }, [])
+
   async function send() {
     const text = input.trim()
     if (!text || sending) return
@@ -459,6 +481,7 @@ export default function ChatPage() {
                 appendToken(chunk)
               }
             },
+            onArtifactsReady,
             onError: (message) => setError(message),
           })
         } finally {
@@ -536,6 +559,35 @@ export default function ChatPage() {
     }
   }
 
+  async function handleDownloadArtifact(a: CompletedArtifact) {
+    try {
+      Taro.showLoading({ title: '正在保存…' })
+      const path = await saveBase64File(a.filename, a.chunks)
+      Taro.hideLoading()
+      const how = await openOrShareFile(path, a.format)
+      if (how === 'shared') {
+        Taro.showToast({ title: '已转发到聊天', icon: 'none' })
+      }
+    } catch (err) {
+      Taro.hideLoading()
+      Taro.showToast({ title: errorText(err, '保存失败'), icon: 'none' })
+    }
+  }
+
+  async function handleExportMarkdown(m: MsgView) {
+    try {
+      const ts = new Date()
+        .toISOString()
+        .replace(/[:.]/g, '-')
+        .slice(0, -5)
+      const path = await exportMarkdown(`CopiioAI_Chat_${ts}.md`, m.content)
+      await openOrShareFile(path, 'md')
+      Taro.showToast({ title: '已转发到聊天', icon: 'none' })
+    } catch (err) {
+      Taro.showToast({ title: errorText(err, '导出失败'), icon: 'none' })
+    }
+  }
+
   function copyPatent(pid: string) {
     Taro.setClipboardData({ data: pid })
   }
@@ -600,6 +652,37 @@ export default function ChatPage() {
                       </View>
                     ),
                   )}
+                </View>
+              ) : null}
+              {m.role === 'assistant' &&
+              (m.artifacts || []).filter((a) => a.format !== 'json').length > 0 ? (
+                <View className='chat-msg-artifacts'>
+                  {(m.artifacts || [])
+                    .filter((a) => a.format !== 'json')
+                    .map((a) => (
+                      <View
+                        key={a.artifactId}
+                        className='chat-artifact'
+                        onClick={() => handleDownloadArtifact(a)}
+                      >
+                        <Text className='chat-artifact-badge'>
+                          {a.format.toUpperCase()}
+                        </Text>
+                        <Text className='chat-artifact-label'>
+                          {a.format === 'csv' ? '导出 CSV' : '导出 Excel'}
+                        </Text>
+                      </View>
+                    ))}
+                </View>
+              ) : null}
+
+              {m.role === 'assistant' && m.content ? (
+                <View
+                  className='chat-artifact chat-artifact-plain'
+                  onClick={() => handleExportMarkdown(m)}
+                >
+                  <Text className='chat-artifact-badge'>MD</Text>
+                  <Text className='chat-artifact-label'>导出原文</Text>
                 </View>
               ) : null}
               {m.role === 'assistant' && m.patents && m.patents.length > 0 ? (

@@ -124,6 +124,13 @@ export function streamQuery(
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const parser = new SseParser()
+    // 工件缓冲：chunk 只 push 进这里，**不回调页面**——multi-MB 工件每帧
+    // 都触发重渲染会把界面卡死（web 在 useChatStream.ts:275-276 有同样结论）。
+    // 收齐（artifact_end）后一次性交付。
+    const artifactBuf = new Map<
+      string,
+      { meta: ArtifactPayload; chunks: string[] }
+    >()
     let finished = false
     const token = Taro.getStorageSync(STORAGE_KEYS.wxToken)
     const queryId = `mini_${Date.now().toString(36)}_${Math.floor(
@@ -141,7 +148,7 @@ export function streamQuery(
       try {
         const raw = decodeChunk(res.data)
         for (const ev of parser.push(raw)) {
-          handleEvent(ev, cb, finish)
+          handleEvent(ev, cb, finish, artifactBuf)
         }
       } catch (e) {
         finish(e instanceof Error ? e : new Error('响应解析失败'))
@@ -211,6 +218,7 @@ function handleEvent(
   ev: SseEvent,
   cb: StreamCallbacks,
   finish: (err?: Error) => void,
+  artifactBuf: Map<string, { meta: ArtifactPayload; chunks: string[] }>,
 ) {
   switch (ev.type) {
     case 'token':
@@ -235,6 +243,37 @@ function handleEvent(
       cb.onDone?.()
       finish()
       break
+    case 'artifact_start': {
+      // 后端把 metadata 平铺进 start 帧（sse_callback.py:56-59），
+      // 字段名是 snake_case
+      const id = String(ev.artifact_id || ev.artifactId || '')
+      if (!id) break
+      artifactBuf.set(id, {
+        meta: {
+          format: String(ev.format || ''),
+          filename: String(ev.filename || ''),
+          mimeType: String(ev.mime_type || ev.mimeType || ''),
+          rowCount: Number(ev.row_count || 0),
+          columnCount: Number(ev.column_count || 0),
+        },
+        chunks: [],
+      })
+      break
+    }
+    case 'artifact_chunk': {
+      const id = String(ev.artifact_id || ev.artifactId || '')
+      const slot = artifactBuf.get(id)
+      if (slot && ev.data) slot.chunks.push(String(ev.data))
+      break
+    }
+    case 'artifact_end': {
+      const id = String(ev.artifact_id || ev.artifactId || '')
+      const slot = artifactBuf.get(id)
+      if (!slot) break
+      artifactBuf.delete(id)
+      cb.onArtifactsReady?.([{ artifactId: id, ...slot.meta, chunks: slot.chunks }])
+      break
+    }
     default:
       cb.onEvent?.(ev)
   }
