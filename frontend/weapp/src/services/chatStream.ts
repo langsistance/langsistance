@@ -116,6 +116,19 @@ export class SseParser {
   }
 }
 
+/**
+ * 流式**静默**上限（非总时长）。
+ *
+ * 后端静默期每 15s 发一次 `: ping`（core.py:1696 heartbeat_interval / :1816
+ * 发送），所以连接活着时静默不会超过约 15s。120s ≈ 连续漏掉 8 次心跳，
+ * 只有真的断了才会触发。
+ *
+ * 留这么大余量是因为心跳依赖事件循环不被阻塞——若服务端某处又有同步
+ * CPU 活挡在循环上（历史上工件生成就是，见 general_agent._build_artifacts_off_loop），
+ * 心跳会停发。宁可多等，也不要在答案已经答完时误报超时。
+ */
+const IDLE_TIMEOUT_MS = 120000
+
 /** 发起一次流式问答。resolve 于收到 end；reject 于错误事件/网络失败。 */
 export function streamQuery(
   query: string,
@@ -144,7 +157,30 @@ export function streamQuery(
       else resolve()
     }
 
+    // 空闲看门狗——量的是**静默时长**，不是总时长。
+    //
+    // 后端把 end 帧排在 agent 干完活之后才入队（core.py:1429），而工件
+    // （multi-MB 的 CSV/XLSX）就是在这一段里生成的（core.py:1730-1737）。
+    // 这段时间**没有任何 data: 帧**，只有每 15s 一次的 `: ping` 心跳。
+    // 早先这里是个 150s 的定值 setTimeout，量的是总时长且从不重置——大结果集
+    // 一旦让这一段超过 150s，就会把一个**已经答完**的对话判成超时：答案因为
+    // finalizeAssistant() 在 finally 里已执行而留在屏幕上，底下却挂一条
+    // 「请求超时，请重试」。
+    //
+    // 改成每收到一个 chunk 就重置。心跳也是 chunk，所以只要连接活着就不会
+    // 触发，判定的才是真正的断连。
+    let idleTimer: ReturnType<typeof setTimeout> | null = null
+    function armIdleTimer() {
+      if (idleTimer) clearTimeout(idleTimer)
+      idleTimer = setTimeout(() => {
+        req.offChunkReceived(onChunk)
+        finish(new Error('请求超时，请重试'))
+      }, IDLE_TIMEOUT_MS)
+    }
+
     const onChunk: ChunkCallback = (res) => {
+      // 收到任何字节都说明连接还活着——心跳帧也算，故放在解析之前
+      armIdleTimer()
       try {
         const raw = decodeChunk(res.data)
         for (const ev of parser.push(raw)) {
@@ -179,10 +215,7 @@ export function streamQuery(
     // 的返回值），Taro 命名空间上没有这两个 API。
     req.onChunkReceived(onChunk)
 
-    const timer = setTimeout(() => {
-      req.offChunkReceived(onChunk)
-      finish(new Error('请求超时，请重试'))
-    }, 150000)
+    armIdleTimer()
 
     req
       .then((resp) => {
@@ -208,7 +241,7 @@ export function streamQuery(
         )
       })
       .finally(() => {
-        clearTimeout(timer)
+        if (idleTimer) clearTimeout(idleTimer)
         req.offChunkReceived(onChunk)
       })
   })

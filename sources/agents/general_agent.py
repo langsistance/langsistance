@@ -80,6 +80,18 @@ _HISTORY_NOISE_MARKERS = ("🔬", "✅", "❌", "⏸", "⏹", "Task ID", "任务
 _CONV_PATENT_IDS_KEY_PREFIX = "lt:conv"
 _CONV_PATENT_IDS_TTL = 3600  # 1 hour
 
+
+async def _build_artifacts_off_loop(*args, **kwargs):
+    """在线程里生成导出工件。
+
+    ``build_result_artifacts`` 是同步 CPU 活（纯 Python 的 zipfile 拼
+    multi-MB 的 xlsx/csv）。直接在事件循环里调用会**阻塞整个循环**：
+    ``/query_stream`` 的 SSE 生成器停转、``: ping`` 心跳断供。后果是客户端
+    在答案正文已经出完之后长时间收不到任何字节——正文看起来已经答完，
+    底下却挂一条「请求超时」，而服务端其实还在正常干活。
+    """
+    return await asyncio.to_thread(build_result_artifacts, *args, **kwargs)
+
 # Regex to strip user_id / query_id from historical user messages before
 # retaining them in multi-turn memory (current call still embeds them fresh).
 _STRIP_IDS_RE = re.compile(
@@ -2674,7 +2686,7 @@ Begin your response now:
             on_artifacts = getattr(callback_handler, "on_artifacts", None)
             if on_artifacts:
                 _replace_uspto_download_urls_for_batch(items_for_export)
-                artifacts = build_result_artifacts(
+                artifacts = await _build_artifacts_off_loop(
                     items_for_export,
                     source=_infer_result_source(self.knowledgeTool[1]),
                     query_id=getattr(self, "_last_query_id", None),
@@ -2752,7 +2764,7 @@ Begin your response now:
             on_artifacts = getattr(callback_handler, "on_artifacts", None)
             if on_artifacts:
                 _replace_uspto_download_urls_for_batch(items_for_export)
-                artifacts = build_result_artifacts(
+                artifacts = await _build_artifacts_off_loop(
                     items_for_export,
                     source=_infer_result_source(self.knowledgeTool[1]),
                     query_id=getattr(self, "_last_query_id", None),
@@ -2846,7 +2858,7 @@ Begin your response now:
         on_artifacts = getattr(callback_handler, "on_artifacts", None)
         if on_artifacts:
             _replace_uspto_download_urls_for_batch(items_for_export)
-            artifacts = build_result_artifacts(
+            artifacts = await _build_artifacts_off_loop(
                 items_for_export,
                 source=_infer_result_source(self.knowledgeTool[1]),
                 query_id=getattr(self, "_last_query_id", None),
