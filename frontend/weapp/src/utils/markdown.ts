@@ -46,28 +46,33 @@ function isSeparatorRow(cells: string[]): boolean {
  * （正文里的 `code` 也因此按浏览器默认走了等宽字体，看起来像"好几种字体"）。
  * 官方文档明确「全局支持 class 和 style 属性」，所以把样式直接注进 HTML。
  *
- * 字号与 app.scss 的 --fs-body / --fs-meta 保持一致（同为 26px）。
- * 内联样式里不能用 var()（rich-text 内部节点拿不到自定义属性），故此处硬编码，
- * 调整时两处需要同步改。
+ * ⚠️ 单位必须写 rpx，绝不能用 px。
+ * 这些字符串是内联进 HTML 的，**不经过 SCSS 编译管线**——Taro 的 pxtransform
+ * 只处理 .scss 文件。小程序里裸 px 是物理像素，而 SCSS 里的 32px 会被编译成
+ * 32rpx（≈16pt @375pt 屏）。两边写同一个数字，实际渲染相差一倍，
+ * 表现为「回答的字比提问大一倍」。
+ *
+ * 字号与 app.scss 的 --fs-msg 对齐（32rpx）；内联样式里不能用 var()
+ * （rich-text 内部节点拿不到自定义属性），故此处硬编码，调整时两处需同步。
  */
 const BLOCK_STYLE: Record<string, string> = {
-  p: 'margin:0 0 28px;font-size:32px;line-height:1.75;letter-spacing:0.3px;',
+  p: 'margin:0 0 28rpx;font-size:32rpx;line-height:1.75;letter-spacing:0.3rpx;',
   // 标题带上间距：标题与**上方内容**之间的距离同样属于段落间距，
   // 只给下间距会让标题和上一段黏在一起。
   // 字重统一 600——strong 默认是 700，标题 600，正文 400 三档混在一起
   // 会让同一段里的粗体忽重忽轻。
-  h1: 'margin:36px 0 18px;font-size:32px;font-weight:600;line-height:1.5;',
-  h2: 'margin:36px 0 18px;font-size:32px;font-weight:600;line-height:1.5;',
-  h3: 'margin:32px 0 16px;font-size:32px;font-weight:600;line-height:1.5;',
-  h4: 'margin:28px 0 14px;font-size:32px;font-weight:600;line-height:1.5;',
-  ul: 'margin:0 0 28px;padding-left:36px;',
-  ol: 'margin:0 0 28px;padding-left:36px;',
+  h1: 'margin:36rpx 0 18rpx;font-size:32rpx;font-weight:600;line-height:1.5;',
+  h2: 'margin:36rpx 0 18rpx;font-size:32rpx;font-weight:600;line-height:1.5;',
+  h3: 'margin:32rpx 0 16rpx;font-size:32rpx;font-weight:600;line-height:1.5;',
+  h4: 'margin:28rpx 0 14rpx;font-size:32rpx;font-weight:600;line-height:1.5;',
+  ul: 'margin:0 0 28rpx;padding-left:36rpx;',
+  ol: 'margin:0 0 28rpx;padding-left:36rpx;',
   // 列表项间距也属于段落级间距——同样只能内联才生效
-  li: 'margin:0 0 12px;font-size:32px;line-height:1.75;letter-spacing:0.3px;',
+  li: 'margin:0 0 12rpx;font-size:32rpx;line-height:1.75;letter-spacing:0.3rpx;',
   blockquote:
-    'margin:0 0 28px;padding-left:22px;border-left:4px solid #e1e4e8;color:#6e7781;',
-  pre: 'margin:0 0 28px;padding:18px;background:#f6f8fa;border-radius:12px;font-size:28px;line-height:1.7;',
-  code: 'font-size:28px;',
+    'margin:0 0 28rpx;padding-left:22rpx;border-left:4rpx solid #e1e4e8;color:#6e7781;',
+  pre: 'margin:0 0 28rpx;padding:18rpx;background:#f6f8fa;border-radius:12rpx;font-size:28rpx;line-height:1.7;',
+  code: 'font-size:28rpx;',
   // 粗体统一到 600：正文里 **…** 用得很密，700 会明显比标题还重
   strong: 'font-weight:600;',
   b: 'font-weight:600;',
