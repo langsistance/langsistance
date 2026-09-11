@@ -1,0 +1,44 @@
+.navbar {
+  background: var(--c-bg);
+  flex-shrink: 0;
+}
+
+.navbar-inner {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+/* 标题居中；左右给胶囊/按钮留出空间，避免视觉偏移 */
+.navbar-title {
+  position: absolute;
+  left: 160px;
+  right: 160px;
+  text-align: center;
+  font-size: 32px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.navbar-menu {
+  position: relative;
+  z-index: 1;
+  width: 88px;
+  height: 100%;
+  margin-left: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  &:active {
+    opacity: 0.5;
+  }
+}
+
+.navbar-menu-icon {
+  font-size: 40px;
+  line-height: 1;
+  color: var(--c-text);
+}
