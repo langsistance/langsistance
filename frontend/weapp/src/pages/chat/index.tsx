@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Button,
   RichText,
@@ -67,6 +67,30 @@ export default function ChatPage() {
   const [renameError, setRenameError] = useState('')
 
   const scrollToBottom = () => setAnchor(`msg-${Date.now()}`)
+
+  // 处理耗时（本地计时）：等待期状态后面显示秒数，对齐 web 端的观感。
+  // 后端的 agent_elapsed 只在结束时推一次，等待期看不到跳动。
+  const [elapsed, setElapsed] = useState(0)
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  function startTimer() {
+    setElapsed(0)
+    const t0 = Date.now()
+    timerRef.current = setInterval(
+      () => setElapsed(Math.floor((Date.now() - t0) / 1000)),
+      1000,
+    )
+  }
+
+  function stopTimer() {
+    if (timerRef.current) {
+      clearInterval(timerRef.current)
+      timerRef.current = null
+    }
+  }
+
+  // 卸载时清理，避免流未结束时留下计时器
+  useEffect(() => () => stopTimer(), [])
 
   // 首页必须自己把门（登录态检查从已删除的会话列表页搬来）
   useDidShow(() => {
@@ -221,6 +245,7 @@ export default function ChatPage() {
     setSending(true)
     setStatus('连接中…')
     setError('')
+    startTimer()
     try {
       const history: ChatMsg[] = msgs.map((m) => ({
         role: m.role,
@@ -266,6 +291,7 @@ export default function ChatPage() {
     } catch (err) {
       setError(errorText(err))
     } finally {
+      stopTimer()
       setSending(false)
       setStatus('')
       scrollToBottom()
@@ -304,7 +330,11 @@ export default function ChatPage() {
               key={`${m.role}-${i}`}
               className={`chat-msg chat-msg-${m.role}`}
             >
-              {m.role === 'assistant' && m.content ? (
+              {m.role === 'user' ? (
+                <View className='chat-msg-body'>
+                  <Text className='chat-msg-text'>{m.content}</Text>
+                </View>
+              ) : m.content ? (
                 <View className='chat-msg-body'>
                   {parseMarkdown(m.content).map((seg, si) =>
                     seg.kind === 'html' ? (
@@ -331,13 +361,7 @@ export default function ChatPage() {
                     ),
                   )}
                 </View>
-              ) : (
-                <View className='chat-msg-body'>
-                  <Text className='chat-msg-text'>
-                    {m.content || (m.streaming ? '…' : '')}
-                  </Text>
-                </View>
-              )}
+              ) : null}
               {m.role === 'assistant' && m.patents && m.patents.length > 0 ? (
                 <View className='chat-msg-patents'>
                   {m.patents.map((pid) => (
@@ -355,9 +379,10 @@ export default function ChatPage() {
             </View>
           ))}
 
-          {status ? (
+          {sending ? (
             <View className='chat-status'>
-              <Text className='text-muted'>{status}</Text>
+              <Text className='chat-status-text'>{status || '处理中…'}</Text>
+              <Text className='chat-status-time'>{elapsed}s</Text>
             </View>
           ) : null}
           {error ? (
