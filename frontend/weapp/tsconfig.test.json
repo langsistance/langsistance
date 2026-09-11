@@ -17,6 +17,8 @@
     "src/utils/**/*.mjs",
     "src/services/resultsStore.ts",
     "src/services/resultsStore.test.mjs",
-    "src/services/taroRuntimeStubs.ts"
+    "src/services/taroRuntimeStubs.ts",
+    "src/services/patentDetail.ts",
+    "src/services/patentDetail.test.mjs"
   ]
 }
