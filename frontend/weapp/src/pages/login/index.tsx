@@ -53,7 +53,12 @@ export default function LoginPage() {
         登录即代表同意
         <Text
           className='login-legal-link'
-          onClick={() => Taro.navigateTo({ url: '/pages/privacy/index' })}
+          onClick={() =>
+            Taro.navigateTo({
+              url: '/pages/privacy/index',
+              fail: () => Taro.redirectTo({ url: '/pages/privacy/index' }),
+            })
+          }
         >
           《隐私政策》
         </Text>
