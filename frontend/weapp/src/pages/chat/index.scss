@@ -387,8 +387,52 @@
   }
 }
 
+/* 发送中：省略号是禁用态唯一的进度反馈，仍用文字 */
 .chat-send-icon {
-  font-size: 44px;
+  font-size: 40px;
   line-height: 1;
   font-weight: 600;
+}
+
+/* 向上箭头：用 View + transform **画**出来，不用字体字形。
+   『↑』这类字符的粗细与形状随平台字体走（iOS / Android / 开发者工具
+   各不相同），细体下尤其单薄。豆包 / DeepSeek / ChatGPT 用的都是绘制的
+   图标，这里对齐它们，形状跨平台完全一致。
+   构造：一根圆角箭杆 + 两条共顶点、各向外旋 45° 的圆角边（成 ^）。 */
+.chat-send-arrow {
+  position: relative;
+  width: 40px;
+  height: 40px;
+}
+
+.chat-send-stem {
+  position: absolute;
+  left: 50%;
+  bottom: 6px;
+  width: 6px;
+  height: 22px;
+  margin-left: -3px;
+  border-radius: 3px;
+  background: #fff;
+}
+
+.chat-send-head {
+  position: absolute;
+  left: 50%;
+  top: 6px;
+  width: 6px;
+  height: 16px;
+  margin-left: -3px;
+  border-radius: 3px;
+  background: #fff;
+  /* 顶点固定在边的上端，旋转后两边的顶点重合于箭尖 */
+  transform-origin: 50% 0;
+}
+
+.chat-send-head-left {
+  transform: rotate(-45deg);
+}
+
+.chat-send-head-right {
+  transform: rotate(45deg);
 }

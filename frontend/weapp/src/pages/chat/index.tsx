@@ -775,7 +775,15 @@ export default function ChatPage() {
           disabled={sending || !input.trim()}
           onClick={send}
         >
-          <Text className='chat-send-icon'>{sending ? '…' : '↑'}</Text>
+          {sending ? (
+            <Text className='chat-send-icon'>…</Text>
+          ) : (
+            <View className='chat-send-arrow'>
+              <View className='chat-send-stem' />
+              <View className='chat-send-head chat-send-head-left' />
+              <View className='chat-send-head chat-send-head-right' />
+            </View>
+          )}
         </Button>
       </View>
 
