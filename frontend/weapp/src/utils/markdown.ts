@@ -56,22 +56,22 @@ function isSeparatorRow(cells: string[]): boolean {
  * （rich-text 内部节点拿不到自定义属性），故此处硬编码，调整时两处需同步。
  */
 const BLOCK_STYLE: Record<string, string> = {
-  p: 'margin:0 0 28rpx;font-size:32rpx;line-height:1.75;letter-spacing:0.3rpx;',
+  p: 'margin:0 0 56rpx;font-size:32rpx;line-height:1.75;letter-spacing:1rpx;',
   // 标题带上间距：标题与**上方内容**之间的距离同样属于段落间距，
   // 只给下间距会让标题和上一段黏在一起。
   // 字重统一 600——strong 默认是 700，标题 600，正文 400 三档混在一起
   // 会让同一段里的粗体忽重忽轻。
-  h1: 'margin:36rpx 0 18rpx;font-size:32rpx;font-weight:600;line-height:1.5;',
-  h2: 'margin:36rpx 0 18rpx;font-size:32rpx;font-weight:600;line-height:1.5;',
-  h3: 'margin:32rpx 0 16rpx;font-size:32rpx;font-weight:600;line-height:1.5;',
-  h4: 'margin:28rpx 0 14rpx;font-size:32rpx;font-weight:600;line-height:1.5;',
-  ul: 'margin:0 0 28rpx;padding-left:36rpx;',
-  ol: 'margin:0 0 28rpx;padding-left:36rpx;',
+  h1: 'margin:72rpx 0 36rpx;font-size:32rpx;font-weight:600;line-height:1.5;',
+  h2: 'margin:72rpx 0 36rpx;font-size:32rpx;font-weight:600;line-height:1.5;',
+  h3: 'margin:64rpx 0 32rpx;font-size:32rpx;font-weight:600;line-height:1.5;',
+  h4: 'margin:56rpx 0 28rpx;font-size:32rpx;font-weight:600;line-height:1.5;',
+  ul: 'margin:0 0 56rpx;padding-left:56rpx;',
+  ol: 'margin:0 0 56rpx;padding-left:56rpx;',
   // 列表项间距也属于段落级间距——同样只能内联才生效
-  li: 'margin:0 0 12rpx;font-size:32rpx;line-height:1.75;letter-spacing:0.3rpx;',
+  li: 'margin:0 0 24rpx;font-size:32rpx;line-height:1.75;letter-spacing:1rpx;',
   blockquote:
-    'margin:0 0 28rpx;padding-left:22rpx;border-left:4rpx solid #e1e4e8;color:#6e7781;',
-  pre: 'margin:0 0 28rpx;padding:18rpx;background:#f6f8fa;border-radius:12rpx;font-size:28rpx;line-height:1.7;',
+    'margin:0 0 56rpx;padding-left:44rpx;border-left:8rpx solid #e1e4e8;color:#6e7781;',
+  pre: 'margin:0 0 56rpx;padding:36rpx;background:#f6f8fa;border-radius:24rpx;font-size:28rpx;line-height:1.7;',
   code: 'font-size:28rpx;',
   // 粗体统一到 600：正文里 **…** 用得很密，700 会明显比标题还重
   strong: 'font-weight:600;',
