@@ -14,9 +14,10 @@ page {
   --c-danger: #d32f2f;
   --c-warn: #f57c00;
 
-  /* 字号刻度：全局只用三档，避免字号杂乱（正文/元信息/大标题） */
+  /* 字号刻度：正文与元信息同档（26px），仅大标题另设一档。
+     正文原先 30px 偏大——正文与表格并排时落差明显。 */
   --fs-title: 40px;
-  --fs-body: 30px;
+  --fs-body: 26px;
   --fs-meta: 26px;
 
   background: var(--c-bg);

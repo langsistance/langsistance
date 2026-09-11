@@ -49,21 +49,26 @@ function isSeparatorRow(cells: string[]): boolean {
  * 数值与 app.scss 的字号刻度保持一致（30 正文 / 26 元信息）。
  */
 const BLOCK_STYLE: Record<string, string> = {
-  p: 'margin:0 0 28px;font-size:30px;line-height:1.75;letter-spacing:0.3px;',
+  p: 'margin:0 0 28px;font-size:26px;line-height:1.75;letter-spacing:0.3px;',
   // 标题带上间距：标题与**上方内容**之间的距离同样属于段落间距，
   // 只给下间距会让标题和上一段黏在一起。
-  h1: 'margin:36px 0 18px;font-size:32px;font-weight:600;line-height:1.5;',
-  h2: 'margin:36px 0 18px;font-size:32px;font-weight:600;line-height:1.5;',
-  h3: 'margin:32px 0 16px;font-size:30px;font-weight:600;line-height:1.5;',
-  h4: 'margin:28px 0 14px;font-size:30px;font-weight:600;line-height:1.5;',
+  // 字重统一 600——strong 默认是 700，标题 600，正文 400 三档混在一起
+  // 会让同一段里的粗体忽重忽轻。
+  h1: 'margin:36px 0 18px;font-size:28px;font-weight:600;line-height:1.5;',
+  h2: 'margin:36px 0 18px;font-size:28px;font-weight:600;line-height:1.5;',
+  h3: 'margin:32px 0 16px;font-size:26px;font-weight:600;line-height:1.5;',
+  h4: 'margin:28px 0 14px;font-size:26px;font-weight:600;line-height:1.5;',
   ul: 'margin:0 0 28px;padding-left:36px;',
   ol: 'margin:0 0 28px;padding-left:36px;',
   // 列表项间距也属于段落级间距——同样只能内联才生效
-  li: 'margin:0 0 12px;font-size:30px;line-height:1.75;letter-spacing:0.3px;',
+  li: 'margin:0 0 12px;font-size:26px;line-height:1.75;letter-spacing:0.3px;',
   blockquote:
     'margin:0 0 28px;padding-left:22px;border-left:4px solid #e1e4e8;color:#6e7781;',
-  pre: 'margin:0 0 28px;padding:18px;background:#f6f8fa;border-radius:12px;font-size:26px;line-height:1.7;',
-  code: 'font-size:26px;',
+  pre: 'margin:0 0 28px;padding:18px;background:#f6f8fa;border-radius:12px;font-size:24px;line-height:1.7;',
+  code: 'font-size:24px;',
+  // 粗体统一到 600：正文里 **…** 用得很密，700 会明显比标题还重
+  strong: 'font-weight:600;',
+  b: 'font-weight:600;',
 }
 
 function decorate(html: string): string {
