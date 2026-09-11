@@ -68,16 +68,20 @@ export default function ChatPage() {
 
   const scrollToBottom = () => setAnchor(`msg-${Date.now()}`)
 
-  // 处理耗时（本地计时）：等待期状态后面显示秒数，对齐 web 端的观感。
+  // 处理耗时（本地计时）：等待期状态后面显示秒数。
   // 后端的 agent_elapsed 只在结束时推一次，等待期看不到跳动。
+  // 语义是「当前这一步花了多久」——每轮发送、以及每次状态变化都从 0 起算。
   const [elapsed, setElapsed] = useState(0)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const timerT0Ref = useRef(0)
+  const statusRef = useRef('')
 
-  function startTimer() {
+  function restartTimer() {
     setElapsed(0)
-    const t0 = Date.now()
+    timerT0Ref.current = Date.now()
+    if (timerRef.current) clearInterval(timerRef.current)
     timerRef.current = setInterval(
-      () => setElapsed(Math.floor((Date.now() - t0) / 1000)),
+      () => setElapsed(Math.floor((Date.now() - timerT0Ref.current) / 1000)),
       1000,
     )
   }
@@ -245,7 +249,8 @@ export default function ChatPage() {
     setSending(true)
     setStatus('连接中…')
     setError('')
-    startTimer()
+    statusRef.current = ''
+    restartTimer()
     try {
       const history: ChatMsg[] = msgs.map((m) => ({
         role: m.role,
@@ -268,7 +273,13 @@ export default function ChatPage() {
       try {
         await streamQuery(text, history, {
           onStatus: (s) => {
-            if (!completed) setStatus(s)
+            if (completed) return
+            // 状态文字变化 → 计时归零（重复的同一条状态不重置，避免抖动）
+            if (s && s !== statusRef.current) {
+              statusRef.current = s
+              restartTimer()
+            }
+            setStatus(s)
           },
           onToken: (chunk) => {
             if (!completed) {
