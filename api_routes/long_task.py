@@ -134,6 +134,36 @@ def _task_owned_by(task_id: str, user_id: int) -> bool:
         return False
 
 
+def _owned_task_ids(task_ids: list[str], user_id: int) -> set[str]:
+    """*task_ids* 中属于 *user_id* 的那些。
+
+    比逐个调 _task_owned_by 少 N-1 次连接开关——批量轮询是热路径
+    （客户端 1.5s 一轮、上限 20 个 id）。
+    失败时保守返回空集：宁可不返回状态，也不放行越权读取。
+    """
+    ids = [t for t in task_ids if t]
+    if not ids:
+        return set()
+    try:
+        from sources.knowledge.knowledge import get_db_connection
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                placeholders = ", ".join(["%s"] * len(ids))
+                cur.execute(
+                    "SELECT task_id FROM long_tasks "
+                    "WHERE task_id IN (" + placeholders + ") AND user_id = %s",
+                    (*ids, user_id),
+                )
+                rows = cur.fetchall() or []
+            # 游标是 DictCursor（见 _dispatch_from_mysql 的 row.get 用法）
+            return {str(r.get("task_id")) for r in rows if r.get("task_id")}
+        finally:
+            conn.close()
+    except Exception:
+        return set()
+
+
 _TASK_TYPE_TO_SCENARIO = {
     "prosecution_analysis": "prosecution",
     "family_analysis": "families",
@@ -597,11 +627,13 @@ def register_long_task_routes(logger, config):
             task_ids = []
         # Cap at 20 to prevent abuse
         task_ids = task_ids[:20]
+        # 一次查询取回全部归属，避免逐 id 开关连接（热路径，1.5s 一轮）
+        owned = _owned_task_ids(task_ids, user_id)
         statuses = {}
         for tid in task_ids:
             # 非本人的任务直接略过（不报错、不返回 unknown）——
             # 报错或返回 unknown 都会变成 task_id 存在性的探针
-            if not _task_owned_by(tid, user_id):
+            if tid not in owned:
                 continue
             statuses[tid] = get_task_status(tid)
         return {"success": True, "statuses": statuses}
@@ -610,7 +642,9 @@ def register_long_task_routes(logger, config):
     async def pause_task(task_id: str, http_request: Request):
         """Pause a running long task at its next checkpoint."""
         auth_header = http_request.headers.get("Authorization")
-        verify_firebase_token(auth_header)
+        user = verify_firebase_token(auth_header)
+        if not _task_owned_by(task_id, int(user['uid'])):
+            raise HTTPException(status_code=404, detail="Task not found")
         from sources.long_task.status_manager import (
             get_task_status, request_task_pause, is_task_paused,
         )
@@ -629,6 +663,8 @@ def register_long_task_routes(logger, config):
         no other task is running."""
         auth_header = http_request.headers.get("Authorization")
         user = verify_firebase_token(auth_header)
+        if not _task_owned_by(task_id, int(user['uid'])):
+            raise HTTPException(status_code=404, detail="Task not found")
         from sources.long_task.status_manager import (
             get_task_status, clear_task_pause,
         )
@@ -649,7 +685,9 @@ def register_long_task_routes(logger, config):
     async def stop_task(task_id: str, http_request: Request):
         """Permanently stop and discard a long task."""
         auth_header = http_request.headers.get("Authorization")
-        verify_firebase_token(auth_header)
+        user = verify_firebase_token(auth_header)
+        if not _task_owned_by(task_id, int(user['uid'])):
+            raise HTTPException(status_code=404, detail="Task not found")
         from sources.long_task.status_manager import (
             get_task_status, request_task_stop, is_task_stopped,
         )

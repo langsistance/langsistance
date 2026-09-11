@@ -236,10 +236,10 @@ def test_status_other_users_task_returns_404(client):
 def test_batch_status_filters_to_owned_only(client):
     """批量查询只返回本人的任务，不报错（避免被用来枚举 task_id 存在性）。"""
     with patch('api_routes.long_task.verify_firebase_token') as mock_auth, \
-         patch('api_routes.long_task._task_owned_by') as mock_owned, \
+         patch('api_routes.long_task._owned_task_ids') as mock_owned, \
          patch('api_routes.long_task.get_task_status') as mock_get:
         mock_auth.return_value = {"uid": "12345"}
-        mock_owned.side_effect = lambda tid, uid: tid == "lt_mine"
+        mock_owned.return_value = {"lt_mine"}
         mock_get.return_value = {'task_id': 'lt_mine', 'status': 'running'}
 
         response = client.post("/long_task/batch_status",
@@ -293,3 +293,59 @@ def test_task_owned_by_returns_false_when_no_row(client):
 
         from api_routes.long_task import _task_owned_by
         assert _task_owned_by("lt_other", 12345) is False
+
+
+# ── 复审修复: batch_status 归属查询合并为一次（连接扇出） ──
+
+def test_batch_status_uses_single_query_for_all_ids(client):
+    """批量归属必须一次查完 —— 逐个查询会在 1.5s 轮询热路径上放大成 N 次连接开关。"""
+    with patch('api_routes.long_task.verify_firebase_token') as mock_auth, \
+         patch('sources.knowledge.knowledge.get_db_connection') as mock_db, \
+         patch('api_routes.long_task.get_task_status') as mock_get:
+        mock_auth.return_value = {"uid": "12345"}
+        mock_conn = MagicMock()
+        cur = mock_conn.cursor.return_value.__enter__.return_value
+        cur.fetchall.return_value = [{"task_id": "lt_a"}, {"task_id": "lt_b"}]
+        mock_db.return_value = mock_conn
+        mock_get.return_value = {'status': 'running'}
+
+        response = client.post("/long_task/batch_status",
+                               json={"task_ids": ["lt_a", "lt_b", "lt_c"]})
+
+    assert response.status_code == 200
+    statuses = response.json()["statuses"]
+    assert set(statuses.keys()) == {"lt_a", "lt_b"}
+    # 关键：三次 id 只开一次连接、只发一条 SQL
+    mock_db.assert_called_once()
+    sql, params = cur.execute.call_args.args
+    assert "IN (%s, %s, %s)" in " ".join(sql.split())
+    assert params == ("lt_a", "lt_b", "lt_c", 12345)
+
+
+# ── 复审修复: pause / resume / stop 写端点补归属校验 ──
+
+def test_pause_other_users_task_returns_404(client):
+    with patch('api_routes.long_task.verify_firebase_token') as mock_auth, \
+         patch('api_routes.long_task._task_owned_by') as mock_owned:
+        mock_auth.return_value = {"uid": "12345"}
+        mock_owned.return_value = False
+        response = client.post("/long_task/lt_other/pause")
+        assert response.status_code == 404
+
+
+def test_resume_other_users_task_returns_404(client):
+    with patch('api_routes.long_task.verify_firebase_token') as mock_auth, \
+         patch('api_routes.long_task._task_owned_by') as mock_owned:
+        mock_auth.return_value = {"uid": "12345"}
+        mock_owned.return_value = False
+        response = client.post("/long_task/lt_other/resume")
+        assert response.status_code == 404
+
+
+def test_stop_other_users_task_returns_404(client):
+    with patch('api_routes.long_task.verify_firebase_token') as mock_auth, \
+         patch('api_routes.long_task._task_owned_by') as mock_owned:
+        mock_auth.return_value = {"uid": "12345"}
+        mock_owned.return_value = False
+        response = client.post("/long_task/lt_other/stop")
+        assert response.status_code == 404
