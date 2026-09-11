@@ -431,7 +431,9 @@ export default function ChatPage() {
         const decoded = decodeArtifactChunks(it.chunks)
         if (decoded) {
           decoded.setId = it.artifactId
-          resultsStore.put(decoded)
+          // 时间戳在此定格，persist 时原样复用：内存层与落盘层按**同一个**
+          // savedAt 排序淘汰，两层顺序不会各说各话。
+          resultsStore.put(decoded, { savedAt: Date.now() })
           resultSet = { setId: it.artifactId, rowCount: decoded.rows.length }
         }
         // 解码失败的 json 直接丢——留着只占内存，没有任何消费方
@@ -552,20 +554,23 @@ export default function ChatPage() {
         }
         // 带上 resultSetId：后端对消息数组是逐字透传（session.py:202-224），
         // 加字段不需要改后端。历史会话靠它找回本地结果集。
-        const lastResultSet = lastAssistantResultSet()
+        const lastResultSet = currentTurnResultSet()
         const assistantMsg: ChatMsg = {
           role: 'assistant',
           content: assistantRef.current,
           ...(lastResultSet ? { set_id: lastResultSet.setId } : {}),
         }
-        await saveMessages(sid, [...history, userMsg, assistantMsg])
-        // 结果集落盘（裁剪版），供重开小程序后回看
+        // 本地落盘（裁剪版）**先于**网络写：两者互不依赖，而 saveMessages 可能抛。
+        // 放在它后面的话，一次 PUT 失败就会连同这条一起跳过——但 resultsStore.put
+        // 已在流中执行，当前会话看不出异常，只在重开小程序后才发现结果没了。
+        // persist 自身不抛（配额失败静默），所以提前不会反过来挡住 saveMessages。
         if (lastResultSet) {
           resultsStore.persist(resultSetPayload(lastResultSet.setId), {
             sessionId: sid,
             queryText: text,
           })
         }
+        await saveMessages(sid, [...history, userMsg, assistantMsg])
       }
     } catch (err) {
       setError(errorText(err))
@@ -660,13 +665,24 @@ export default function ChatPage() {
     }
   }
 
-  /** 最新一条助手消息上的结果集引用（落库与持久化都要用）。 */
-  function lastAssistantResultSet(): { setId: string; rowCount: number } | null {
-    for (let i = msgsRef.current.length - 1; i >= 0; i--) {
-      const m = msgsRef.current[i]
-      if (m.role === 'assistant' && m.resultSet) return m.resultSet
-    }
-    return null
+  /**
+   * **本轮**助手消息上的结果集引用（落库与持久化都要用），没有则 null。
+   *
+   * 只认本轮那一条，**绝不向前回溯**：回溯会让「本轮没出结果」的追问
+   * （澄清、「换成英文」、出错轮）继承上一轮的结果集——于是答案下凭空多出
+   * 一个「查看全部 N 项结果」入口，且 persist 会拿**旧 set** 配新 queryText
+   * 与新的 savedAt 重写索引，把旧结果集顶成最新，反过来干扰按 savedAt 的淘汰。
+   *
+   * 调用点约定：send() 走到这里时 msgsRef.current 恰好是
+   * [...history, userMsg, currentAssistant]（本函数之前不久刚 append 过
+   * userMsg 与 startAssistant 的助手占位），故**末元素即本轮助手消息**。
+   */
+  function currentTurnResultSet(): { setId: string; rowCount: number } | null {
+    const last = msgsRef.current[msgsRef.current.length - 1]
+    // role 一并校验：将来若改了 push 顺序，这里会退化成 null（本轮到不了下一轮），
+    // 而不是安静地把用户消息上的同名字段当成结果集。
+    if (!last || last.role !== 'assistant') return null
+    return last.resultSet || null
   }
 
   /** 从 store 取回刚入库的完整载荷；还没入库就返回 null。 */

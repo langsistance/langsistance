@@ -15,10 +15,20 @@ import { ResultsPayload, pruneResults } from '../utils/results'
 /** 与 web 同键名（frontend/nextjs/lib/resultsStore.js:11），便于将来对齐。 */
 export const STORAGE_KEY = 'copiioai_results'
 
-/** 保留的集数上限。小程序总量 10MB，20 集 × 约 40KB ≈ 800KB，留足余量。web 是 100。 */
-export const MAX_RESULT_SETS = 20
+/**
+ * **落盘那层**保留的集数上限。小程序总量 10MB，20 集 × 约 40KB ≈ 800KB，留足余量。web 是 100。
+ */
+export const MAX_PERSISTED_SETS = 20
 /** index 条目上限。与集数同量级即可。web 是 200。 */
 export const MAX_INDEX_ENTRIES = 40
+/**
+ * **内存那层**保留的集数上限。内存里是**未裁剪**的完整载荷（当前会话要用全部行，
+ * 见 mem 的注释），比持久化那份（pruneResults 后 ≤MAX_PERSIST_ROWS 行）大得多——
+ * 不设上限就是按会话长度线性增长的泄漏，比这个 feature 当初要治的 base64 泄漏更糟。
+ * 故给它自己的、比落盘更小的额度：超了就按 savedAt 丢最旧的，与落盘同一条策略。
+ * 小程序的真实上限是**单会话**的集数，够一屏回溯即可。
+ */
+export const MAX_MEMORY_SETS = 8
 
 export interface StorageAdapter {
   getSync(key: string): any
@@ -42,7 +52,12 @@ function emptyShape(): StoredShape {
 }
 
 export interface ResultsStore {
-  put(payload: ResultsPayload): void
+  /**
+   * 写内存层。`meta.savedAt` 是这集的**时间戳**，内存淘汰按它排序；
+   * 缺省 Date.now()。调用方若在流中途就有准确的 savedAt（比如来自持久化
+   * 那一份），传进来可以让两层的淘汰顺序一致。
+   */
+  put(payload: ResultsPayload, meta?: { savedAt?: number }): void
   get(setId: string): ResultsPayload | null
   load(setId: string): ResultsPayload | null
   persist(payload: ResultsPayload, meta: { sessionId: string; queryText: string; savedAt?: number }): void
@@ -51,6 +66,37 @@ export interface ResultsStore {
 export function createResultsStore(storage: StorageAdapter): ResultsStore {
   // 当前会话的内存态。全量——持久化那份是裁过的。
   const mem = new Map<string, ResultsPayload>()
+  // mem 自己的 savedAt 表：Map 的迭代序是插入序，不等于 savedAt 序（同一集被
+  // 重写时插入序还不一定是它最后一次写入的时间），故另存一份时间戳来判断谁最旧。
+  const memSavedAt = new Map<string, number>()
+
+  /** 写内存层并淘汰。savedAt 必须与写入同一时刻登记，否则刚进来的那集排不到队尾。 */
+  function memWrite(payload: ResultsPayload, savedAt: number) {
+    mem.set(payload.setId, payload)
+    memSavedAt.set(payload.setId, savedAt)
+    evictMemory()
+  }
+
+  /**
+   * 内存层淘汰：与落盘层**同一策略**（按 savedAt 丢最旧的），只是额度不同。
+   * 只看 mem/memSavedAt，不看 storage——storage 是另一层，它有自己的淘汰。
+   */
+  function evictMemory() {
+    while (mem.size > MAX_MEMORY_SETS) {
+      let oldestId = ''
+      let oldestAt = Infinity
+      for (const [id, at] of memSavedAt) {
+        if (at < oldestAt) {
+          oldestAt = at
+          oldestId = id
+        }
+      }
+      if (!oldestId) break
+      // 刚写入的那集若成了最旧（savedAt 由调用方给），也照丢——不做特例。
+      mem.delete(oldestId)
+      memSavedAt.delete(oldestId)
+    }
+  }
 
   function read(): StoredShape {
     try {
@@ -66,8 +112,8 @@ export function createResultsStore(storage: StorageAdapter): ResultsStore {
   }
 
   return {
-    put(payload) {
-      mem.set(payload.setId, payload)
+    put(payload, meta) {
+      memWrite(payload, meta?.savedAt ?? Date.now())
     },
 
     get(setId) {
@@ -79,9 +125,9 @@ export function createResultsStore(storage: StorageAdapter): ResultsStore {
     },
 
     persist(payload, meta) {
-      // 内存先写：即使落盘失败，当前会话也要能用
-      mem.set(payload.setId, payload)
       const savedAt = meta.savedAt ?? Date.now()
+      // 内存先写：即使落盘失败，当前会话也要能用
+      memWrite(payload, savedAt)
       try {
         const shape = read()
         shape.sets[payload.setId] = pruneResults(payload)
@@ -94,7 +140,7 @@ export function createResultsStore(storage: StorageAdapter): ResultsStore {
         const byOldest = Object.entries(shape.sets).sort(
           (a, b) => (findSavedAt(shape, a[0]) - findSavedAt(shape, b[0])),
         )
-        for (const [id] of byOldest.slice(0, Math.max(0, byOldest.length - MAX_RESULT_SETS))) {
+        for (const [id] of byOldest.slice(0, Math.max(0, byOldest.length - MAX_PERSISTED_SETS))) {
           delete shape.sets[id]
         }
         shape.index = shape.index
