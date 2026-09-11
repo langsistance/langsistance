@@ -16,3 +16,19 @@ export async function fetchSessions(): Promise<SessionItem[]> {
   )
   return body.sessions || []
 }
+
+/** 重命名会话（专用端点，只改标题，不重写 messages）。 */
+export async function renameSession(
+  sessionId: string,
+  title: string,
+): Promise<void> {
+  await request(`/session/${sessionId}/title`, {
+    method: 'PUT',
+    data: { title: title.slice(0, 60) },
+  })
+}
+
+/** 归档会话（后端置 status=2，列表与详情都不再返回）。 */
+export async function archiveSession(sessionId: string): Promise<void> {
+  await request(`/session/${sessionId}`, { method: 'DELETE' })
+}
