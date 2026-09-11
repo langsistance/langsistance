@@ -1856,4 +1856,38 @@ Expected: `OK：凭据文件未入库`。
 
 ## 执行记录
 
-（Task 10 Step 4 填写）
+**执行方式**：subagent-driven development（每任务独立实现 + 独立评审），2026-09-11。
+**提交范围**：`8e95e74`（计划）→ `e2ad692`，共 10 个提交。
+
+### 自动化验证结果
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| Task 10 Step 1 后端回归 | `REDIS_HOST=127.0.0.1 REDIS_PORT=6379 PYTHONUTF8=1 python -m pytest tests/test_session_api.py tests/test_session_anchor.py tests/test_wechat_login.py -q` | **52 passed**（session 30 + anchor 9 + wechat 13） |
+| Task 10 Step 2 凭据未入库 | `git log --name-only \| grep -i firebase_service_key` | **无命中**，`firebase_service_key.json` 未入库 |
+| 前端类型检查 | `cd frontend/weapp && npm run tsc` | exit 0 |
+| 前端构建 | `cd frontend/weapp && npm run build:weapp` | `Compiled successfully` |
+| 首页切换 | `cat frontend/weapp/dist/app.json` | `{"pages":["pages/chat/index","pages/login/index"],...}` |
+
+### 计划外发现并修复的问题
+
+1. **`login/index.tsx:23` 的兜底跳转**指向被删除的 `pages/index/index` —— 已在 Task 9 同步改为 `/pages/chat/index`。
+2. **既有测试基线是红的** —— `test_create_session` / `test_get_user_sessions` 早已因端点要求鉴权而失败（测试债），Task 1 修复后基线才回到 7 passed。
+3. **本机测试环境缺 `firebase_admin`** —— 已装入系统 python；另需在仓库根放置 gitignored 的一次性假凭据 `firebase_service_key.json` 才能 import `passport.py`。
+4. **`append_message` 的 SELECT 补了 `status != 2`** —— 计划要求的顺带修正，已归档会话不再能追加消息。
+5. **删除失败的静默吞错** —— `setListError` 只在抽屉内渲染，删除失败时抽屉通常已关闭，错误不可见。终审发现，已改为 `Taro.showToast`（`e2ad692`）。
+
+### 进程事实（供后续参考）
+
+- Task 2 的 RED 实测为 4 条失败而非计划预期的 5 条：`PUT /messages` 本就调用了 `verify_firebase_token` 只是丢弃返回值 —— 这正是"注释声称校验归属、SQL 却没有"的根源。
+- Task 3 的 `test_rename_session_not_owner` 在 RED 阶段空过（路由缺失与"非本人"同为 404）。评审确认实现后非空过，可接受。
+- Taro 4 React 运行时**不产出逐组件目录**，组件内联进宿主页面的 `index.wxss`；全局 `comp.json` 为 `styleIsolation: "apply-shared"`，故 `app.scss` 中 `page` 上的 `--c-*` token 可达组件。
+
+### Task 10 Step 3 真机验收 —— **未执行，待人工**
+
+以下两项无法自动化验证，需在微信开发者工具 / 真机上确认：
+
+1. **`NavBar` 标题的 `right: 160px` 硬编码 inset** 在异形状态栏/胶囊几何下是否错位（spec §7 已列为风险）。若真机出现偏移，应改为由 `Taro.getMenuButtonBoundingClientRect().right` 推导。
+2. **删除失败的 toast** 实际是否弹出（本项目无前端测试框架，该路径仅通过编译验证）。
+
+另需逐条走 spec §8 的五条验收标准（首页即对话页、☰ 抽屉、增删改、删当前会话回空态、跨账号 404、web/nextjs 回归）。
