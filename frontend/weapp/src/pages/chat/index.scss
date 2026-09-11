@@ -97,15 +97,11 @@
   font-family: inherit;
 }
 
-/* 段落块间距。
-   <rich-text> 支持的 CSS 是白名单制的，margin 不在其中——写在 rich-text 内部
-   的段落 margin 一律无效。所以段落间距由外层这个原生 View 承担。 */
+/* 段落块容器：只做包裹，不设外边距。
+   段落/标题/列表项的间距由 utils/markdown.ts 内联进 HTML——页面 WXSS 的
+   子孙选择器够不到 rich-text 内部节点，这里再加边距会与内联值叠加。 */
 .chat-md-block {
-  margin-bottom: 28px;
-
-  &:last-child {
-    margin-bottom: 0;
-  }
+  margin: 0;
 }
 
 .chat-msg-body rich-text p {
