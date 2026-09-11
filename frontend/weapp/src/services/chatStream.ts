@@ -12,15 +12,32 @@ import { ChatMsg } from './chat'
  * 后续形态: 后端 /ws/chat(WebSocket) 部署后, 此处换 connectSocket 实现,
  * 对外保持同一组回调即可(协议见 WsChat 注释)。
  */
+/** artifact_start 帧的元信息（后端把 metadata 平铺进 start 帧）。 */
+export interface ArtifactPayload {
+  format: string
+  filename: string
+  mimeType: string
+  rowCount: number
+  columnCount: number
+}
+
+/** artifact_end 后交付给页面的一份完整工件。 */
+export interface CompletedArtifact extends ArtifactPayload {
+  artifactId: string
+  chunks: string[]
+}
+
 export interface StreamCallbacks {
   onToken?: (content: string) => void
   onStatus?: (content: string) => void
   onError?: (message: string) => void
   onDone?: () => void
   onEvent?: (event: Record<string, any>) => void
+  /** 一份工件收齐后回调一次（不是每个 chunk 都回调）。 */
+  onArtifactsReady?: (items: CompletedArtifact[]) => void
 }
 
-interface SseEvent {
+export interface SseEvent {
   type?: string
   content?: string
   message?: string
@@ -54,7 +71,7 @@ function decodeChunk(buf: ArrayBuffer): string {
 type ChunkCallback = (res: { data: ArrayBuffer }) => void
 
 /** 增量 SSE 解析器：跨 chunk 的帧/多字节字符安全。 */
-class SseParser {
+export class SseParser {
   private buf = ''
 
   push(raw: string): SseEvent[] {
@@ -145,7 +162,7 @@ export function streamQuery(
         query_id: queryId,
         tts_enabled: false,
         tool_data: '',
-        push_filter: null,
+        push_filter: 2,
         conversation_history: conversationHistory,
       },
     })

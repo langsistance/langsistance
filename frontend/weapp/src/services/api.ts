@@ -7,6 +7,18 @@ export interface ApiResult {
   [key: string]: any
 }
 
+/**
+ * 凭证失效的统一处置：清本地 + 回登录页 + 抛出可见错误。
+ * 抽出来是因为 Taro.uploadFile / Taro.downloadFile 走不到 request()，
+ * 但同样需要这套处置。
+ */
+export function clearAuthAndRedirect(message = '登录已失效'): never {
+  Taro.removeStorageSync(STORAGE_KEYS.wxToken)
+  Taro.removeStorageSync(STORAGE_KEYS.userId)
+  Taro.navigateTo({ url: '/pages/login/index' })
+  throw new Error(message)
+}
+
 export async function request<T = ApiResult>(
   path: string,
   options: {
@@ -34,11 +46,7 @@ export async function request<T = ApiResult>(
   })
   const body = resp.data as any
   if (resp.statusCode === 401) {
-    // 凭证失效/未登录 —— 清本地并回登录页
-    Taro.removeStorageSync(STORAGE_KEYS.wxToken)
-    Taro.removeStorageSync(STORAGE_KEYS.userId)
-    Taro.navigateTo({ url: '/pages/login/index' })
-    throw new Error((body && (body.detail || body.message)) || '登录已失效')
+    clearAuthAndRedirect((body && (body.detail || body.message)) || '登录已失效')
   }
   if (resp.statusCode >= 400) {
     const detail = body && (body.detail || body.message)
