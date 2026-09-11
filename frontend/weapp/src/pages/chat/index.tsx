@@ -29,7 +29,11 @@ import NavBar from '../../components/NavBar'
 import SessionDrawer from '../../components/SessionDrawer'
 import RenameModal from '../../components/RenameModal'
 import PrivacyPopup from '../../components/PrivacyPopup'
-import { resolvePrivacy, subscribePrivacy } from '../../services/privacy'
+import {
+  abandonPrivacy,
+  resolvePrivacy,
+  subscribePrivacy,
+} from '../../services/privacy'
 import { parseMarkdown } from '../../utils/markdown'
 import './index.scss'
 
@@ -98,8 +102,14 @@ export default function ChatPage() {
     }
   }
 
-  // 卸载时清理，避免流未结束时留下计时器
-  useEffect(() => () => stopTimer(), [])
+  // 卸载时清理：停计时器 + 结算可能悬着的隐私授权等待
+  useEffect(
+    () => () => {
+      stopTimer()
+      abandonPrivacy()
+    },
+    [],
+  )
 
   // 订阅隐私浮层显隐（App 级监听在 app.ts 注册）
   useEffect(() => subscribePrivacy(setPrivacyVisible), [])

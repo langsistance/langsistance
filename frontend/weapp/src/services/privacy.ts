@@ -48,22 +48,34 @@ export function resolvePrivacy(agree: boolean, buttonId = ''): void {
 }
 
 /**
- * 在调用任何隐私接口之前 await 这个。
- * 已同意过 / 基础库不支持 → 立即兑现；否则等浮层结果。
+ * 放弃本次等待（页面卸载/路由离开时调用）。
+ * 不这样做的话 pendingResolve 会一直悬着，调用方的 await 永不兑现。
+ * 用户没有做出选择，所以按"未同意"结算。
  */
-export function ensurePrivacy(): Promise<void> {
+export function abandonPrivacy(): void {
+  const resolve = pendingResolve
+  pendingResolve = null
+  listener?.(false)
+  resolve?.({ event: 'disagree' })
+}
+
+/**
+ * 在调用任何隐私接口之前 await 这个。
+ * 返回 true = 可以继续（已同意过，或本次刚同意）；
+ * 返回 false = 用户拒绝，调用方必须中止，不要再去调隐私接口。
+ *
+ * 基础库不支持时返回 true —— 那种环境下微信不做拦截，硬拦反而会
+ * 让功能在旧版本上不可用。
+ */
+export function ensurePrivacy(): Promise<boolean> {
   return new Promise((resolve) => {
     if (typeof Taro.requirePrivacyAuthorize !== 'function') {
-      resolve()
+      resolve(true)
       return
     }
     Taro.requirePrivacyAuthorize({
-      success: () => resolve(),
-      fail: () => {
-        // 用户拒绝：浮层已经收起来了，这里只负责让调用方继续（
-        // 后续真正的 chooseMessageFile 会因未授权而失败，由调用方提示）
-        resolve()
-      },
+      success: () => resolve(true),
+      fail: () => resolve(false),
     })
   })
 }
