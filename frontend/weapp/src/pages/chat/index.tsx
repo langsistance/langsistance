@@ -607,7 +607,7 @@ export default function ChatPage() {
       await openOrShareFile(path, 'md')
       Taro.showToast({ title: '已转发到聊天', icon: 'none' })
     } catch (err) {
-      Taro.showToast({ title: errorText(err, '导出失败'), icon: 'none' })
+      Taro.showToast({ title: errorText(err, '下载失败'), icon: 'none' })
     }
   }
 
@@ -692,7 +692,7 @@ export default function ChatPage() {
                           {a.format.toUpperCase()}
                         </Text>
                         <Text className='chat-artifact-label'>
-                          {a.format === 'csv' ? '导出 CSV' : '导出 Excel'}
+                          {a.format === 'csv' ? '下载 CSV' : '下载 Excel'}
                         </Text>
                       </View>
                     ))}
@@ -705,7 +705,7 @@ export default function ChatPage() {
                   onClick={() => handleExportMarkdown(m)}
                 >
                   <Text className='chat-artifact-badge'>MD</Text>
-                  <Text className='chat-artifact-label'>导出原文</Text>
+                  <Text className='chat-artifact-label'>下载原文</Text>
                 </View>
               ) : null}
               {m.role === 'assistant' && m.patents && m.patents.length > 0 ? (
