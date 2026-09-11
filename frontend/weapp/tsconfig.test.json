@@ -3,15 +3,14 @@
   "compilerOptions": {
     "noEmit": false,
     "outDir": "dist-test",
-    "module": "esnext",
+    // commonjs 而非 esnext：生产源码按普通相对路径 import（`../utils/results`），
+    // 这正是要的——产物只依赖 tracked 源码。但 node 的 **ESM** 解析要求显式扩展名，
+    // `../utils/results` 会被 ERR_MODULE_NOT_FOUND 拒掉。emitted 为 CJS 后走 node 的
+    // CJS 解析器，它会补 `.js`，于是相对路径原样可用，生产源码不必再背一个测试专用
+    // specifier（曾用 `#utils/*` → package.json imports → dist-test/，见 git log）。
+    "module": "commonjs",
     "target": "es2020",
-    "moduleResolution": "node",
-    "baseUrl": ".",
-    "paths": {
-      "#utils/*": [
-        "src/utils/*"
-      ]
-    }
+    "moduleResolution": "node"
   },
   "include": [
     "src/utils/**/*.ts",

@@ -3,9 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "description": "CopiioAI 微信小程序（Taro + React + TS，国内微信用户）",
-  "imports": {
-    "#utils/*": "./dist-test/src/utils/*.js"
-  },
   "templateInfo": {
     "name": "default",
     "typescript": true,

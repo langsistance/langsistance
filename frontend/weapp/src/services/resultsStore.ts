@@ -1,5 +1,9 @@
 import Taro from '@tarojs/taro'
-import { ResultsPayload, pruneResults } from '#utils/results'
+// 普通相对路径：产物只依赖 tracked 源码。曾用 `#utils/results`，而 package.json
+// 把该前缀映射到 gitignore 的 dist-test/（测试编译产物）——干净检出时它不存在，
+// 构建会直接 "Module not found"；而只要跑过一次测试，webpack 就会把**上一次
+// 测试编译出的旧副本**打进产物。测试侧如何解析 extensionless 见 tsconfig.test.json。
+import { ResultsPayload, pruneResults } from '../utils/results'
 
 /**
  * 结果集的内存态 + 持久化。

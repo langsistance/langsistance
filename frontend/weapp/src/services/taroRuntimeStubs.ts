@@ -22,18 +22,58 @@ import { createRequire } from 'node:module'
 type DefinePluginOptions = Record<string, string | boolean>
 
 /**
- * 解析 `@tarojs/webpack5-runner` 的 CJS require。
+ * 本模块所在目录，跨 CJS/ESM 两种形态都成立。
  *
- * 用 `process.cwd()` 而不是 `import.meta.url`：本文件同时被 app 的
- * `tsc --noEmit`（module: commonjs）检查，那里不容许 `import.meta`。
- * 测试脚本总是在项目根跑（见 package.json 的 test），`process.cwd()`
- * 正是项目根，够用。
+ * 定义期存在 `__dirname`（CJS 全局）；本文件**同时**被测试侧按 ESM 加载，
+ * 那里没有它——但 ESM 下 `import.meta.url` 有值。两边各取其一。
+ *
+ * 不能用 `new URL('./package.json', import.meta.url)` 当作唯一写法：
+ * `tsc --noEmit`（module: commonjs）不容许 `import.meta`，会直接编译失败，
+ * 所以只能在 `typeof __dirname` 判空之后、由 `eval` 间接取一次。
  */
-const requireFromHere = createRequire(`${process.cwd()}/package.json`)
+function selfDir(): string {
+  const cjsDir = typeof __dirname === 'string' ? __dirname : ''
+  if (cjsDir) return cjsDir
+  const importMetaUrl = (0, eval)('import.meta.url') as string
+  // 只用 URL 解析路径，不 fs 读文件——故不依赖本模块在磁盘上的存在形式。
+  return decodeURIComponent(new URL('.', importMetaUrl).pathname.replace(/^\/(?=[A-Za-z]:)/, ''))
+}
+
+/** 向上逐级找 package.json，得到锚在本模块而非 cwd 的 require。 */
+function makeRequireFromSelf(): NodeRequire {
+  let dir = selfDir()
+  for (;;) {
+    try {
+      return createRequire(`${dir}/package.json`)
+    } catch {
+      const parent = dir.replace(/[\\/][^\\/]*$/, '')
+      if (!parent || parent === dir) throw new Error(`taroRuntimeStubs: 自 ${selfDir()} 起未找到 package.json`)
+      dir = parent
+    }
+  }
+}
+
+const requireFromHere = makeRequireFromSelf()
+
+/**
+ * `@tarojs/webpack5-runner` 的解析锚点（其 package.json 所在目录）。
+ *
+ * 取不到定义表时要把这个路径写进报错——否则在多包/workspace 场景下
+ * 只能看到一句"Taro 内部结构可能已变"，而真实原因往往是**找错了目录**。
+ */
+const TARO_RUNNER_SPECIFIER = '@tarojs/webpack5-runner/dist/webpack/MiniWebpackPlugin'
+
+function taroRunnerAnchor(): string {
+  try {
+    return requireFromHere.resolve(TARO_RUNNER_SPECIFIER)
+  } catch {
+    return `(未解析到 ${TARO_RUNNER_SPECIFIER}；require 锚点为 ${selfDir()})`
+  }
+}
 
 function readTaroDefineConstants(): DefinePluginOptions {
   try {
-    const { MiniWebpackPlugin } = requireFromHere('@tarojs/webpack5-runner/dist/webpack/MiniWebpackPlugin')
+    const { MiniWebpackPlugin } = requireFromHere(TARO_RUNNER_SPECIFIER)
     // 借原型拿到 getDefinePlugin，绕开构造函数对完整 combination 的依赖
     const probe = Object.create(MiniWebpackPlugin.prototype)
     probe.combination = { config: {}, buildAdapter: 'weapp' }
@@ -54,8 +94,10 @@ export function installTaroRuntimeStubs(): void {
   const defineConstants = readTaroDefineConstants()
   if (Object.keys(defineConstants).length === 0) {
     throw new Error(
-      'Taro 运行时常量表取不到（@tarojs/webpack5-runner 内部结构可能已变），' +
-        '拒绝用假环境跑测试。请检查 MiniWebpackPlugin.getDefinePlugin()。',
+      'Taro 运行时常量表取不到，拒绝用假环境跑测试。' +
+        `已尝试从 ${selfDir()} 解析 ${TARO_RUNNER_SPECIFIER}，解析结果为：${taroRunnerAnchor()}。` +
+        '若该路径不在本项目 node_modules 内，多半是解析锚点落在了错误的目录；' +
+        '若路径正确，再检查 MiniWebpackPlugin.getDefinePlugin() 是否已随 Taro 升级改名。',
     )
   }
   const target = globalThis as Record<string, unknown>
