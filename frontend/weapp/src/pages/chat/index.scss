@@ -355,15 +355,22 @@
   color: #aeb5bd;
 }
 
+/* 圆形发送钮（箭头图标，不写汉字）——把「发送」二字让给输入框：
+   132px 胶囊 → 80px 圆，宽度省下 52rpx。
+   用 flex 居中而非 line-height：图标字形的行盒高度随字号变化，
+   line-height 定的死值会把箭头顶偏。 */
 .chat-send {
+  flex-shrink: 0;
   margin-left: 16px;
-  width: 132px;
+  width: 80px;
   height: 80px;
-  line-height: 80px;
+  padding: 0;
   background: var(--c-primary);
   color: #fff;
-  border-radius: 999px;
-  font-size: var(--fs-meta);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 
   &::after {
     border: none;
@@ -378,4 +385,10 @@
   &:active {
     background: var(--c-primary-deep);
   }
+}
+
+.chat-send-icon {
+  font-size: 44px;
+  line-height: 1;
+  font-weight: 600;
 }
