@@ -40,6 +40,13 @@ export function canOpen(format: string): format is OpenableFormat {
  * 上一次用 writeFile 写进 USER_DATA_PATH 的路径。
  * 该目录有 200MB 上限，反复下载会堆积到写不进去——每次写盘前先删掉上一个，
  * 只保留最新一份。downloadFile 落到系统临时目录，不在此列。
+ *
+ * **单槽保留是刻意的，不是 bug。** `saveBase64File`（artifact）与
+ * `exportMarkdown`（导出的会话）共用这一个槽位，因此写新文件必然让上一个
+ * 失效——先导出会话再下载附件，导出的 .md 就会被删掉；用户此时若还停在
+ * `wx.openDocument` 里看着它，回到小程序就没有东西可转发了。
+ * 这是拿"同时只能留一份"换 USER_DATA_PATH 的空间预算，接受该取舍。
+ * 请勿把它"修"成无上限的路径列表。
  */
 let lastWrittenPath = ''
 
@@ -107,16 +114,16 @@ export async function downloadReport(
   format: string,
 ): Promise<string> {
   const token = Taro.getStorageSync(STORAGE_KEYS.wxToken)
+  if (!token) {
+    // 没 token 就别发请求：空 Bearer 会被后端判成 404 而非 401，
+    // 于是 401 分支永不触发，登出用户看到的是"报告不存在"。
+    clearAuthAndRedirect('登录已失效')
+  }
   const res = await Taro.downloadFile({
     url: reportDownloadUrl(taskId, format),
     header: { Authorization: `Bearer ${token}` },
   })
   if (res.statusCode === 401) clearAuthAndRedirect()
-  // 未登录时 wx.request 族不带 Authorization 会落到 404（后端把"没这个任务"
-  // 和"任务不属于你"合并成同一个响应）。这条守卫保证只有真过鉴权的 404
-  // 才被当成"报告不存在"，且 401 分支（clearAuthAndRedirect 返回 never，
-  // 控制流本不会继续）在类型上也闭合。
-  if (!token) clearAuthAndRedirect('登录已失效')
   if (res.statusCode === 404) throw new Error('报告不存在或已过期')
   if (res.statusCode >= 400) throw new Error('报告下载失败，请稍后重试')
   return res.tempFilePath
