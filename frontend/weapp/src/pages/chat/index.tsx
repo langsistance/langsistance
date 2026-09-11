@@ -28,6 +28,8 @@ import {
 import NavBar from '../../components/NavBar'
 import SessionDrawer from '../../components/SessionDrawer'
 import RenameModal from '../../components/RenameModal'
+import PrivacyPopup from '../../components/PrivacyPopup'
+import { resolvePrivacy, subscribePrivacy } from '../../services/privacy'
 import { parseMarkdown } from '../../utils/markdown'
 import './index.scss'
 
@@ -54,6 +56,9 @@ export default function ChatPage() {
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
   const [anchor, setAnchor] = useState('')
+
+  // 隐私授权浮层
+  const [privacyVisible, setPrivacyVisible] = useState(false)
 
   // 抽屉
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -95,6 +100,9 @@ export default function ChatPage() {
 
   // 卸载时清理，避免流未结束时留下计时器
   useEffect(() => () => stopTimer(), [])
+
+  // 订阅隐私浮层显隐（App 级监听在 app.ts 注册）
+  useEffect(() => subscribePrivacy(setPrivacyVisible), [])
 
   // 首页必须自己把门（登录态检查从已删除的会话列表页搬来）
   useDidShow(() => {
@@ -449,6 +457,12 @@ export default function ChatPage() {
         error={renameError}
         onCancel={() => setRenameTarget(null)}
         onConfirm={confirmRename}
+      />
+
+      <PrivacyPopup
+        visible={privacyVisible}
+        onAgree={() => resolvePrivacy(true)}
+        onDecline={() => resolvePrivacy(false)}
       />
     </View>
   )
