@@ -30,13 +30,24 @@ def mock_db():
 # session.py 里 verify_firebase_token 是模块级 import，patch 目标必须是
 # api_routes.session.verify_firebase_token。替身行为对齐真实实现
 # （sources/user/passport.py:36-37）：无 Bearer 头抛 401。
+# token → uid 映射：让测试能表达"第二个用户"，从而验证"归属校验用的是
+# 当前请求者的 uid"而不是某个写死的值。
+TOKEN_UIDS = {
+    'test-token': 123,
+    'other-user-token': 456,
+}
 TEST_UID = 123
 AUTH = {'Authorization': 'Bearer test-token'}
+OTHER_AUTH = {'Authorization': 'Bearer other-user-token'}
 
 
-def _fake_verify(auth_header, uid=TEST_UID):
+def _fake_verify(auth_header):
     if not auth_header or not auth_header.startswith('Bearer '):
         raise HTTPException(status_code=401, detail='Missing token')
+    token = auth_header[len('Bearer '):]
+    uid = TOKEN_UIDS.get(token)
+    if uid is None:
+        raise HTTPException(status_code=401, detail='Invalid token')
     return {'uid': uid}
 
 
@@ -153,3 +164,99 @@ def test_archive_session_not_found(client, mock_db):
 
     response = client.delete("/session/nonexistent", headers=AUTH)
     assert response.status_code == 404
+
+
+# ── 归属校验（IDOR 回归）─────────────────────────────────────
+
+def _executed_sql(cursor):
+    """把 cursor.execute 收到的 SQL 文本拼起来，供"归属过滤真的写进 SQL 了吗"断言用。"""
+    return ' '.join(
+        str(call.args[0]) for call in cursor.execute.call_args_list if call.args
+    )
+
+
+def _executed_params(cursor):
+    """cursor.execute 收到的参数元组/列表，供"查的是谁"断言用。"""
+    return [
+        call.args[1] for call in cursor.execute.call_args_list
+        if len(call.args) > 1 and isinstance(call.args[1], (tuple, list))
+    ]
+
+
+# 5 个本任务补鉴权的端点（方法, 路径, 合法 body）
+# body 必须合法，否则 FastAPI 会在进 handler 前返回 422，测不到 401。
+PROTECTED = [
+    ('get', '/session/sess_001', None),
+    ('get', '/session-by-id?session_id=sess_001', None),
+    ('post', '/session/sess_001/message', {'role': 'user', 'content': 'x'}),
+    ('put', '/session/sess_001/messages', {'messages': [], 'title': ''}),
+    ('delete', '/session/sess_001', None),
+]
+
+
+@pytest.mark.parametrize('method,path,body', PROTECTED)
+def test_endpoints_require_auth(client, method, path, body):
+    """缺 Authorization 一律 401。"""
+    kwargs = {'json': body} if body is not None else {}
+    response = getattr(client, method)(path, **kwargs)
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize('method,path,body', PROTECTED)
+def test_endpoints_filter_by_owner(client, mock_db, method, path, body):
+    """SQL 必须真的带 user_id 过滤；查不中 → 404。
+
+    这条断言存在的理由：PUT /messages 之前注释写着 "belongs to user" 但 SQL 里
+    没有 user_id。只测状态码不够，必须测 SQL 文本。
+    """
+    _, cursor = mock_db
+    cursor.fetchone.return_value = None
+    cursor.rowcount = 0
+    kwargs = {'json': body} if body is not None else {}
+    response = getattr(client, method)(path, headers=AUTH, **kwargs)
+    assert response.status_code == 404
+    assert 'user_id' in _executed_sql(cursor)
+    assert any(TEST_UID in p for p in _executed_params(cursor))
+
+
+def test_ownership_uses_authenticated_uid(client, mock_db):
+    """用第二个用户的 token 请求时，SQL 参数里必须是他的 uid(456)，不能是别人的(123)。"""
+    _, cursor = mock_db
+    cursor.fetchone.return_value = None
+    cursor.rowcount = 0
+
+    response = client.get('/session/sess_001', headers=OTHER_AUTH)
+
+    assert response.status_code == 404
+    params = _executed_params(cursor)
+    assert any(456 in p for p in params)
+    assert not any(123 in p for p in params)
+
+
+def test_save_messages_keeps_title_behavior(client, mock_db):
+    """回归：PUT /messages 带 title 时仍写 title 列（web 端在用，行为不能变）。"""
+    _, cursor = mock_db
+    cursor.fetchone.return_value = {'id': 1}
+
+    response = client.put('/session/sess_001/messages',
+                          json={'messages': [{'role': 'user', 'content': 'hi'}],
+                                'title': '新标题'},
+                          headers=AUTH)
+
+    assert response.status_code == 200
+    sql = _executed_sql(cursor).lower()
+    assert 'messages = %s' in sql
+    assert 'title = %s' in sql
+
+
+def test_save_messages_omits_title_when_blank(client, mock_db):
+    """回归：title 为空串时不动 title 列（既有语义）。"""
+    _, cursor = mock_db
+    cursor.fetchone.return_value = {'id': 1}
+
+    response = client.put('/session/sess_001/messages',
+                          json={'messages': [], 'title': ''},
+                          headers=AUTH)
+
+    assert response.status_code == 200
+    assert 'title = %s' not in _executed_sql(cursor).lower()

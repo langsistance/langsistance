@@ -62,7 +62,12 @@ def register_session_routes(logger, config):
             conn.close()
 
     @router.get("/session-by-id")
-    async def get_session_by_id(session_id: str = Query(..., min_length=1)):
+    async def get_session_by_id(http_request: Request,
+                                session_id: str = Query(..., min_length=1)):
+        auth_header = http_request.headers.get("Authorization")
+        user = verify_firebase_token(auth_header)
+        user_id = int(user['uid'])
+
         conn = get_db_connection()
         try:
             with conn.cursor() as cur:
@@ -70,8 +75,8 @@ def register_session_routes(logger, config):
                     """SELECT session_id, title, status,
                               long_task_ids, messages, create_time, update_time
                        FROM conversations
-                       WHERE session_id = %s AND status != 2""",
-                    (session_id,))
+                       WHERE session_id = %s AND user_id = %s AND status != 2""",
+                    (session_id, user_id))
                 row = cur.fetchone()
             if row is None:
                 raise HTTPException(status_code=404, detail="Session not found")
@@ -96,7 +101,11 @@ def register_session_routes(logger, config):
             conn.close()
 
     @router.get("/session/{session_id}")
-    async def get_session(session_id: str):
+    async def get_session(session_id: str, http_request: Request):
+        auth_header = http_request.headers.get("Authorization")
+        user = verify_firebase_token(auth_header)
+        user_id = int(user['uid'])
+
         conn = get_db_connection()
         try:
             with conn.cursor() as cur:
@@ -105,8 +114,8 @@ def register_session_routes(logger, config):
                               messages, long_task_ids, status,
                               create_time, update_time
                        FROM conversations
-                       WHERE session_id = %s AND status != 2""",
-                    (session_id,))
+                       WHERE session_id = %s AND user_id = %s AND status != 2""",
+                    (session_id, user_id))
                 row = cur.fetchone()
             if row is None:
                 raise HTTPException(status_code=404, detail="Session not found")
@@ -151,13 +160,19 @@ def register_session_routes(logger, config):
             conn.close()
 
     @router.post("/session/{session_id}/message")
-    async def append_message(session_id: str, req: AppendMessageRequest):
+    async def append_message(session_id: str, req: AppendMessageRequest,
+                             http_request: Request):
+        auth_header = http_request.headers.get("Authorization")
+        user = verify_firebase_token(auth_header)
+        user_id = int(user['uid'])
+
         conn = get_db_connection()
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT messages FROM conversations WHERE session_id = %s",
-                    (session_id,))
+                    """SELECT messages FROM conversations
+                       WHERE session_id = %s AND user_id = %s AND status != 2""",
+                    (session_id, user_id))
                 row = cur.fetchone()
                 if row is None:
                     raise HTTPException(status_code=404, detail="Session not found")
@@ -171,8 +186,9 @@ def register_session_routes(logger, config):
                 messages.append(new_msg)
 
                 cur.execute(
-                    "UPDATE conversations SET messages = %s WHERE session_id = %s",
-                    (json.dumps(messages, ensure_ascii=False), session_id))
+                    """UPDATE conversations SET messages = %s
+                       WHERE session_id = %s AND user_id = %s""",
+                    (json.dumps(messages, ensure_ascii=False), session_id, user_id))
                 conn.commit()
             logger.info(f"Message appended to session: {session_id}")
             return {"success": True}
@@ -183,14 +199,17 @@ def register_session_routes(logger, config):
     async def save_messages(session_id: str, req: SaveMessagesRequest, http_request: Request):
         """Bulk-save all messages for a session (replace entire messages array)."""
         auth_header = http_request.headers.get("Authorization")
-        verify_firebase_token(auth_header)
+        user = verify_firebase_token(auth_header)
+        user_id = int(user['uid'])
+
         conn = get_db_connection()
         try:
             with conn.cursor() as cur:
                 # Verify session exists and belongs to user
                 cur.execute(
-                    "SELECT id FROM conversations WHERE session_id = %s AND status != 2",
-                    (session_id,))
+                    """SELECT id FROM conversations
+                       WHERE session_id = %s AND user_id = %s AND status != 2""",
+                    (session_id, user_id))
                 if cur.fetchone() is None:
                     raise HTTPException(status_code=404, detail="Session not found")
                 updates = ["messages = %s"]
@@ -198,9 +217,10 @@ def register_session_routes(logger, config):
                 if req.title:
                     updates.append("title = %s")
                     params.append(req.title)
-                params.append(session_id)
+                params.extend([session_id, user_id])
                 cur.execute(
-                    f"UPDATE conversations SET {', '.join(updates)} WHERE session_id = %s",
+                    f"UPDATE conversations SET {', '.join(updates)} "
+                    f"WHERE session_id = %s AND user_id = %s",
                     params)
                 conn.commit()
             logger.info(f"Session messages saved: {session_id}, count={len(req.messages)}")
@@ -209,13 +229,18 @@ def register_session_routes(logger, config):
             conn.close()
 
     @router.delete("/session/{session_id}")
-    async def archive_session(session_id: str):
+    async def archive_session(session_id: str, http_request: Request):
+        auth_header = http_request.headers.get("Authorization")
+        user = verify_firebase_token(auth_header)
+        user_id = int(user['uid'])
+
         conn = get_db_connection()
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE conversations SET status = 2 WHERE session_id = %s",
-                    (session_id,))
+                    """UPDATE conversations SET status = 2
+                       WHERE session_id = %s AND user_id = %s""",
+                    (session_id, user_id))
                 if cur.rowcount == 0:
                     raise HTTPException(status_code=404, detail="Session not found")
                 conn.commit()
