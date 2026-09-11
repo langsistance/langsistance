@@ -2,6 +2,7 @@
 """Tests for session API routes (Task 6)."""
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 
@@ -25,8 +26,30 @@ def mock_db():
         yield conn, cursor
 
 
+# ── 鉴权替身 ──────────────────────────────────────────────────
+# session.py 里 verify_firebase_token 是模块级 import，patch 目标必须是
+# api_routes.session.verify_firebase_token。替身行为对齐真实实现
+# （sources/user/passport.py:36-37）：无 Bearer 头抛 401。
+TEST_UID = 123
+AUTH = {'Authorization': 'Bearer test-token'}
+
+
+def _fake_verify(auth_header, uid=TEST_UID):
+    if not auth_header or not auth_header.startswith('Bearer '):
+        raise HTTPException(status_code=401, detail='Missing token')
+    return {'uid': uid}
+
+
 @pytest.fixture
-def client(mock_db):
+def auth():
+    """把 verify_firebase_token 换成仿真替身，让测试同时覆盖 401 与已鉴权路径。"""
+    with patch('api_routes.session.verify_firebase_token',
+               side_effect=_fake_verify):
+        yield TEST_UID
+
+
+@pytest.fixture
+def client(mock_db, auth):
     from fastapi import FastAPI
     from api_routes.session import register_session_routes
     import logging
@@ -44,7 +67,7 @@ def test_get_session_not_found(client, mock_db):
     _, cursor = mock_db
     cursor.fetchone.return_value = None
 
-    response = client.get("/session/nonexistent")
+    response = client.get("/session/nonexistent", headers=AUTH)
     assert response.status_code == 404
 
 
@@ -59,7 +82,7 @@ def test_create_session(client, mock_db):
     response = client.post("/session", json={
         "user_id": 123,
         "messages": [{"role": "user", "content": "hello"}],
-    })
+    }, headers=AUTH)
     assert response.status_code == 200
     data = response.json()
     assert data['success'] is True
@@ -76,7 +99,7 @@ def test_get_user_sessions(client, mock_db):
          'update_time': datetime.datetime(2026, 6, 23, 10, 0, 0)},
     ]
 
-    response = client.get("/sessions?user_id=123")
+    response = client.get("/sessions?user_id=123", headers=AUTH)
     assert response.status_code == 200
     data = response.json()
     assert data['success'] is True
@@ -94,7 +117,7 @@ def test_append_message(client, mock_db):
     response = client.post("/session/sess_001/message", json={
         "role": "assistant",
         "content": "hi there",
-    })
+    }, headers=AUTH)
     assert response.status_code == 200
     data = response.json()
     assert data['success'] is True
@@ -108,7 +131,7 @@ def test_append_message_session_not_found(client, mock_db):
     response = client.post("/session/nonexistent/message", json={
         "role": "assistant",
         "content": "hi",
-    })
+    }, headers=AUTH)
     assert response.status_code == 404
 
 
@@ -117,7 +140,7 @@ def test_archive_session(client, mock_db):
     _, cursor = mock_db
     cursor.rowcount = 1
 
-    response = client.delete("/session/sess_001")
+    response = client.delete("/session/sess_001", headers=AUTH)
     assert response.status_code == 200
     data = response.json()
     assert data['success'] is True
@@ -128,5 +151,5 @@ def test_archive_session_not_found(client, mock_db):
     _, cursor = mock_db
     cursor.rowcount = 0
 
-    response = client.delete("/session/nonexistent")
+    response = client.delete("/session/nonexistent", headers=AUTH)
     assert response.status_code == 404
