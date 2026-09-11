@@ -41,6 +41,10 @@ import SessionDrawer from '../../components/SessionDrawer'
 import RenameModal from '../../components/RenameModal'
 import PrivacyPopup from '../../components/PrivacyPopup'
 import { pickFile, PickedFile } from '../../services/upload'
+// 只引本页真正用到的两个。brief 多列的 exportMarkdown / saveBase64File
+// 本页无调用点，而 tsconfig 开了 noUnusedLocals，多引即编译失败：
+// exportMarkdown 由 Task 11 接，saveBase64File 由 Task 11 的 artifact 落盘接。
+import { downloadReport, openOrShareFile } from '../../services/download'
 import {
   abandonPrivacy,
   resolvePrivacy,
@@ -517,9 +521,19 @@ export default function ChatPage() {
     }
   }
 
-  function handleDownloadReport(_taskId: string, format: string) {
-    // Task 10 实现真实下载（届时接上 _taskId → /long_task/{id}/report）
-    Taro.showToast({ title: `${format} 下载待实现`, icon: 'none' })
+  async function handleDownloadReport(taskId: string, format: string) {
+    try {
+      Taro.showLoading({ title: '正在下载…' })
+      const path = await downloadReport(taskId, format)
+      Taro.hideLoading()
+      const how = await openOrShareFile(path, format)
+      if (how === 'shared') {
+        Taro.showToast({ title: '已转发到聊天', icon: 'none' })
+      }
+    } catch (err) {
+      Taro.hideLoading()
+      Taro.showToast({ title: errorText(err, '下载失败'), icon: 'none' })
+    }
   }
 
   function copyPatent(pid: string) {
