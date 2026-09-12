@@ -10,8 +10,9 @@
   },
   "scripts": {
     "dev:weapp": "taro build --type weapp --watch",
-    "build:weapp": "taro build --type weapp && npm run check:syntax",
+    "build:weapp": "taro build --type weapp && npm run check:syntax && npm run check:appid",
     "check:syntax": "node scripts/check-dist-syntax.mjs",
+    "check:appid": "node scripts/check-dist-appid.mjs",
     "tsc": "tsc --noEmit",
     "test": "tsc -p tsconfig.test.json && bash -c \"shopt -s globstar; set -- dist-test/**/*.test.mjs; if [ ! -e \\\"$1\\\" ]; then echo 'No compiled test files matched dist-test/**/*.test.mjs' >&2; exit 1; fi; node --test \\\"$@\\\"\""
   },

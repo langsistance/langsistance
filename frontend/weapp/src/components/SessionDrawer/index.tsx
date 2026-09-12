@@ -9,6 +9,12 @@ type Props = {
   currentSessionId: string
   loading?: boolean
   error?: string
+  /**
+   * 未登录：不发会话列表请求（那必然 401），改为显示登录引导。
+   * 「新对话」不受影响——它是纯本地的，不需要凭证。
+   */
+  needLogin?: boolean
+  onLogin?: () => void
   onClose: () => void
   onSelect: (sessionId: string) => void
   onNew: () => void
@@ -25,6 +31,8 @@ export default function SessionDrawer({
   currentSessionId,
   loading,
   error,
+  needLogin,
+  onLogin,
   onClose,
   onSelect,
   onNew,
@@ -77,17 +85,26 @@ export default function SessionDrawer({
             </View>
           ))}
 
-          {!loading && !error && sessions.length === 0 ? (
+          {/* 未登录优先：不显示"还没有对话/加载失败"，那些都会误导 */}
+          {needLogin ? (
+            <View className='drawer-empty'>
+              <Text className='text-muted'>登录后可查看历史对话</Text>
+              <View className='drawer-login' onClick={onLogin}>
+                <Text className='drawer-login-text'>微信一键登录</Text>
+              </View>
+            </View>
+          ) : null}
+          {!needLogin && !loading && !error && sessions.length === 0 ? (
             <View className='drawer-empty'>
               <Text className='text-muted'>还没有对话</Text>
             </View>
           ) : null}
-          {loading ? (
+          {!needLogin && loading ? (
             <View className='drawer-empty'>
               <Text className='text-muted'>加载中…</Text>
             </View>
           ) : null}
-          {error ? (
+          {!needLogin && error ? (
             <View className='drawer-empty'>
               <Text className='drawer-error'>{error}</Text>
             </View>

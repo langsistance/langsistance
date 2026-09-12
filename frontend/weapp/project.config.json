@@ -2,7 +2,7 @@
   "miniprogramRoot": "dist/",
   "projectname": "copiioai-weapp",
   "description": "CopiioAI 专利智能助手（微信小程序）",
-  "appid": "wx0f0ddbb665354fff",
+  "appid": "wx5820ef2ce3c12cbc",
   "setting": {
     "urlCheck": false,
     "es6": false,

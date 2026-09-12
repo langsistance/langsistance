@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Button,
   RichText,
@@ -96,6 +96,33 @@ export default function ChatPage() {
   const assistantRef = useRef('') // 最新一轮助手全文（落库用，防闭包过期）
   /** 用户点过发送但被登录拦下；登录回来时补发一次，不让他再点一遍 */
   const pendingSendRef = useRef(false)
+
+  /**
+   * 窗口高度取**启动时的值**，不用 CSS 的 100vh。
+   *
+   * 这个页面的布局是固定高的 flex 列（顶栏 + 滚动区 + 输入栏），而小程序
+   * `adjust-position` 的自动上推本质是「滚动页面」—— 页面正好一屏、没有
+   * 滚动余量时推不动，输入栏就被键盘盖住（安卓上尤其稳定复现，iOS 常正常）。
+   * 所以改为自己监听键盘高度、把整列压矮，见下面 keyboardHeight。
+   *
+   * 用固定值而非 vh 的原因：安卓上键盘弹出可能连带把视口/vh 也改小，那样
+   * 「vh 自己变矮」与「我们再减去键盘高」会叠加成**双重上移**。
+   */
+  const windowHeight = useMemo(
+    () => Taro.getSystemInfoSync().windowHeight || 0,
+    [],
+  )
+  /**
+   * 键盘高度。
+   *
+   * **不要用 `Taro.onKeyboardHeightChange`** —— 那个名字只存在于 Taro 的 `.d.ts`
+   * 类型定义里（`types/api/device/keyboard.d.ts`），任何运行时实现里都查不到，
+   * 是个**只有类型、没有实现的幽灵 API**：`tsc` 通过、真机无效。本会话踩过。
+   *
+   * 改用组件级事件 `<Textarea onKeyboardHeightChange>` —— Taro 的
+   * `components/types/Textarea.d.ts:156` 标注 `@supported weapp`，是平台真实事件。
+   */
+  const [keyboardHeight, setKeyboardHeight] = useState(0)
   const [msgs, setMsgs] = useState<MsgView[]>([])
   const [sessionTitle, setSessionTitle] = useState('')
   const [input, setInput] = useState('')
@@ -121,6 +148,8 @@ export default function ChatPage() {
 
   // 抽屉
   const [drawerOpen, setDrawerOpen] = useState(false)
+  /** 抽屉当前是否该显示登录引导（开抽屉那一刻算，见 openDrawer） */
+  const [drawerNeedLogin, setDrawerNeedLogin] = useState(false)
   const [sessions, setSessions] = useState<SessionItem[]>([])
   const [listLoading, setListLoading] = useState(false)
   const [listError, setListError] = useState('')
@@ -294,7 +323,24 @@ export default function ChatPage() {
 
   function openDrawer() {
     setDrawerOpen(true)
-    loadSessions()
+    // 未登录不去打那个**必然 401** 的请求（会被 catch 成"会话列表加载失败"，
+    // 用户看了一头雾水）——抽屉里改为显示登录引导。
+    //
+    // 用 state 而不是渲染时现算 isLoggedIn()：从登录页回来时本页不一定会重渲染，
+    // 现算会拿到过期值。开抽屉这一刻算，必定是最新的。
+    const loggedIn = isLoggedIn()
+    setDrawerNeedLogin(!loggedIn)
+    if (loggedIn) {
+      loadSessions()
+    } else {
+      setSessions([])
+      setListError('')
+    }
+  }
+
+  function loginFromDrawer() {
+    setDrawerOpen(false)
+    Taro.navigateTo({ url: '/pages/login/index' })
   }
 
   function resetToNewChat() {
@@ -712,12 +758,21 @@ export default function ChatPage() {
   }
 
   return (
-    <View className='chat'>
+    <View
+      className='chat'
+      // 键盘弹出时把整列压矮 keyboardHeight，输入栏（flex 列最后一个）自然抬到键盘上方
+      style={
+        windowHeight
+          ? { height: `${Math.max(0, windowHeight - keyboardHeight)}px` }
+          : undefined
+      }
+    >
       <NavBar
         title={sessionTitle || '新对话'}
         onMenuClick={openDrawer}
         onNewChat={newChat}
       />
+
 
       <ScrollView
         className='chat-scroll'
@@ -735,7 +790,7 @@ export default function ChatPage() {
                 描述您的产品、技术或专利号，例如：
               </Text>
               <Text className='chat-welcome-example text-muted'>
-                “查一下可折叠桌子相关的专利”
+                “帮我查一下折叠手机的铰链专利”
               </Text>
             </View>
           ) : null}
@@ -865,6 +920,16 @@ export default function ChatPage() {
           value={input}
           maxlength={4000}
           autoHeight
+          // 关掉框架的自动上推：固定高布局下它推不动（页面没有滚动余量），
+          // 反而可能和下面自己算的高度打架。上推由 .chat 的高度负责。
+          adjustPosition={false}
+          // 关掉系统 confirm-bar：它画在键盘上方、且**在原生层**，会把自绘
+          // 输入栏整条压住（真机实测：只露出"完成"二字的细条）。键盘高度已由
+          // onKeyboardHeightChange 拿到，收键盘靠点发送或点消息区，不依赖它。
+          showConfirmBar={false}
+          onKeyboardHeightChange={(e) =>
+            setKeyboardHeight(e.detail.height || 0)
+          }
           placeholder='输入问题…'
           placeholderClass='chat-placeholder'
           onInput={(e) => setInput(e.detail.value)}
@@ -893,6 +958,8 @@ export default function ChatPage() {
         currentSessionId={sessionIdRef.current}
         loading={listLoading}
         error={listError}
+        needLogin={drawerNeedLogin}
+        onLogin={loginFromDrawer}
         onClose={() => setDrawerOpen(false)}
         onSelect={selectSession}
         onNew={newChat}

@@ -1,6 +1,8 @@
 .chat {
   display: flex;
   flex-direction: column;
+  /* 实际高度由 index.tsx 内联给（= 启动时窗口高 − 键盘高），这里只是
+     取不到系统信息时的兜底。键盘遮挡问题见 index.tsx 里 keyboardHeight 的注释。 */
   height: 100vh;
   box-sizing: border-box;
   background: var(--c-bg);
@@ -277,19 +279,22 @@
 /* ── 输入栏 ── */
 .chat-inputbar {
   display: flex;
-  align-items: flex-end;
+  /* center 而非 flex-end：两个圆钮（68rpx）比输入框最小高（80rpx）矮，
+     flex-end 会让它们比输入框中心低 6rpx，看着没对齐。
+     代价是输入框多行变高时圆钮会浮在其垂直中间——单行时才是常见态。 */
+  align-items: center;
   padding: 16px 20px calc(16px + env(safe-area-inset-bottom));
   background: var(--c-surface);
   border-top: 1px solid var(--c-border);
 }
 
 /* 「＋」附件按钮：与输入框**同一行**、居左，对齐 ChatGPT / DeepSeek 的回形针位置。
-   此前它是独立一行挂在输入框上方，没选文件时也会在输入框上留一条空横条。
-   align-self 由 .chat-inputbar 的 flex-end 决定，与发送按钮底边对齐。 */
+   此前它是独立一行挂在输入框上方，没选文件时也会在输入框上留一条空横条。 */
+/* 圆圈 80→68rpx（40→34px）：图标本身不变，收的是圆内的留白 */
 .chat-attach {
   flex-shrink: 0;
-  width: 80px;
-  height: 80px;
+  width: 68px;
+  height: 68px;
   margin-right: 16px;
   border-radius: 50%;
   background: var(--c-bg);
@@ -335,11 +340,12 @@
    132px 胶囊 → 80px 圆，宽度省下 52rpx。
    用 flex 居中而非 line-height：图标字形的行盒高度随字号变化，
    line-height 定的死值会把箭头顶偏。 */
+/* 圆圈 80→68rpx（40→34px）：箭头本身不变，收的是圆内的留白 */
 .chat-send {
   flex-shrink: 0;
   margin-left: 16px;
-  width: 80px;
-  height: 80px;
+  width: 68px;
+  height: 68px;
   padding: 0;
   background: var(--c-primary);
   color: #fff;

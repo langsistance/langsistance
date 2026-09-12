@@ -99,7 +99,13 @@
   color: var(--c-text-muted);
 }
 
+/* flex 列 + align-items:center：让文案与登录按钮**各占一行**。
+   此前靠 text-align:center，而 `<Text>` 与 `.drawer-login` 都是行内级，
+   于是两者挤在同一行。 */
 .drawer-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   padding: 48px 32px;
   text-align: center;
 
@@ -110,4 +116,26 @@
 
 .drawer-error {
   color: var(--c-danger);
+}
+
+/* 未登录引导的登录按钮，位于文案下方一行（.drawer-empty 已是居中 flex 列，
+   作为 flex 项会自然收成内容宽并居中，不需要 inline-flex）。 */
+.drawer-login {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 32px;
+  padding: 20px 48px;
+  border-radius: 999px;
+  background: var(--c-primary);
+
+  &:active {
+    background: var(--c-primary-deep);
+  }
+}
+
+.drawer-login-text {
+  font-size: 28px;
+  font-weight: 500;
+  color: #ffffff;
 }
