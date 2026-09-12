@@ -40,6 +40,7 @@ import {
 } from '../../services/longTask'
 import { uploadQuery } from '../../services/upload'
 import AttachmentBar from '../../components/AttachmentBar'
+import BrandBlock from '../../components/BrandBlock'
 import LongTaskCard from '../../components/LongTaskCard'
 import NavBar from '../../components/NavBar'
 import SessionDrawer from '../../components/SessionDrawer'
@@ -93,6 +94,8 @@ function downloadableArtifacts(m: MsgView): CompletedArtifact[] {
 export default function ChatPage() {
   const sessionIdRef = useRef('')
   const assistantRef = useRef('') // 最新一轮助手全文（落库用，防闭包过期）
+  /** 用户点过发送但被登录拦下；登录回来时补发一次，不让他再点一遍 */
+  const pendingSendRef = useRef(false)
   const [msgs, setMsgs] = useState<MsgView[]>([])
   const [sessionTitle, setSessionTitle] = useState('')
   const [input, setInput] = useState('')
@@ -262,11 +265,19 @@ export default function ChatPage() {
     msgsRef.current = msgs
   }, [msgs])
 
-  // 首页必须自己把门（登录态检查从已删除的会话列表页搬来）
+  // 首页**不再**在 onShow 时把未登录用户踹去登录页——允许先看到新对话页，
+  // 真正需要凭证的动作（发送、会话列表）再各自拦。见 send() 与 request() 的
+  // 401 处置：未登录时那些接口会带回 401，由 clearAuthAndRedirect 统一跳登录。
+  //
+  // 补发：用户在 send() 里被登录拦下时置位 pendingSendRef，登录成功回到本页
+  // 时在这里补发一次，不让他再点一遍。Taro 的 useDidShow 内部用 fnRef 每次渲染
+  // 更新回调（plugin-framework-react/dist/runtime.js:45-63），所以这里调到的是
+  // **最新闭包**，input/msgs 都是当下值，不会拿到挂载时的旧状态。
   useDidShow(() => {
-    if (!isLoggedIn()) {
-      Taro.navigateTo({ url: '/pages/login/index' })
-    }
+    // 一次性：无论这次是否真的补发，都清掉，避免日后再触发一次意外发送
+    const pending = pendingSendRef.current
+    pendingSendRef.current = false
+    if (pending && isLoggedIn()) send()
   })
 
   const loadSessions = useCallback(async () => {
@@ -458,6 +469,14 @@ export default function ChatPage() {
   async function send() {
     const text = input.trim()
     if (!text || sending) return
+    // 未登录不放行：置位后去登录页，**不清空输入**——navigateTo 之后本页仍在
+    // 页面栈里，React 状态不会丢。登录成功 navigateBack 回来时，下面那个
+    // useDidShow 会把这个待发补上，用户不必再点一次。
+    if (!isLoggedIn()) {
+      pendingSendRef.current = true
+      Taro.navigateTo({ url: '/pages/login/index' })
+      return
+    }
     setInput('')
     setSending(true)
     setStatus('连接中…')
@@ -694,7 +713,11 @@ export default function ChatPage() {
 
   return (
     <View className='chat'>
-      <NavBar title={sessionTitle || '新对话'} onMenuClick={openDrawer} />
+      <NavBar
+        title={sessionTitle || '新对话'}
+        onMenuClick={openDrawer}
+        onNewChat={newChat}
+      />
 
       <ScrollView
         className='chat-scroll'
@@ -702,10 +725,12 @@ export default function ChatPage() {
         scrollIntoView={anchor}
         scrollWithAnimation
       >
-        <View className='chat-list'>
+        {/* 空态时多挂一个类把列表撑满滚动区，好让欢迎块垂直居中 */}
+        <View className={`chat-list${msgs.length === 0 ? ' chat-list-empty' : ''}`}>
           {msgs.length === 0 ? (
             <View className='chat-welcome'>
-              <Text className='chat-welcome-title'>专利智能对话</Text>
+              {/* 品牌区与登录页共用同一份内容（BrandBlock），避免两处各写一遍 */}
+              <BrandBlock />
               <Text className='chat-welcome-sub text-muted'>
                 描述您的产品、技术或专利号，例如：
               </Text>

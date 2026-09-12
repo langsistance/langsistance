@@ -45,7 +45,14 @@ export async function request<T = ApiResult>(
     timeout: 30000,
   })
   const body = resp.data as any
-  if (resp.statusCode === 401) {
+  // 只有**带鉴权**的请求才把 401 当会话失效。
+  //
+  // 登录/注册这类 auth:false 的请求没有会话可失效；`/auth/wechat` 兑换 code
+  // 失败时回的正是 401（api_routes/wechat_auth.py:53）。若也走这里，就会：
+  // 清空凭证 → navigateTo 到登录页（而我们**已经在登录页上**）→ 抛出笼统的
+  // "登录已失效"，把后端的真实 detail（如 "code2session error 40029: ..."）
+  // 盖掉。用户于是只看到一个转圈和一个无信息量的错误，真正的原因消失。
+  if (auth && resp.statusCode === 401) {
     clearAuthAndRedirect((body && (body.detail || body.message)) || '登录已失效')
   }
   if (resp.statusCode >= 400) {

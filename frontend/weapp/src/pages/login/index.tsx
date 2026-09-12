@@ -3,6 +3,7 @@ import { Button, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { wechatLogin } from '../../services/auth'
 import { errorText } from '../../services/api'
+import BrandBlock from '../../components/BrandBlock'
 import './index.scss'
 
 /**
@@ -12,9 +13,11 @@ import './index.scss'
 export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  /** 协议勾选。未勾选不放行登录——这是显式同意，不是「登录即代表同意」 */
+  const [agreed, setAgreed] = useState(false)
 
   async function onLogin() {
-    if (loading) return
+    if (loading || !agreed) return
     setLoading(true)
     setError('')
     try {
@@ -29,40 +32,48 @@ export default function LoginPage() {
     }
   }
 
+  function openPrivacy() {
+    Taro.navigateTo({
+      url: '/pages/privacy/index',
+      fail: () => Taro.redirectTo({ url: '/pages/privacy/index' }),
+    })
+  }
+
   return (
     <View className='login'>
       <View className='login-brand'>
-        <View className='login-logo' />
-        <Text className='login-title'>CopiioAI 专利助手</Text>
-        <Text className='login-sub text-muted'>
-          专利检索 · 侵权风险 · 授权前景分析
-        </Text>
+        <BrandBlock />
       </View>
 
       <Button
         className='btn-primary login-btn'
         loading={loading}
-        disabled={loading}
+        disabled={loading || !agreed}
         onClick={onLogin}
       >
         微信一键登录
       </Button>
 
       {error ? <Text className='login-error'>{error}</Text> : null}
-      <Text className='login-legal text-muted'>
-        登录即代表同意
-        <Text
-          className='login-legal-link'
-          onClick={() =>
-            Taro.navigateTo({
-              url: '/pages/privacy/index',
-              fail: () => Taro.redirectTo({ url: '/pages/privacy/index' }),
-            })
-          }
-        >
-          《隐私政策》
+
+      {/* 整行可点切换勾选；点《隐私政策》时 stopPropagation，避免顺带切换 */}
+      <View className='login-agree' onClick={() => setAgreed((v) => !v)}>
+        <View className={`login-check${agreed ? ' login-check-on' : ''}`}>
+          {agreed ? <Text className='login-check-tick'>✓</Text> : null}
+        </View>
+        <Text className='login-agree-text text-muted'>
+          我已阅读并同意
+          <Text
+            className='login-legal-link'
+            onClick={(e) => {
+              e.stopPropagation()
+              openPrivacy()
+            }}
+          >
+            《隐私政策》
+          </Text>
         </Text>
-      </Text>
+      </View>
     </View>
   )
 }

@@ -9,7 +9,8 @@
   align-items: center;
 }
 
-/* 标题居中；左右给胶囊/按钮留出空间，避免视觉偏移 */
+/* 标题左右内缩由组件按「左侧组宽 vs 胶囊占宽」现算并以内联 px 覆盖，
+   两边同值故恒居中（写死 rpx 会在窄屏上让右侧钻到胶囊下面）。 */
 .navbar-title {
   position: absolute;
   left: 160px;
@@ -22,10 +23,14 @@
   white-space: nowrap;
 }
 
+/* ☰ 与 ＋ 并排在左侧成一组，标题两侧对称内缩才可能真居中。
+   容器宽 72rpx（36px 触摸区）；两个容器的左右留白相加即两图标的视觉间距，
+   所以想让他们更近就调这里，而不是调 margin —— 改完记得同步
+   NavBar/index.tsx 的 LEFT_GROUP_RPX。 */
 .navbar-menu {
   position: relative;
   z-index: 1;
-  width: 88px;
+  width: 72px;
   height: 100%;
   margin-left: 12px;
   display: flex;
@@ -37,8 +42,83 @@
   }
 }
 
+/* 菜单图标也画出来：**三条**等距圆角横杠。
+   字体字形的 ☰ 是三条细线、粗细随平台字体走，和旁边画出来的「＋」不是一套。 */
 .navbar-menu-icon {
-  font-size: 40px;
-  line-height: 1;
-  color: var(--c-text);
+  position: relative;
+  width: 36px;
+  height: 36px;
+}
+
+.navbar-menu-bar {
+  position: absolute;
+  left: 0;
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--c-text);
+}
+
+/* 三杠各 4rpx，置于 36rpx 框的 4 / 16 / 28 处 ——
+   整组跨 4..32，居中于框中心 18，杠间距各 8rpx 等距。 */
+.navbar-menu-bar-top {
+  top: 4px;
+}
+
+.navbar-menu-bar-middle {
+  top: 16px;
+}
+
+.navbar-menu-bar-bottom {
+  top: 28px;
+}
+
+/* 「＋」开新对话：紧跟在 ☰ 后面，两者共同构成左侧一组。
+   宽度与 margin-left 会被 NavBar/index.tsx 的 LEFT_GROUP_RPX(160rpx) 计入，
+   改动这里必须同步那个常量，否则标题会偏离屏幕中心。 */
+.navbar-new {
+  position: relative;
+  z-index: 1;
+  margin-left: 4px;
+  width: 72px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  &:active {
+    opacity: 0.5;
+  }
+}
+
+/* 「＋」用 View 画，不用字体字形 —— 同 pages/chat 里 .chat-send-arrow 的理由：
+   『＋』的粗细与形状随平台字体走（iOS / Android / 开发者工具各不相同），
+   细体下尤其单薄，看着不像个能点的东西。构造：两根圆角短杆十字交叉，
+   形状跨平台完全一致。 */
+.navbar-new-icon {
+  position: relative;
+  width: 36px;
+  height: 36px;
+}
+
+.navbar-new-bar {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border-radius: 2px;
+  background: var(--c-text);
+}
+
+/* 负 margin 精确居中，不用 transform：.navbar-new 已是 flex 居中容器，
+   再叠一层 transform 会让两个居中逻辑互相打架。 */
+.navbar-new-bar-h {
+  width: 36px;
+  height: 4px;
+  margin: -2px 0 0 -18px;
+}
+
+.navbar-new-bar-v {
+  width: 4px;
+  height: 36px;
+  margin: -18px 0 0 -2px;
 }

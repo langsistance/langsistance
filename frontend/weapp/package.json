@@ -10,7 +10,8 @@
   },
   "scripts": {
     "dev:weapp": "taro build --type weapp --watch",
-    "build:weapp": "taro build --type weapp",
+    "build:weapp": "taro build --type weapp && npm run check:syntax",
+    "check:syntax": "node scripts/check-dist-syntax.mjs",
     "tsc": "tsc --noEmit",
     "test": "tsc -p tsconfig.test.json && bash -c \"shopt -s globstar; set -- dist-test/**/*.test.mjs; if [ ! -e \\\"$1\\\" ]; then echo 'No compiled test files matched dist-test/**/*.test.mjs' >&2; exit 1; fi; node --test \\\"$@\\\"\""
   },
@@ -29,6 +30,7 @@
     "@tarojs/runtime": "4.1.x",
     "@tarojs/shared": "4.1.x",
     "@tarojs/taro": "4.1.x",
+    "marked": "^18.0.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

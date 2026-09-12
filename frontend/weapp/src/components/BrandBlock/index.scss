@@ -1,0 +1,20 @@
+.brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* 品牌图 480×546（宽高比 0.879）。显式给高度是为了加载期不跳动——
+   mode="widthFix" 会在图片就绪后按宽度重算高度，两者同值故无位移。
+   高度 = 宽 × 546/480，改宽度时记得一起改。 */
+.brand-logo {
+  width: 200px;
+  height: 228px;
+  margin-bottom: 24px;
+}
+
+.brand-title {
+  font-size: 44px;
+  font-weight: 600;
+  color: var(--c-text);
+}

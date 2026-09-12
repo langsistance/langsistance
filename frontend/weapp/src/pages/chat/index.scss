@@ -16,17 +16,30 @@
   box-sizing: border-box;
 }
 
+/* 空态：把列表撑满滚动区并让内容垂直居中。
+   不这么做的话欢迎块只能靠 margin-top 定位，而品牌图比原来的单行标题高得多，
+   同一个 margin 在小屏/大屏上的观感差很多。撑满 + 居中与内容高度解耦。
+   注意 min-height:100% 的参照是 scroll-view（它有来自 flex:1 的确定高度）。
+
+   底部多加的 padding 是把内容**整体上提**：justify-content: center 居中的是
+   内容盒，底部内边距每加 2rpx，内容中心上移 1rpx。这里 180−24 = 156rpx，
+   即上提 78rpx(≈39px)——纯几何居中在视觉上偏低，略高于中心更稳。
+   想再调高度就改这一个数。 */
+.chat-list-empty {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-bottom: 180px;
+}
+
 /* ── 欢迎空态 ── */
+/* 垂直位置交给 .chat-list-empty 的居中，这里不再用 margin-top 定位。
+   标题由 BrandBlock 提供，与登录页共用。 */
 .chat-welcome {
   display: flex;
   flex-direction: column;
   align-items: center;
-  margin-top: 160px;
-}
-
-.chat-welcome-title {
-  font-size: var(--fs-title);
-  font-weight: 600;
 }
 
 .chat-welcome-sub,

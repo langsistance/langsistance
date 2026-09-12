@@ -32,6 +32,16 @@ const config = {
     enable: false,
   },
   mini: {
+    // Taro 默认只把 taro 自家的 node_modules 交 babel（MiniWebpackModule.js:164-167），
+    // 其余依赖原样放行。marked 发的是 ES2022（裸类字段 `options;` / `#私有方法`），
+    // 开发者工具桌面引擎能跑，但**真机调试**的解析器直接报
+    // "SyntaxError: Unexpected token ;"（pages/chat/index.js, 1:19377）。
+    // 这里把它拉进转译范围，只降语法、不改行为。谓词写法对齐 Taro 自己的默认项。
+    compile: {
+      include: [
+        (filename: string) => /(?<=node_modules[\\/])marked/.test(filename),
+      ],
+    },
     postcss: {
       pxtransform: {
         enable: true,
