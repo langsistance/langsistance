@@ -153,3 +153,64 @@ class TestWordLevelQueryFallback(unittest.TestCase):
             '"RGB LED"', 200, 200, items))
         self.assertEqual(len(calls), 1)
         self.assertEqual(len(result), 1)
+
+
+class TestAndBudgetTrimRetry(unittest.TestCase):
+    """2026-09-12 生产实测：applications/search 404 掉的查询是 **2 个 AND 算子**
+    （3 个连接组），例如
+        ("cervical rehabilitation" OR "neck exercise")
+          AND ("head support assembly" OR "head restraint") AND resistance
+
+    生成侧的 MAX_USPTO_AND_OPS=2 对它们判定"合规、不裁" —— 若重发沿用同一预算，
+    重发查询与首次**逐字相同**，等于没重发（本轮修复最初就是这么写的，被这条
+    测试抓出来）。既然已经 404，就只能按更严的预算裁掉尾部合取项。
+    """
+
+    Q_2AND = ('("cervical rehabilitation" OR "neck exercise") '
+              'AND ("head support assembly" OR "head restraint") '
+              'AND resistance')
+    Q_TRIMMED = ('("cervical rehabilitation" OR "neck exercise") '
+                 'AND ("head support assembly" OR "head restraint")')
+
+    def _run_then_200(self, q, fail_times):
+        """前 *fail_times* 次请求返 404，其后返 200；返回 (结果, 备注, 送出的查询)。"""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from sources.agents.react_tools import _uspto_search_by_query
+
+        calls = []
+        items = [{"applicationNumberText": "19511555",
+                  "applicationMetaData": {"inventionTitle": "cervical rehab"}}]
+
+        async def _fake_arequest(method, url, purpose=None, headers=None,
+                                 json=None, timeout=None):
+            calls.append(json["q"])
+            resp = MagicMock()
+            resp.status_code = 404 if len(calls) <= fail_times else 200
+            resp.json = lambda: {"patentFileWrapperDataBag": items}
+            return resp
+
+        with patch("sources.http_outbound.outbound_http") as mock_http:
+            mock_http.arequest = _fake_arequest
+            (result, note) = asyncio.run(_uspto_search_by_query(q))
+        return result, note, calls
+
+    def test_404_retry_trims_the_real_production_query(self):
+        # 线上形态：原发 404 → 词级降级 404 → 才轮到裁尾
+        result, note, calls = self._run_then_200(self.Q_2AND, fail_times=2)
+        self.assertEqual(len(calls), 3, "应为 原发 → 词级降级 → 裁尾重发 三次")
+        self.assertEqual(
+            calls[2], self.Q_TRIMMED,
+            "重发必须把 AND 裁到 1；与首次逐字相同就等于没重发")
+        self.assertNotEqual(calls[0], calls[2], "重发查询不得等于原查询")
+        self.assertIn("AND-budget trim", note)
+        self.assertEqual(len(result), 1)
+
+    def test_already_within_budget_is_not_needlessly_retried(self):
+        # 1 个 AND 本就合规：裁尾不产生新查询，不应多发请求
+        q = '("pressure transducer" OR "pressure sensor array") AND (cervical OR neck)'
+        result, note, calls = self._run_then_200(q, fail_times=0)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(result), 1)
+        self.assertNotIn("trim", note)

@@ -2062,10 +2062,35 @@ async def _uspto_search_by_query(
             word_q = _word_level_query(q)
             if word_q:
                 response, used_q = await _search(word_q)
+        trim_note = ""
         if getattr(response, "status_code", 0) != 200:
-            # 括号 AND/OR 结构 0 命中 → 去括号纯空格词形重试一次
-            # (2026-09-03 观察: 多概念括号查询整轮 404, 空格词形返回 200,
-            # 噪声由 relevance gate/dead 过滤兜底)。
+            # 3+ 个 AND 连接组在该端点**必 404**（2026-09-07 实测：≤2 AND 可
+            # 解析计数，3+ 无论括号怎么套都 404）。按预算裁掉尾部 AND 合取项
+            # 是**唯一不丢约束**的救法，与 dynamic_tool_params 里 KB 路径用的
+            # 是同一个纯函数。
+            # ⚠️ 这里必须用**比生成侧更严的 1**，不能用默认的 MAX_USPTO_AND_OPS=2。
+            # 2026-09-12 生产日志实测：404 掉的正是 2 个 AND 算子（3 个连接组）的
+            # 查询，例如
+            #   ("cervical rehabilitation" OR "neck exercise")
+            #     AND ("head support assembly" OR "head restraint") AND resistance
+            # 它在默认预算下**判定为合规、不裁**——于是"重发"与"原发"是同一条，
+            # 修复形同空转。既然已经 404 了，就是这条查询过不了，只能裁得更狠。
+            try:
+                from sources.long_task.search_query_builder import (
+                    trim_uspto_and_overflow)
+                trimmed_q = trim_uspto_and_overflow(q, max_and_ops=1)
+            except Exception:
+                trimmed_q = ""
+            if trimmed_q and trimmed_q not in (q, word_q):
+                response, used_q = await _search(trimmed_q)
+                if getattr(response, "status_code", 0) == 200:
+                    trim_note = "uspto 404 retry — AND-budget trim"
+        if getattr(response, "status_code", 0) != 200:
+            # ★ 只作最后兜底的「去括号纯空格词形」：它会把 404 换成**含噪 200**
+            # ——空格拼接在该端点是 OR 语义（dynamic_tool_params.py 的实测结论：
+            # 单概念基线的命中数之和 == 空格拼接的命中数），约束全丢、结果与
+            # 原查询不可比。2026-09-03 起它被当作"救援"，实测是拿噪声换 200；
+            # 现降级为末位，且不再计入救援成功。
             try:
                 from sources.long_task.search_query_builder import (
                     destructure_uspto_query)
@@ -2074,12 +2099,15 @@ async def _uspto_search_by_query(
                 flat_q = ""
             if flat_q and flat_q not in (q, word_q):
                 response, used_q = await _search(flat_q)
+                if getattr(response, "status_code", 0) == 200:
+                    trim_note = "uspto 404 fallback — space-flatten (OR semantics, noisy)"
         if getattr(response, "status_code", 0) != 200:
             return [], f"USPTO HTTP {response.status_code}"
         data = response.json()
         items = _normalize_uspto_items(
             data.get("patentFileWrapperDataBag") or [])
-        return items, f"USPTO {len(items)} hits"
+        return items, f"USPTO {len(items)} hits" + (
+            f" ({trim_note})" if trim_note else "")
     except Exception as exc:
         return [], f"USPTO failed: {exc}"
 
