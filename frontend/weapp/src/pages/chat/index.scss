@@ -188,39 +188,6 @@
   word-break: break-word;
 }
 
-/* ── 专利号卡（助手气泡下）── */
-.chat-msg-patents {
-  display: flex;
-  flex-wrap: wrap;
-  margin-top: 12px;
-  gap: 12px;
-}
-
-.chat-patent {
-  display: flex;
-  align-items: center;
-  background: var(--c-primary-soft);
-  border: 1px solid rgba(16, 163, 127, 0.25);
-  border-radius: 12px;
-  padding: 10px 18px;
-
-  &:active {
-    background: #d8ece6;
-  }
-}
-
-.chat-patent-id {
-  font-size: var(--fs-meta);
-  font-weight: 500;
-  color: var(--c-primary-deep);
-}
-
-.chat-patent-copy {
-  margin-left: 12px;
-  font-size: var(--fs-meta);
-  color: var(--c-text-muted);
-}
-
 /* ── 结果工件（CSV/XLSX 下载）── */
 .chat-msg-artifacts {
   display: flex;
@@ -341,7 +308,9 @@
   box-sizing: border-box;
   background: var(--c-bg);
   border-radius: 20px;
-  font-size: var(--fs-body);
+  /* 与 .chat-msg-text 同档（--fs-msg）：输入的字和发出去的字一样大，
+     否则点发送时正文会当场跳大一号。此前用 --fs-body（26px），比已发消息小 6px。 */
+  font-size: var(--fs-msg);
   line-height: 1.5;
 }
 

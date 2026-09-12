@@ -692,10 +692,6 @@ export default function ChatPage() {
     return { setId, source: 'uspto', columns: [], rows: [] }
   }
 
-  function copyPatent(pid: string) {
-    Taro.setClipboardData({ data: pid })
-  }
-
   return (
     <View className='chat'>
       <NavBar title={sessionTitle || '新对话'} onMenuClick={openDrawer} />
@@ -758,21 +754,6 @@ export default function ChatPage() {
                   )}
                 </View>
               ) : null}
-              {m.role === 'assistant' && m.resultSet ? (
-                <View
-                  className='chat-result-entry'
-                  onClick={() =>
-                    Taro.navigateTo({
-                      url: `/pages/results/index?set=${encodeURIComponent(m.resultSet!.setId)}`,
-                    })
-                  }
-                >
-                  <Text className='chat-result-entry-label'>
-                    查看全部 {m.resultSet.rowCount} 项结果
-                  </Text>
-                  <Text className='chat-result-entry-arrow'>›</Text>
-                </View>
-              ) : null}
               {m.role === 'assistant' &&
               (downloadableArtifacts(m).length > 0 || m.content) ? (
                 <View className='chat-msg-artifacts'>
@@ -801,18 +782,19 @@ export default function ChatPage() {
                   ) : null}
                 </View>
               ) : null}
-              {m.role === 'assistant' && m.patents && m.patents.length > 0 ? (
-                <View className='chat-msg-patents'>
-                  {m.patents.map((pid) => (
-                    <View
-                      key={pid}
-                      className='chat-patent'
-                      onClick={() => copyPatent(pid)}
-                    >
-                      <Text className='chat-patent-id'>{pid}</Text>
-                      <Text className='chat-patent-copy'>复制</Text>
-                    </View>
-                  ))}
+              {m.role === 'assistant' && m.resultSet ? (
+                <View
+                  className='chat-result-entry'
+                  onClick={() =>
+                    Taro.navigateTo({
+                      url: `/pages/results/index?set=${encodeURIComponent(m.resultSet!.setId)}`,
+                    })
+                  }
+                >
+                  <Text className='chat-result-entry-label'>
+                    查看全部 {m.resultSet.rowCount} 项结果
+                  </Text>
+                  <Text className='chat-result-entry-arrow'>›</Text>
                 </View>
               ) : null}
               {m.role === 'assistant' && m.task ? (
