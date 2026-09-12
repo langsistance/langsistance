@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 // 否则下一行 import api → @tarojs/taro → @tarojs/runtime 会直接 ReferenceError。
 import './taroRuntimeStubs.js'
 import TaroModule from '@tarojs/taro'
-import { request } from './api.js'
+import { request, errorText } from './api.js'
 
 /** CJS/ESM 互操作下默认导出可能是外层命名空间，两种形态都取一下。 */
 const Taro = TaroModule?.default?.request ? TaroModule.default : TaroModule
@@ -90,6 +90,33 @@ test('request：auth:true 的 401 仍清凭证并跳登录页', async () => {
   } finally {
     restore()
   }
+})
+
+/**
+ * 承重用例：微信**网络层**失败时 Taro reject 的是原始 fail 对象，其上只有
+ * `errMsg`（没有 detail / message）。
+ *
+ * 修复前这个字段不被识别 → 一路落到兜底文案。后果在 2026-09-12 真机实测中
+ * 暴露：体验版因域名未备案被拦（600002），用户只看到"登录失败，请稍后重试"，
+ * 而**服务端一条日志都没有** —— 排查时完全无从下手。
+ *
+ * 判别力：断言真实 errMsg 文本出现。只看"是否返回兜底"的弱实现能过，但它正是漏掉的那条。
+ */
+test('errorText：微信 fail 对象的 errMsg 必须透出，不能被兜底吞掉', () => {
+  const fail = { errno: 600002, errMsg: 'request:fail url not in domain list' }
+  assert.equal(errorText(fail, '登录失败，请稍后重试'), 'request:fail url not in domain list')
+})
+
+test('errorText：后端 detail 优先于 errMsg', () => {
+  assert.equal(
+    errorText({ detail: 'code2session error 40029', errMsg: 'request:fail' }),
+    'code2session error 40029',
+  )
+})
+
+test('errorText：什么都没有时才用兜底', () => {
+  assert.equal(errorText({}, '兜底'), '兜底')
+  assert.equal(errorText(null, '兜底'), '兜底')
 })
 
 /** 非 401 的业务失败照常抛出，不受 401 分支影响。 */

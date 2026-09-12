@@ -64,11 +64,25 @@ export async function request<T = ApiResult>(
   return body as T
 }
 
-/** 后端消息体可能把 detail 包成对象 —— 通用取错误文案 */
+/**
+ * 通用取错误文案。
+ *
+ * 三条来源，缺一不可：
+ *  1. 后端 HTTP 错误体：`detail`（FastAPI HTTPException）/ `message`
+ *  2. JS `Error`：`message`
+ *  3. **微信网络层 fail 对象：`errMsg`** —— Taro 的 promise 包装在
+ *     `wx.request` 失败时 reject 的是这个，其上是 `errMsg`
+ *     （如 `request:fail url not in domain list`）。
+ *
+ * 第 3 条曾漏掉，后果很严重：域名不在白名单、证书不合法、断网等**根本没到
+ * 后端**的失败全被吞成兜底文案，用户只看到"请稍后重试"，而服务端**一条日志
+ * 都没有**——排查时极难定位。upload.ts 早就单独处理了 errMsg，这里漏了。
+ */
 export function errorText(err: any, fallback = '操作失败，请稍后重试'): string {
   const detail = err && (err.detail || err.message)
   if (typeof detail === 'string') return detail
   if (detail && typeof detail.error === 'string') return detail.error
   if (err && typeof err.message === 'string') return err.message
+  if (err && typeof err.errMsg === 'string') return err.errMsg
   return fallback
 }
