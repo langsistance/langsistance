@@ -2045,6 +2045,7 @@ Begin your response now:
         # —— agent 池复用会让缓存跨请求泄漏（本项目已踩过同类坑）。
         self._law_flzt_cache = {}
         self._law_fswx_cache = {}
+        self._law_budget_used = 0  # 每请求 lawInfos 配额预算
         self._search_interpretation = None  # architecture-level interpretation, per request
         self._request_started = time.monotonic()  # whole-request timer (agent_elapsed origin)
         self._grounded_done = False  # post-retrieval grounded synthesis, once per request

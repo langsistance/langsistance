@@ -2285,6 +2285,32 @@ LAW_TIMELINE_MAX_ITEMS = 12     # FLZT events kept per candidate
 LAW_REVIEW_MAX_ITEMS = 3        # FSWX decisions kept per candidate
 LAW_REVIEW_FULLTEXT_CHARS = 800  # decision fullText cap per decision
 
+# 富化并发上限（2026-09-13 生产事故）。佰腾网关对并发敏感：单轮 30 条候选
+# 一起去时约一半 FLZT 调用返回 500
+# ``no access for this api: DATA_PAT_PATAFFAIRSDATA_ONE``；而同一个号码在
+# 26 秒后重试**成功**——不是权限缺失，是并发节流。此前是「每次检索 10 路」，
+# 收拢成单轮一次后变成「单轮 N 路」，去重省下的调用被节流打回，净亏。
+# 限并发后单位时间请求数下降，首轮成功率上升。
+LAW_ENRICH_CONCURRENCY = int(os.getenv("REACT_LAW_ENRICH_CONCURRENCY", "4"))
+
+# 每次工具调用最多富化多少条（2026-09-13 配额治理）。lawInfos 是**计费/
+# 配额**接口，而自动补跑阶梯一次可能收进 30+ 条候选；全查一遍是配额的主要
+# 消耗方式。默认对齐摘要展示条数（SEARCH_DIGEST_LIMIT）——超出这个数的行
+# 本来也不会出现在模型看到的那段摘要里。
+#
+# **取舍（明确记录）**：超出上限的候选**没有法律状态**，其状态列在导出文件
+# 里会空着。按配额松紧用 env 调整；设 0 表示不限（回到旧行为）。
+LAW_ENRICH_MAX_PER_CALL = int(
+    os.getenv("REACT_LAW_ENRICH_MAX_PER_CALL", str(SEARCH_DIGEST_LIMIT)))
+
+# 每**请求**的 lawInfos 总预算 —— 配额治理的主要旋钮。按调用限流治不了总量：
+# 一次提问会跑 5–6 次工具调用（阶梯 + 自动补跑），每次各自限 20 条仍然合计
+# ~50 次；配额是每请求的硬约束，所以必须有总量闸门。默认与摘要展示条数一致
+# —— **每个请求只够富化一份完整摘要**。缓存命中不消耗预算，只有真正打到网关
+# 的调用才计数。0 = 不限（回到旧行为）。
+LAW_ENRICH_MAX_PER_REQUEST = int(
+    os.getenv("REACT_LAW_ENRICH_MAX_PER_REQUEST", str(SEARCH_DIGEST_LIMIT)))
+
 
 def _compact_baiten_law_summary(c: dict) -> str:
     """One-line legal-status suffix for a digest row (observation only).
@@ -2360,6 +2386,28 @@ async def _enrich_baiten_law_status(client, candidates: list, glog,
     if not candidates:
         return
     detail_lookup = len(candidates) <= LAW_DETAIL_SMALL_LIST
+    # 并发上限：佰腾网关对并发敏感，不限流会把去重省下的调用换成 500。
+    # 每次调用建一个新信号量（不是模块级），避免跨请求持有。
+    sem = asyncio.Semaphore(max(1, int(LAW_ENRICH_CONCURRENCY)))
+    # 配额上限：只富化前 N 条（候选顺序即摘要展示顺序）。0 = 不限。
+    _cap = max(0, int(LAW_ENRICH_MAX_PER_CALL))
+    targets = candidates[:_cap] if _cap else candidates
+    _max_req = max(0, int(LAW_ENRICH_MAX_PER_REQUEST))
+
+    def _spend() -> bool:
+        """从每请求预算里预留一次 lawInfos 调用。
+
+        无 agent（旧调用方式）或不限额时恒真 —— 保持既有行为。缓存命中不
+        走这里，因此不消耗预算。asyncio 单线程、检查与自增之间无 await，
+        并发下不会超发。
+        """
+        if agent is None or not _max_req:
+            return True
+        used = int(getattr(agent, "_law_budget_used", 0) or 0)
+        if used >= _max_req:
+            return False
+        agent._law_budget_used = used + 1
+        return True
 
     async def _app_num(c: dict) -> str:
         return str(c.get("app_num") or c.get("application_number")
@@ -2374,8 +2422,11 @@ async def _enrich_baiten_law_status(client, candidates: list, glog,
             timeline = flzt[app_num]
         else:
             try:
-                timeline = await asyncio.wait_for(
-                    client.query_legal_state_timeline(app_num), timeout=5)
+                async with sem:
+                    if not _spend():
+                        return
+                    timeline = await asyncio.wait_for(
+                        client.query_legal_state_timeline(app_num), timeout=5)
             except Exception as exc:
                 if glog is not None:
                     glog.warning(
@@ -2406,8 +2457,11 @@ async def _enrich_baiten_law_status(client, candidates: list, glog,
             decisions = fswx[app_num]
         else:
             try:
-                decisions = await asyncio.wait_for(
-                    client.query_patent_review(app_num), timeout=5)
+                async with sem:
+                    if not _spend():
+                        return
+                    decisions = await asyncio.wait_for(
+                        client.query_patent_review(app_num), timeout=5)
             except Exception as exc:
                 if glog is not None:
                     glog.warning(
@@ -2433,9 +2487,9 @@ async def _enrich_baiten_law_status(client, candidates: list, glog,
         if kept:
             c["review_decisions"] = kept
 
-    await asyncio.gather(*[_one(c) for c in candidates])
+    await asyncio.gather(*[_one(c) for c in targets])
     if detail_lookup:
-        await asyncio.gather(*[_reviews(c) for c in candidates])
+        await asyncio.gather(*[_reviews(c) for c in targets])
 
 
 async def _enrich_cn_candidates_once(agent, items, glog) -> None:

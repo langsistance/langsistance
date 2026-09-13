@@ -302,6 +302,226 @@ class TestLawLookupMemoization(unittest.TestCase):
         self.assertNotIn("CN20230", getattr(agent, "_law_fswx_cache", {}))
 
 
+class TestLawEnrichmentConcurrency(unittest.TestCase):
+    """富化必须限并发 —— 佰腾网关对并发敏感。
+
+    2026-09-13 生产日志：单轮 30 条候选一起去（30 路并发）时，约一半的
+    FLZT 调用返回 500 ``no access for this api: DATA_PAT_PATAFFAIRSDATA_ONE``；
+    同一个号码先失败、26 秒后重试成功，说明不是权限缺失而是**并发节流**。
+    改动前是「每次检索 10 路」，改动后变成「单轮 N 路」——去重省了调用，
+    却把瞬时并发放宽了，必须设上限。
+    """
+
+    class _TrackingClient:
+        def __init__(self):
+            self.in_flight = 0
+            self.peak = 0
+
+        async def query_legal_state_timeline(self, app_num):
+            self.in_flight += 1
+            self.peak = max(self.peak, self.in_flight)
+            # 让出控制权，使所有并发任务都有机会进入临界区
+            await asyncio.sleep(0)
+            self.in_flight -= 1
+            return [{"date": "2025-09-09", "lawStatus": "授权"}]
+
+        async def query_patent_review(self, app_num):
+            return []
+
+    _CANDS = [{"patent_id": "CN%dA" % i, "app_num": "CN2023%d" % i,
+               "status": ""} for i in range(24)]
+
+    def test_flzt_concurrency_is_capped(self):
+        client = self._TrackingClient()
+        with patch.object(react_tools, "LAW_ENRICH_CONCURRENCY", 4):
+            asyncio.run(_enrich_baiten_law_status(
+                client, self._CANDS, None))
+        self.assertLessEqual(client.peak, 4)
+        self.assertGreater(client.peak, 1)   # 仍然是并发，不是串行
+
+    def test_cap_is_configurable(self):
+        client = self._TrackingClient()
+        with patch.object(react_tools, "LAW_ENRICH_CONCURRENCY", 2):
+            asyncio.run(_enrich_baiten_law_status(
+                client, self._CANDS, None))
+        self.assertLessEqual(client.peak, 2)
+
+    def test_default_cap_is_conservative(self):
+        # 默认值必须明显低于改动前的「单轮不限并发」。
+        self.assertLessEqual(react_tools.LAW_ENRICH_CONCURRENCY, 5)
+        self.assertGreaterEqual(react_tools.LAW_ENRICH_CONCURRENCY, 1)
+
+    def test_all_candidates_still_enriched_under_the_cap(self):
+        # 限并发不得丢候选。用 12 条（< 每次调用配额上限）以便只考并发。
+        client = self._TrackingClient()
+        cands = [dict(c) for c in self._CANDS[:12]]
+        with patch.object(react_tools, "LAW_ENRICH_CONCURRENCY", 3):
+            asyncio.run(_enrich_baiten_law_status(client, cands, None))
+        for c in cands:
+            self.assertEqual(c["status"], "授权")
+
+
+class TestLawEnrichmentPerCallBudget(unittest.TestCase):
+    """每次工具调用的 lawInfos 条数上限。
+
+    配额是硬约束（2026-09-13 账号额度耗尽 → 大片 500），而自动补跑阶梯
+    一次可能收进 30+ 条候选，全查一遍是配额的主要消耗方式。
+
+    取舍（明确记录）：**超出上限的行没有法律状态** —— 摘要的状态列与
+    导出文件的状态列都会空着。上限默认等于摘要展示条数，可用 env
+    ``REACT_LAW_ENRICH_MAX_PER_CALL`` 按配额松紧调整；设为 0 表示不限。
+    """
+
+    class _Client:
+        def __init__(self):
+            self.calls = []
+
+        async def query_legal_state_timeline(self, app_num):
+            self.calls.append(app_num)
+            return [{"date": "2025-09-09", "lawStatus": "授权"}]
+
+        async def query_patent_review(self, app_num):
+            return []
+
+    def _cands(self, n):
+        return [{"patent_id": "CN%dA" % i, "app_num": "CN2023%d" % i,
+                 "status": ""} for i in range(n)]
+
+    def test_enriches_at_most_the_cap(self):
+        client = self._Client()
+        cands = self._cands(30)
+        with patch.object(react_tools, "LAW_ENRICH_MAX_PER_CALL", 20):
+            asyncio.run(_enrich_baiten_law_status(client, cands, None))
+        self.assertEqual(len(client.calls), 20)
+
+    def test_rows_beyond_the_cap_keep_empty_status(self):
+        client = self._Client()
+        cands = self._cands(30)
+        with patch.object(react_tools, "LAW_ENRICH_MAX_PER_CALL", 20):
+            asyncio.run(_enrich_baiten_law_status(client, cands, None))
+        for c in cands[:20]:
+            self.assertEqual(c["status"], "授权")
+        for c in cands[20:]:
+            self.assertEqual(c["status"], "")
+
+    def test_cap_is_tunable(self):
+        client = self._Client()
+        with patch.object(react_tools, "LAW_ENRICH_MAX_PER_CALL", 5):
+            asyncio.run(_enrich_baiten_law_status(
+                client, self._cands(30), None))
+        self.assertEqual(len(client.calls), 5)
+
+    def test_zero_means_unlimited(self):
+        client = self._Client()
+        with patch.object(react_tools, "LAW_ENRICH_MAX_PER_CALL", 0):
+            asyncio.run(_enrich_baiten_law_status(
+                client, self._cands(30), None))
+        self.assertEqual(len(client.calls), 30)
+
+    def test_small_lists_are_unaffected(self):
+        client = self._Client()
+        asyncio.run(_enrich_baiten_law_status(client, self._cands(3), None))
+        self.assertEqual(len(client.calls), 3)
+
+    def test_default_cap_equals_the_digest_display_size(self):
+        self.assertEqual(react_tools.LAW_ENRICH_MAX_PER_CALL,
+                         react_tools.SEARCH_DIGEST_LIMIT)
+
+
+class TestLawEnrichmentPerRequestBudget(unittest.TestCase):
+    """每**请求**的 lawInfos 总预算 —— 按调用限流治不了总量。
+
+    一次提问会跑 5–6 次工具调用（阶梯 + 自动补跑），每次调用各自限 20 条
+    仍然合计 ~50 次。配额是每请求的硬约束，所以必须有总量闸门。
+
+    默认与 ``SEARCH_DIGEST_LIMIT`` 一致，含义：**每个请求只够富化一份完整
+    摘要**。0 = 不限（回到旧行为）。
+    """
+
+    class _Client:
+        def __init__(self):
+            self.calls = []
+
+        async def query_legal_state_timeline(self, app_num):
+            self.calls.append(app_num)
+            return [{"date": "2025-09-09", "lawStatus": "授权"}]
+
+        async def query_patent_review(self, app_num):
+            self.calls.append("FSWX:" + app_num)
+            return []
+
+    def _cands(self, n, offset=0):
+        return [{"patent_id": "CN%dA" % i, "app_num": "CN2023%d" % i,
+                 "status": ""} for i in range(offset, offset + n)]
+
+    def _agent(self):
+        return SimpleNamespace(logger=None, _law_budget_used=0)
+
+    def test_total_across_passes_is_capped(self):
+        client = self._Client()
+        agent = self._agent()
+        with patch.object(react_tools, "LAW_ENRICH_MAX_PER_REQUEST", 20):
+            for r in range(4):          # 模拟 4 轮工具调用
+                asyncio.run(_enrich_baiten_law_status(
+                    client, self._cands(10, offset=r * 10), None, agent=agent))
+        self.assertEqual(len(client.calls), 20)
+        self.assertEqual(agent._law_budget_used, 20)
+
+    def test_budget_is_per_request_flag_not_module_state(self):
+        # 两个 agent（两次请求）各自有预算，互不扣减。
+        client = self._Client()
+        with patch.object(react_tools, "LAW_ENRICH_MAX_PER_REQUEST", 5):
+            for _ in range(2):
+                asyncio.run(_enrich_baiten_law_status(
+                    client, self._cands(10), None, agent=self._agent()))
+        self.assertEqual(len(client.calls), 10)
+
+    def test_cache_hits_do_not_consume_budget(self):
+        client = self._Client()
+        agent = self._agent()
+        with patch.object(react_tools, "LAW_ENRICH_MAX_PER_REQUEST", 10):
+            cands = self._cands(5)
+            asyncio.run(_enrich_baiten_law_status(client, cands, None,
+                                                  agent=agent))
+            asyncio.run(_enrich_baiten_law_status(
+                client, self._cands(5), None, agent=agent))
+        self.assertEqual(len(client.calls), 5)      # 第二次全命中缓存
+        self.assertEqual(agent._law_budget_used, 5)
+
+    def test_exhausted_budget_leaves_the_rest_empty(self):
+        client = self._Client()
+        agent = self._agent()
+        with patch.object(react_tools, "LAW_ENRICH_MAX_PER_REQUEST", 3):
+            cands = self._cands(10)
+            asyncio.run(_enrich_baiten_law_status(client, cands, None,
+                                                  agent=agent))
+        self.assertEqual(len(client.calls), 3)
+        # 恰好 3 条拿到状态，其余 7 条留空（不指定是哪 3 条：并发顺序不定）
+        enriched = [c for c in cands if c["status"]]
+        self.assertEqual(len(enriched), 3)
+
+    def test_zero_means_unlimited(self):
+        client = self._Client()
+        agent = self._agent()
+        with patch.object(react_tools, "LAW_ENRICH_MAX_PER_REQUEST", 0):
+            for r in range(3):
+                asyncio.run(_enrich_baiten_law_status(
+                    client, self._cands(10, offset=r * 10), None, agent=agent))
+        self.assertEqual(len(client.calls), 30)
+
+    def test_no_agent_is_unbudgeted(self):
+        # 向后兼容：不传 agent 时保持旧行为（既有测试就这么调）。
+        client = self._Client()
+        with patch.object(react_tools, "LAW_ENRICH_MAX_PER_REQUEST", 2):
+            cands = self._cands(10)
+            asyncio.run(_enrich_baiten_law_status(client, cands, None))
+        self.assertEqual(len(client.calls), 10)
+
+    def test_default_equals_the_digest_display_size(self):
+        self.assertEqual(react_tools.LAW_ENRICH_MAX_PER_REQUEST,
+                         react_tools.SEARCH_DIGEST_LIMIT)
+
+
 class TestNormalizeUsptoItems(unittest.TestCase):
     def test_lifts_title_from_meta_invention_title(self):
         items = [{"applicationNumberText": "19511555", "applicationMetaData": {
