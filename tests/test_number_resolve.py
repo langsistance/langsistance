@@ -421,6 +421,24 @@ class TestBaitenLawLookup(unittest.TestCase):
         self.assertEqual(agent._legal_status_used, 1)
         self.assertEqual(agent._number_cross_used, 0)
 
+    def test_reuses_flzt_cache_from_search_enrichment(self):
+        # 检索期已查过的号，法律状态工具不该再打一次 FLZT —— 同一请求内
+        # 同一申请号的状态不会变。缓存按**线调用**分开，所以 FSWX 仍会
+        # 按需补查（大列表富化时没查过它）。
+        agent = _agent()
+        agent._law_flzt_cache = {
+            "CN202310123456.7": [{"date": "2025-09-09", "lawStatus": "授权"}]}
+        client = SimpleNamespace(
+            query_legal_state_timeline=AsyncMock(),
+            query_patent_review=AsyncMock(return_value=[]))
+        with patch.object(react_tools, "_baiten_client_or_none",
+                          return_value=client):
+            res = _run(react_tools._baiten_law_lookup(
+                agent, "CN202310123456.7"))
+        self.assertEqual(res["status"], "授权")
+        client.query_legal_state_timeline.assert_not_awaited()
+        client.query_patent_review.assert_awaited()   # FSWX 未查过 → 补查
+
     def test_unconfigured_client_returns_empty(self):
         agent = _agent()
         with patch.object(react_tools, "_baiten_client_or_none",

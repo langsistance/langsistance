@@ -2041,6 +2041,10 @@ Begin your response now:
         self._number_cross_done = False  # cross-source zero-hit check fired
         self._number_cross_used = 0  # number-resolution gateway-call budget
         self._legal_status_used = 0  # 需求#18 legal-status lookup budget
+        # lawInfos 每请求缓存（2026-09-13）：同号不重查。**必须在这里重置**
+        # —— agent 池复用会让缓存跨请求泄漏（本项目已踩过同类坑）。
+        self._law_flzt_cache = {}
+        self._law_fswx_cache = {}
         self._search_interpretation = None  # architecture-level interpretation, per request
         self._request_started = time.monotonic()  # whole-request timer (agent_elapsed origin)
         self._grounded_done = False  # post-retrieval grounded synthesis, once per request

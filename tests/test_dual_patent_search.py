@@ -1,7 +1,7 @@
 """Tests for the built-in dual/single-source patent search tool."""
 import asyncio
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from types import SimpleNamespace
 
@@ -24,6 +24,7 @@ from sources.agents.react_tools import (
     _builtin_deep_analysis_description,
     build_tool_set,
 )
+from sources.agents import react_tools
 from sources.patent_source_detect import (
     detect_patent_source_text,
     map_source_for_tool_route,
@@ -211,6 +212,96 @@ class TestEnrichBaitenLawStatus(unittest.TestCase):
         self.assertIn("复审/无效决定1条(最近2024-08-01)", digest)
 
 
+class TestLawLookupMemoization(unittest.TestCase):
+    """同一请求内、同一申请号的 FLZT 只查一次。
+
+    2026-09-13 生产日志实测：一次提问的 ~100 次 lawInfos 里有 40 次是
+    **完全重复**——自动补跑阶梯把同一条检索式又发了一遍，同一批 10 件
+    专利被重复查了两遍法律状态。缓存按**线调用**分开（FLZT / FSWX），
+    这样大列表没查过 FSWX 时，法律状态工具仍会按需补查，但不会重查
+    昂贵的 FLZT。
+    """
+
+    class _CountingClient:
+        def __init__(self, timeline=None, decisions=None):
+            self.timeline_calls = []
+            self.review_calls = []
+            self._timeline = timeline or []
+            self._decisions = decisions or []
+
+        async def query_legal_state_timeline(self, app_num):
+            self.timeline_calls.append(app_num)
+            return self._timeline
+
+        async def query_patent_review(self, app_num):
+            self.review_calls.append(app_num)
+            return self._decisions
+
+    _TIMELINE = [{"date": "2025-09-09", "lawStatus": "授权"}]
+
+    def _cands(self, app_num="CN202311111111.1"):
+        return [{"patent_id": "CN111A", "app_num": app_num, "status": ""}]
+
+    def test_repeat_search_of_same_app_num_hits_cache(self):
+        agent = SimpleNamespace(logger=None)
+        client = self._CountingClient(self._TIMELINE)
+        asyncio.run(_enrich_baiten_law_status(
+            client, self._cands(), None, agent=agent))
+        asyncio.run(_enrich_baiten_law_status(
+            client, self._cands(), None, agent=agent))
+        self.assertEqual(client.timeline_calls, ["CN202311111111.1"])
+
+    def test_cached_row_still_gets_the_status_filled(self):
+        # 命中缓存的行也必须被填上状态 —— 缓存的是线调用，不是跳过赋值。
+        agent = SimpleNamespace(logger=None)
+        client = self._CountingClient(self._TIMELINE)
+        asyncio.run(_enrich_baiten_law_status(
+            client, self._cands(), None, agent=agent))
+        fresh = self._cands()
+        asyncio.run(_enrich_baiten_law_status(client, fresh, None, agent=agent))
+        self.assertEqual(fresh[0]["status"], "授权")
+        self.assertEqual(len(fresh[0]["legal_timeline"]), 1)
+
+    def test_empty_result_is_cached_too(self):
+        # "查过且为空" 也要缓存，否则空结果会被反复重查。
+        agent = SimpleNamespace(logger=None)
+        client = self._CountingClient([])
+        asyncio.run(_enrich_baiten_law_status(
+            client, self._cands(), None, agent=agent))
+        asyncio.run(_enrich_baiten_law_status(
+            client, self._cands(), None, agent=agent))
+        self.assertEqual(client.timeline_calls, ["CN202311111111.1"])
+
+    def test_cache_is_per_agent_not_global(self):
+        # per-request：两个 agent（两次请求）不得互相污染。
+        a1, a2 = SimpleNamespace(logger=None), SimpleNamespace(logger=None)
+        client = self._CountingClient(self._TIMELINE)
+        asyncio.run(_enrich_baiten_law_status(
+            client, self._cands(), None, agent=a1))
+        asyncio.run(_enrich_baiten_law_status(
+            client, self._cands(), None, agent=a2))
+        self.assertEqual(len(client.timeline_calls), 2)
+
+    def test_no_agent_still_works_uncached(self):
+        # 向后兼容：不传 agent 时保持旧行为（既有测试就这么调）。
+        client = self._CountingClient(self._TIMELINE)
+        cands = self._cands()
+        asyncio.run(_enrich_baiten_law_status(client, cands, None))
+        self.assertEqual(cands[0]["status"], "授权")
+
+    def test_fswx_only_cached_when_actually_fetched(self):
+        # 大列表不查 FSWX；此时缓存里不该留下"已查"的痕迹，
+        # 否则法律状态工具会误以为查过而不补查。
+        agent = SimpleNamespace(logger=None)
+        client = self._CountingClient(self._TIMELINE)
+        big = [{"patent_id": f"CN{i}A", "app_num": f"CN2023{i}", "status": ""}
+               for i in range(5)]
+        asyncio.run(_enrich_baiten_law_status(client, big, None, agent=agent))
+        self.assertEqual(client.review_calls, [])
+        # 缓存字典本身是惰性创建的：没查过 FSWX 就不该留下任何条目。
+        self.assertNotIn("CN20230", getattr(agent, "_law_fswx_cache", {}))
+
+
 class TestNormalizeUsptoItems(unittest.TestCase):
     def test_lifts_title_from_meta_invention_title(self):
         items = [{"applicationNumberText": "19511555", "applicationMetaData": {
@@ -253,7 +344,9 @@ class TestBaitenResultsToCandidates(unittest.TestCase):
         self.assertEqual(len(cands), 1)
         c = cands[0]
         self.assertEqual(c["patent_id"], "CN118000001A")
-        self.assertEqual(c["source"], "baiten")
+        # 中立取值：用户可下载的导出文件里不得出现供应商名（见
+        # test_cn_source_value.py）。读取侧仍接受历史值 "baiten"。
+        self.assertEqual(c["source"], "cn")
         self.assertEqual(c["title"], "一种散热装置")
         self.assertEqual(c["app_num"], "CN202310123456")
         self.assertEqual(c["pub_date"], "2024-01-01")
@@ -471,11 +564,15 @@ class TestRunPatentSearch(unittest.TestCase):
         async def _us(q, page=1, page_size=20, agent=None):
             return us_result if us_result is not None else ([], "USPTO n/a")
 
-        async def _cn(q, page=1, page_size=20, agent=None):
+        async def _cn(q, page=1, page_size=20, agent=None, enrich=True):
             return cn_result if cn_result is not None else ([], "Baiten n/a")
 
         with patch("sources.agents.react_tools._uspto_search_by_query", _us), \
-             patch("sources.agents.react_tools._baiten_search_by_query", _cn):
+             patch("sources.agents.react_tools._baiten_search_by_query", _cn), \
+             patch("sources.agents.react_tools._enrich_baiten_law_status",
+                   new=AsyncMock()), \
+             patch("sources.agents.react_tools._baiten_client_or_none",
+                   return_value=None):
             agent = agent or _FakeAgent()
             result = await _run_patent_search(agent, args, lang)
             return agent, result
@@ -579,7 +676,7 @@ class TestRunPatentSearch(unittest.TestCase):
         # the CN leg silently never ran.  Now the CN tightest is auto-filled.
         cn_calls = []
 
-        async def _cn(q, page=1, page_size=20, agent=None):
+        async def _cn(q, page=1, page_size=20, agent=None, enrich=True):
             cn_calls.append(q)
             return [{"patent_id": "CN118000001A", "source": "baiten",
                      "title": "散热装置"}], "Baiten 1 hits"
@@ -603,7 +700,7 @@ class TestRunPatentSearch(unittest.TestCase):
         # 中文提问：CN 首轮 0 命中 → 系统自动补跑未尝试的 CN 阶梯式。
         cn_calls = []
 
-        async def _cn(q, page=1, page_size=20, agent=None):
+        async def _cn(q, page=1, page_size=20, agent=None, enrich=True):
             cn_calls.append(q)
             if q == "ti:(载体)":
                 return [{"patent_id": "CN118000002A", "source": "baiten",
@@ -643,7 +740,7 @@ class TestRunPatentSearch(unittest.TestCase):
                              "filingDate": "2024-01-01"}}], "USPTO 1 hits"
             return [], "USPTO 0 hits"
 
-        async def _cn(q, page=1, page_size=20, agent=None):
+        async def _cn(q, page=1, page_size=20, agent=None, enrich=True):
             return [], "Baiten 0 hits (gateway 0 records)"
 
         with patch("sources.agents.react_tools._uspto_search_by_query", _us), \
@@ -663,7 +760,7 @@ class TestRunPatentSearch(unittest.TestCase):
         cn_calls = []
         us_calls = []
 
-        async def _cn(q, page=1, page_size=20, agent=None):
+        async def _cn(q, page=1, page_size=20, agent=None, enrich=True):
             cn_calls.append(q)
             if q == "ti:(载体)":
                 return [{"patent_id": "CN118000002A", "source": "baiten",
@@ -697,7 +794,7 @@ class TestRunPatentSearch(unittest.TestCase):
         # 预算按源独立:CN 已用 3/4,补跑只能再执行 1 条(US 侧另有自己的 4 条)。
         cn_calls = []
 
-        async def _cn(q, page=1, page_size=20, agent=None):
+        async def _cn(q, page=1, page_size=20, agent=None, enrich=True):
             cn_calls.append(q)
             return [], "Baiten 0 hits (gateway 0 records)"
 
@@ -720,7 +817,7 @@ class TestRunPatentSearch(unittest.TestCase):
         # 预算按源独立后,US 用尽不再影响 CN 兜底。
         cn_calls = []
 
-        async def _cn(q, page=1, page_size=20, agent=None):
+        async def _cn(q, page=1, page_size=20, agent=None, enrich=True):
             cn_calls.append(q)
             if q == "ti:(载体)":
                 return [{"patent_id": "CN118000002A", "source": "baiten",
@@ -821,6 +918,74 @@ class TestBuildToolSetRegistration(unittest.TestCase):
             entry = registry.get(PATENT_LEGAL_STATUS_TOOL_NAME)
             self.assertIsNotNone(entry, src)
             self.assertEqual(entry.kind, "patent_legal_status", src)
+
+
+class TestEnrichmentOncePerToolCall(unittest.TestCase):
+    """富化从「每次佰腾检索一次」改为「每次工具调用一次」。
+
+    生产日志（2026-09-13）：一次 ``patent_search_dual`` 会跑 2–4 次佰腾
+    检索（首轮 + 自动补跑阶梯），每次都内联 ``await`` 富化（~1.5s），全部
+    串在关键路径上。改为收尾统一跑一遍 —— 仍在**排名之前**，因为排名要读
+    ``status``；配合每请求缓存，同号也不会重查。
+    """
+
+    _CN_ITEM = {"patent_id": "CN118000001A", "source": "baiten",
+                "app_num": "CN202311111111.1", "title": "散热装置"}
+
+    def _drive(self, cn_runs):
+        """cn_runs: 连续几次佰腾检索的返回值（最后一次起循环复用）。"""
+        calls = {"n": 0}
+
+        async def _cn(q, page=1, page_size=20, agent=None, enrich=True):
+            idx = min(calls["n"], len(cn_runs) - 1)
+            calls["n"] += 1
+            return cn_runs[idx]
+
+        async def _us(q, page=1, page_size=20):
+            return [], "USPTO 0 hits"
+
+        with patch.object(react_tools, "_baiten_search_by_query", _cn), \
+             patch.object(react_tools, "_uspto_search_by_query", _us), \
+             patch.object(react_tools, "_enrich_baiten_law_status",
+                          new=AsyncMock()) as enrich_mock, \
+             patch.object(react_tools, "_baiten_client_or_none",
+                          return_value=object()):
+            agent = _FakeAgent()
+            asyncio.run(_run_patent_search(
+                agent, {"query_string_cn": "ti:(散热)"}, "zh"))
+        return calls["n"], enrich_mock
+
+    def test_one_enrichment_for_a_single_search(self):
+        n, enrich_mock = self._drive([([self._CN_ITEM], "CN 1 hits")])
+        self.assertEqual(n, 1)
+        self.assertEqual(enrich_mock.await_count, 1)
+
+    def test_one_enrichment_across_auto_ladder_rounds(self):
+        # 首轮 0 命中 → 自动补跑阶梯多发几次检索；富化仍然只跑一次。
+        n, enrich_mock = self._drive(
+            [([], "CN 0 hits"), ([self._CN_ITEM], "CN 1 hits")])
+        self.assertGreater(n, 1)
+        self.assertEqual(enrich_mock.await_count, 1)
+
+    def test_enrichment_receives_only_cn_candidates(self):
+        _n, enrich_mock = self._drive([([self._CN_ITEM], "CN 1 hits")])
+        passed = enrich_mock.await_args[0][1]
+        self.assertTrue(passed)
+        self.assertTrue(all(c.get("source") == "baiten" for c in passed))
+
+    def test_no_baiten_client_skips_enrichment(self):
+        with patch.object(react_tools, "_baiten_search_by_query",
+                          new=AsyncMock(return_value=(
+                              [self._CN_ITEM], "CN 1 hits"))), \
+             patch.object(react_tools, "_uspto_search_by_query",
+                          new=AsyncMock(return_value=([], "USPTO 0"))), \
+             patch.object(react_tools, "_enrich_baiten_law_status",
+                          new=AsyncMock()) as enrich_mock, \
+             patch.object(react_tools, "_baiten_client_or_none",
+                          return_value=None):
+            asyncio.run(_run_patent_search(
+                _FakeAgent(), {"query_string_cn": "ti:(散热)"}, "zh"))
+        enrich_mock.assert_not_awaited()
 
 
 class TestCnPoolCandidateKeepsNativeKey(unittest.TestCase):

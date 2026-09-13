@@ -32,7 +32,7 @@ class TestRunPatentSearchStreamNotes(unittest.TestCase):
         async def _us(q, page=1, page_size=20):
             return list(us_items), us_note
 
-        async def _cn(q, page=1, page_size=20, agent=None):
+        async def _cn(q, page=1, page_size=20, agent=None, enrich=True):
             return list(cn_items), cn_note
 
         with patch("sources.agents.react_tools._uspto_search_by_query", _us), \

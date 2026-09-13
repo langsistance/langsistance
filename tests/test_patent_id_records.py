@@ -31,7 +31,9 @@ class TestExtractRecords(unittest.TestCase):
         self.assertEqual(len(recs), 1)
         r = recs[0]
         self.assertEqual(r["id"], "CN116570413A")
-        self.assertEqual(r["source"], "baiten")
+        # 产出侧已是中立值 "cn"（历史值 "baiten" 仍被接受——本文件其余
+        # 用例的输入正好覆盖那条兼容路径）。
+        self.assertEqual(r["source"], "cn")
         self.assertEqual(r["native_key"], "CN202310123456.7")
         self.assertEqual(r["native_key_kind"], "app_num")
         self.assertTrue(r["retrievable"])

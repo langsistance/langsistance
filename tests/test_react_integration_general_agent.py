@@ -86,6 +86,8 @@ class TestCreateAgentWiring(unittest.TestCase):
         agent._ladder_capped = True
         agent._search_ranked = True
         agent._legal_status_used = 3
+        agent._law_flzt_cache = {"STALE": [{"date": "x"}]}
+        agent._law_fswx_cache = {"STALE": [{"declareNum": "x"}]}
         with patch("sources.agents.general_agent.build_tool_set",
                    new=AsyncMock(return_value=({}, []))), \
              patch("sources.agents.general_agent.ReActLoop") as MockLoop:
@@ -109,6 +111,9 @@ class TestCreateAgentWiring(unittest.TestCase):
         # 需求#18: 用满 3 次后若不重置，池化 agent 会让该用户后续所有
         # 法律状态查询静默降级成"未覆盖"。
         self.assertEqual(getattr(agent, "_legal_status_used", "unset"), 0)
+        # lawInfos 缓存同理：跨请求留着会让下一个请求拿到过期的法律状态。
+        self.assertEqual(getattr(agent, "_law_flzt_cache", "unset"), {})
+        self.assertEqual(getattr(agent, "_law_fswx_cache", "unset"), {})
 
     def test_referential_prompt_hydrates_candidates_from_history(self):
         # 需求#29 端到端：提问里没有号码、但用指代词回指上一轮结果时，

@@ -10,8 +10,9 @@
 ``retrievable``（能否免自由文本检索直接取回）。
 
 **为什么是叶子模块**：``celery_worker.py`` 是独立进程入口，与
-``general_agent`` 共用本模块的映射逻辑，因此**本模块自身只允许 stdlib
-导入**（当前仅 ``json``/``typing``），不引入任何项目内依赖。
+``general_agent`` 共用本模块的映射逻辑，因此**本模块自身只允许轻量导入**
+—— 当前是 ``json`` / ``typing``，以及 ``sources.patent_source_detect``
+（该模块自身零导入，纯函数），不会把重依赖拖进 worker。
 
 注意：该保证只覆盖模块体 —— 经由 ``sources.agents.patent_id_records``
 导入时仍会执行 ``sources/agents/__init__.py``，从而拉起整个 agent 包。
@@ -25,6 +26,8 @@ from __future__ import annotations
 
 import json
 from typing import Any
+
+from sources.patent_source_detect import is_cn_source
 
 RECORD_VERSION = 2
 
@@ -63,10 +66,10 @@ def _legacy_record(pid: str) -> dict:
 
 def _record_for_key(item: dict, key: str, value: str) -> dict:
     """按命中字段与条目形状判定来源与原生键。"""
-    if item.get("source") == "baiten":
+    if is_cn_source(item.get("source")):
         app_num = str(item.get("app_num") or "").strip()
         # 没有键就不给 kind 标签 —— 否则会诱导下游去解引用一个空键。
-        return {"id": value, "source": "baiten",
+        return {"id": value, "source": "cn",
                 "native_key": app_num,
                 "native_key_kind": "app_num" if app_num else "",
                 "retrievable": bool(app_num)}

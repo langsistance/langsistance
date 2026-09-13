@@ -7,6 +7,18 @@ registration agrees with the long-task routing.  Pure functions only.
 """
 
 
+# 结果行上标记「中国专利来源」的取值。产出侧统一写中立值 "cn"（用户可下载
+# 的导出文件里不得出现商业供应商名）；"baiten"/"cnipa" 是历史写法，前端
+# 已持久化的行与旧客户端仍在用，**必须继续接受** —— 丢掉它会让 CN 行被路由
+# 到 US 详情端点（2026-08-29 事故：/patent/uspto/CN213905456U/spec）。
+CN_SOURCE_VALUES = ("cn", "baiten", "cnipa")
+
+
+def is_cn_source(value) -> bool:
+    """结果行的 source 是否标记为中国专利来源。纯函数，永不抛。"""
+    return str(value or "").strip().lower() in CN_SOURCE_VALUES
+
+
 def detect_patent_source_text(
     query: str, conv_history: list = None,
 ) -> str:

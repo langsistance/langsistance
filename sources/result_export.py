@@ -9,6 +9,7 @@ from html import escape
 from typing import Any
 
 from sources.export_labels import uspto_field_label
+from sources.patent_source_detect import is_cn_source
 
 # Export for any non-empty result list: the pipeline already curates
 # (dead/design filtered, relevance ranked), so even a 1-item list is a
@@ -633,9 +634,9 @@ def build_result_artifacts(
     # Split CN (baiten) and other (USPTO) rows into separate workbook
     # sheets — a dual-source result set must not be dumped into one sheet.
     cn_rows = [r for r in rows
-               if str(r.get("source", "")).strip().lower() == "baiten"]
+               if is_cn_source(r.get("source"))]
     other_rows = [r for r in rows
-                  if str(r.get("source", "")).strip().lower() != "baiten"]
+                  if not is_cn_source(r.get("source"))]
     if lang == "zh":
         cn_name, us_name = "中国专利", "美国专利"
     else:
