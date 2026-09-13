@@ -13,6 +13,7 @@ import {
 import { renderMarkdownToHtml } from '@/lib/markdownRender'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { artifactVisualLabel, orderDownloadArtifacts } from '@/lib/downloadArtifacts'
+import { visibleStatusSteps } from '@/lib/chatSession'
 import LongTaskProgress from './LongTaskProgress'
 
 interface Props {
@@ -132,10 +133,10 @@ export default function MarkdownMessage({ content, artifacts = [], resultSummary
   // 单列时间序（2026-09-06）：工具步由 agentSteps 轨呈现，status 轨只保留
   // 进度类消息——同一工具调用的后端双发（step + status 同文案）在此去重，
   // 避免「第 N 步 · 正在调用」在气泡内出现两份。
-  const stepThoughts = new Set(steps.map((s) => (s.thought ?? '').trim()))
+  // 去重逻辑抽到 lib/chatSession.visibleStatusSteps（可测）：它有一条硬约束
+  // ——**永不隐藏正在运行的那条**，否则最新进度被滤掉后整个轨只剩已完成项。
   const rawStatusSteps = statusSteps ?? ctxStatusSteps ?? []
-  const stepsToShow = rawStatusSteps.filter((s) =>
-    !(hasSteps && stepThoughts.has(String(s.message ?? '').trim())))
+  const stepsToShow = visibleStatusSteps(rawStatusSteps, steps)
   const elapsed = statusElapsed ?? ctxStatusElapsed
   const runningSteps = stepsToShow.some((s) => s.state === 'running')
   const runningElapsed = runningSteps ? elapsed : 0

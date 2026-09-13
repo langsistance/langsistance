@@ -231,6 +231,33 @@ export function shouldResetConversationOnNavigation(pathname) {
 }
 
 /**
+ * Status rail for display: hide statuses that merely repeat an agent step.
+ *
+ * Tool steps are already rendered by the agentSteps rail, so a status message
+ * identical to an agent step's thought is dropped to avoid showing it twice.
+ *
+ * **The running status is never dropped.** When the newest status happened to
+ * duplicate an agent thought, filtering it left the rail with every row marked
+ * done while work was still in flight — no progress indicator at all, which
+ * reads as "finished but stuck" (reported 2026-09-13). Showing one row twice is
+ * strictly better than showing none.
+ */
+export function visibleStatusSteps(statusSteps, agentSteps) {
+  const raw = Array.isArray(statusSteps) ? statusSteps : []
+  // 渲染层会直接取 step.id / step.state —— 非对象条目必须挡在这里，
+  // 否则一个 null 就是一次白屏。
+  const safe = raw.filter((s) => s && typeof s === 'object')
+  const steps = Array.isArray(agentSteps) ? agentSteps : []
+  if (!steps.length) return safe
+  const thoughts = new Set(
+    steps.map((s) => String(s?.thought ?? '').trim()).filter(Boolean),
+  )
+  if (!thoughts.size) return safe
+  return safe.filter((s) => s?.state === 'running'
+    || !thoughts.has(String(s?.message ?? '').trim()))
+}
+
+/**
  * ReAct loop step events → message.agentSteps timeline.
  * step appends/merges a running step; observation closes it; agent_elapsed
  * stamps elapsedSeconds and closes any step still running.
