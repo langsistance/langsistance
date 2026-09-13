@@ -47,6 +47,21 @@ class TestExtractPatentIds(unittest.TestCase):
         items = [{"title": "nothing"}, "junk", None, 42]
         self.assertEqual(_extract_patent_ids_from_items(items), [])
 
+    def test_flat_list_is_exactly_the_record_ids(self):
+        # 需求#29 记录化后，平铺契约（返回哪些 id、什么顺序）必须逐项
+        # 一致——前端 SSE 与既有消费者都依赖它。
+        from sources.agents.patent_id_records import (
+            extract_patent_id_records)
+        items = [
+            {"applicationNumberText": "19511555"},
+            {"patent_id": "CN117491049A", "source": "baiten",
+             "app_num": "CN202311458694.9"},
+            {"patent_id": "CN117491049A", "source": "baiten"},
+        ]
+        self.assertEqual(
+            _extract_patent_ids_from_items(items),
+            [r["id"] for r in extract_patent_id_records(items)])
+
 
 if __name__ == "__main__":
     unittest.main()

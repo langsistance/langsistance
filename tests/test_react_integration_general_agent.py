@@ -85,6 +85,7 @@ class TestCreateAgentWiring(unittest.TestCase):
         agent._recall_done = True
         agent._ladder_capped = True
         agent._search_ranked = True
+        agent._legal_status_used = 3
         with patch("sources.agents.general_agent.build_tool_set",
                    new=AsyncMock(return_value=({}, []))), \
              patch("sources.agents.general_agent.ReActLoop") as MockLoop:
@@ -105,6 +106,52 @@ class TestCreateAgentWiring(unittest.TestCase):
         self.assertFalse(getattr(agent, "_recall_done", True))
         self.assertFalse(getattr(agent, "_ladder_capped", True))
         self.assertFalse(getattr(agent, "_search_ranked", True))
+        # 需求#18: 用满 3 次后若不重置，池化 agent 会让该用户后续所有
+        # 法律状态查询静默降级成"未覆盖"。
+        self.assertEqual(getattr(agent, "_legal_status_used", "unset"), 0)
+
+    def test_referential_prompt_hydrates_candidates_from_history(self):
+        # 需求#29 端到端：提问里没有号码、但用指代词回指上一轮结果时，
+        # 候选必须能从持久化记录补水，并带上来源原生键。
+        agent = _make_agent()
+        handler = _FakeHandler()
+        records = [{"id": "CN116570413A", "source": "baiten",
+                    "native_key": "CN202310123456.7",
+                    "native_key_kind": "app_num", "retrievable": True}]
+        with patch("sources.agents.general_agent.build_tool_set",
+                   new=AsyncMock(return_value=({}, []))), \
+             patch("sources.agents.general_agent._read_recent_patent_records",
+                   return_value=records), \
+             patch("sources.agents.general_agent.ReActLoop") as MockLoop:
+            MockLoop.return_value.run = AsyncMock(
+                return_value=RoundResult(kind="answer", answer_text="hi", steps=1))
+            _run(agent.create_agent(
+                "u1", "这些专利的法律状态如何", "q1", "", handler,
+                push_filter=None))
+        cands = getattr(agent, "_number_candidates", [])
+        self.assertEqual([c["display"] for c in cands], ["CN116570413A"])
+        self.assertEqual(cands[0]["native_key"], "CN202310123456.7")
+        self.assertEqual(cands[0]["native_key_kind"], "app_num")
+
+    def test_plain_prompt_does_not_hydrate(self):
+        agent = _make_agent()
+        handler = _FakeHandler()
+        records = [{"id": "CN116570413A", "source": "baiten",
+                    "native_key": "CN202310123456.7",
+                    "native_key_kind": "app_num", "retrievable": True}]
+        with patch("sources.agents.general_agent.build_tool_set",
+                   new=AsyncMock(return_value=({}, []))), \
+             patch("sources.agents.general_agent._read_recent_patent_records",
+                   return_value=records), \
+             patch("sources.agents.general_agent.ReActLoop") as MockLoop:
+            MockLoop.return_value.run = AsyncMock(
+                return_value=RoundResult(kind="answer", answer_text="hi", steps=1))
+            _run(agent.create_agent(
+                "u1", "帮我找工业机器人专利", "q1", "", handler,
+                push_filter=None))
+        # 无指代意图 → 不补水（号码不参与解析）。注：记录读取本身在系统
+        # 提示兜底路径另有既有调用点，所以这里只断言行为，不数调用次数。
+        self.assertEqual(getattr(agent, "_number_candidates", []), [])
 
     def test_create_agent_matches_cpc_once_per_request(self):
         agent = _make_agent()

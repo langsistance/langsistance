@@ -20,6 +20,8 @@ from sources.agents.react_tools import (
     _rank_builtin_patent_pool,
     _resolve_patent_queries,
     _run_patent_search,
+    PATENT_LEGAL_STATUS_TOOL_NAME,
+    _builtin_deep_analysis_description,
     build_tool_set,
 )
 from sources.patent_source_detect import (
@@ -810,6 +812,45 @@ class TestBuildToolSetRegistration(unittest.TestCase):
         # 未指定国别（默认）→ 双源工具注册（未传 patent_source）
         registry, _ = asyncio.run(self._build(None))
         self.assertIn("patent_search_dual", registry)
+
+    def test_legal_status_tool_registered_in_every_mode(self):
+        # 需求#18: 法律状态问题可能在任何国别模式下到来，确定性路径
+        # 不能依赖 LLM 挑到合适的 KB 工具 —— 无条件注册。
+        for src in ("dual", "cn", "uspto"):
+            registry, _ = asyncio.run(self._build(src))
+            entry = registry.get(PATENT_LEGAL_STATUS_TOOL_NAME)
+            self.assertIsNotNone(entry, src)
+            self.assertEqual(entry.kind, "patent_legal_status", src)
+
+
+class TestCnPoolCandidateKeepsNativeKey(unittest.TestCase):
+    """需求#29: 池化曾丢弃 app_num，导致下游再也拿不到 CN 申请号 ——
+    而它正是佰腾法律状态/取件 API 需要的键。"""
+
+    def test_app_num_survives_pool_mapping(self):
+        item = {"patent_id": "CN116570413A", "patent_number": "CN116570413A",
+                "title": "某方法", "applicant": "某公司",
+                "app_num": "CN202310123456.7", "source": "baiten"}
+        pool = _cn_item_to_pool_candidate(item)
+        self.assertEqual(pool["app_num"], "CN202310123456.7")
+
+    def test_missing_app_num_is_empty_string(self):
+        item = {"patent_id": "CN116570413A", "source": "baiten"}
+        self.assertEqual(_cn_item_to_pool_candidate(item)["app_num"], "")
+
+
+class TestDeepAnalysisDescriptionRedirect(unittest.TestCase):
+    """需求#18: 法律状态问题此前被 deep_analysis 描述推回关键词检索
+    （"请走检索"），而检索答不了状态级问题 —— 必须改指专用工具。"""
+
+    def test_zh_redirects_to_legal_status_tool(self):
+        d = _builtin_deep_analysis_description("zh")
+        self.assertNotIn("请走检索", d)
+        self.assertIn(PATENT_LEGAL_STATUS_TOOL_NAME, d)
+
+    def test_en_redirects_to_legal_status_tool(self):
+        d = _builtin_deep_analysis_description("en")
+        self.assertIn(PATENT_LEGAL_STATUS_TOOL_NAME, d)
 
 
 

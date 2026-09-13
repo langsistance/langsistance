@@ -6144,29 +6144,23 @@ def _store_long_task_patent_ids(
     if not user_id or not table_rows:
         return
 
-    # Use the first column (typically '专利号' / 'patent_number') as the ID source.
-    id_column = columns[0] if columns else None
-    if not id_column:
-        return
-
-    patent_ids = []
-    for row in table_rows:
-        pid = str(row.get(id_column, '')).strip()
-        if pid and not row.get('_failed'):
-            patent_ids.append(pid)
-
-    if not patent_ids:
+    # The first column is typically '专利号' / 'patent_number'; the shared
+    # helper owns the row→record mapping so this writer and the general-agent
+    # writer can never drift into different shapes for the same Redis key.
+    from sources.agents.patent_id_records import (
+        encode_records, records_from_long_task_rows)
+    records = records_from_long_task_rows(table_rows, columns)
+    if not records:
         return
 
     try:
         from sources.knowledge.knowledge import get_redis_connection
         r = get_redis_connection()
         key = f"lt:conv:{user_id}:patent_ids"
-        r.set(key, json.dumps(patent_ids, ensure_ascii=False),
-              ex=_CONV_PATENT_IDS_TTL)
+        r.set(key, encode_records(records), ex=_CONV_PATENT_IDS_TTL)
         _pipeline_logger.info(
             f"[task={task_id}] stored_patent_ids_for_followup — "
-            f"count={len(patent_ids)}, key={key}"
+            f"count={len(records)}, key={key}"
         )
     except Exception as e:
         _pipeline_logger.warning(

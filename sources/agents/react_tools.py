@@ -212,6 +212,32 @@ async def _patent_number_stub(number: str) -> str:
     raise NotImplementedError("executed via dispatch, not directly")
 
 
+# ── Built-in legal-status lookup (需求#18, CN-first) ─────────────────────────
+# Registered on every request, like the number tool: a legal-status question
+# can arrive in any country mode and must not depend on the LLM picking a
+# pushed KB tool.  Deterministic — the number is parsed system-side, then the
+# owning source's legal-status API is queried by key.
+
+PATENT_LEGAL_STATUS_TOOL_NAME = "patent_legal_status"
+
+# FLZT/FSWX are a DIFFERENT gateway method from /openService/search: they are
+# key-addressed and cost no search fan-out.  They therefore get their own
+# per-request cap rather than sharing NUMBER_CROSS_MAX_QUERIES — conflating
+# the two would let one status question starve a later number lookup.
+LEGAL_STATUS_MAX_LOOKUPS = int(os.getenv("REACT_LEGAL_STATUS_MAX_LOOKUPS", "3"))
+
+
+class _LegalStatusArgs(BaseModel):
+    number: str = Field(
+        description=("专利号/公开号/申请号原文，可含 CN/US 前缀；"
+                     "系统会解析格式并查询法律状态事件与复审/无效决定"),
+    )
+
+
+async def _patent_legal_status_stub(number: str) -> str:
+    raise NotImplementedError("executed via dispatch, not directly")
+
+
 # ── Built-in dual/single-source patent search (USPTO + Baiten CN) ────────────
 # Registered per query in build_tool_set based on the detected patent
 # source; executed via make_action_executor (kind="patent_search").
@@ -376,13 +402,15 @@ def _builtin_deep_analysis_description(lang: str = "zh") -> str:
             "the user the analysis task was created and that results will "
             "appear here when done. Do NOT substitute a keyword search for "
             "this analysis."
+            " A plain legal-status question (e.g. \"was it rejected?\") is "
+            "NOT this task - call patent_legal_status instead."
         )[:800]
     return (
         "对指定专利发起后台深度分析任务：审查历史/审查意见/OA/驳回/复审无效，"
         "或全球同族申请在各国的审查过程与差异。问题中必须包含具体专利号/申请号。"
         "任务异步执行——调用后告知用户任务已创建，完成后结果会出现在本会话；"
         "不要用普通关键词检索代替该分析。仅法律状态查询（如“被驳回了吗”）"
-        "不属于本任务，请走检索。"
+        "不属于本任务，请改用 patent_legal_status 工具。"
     )[:800]
 
 
@@ -496,6 +524,29 @@ async def build_tool_set(
     )
     add(ToolEntry(name=PATENT_NUMBER_RESOLVE_TOOL_NAME, kind="patent_number",
                   knowledge=None, tool_info=None, tool=number_tool))
+
+    # Built-in legal-status lookup (需求#18) — always registered, for the
+    # same reason as the number tool above.
+    legal_status_tool = StructuredTool.from_function(
+        func=_patent_legal_status_stub,
+        name=PATENT_LEGAL_STATUS_TOOL_NAME,
+        description=(
+            "Query the LEGAL STATUS of one patent by its exact number "
+            "(grant / publication / application number, CN or US). Use this "
+            "when the user asks whether a patent was granted, rejected, "
+            "withdrawn, terminated or expired, or asks for its legal-status "
+            "timeline, re-examination / invalidation decisions, or whether "
+            "re-examination is available. Returns the recorded status "
+            "events; where the sources do not cover a status, the answer "
+            "states that explicitly and gives the official lookup entry. "
+            "Answer ONLY from the returned record — never infer a reason "
+            "the record does not state."
+        ),
+        args_schema=_LegalStatusArgs,
+    )
+    add(ToolEntry(name=PATENT_LEGAL_STATUS_TOOL_NAME,
+                  kind="patent_legal_status",
+                  knowledge=None, tool_info=None, tool=legal_status_tool))
 
     search_tool = StructuredTool.from_function(
         func=_search_knowledge_stub,
@@ -2316,6 +2367,9 @@ async def _enrich_baiten_law_status(client, candidates: list, glog) -> None:
                 glog.warning(
                     f"baiten FSWX review failed for {app_num}: {exc}")
             return
+        # 只在 FSWX **确实返回过**时标记「已查询」——调用失败不能算查过，
+        # 否则下游会把"没查成"渲染成"查过且没有"。
+        c["reviews_checked"] = True
         kept = []
         for d in (decisions or [])[:LAW_REVIEW_MAX_ITEMS]:
             if not isinstance(d, dict):
@@ -2493,6 +2547,11 @@ def _cn_item_to_pool_candidate(item: dict) -> dict:
     The pool consumes patent_id/title/applicant/status/filing_date/
     patent_number/type_code/cpc_codes/_raw; Baiten candidates carry most
     of these natively — filing_date derives from apply_date/pub_date.
+
+    ``app_num`` is carried through as well (需求#29): it is the CN
+    application number, the key the Baiten legal-status / retrieval APIs
+    actually accept.  Dropping it here is what made a delivered CN
+    publication number impossible to read back.
     """
     return {
         "patent_id": str(item.get("patent_id") or ""),
@@ -2502,6 +2561,7 @@ def _cn_item_to_pool_candidate(item: dict) -> dict:
         "filing_date": str(item.get("apply_date")
                           or item.get("pub_date") or ""),
         "patent_number": str(item.get("patent_number") or ""),
+        "app_num": str(item.get("app_num") or ""),
         "type_code": str(item.get("type_code") or ""),
         "cpc_codes": item.get("cpc_codes") or [],
         "_raw": item,
@@ -2876,12 +2936,43 @@ async def _lookup_number_candidates(
         if items:
             merged.extend(items)
 
+    async def _baiten_native_leg(c: dict) -> bool:
+        """需求#29: 候选带来源原生键（CN 申请号）时按号直查。
+
+        这是「系统读不回自己刚产出的号码」的正面修法——此前只能把
+        CN 公开号当作佰腾的自由文本检索词发出去，而那不是可靠的查询键。
+        """
+        if str(c.get("native_key_kind") or "") != "app_num":
+            return False
+        native = str(c.get("native_key") or "").strip()
+        if not native:
+            return False
+        result = await _baiten_law_lookup(agent, native)
+        if not result:
+            return False
+        status = str(result.get("status") or "")
+        notes.append(f"Baiten(app_num={native}) — {status or 'ok'}")
+        merged.append({
+            "patent_id": str(c.get("display") or native),
+            "patent_number": str(c.get("display") or native),
+            "source": "baiten",
+            "app_num": native,
+            "title": "",
+            "status": status,
+            "legal_timeline": result.get("timeline") or [],
+            "review_decisions": result.get("reviews") or [],
+            "reviews_checked": bool(result.get("reviews_checked")),
+        })
+        return True
+
     for c in (candidates or [])[:3]:
         country = str(c.get("country") or "")
         lookups = [l for l in (c.get("lookups") or []) if l]
         if not lookups:
             continue
         primary = "cn" if country == "CN" else "us"
+        if primary == "cn" and await _baiten_native_leg(c):
+            continue  # 原生键已命中 — 无需检索，也无需打对侧
         for source in (primary, "us" if primary == "cn" else "cn"):
             before = len(merged)
             if source == "cn":
@@ -2990,6 +3081,301 @@ async def _run_patent_number_resolve(agent, args, lang: str) -> dict:
     return {"kind": "observation", "text": digest}
 
 
+# ── 需求#18 法律状态直查（CN 优先）─────────────────────────────────────────
+# 与号码工具的区别：号码工具回答"这个号是什么"，本工具回答"这个号现在
+# 处于什么法律状态、有没有复审/无效决定"。数据源是佰腾 FLZT（状态事件流）
+# 与 FSWX（复审/无效决定），二者都是**按键寻址**的网关方法（app_num 是
+# query_law_infos 的文档参数），不涉及自由文本检索。
+
+
+def _baiten_client_or_none(agent):
+    """按配置构造 BaitenClient；未配置或构造失败返回 None。永不抛。"""
+    try:
+        from sources.baiten_client import BaitenClient
+        from sources.long_task.config import get_baiten_config
+        cfg = get_baiten_config()
+        if not cfg.get("app_key") or not cfg.get("app_secret"):
+            return None
+        return BaitenClient(cfg["app_key"], cfg["app_secret"],
+                            cfg["gateway_url"])
+    except Exception as exc:
+        # 配置损坏与"未配置"必须可区分 —— 否则用户看到的是"数据源未覆盖"，
+        # 而真相是配置坏了，正是需求#18 要避免的能力误报。
+        _glog = getattr(agent, "logger", None)
+        if _glog is not None:
+            _glog.warning(f"baiten client unavailable: {exc}")
+        return None
+
+
+async def _baiten_law_lookup(agent, app_num) -> dict:
+    """一个 CN 申请号的法律状态时间线 + 复审/无效决定。
+
+    返回 ``{status, status_date, category, timeline, reviews}``；任一步失败
+    降级为 ``{}``，永不抛。计数记在 ``agent._legal_status_used``，
+    **刻意不记** ``_number_cross_used`` —— 见 LEGAL_STATUS_MAX_LOOKUPS。
+    """
+    app_num = str(app_num or "").strip()
+    if not app_num:
+        return {}
+    used = int(getattr(agent, "_legal_status_used", 0) or 0)
+    if used >= LEGAL_STATUS_MAX_LOOKUPS:
+        return {}
+    client = _baiten_client_or_none(agent)
+    if client is None:
+        return {}
+    agent._legal_status_used = used + 1
+    _glog = getattr(agent, "logger", None)
+
+    try:
+        timeline = await asyncio.wait_for(
+            client.query_legal_state_timeline(app_num), timeout=5)
+    except Exception as exc:
+        if _glog is not None:
+            _glog.warning(f"legal status FLZT failed for {app_num}: {exc}")
+        return {}
+
+    from sources.long_task.legal_status import summarize_timeline
+    summary = summarize_timeline(timeline, country="CN")
+    if not summary["latest"]:
+        return {}
+    out: dict = {
+        "status": summary["latest"],
+        "status_date": summary["latest_date"],
+        "category": summary["category"],
+        "timeline": [
+            {"date": str(e.get("date") or ""),
+             "lawStatus": str(e.get("lawStatus") or "")}
+            for e in (timeline or [])[:LAW_TIMELINE_MAX_ITEMS]
+            if isinstance(e, dict) and e.get("lawStatus")
+        ],
+    }
+
+    reviews_checked = False
+    try:
+        decisions = await asyncio.wait_for(
+            client.query_patent_review(app_num), timeout=5)
+        reviews_checked = True
+    except Exception as exc:
+        if _glog is not None:
+            _glog.warning(f"legal status FSWX failed for {app_num}: {exc}")
+        decisions = []
+    out["reviews_checked"] = reviews_checked
+    kept = []
+    for d in (decisions or [])[:LAW_REVIEW_MAX_ITEMS]:
+        if not isinstance(d, dict):
+            continue
+        kept.append({
+            "declareNum": str(d.get("declareNum")
+                              or d.get("declare_num") or ""),
+            "declareDate": str(d.get("declareDate")
+                               or d.get("declare_date") or ""),
+            "lawBase": str(d.get("lawBase") or d.get("law_base") or ""),
+            "fullText": str(d.get("fullText") or "")[
+                :LAW_REVIEW_FULLTEXT_CHARS],
+        })
+    if kept:
+        out["reviews"] = kept
+    return out
+
+
+def _legal_status_entries(merged: list, notes: list) -> list:
+    """把已解析的记录映射成法律状态条目。纯映射，不发起调用。
+
+    多数 CN 记录在检索阶段已被 `_enrich_baiten_law_status` 挂上
+    ``status`` / ``legal_timeline`` / ``review_decisions`` —— 这里只读取，
+    因此常见的号码查询是零额外网关调用的。
+
+    ``covered`` 由"来源是否真的给了状态"决定，不由国别决定：没拿到就
+    不能假装有，也不能假装查过。
+    """
+    entries = []
+    for item in (merged or []):
+        if not isinstance(item, dict):
+            continue
+        is_baiten = item.get("source") == "baiten"
+        display = str(item.get("patent_id")
+                      or item.get("patent_number")
+                      or item.get("applicationNumberText") or "").strip()
+        if not display:
+            continue
+        status = str(item.get("status") or "").strip()
+        entries.append({
+            "display": display,
+            "app_num": str(item.get("app_num") or "").strip(),
+            "country": "CN" if is_baiten else "US",
+            "status": status,
+            "status_date": "",
+            "timeline": item.get("legal_timeline") or [],
+            "reviews": item.get("review_decisions") or [],
+            "reviews_checked": bool(item.get("reviews_checked")),
+            "checked": ["Baiten FLZT/FSWX"] if is_baiten else ["USPTO"],
+            "covered": bool(status),
+        })
+    return entries
+
+
+def _legal_status_digest(entries: list, lang: str) -> str:
+    """法律状态 observation 渲染。双语，永不抛。
+
+    每个条目只陈述记录载明的状态与事件；来源没覆盖的部分显式标注
+    「未覆盖」并给出官方查询入口 —— 需求#18 的诚实边界要求。
+    """
+    from sources.long_task.legal_status import (
+        LEGAL_STATUS_DISCLAIMER, classify_status, official_portal,
+        summarize_review_decisions)
+    is_en = str(lang) == "en"
+    blocks: list = []
+    for e in (entries or []):
+        if not isinstance(e, dict):
+            continue
+        display = str(e.get("display") or "").strip()
+        if not display:
+            continue
+        country = str(e.get("country") or "")
+        app_num = str(e.get("app_num") or "").strip()
+        lines: list = []
+        if app_num:
+            lines.append(f"{display}（申请号 {app_num}）" if not is_en
+                         else f"{display} (application {app_num})")
+        else:
+            lines.append(display)
+
+        if e.get("covered"):
+            cls = classify_status(e.get("status"), country=country)
+            label = cls["en"] if is_en else cls["zh"]
+            date = str(e.get("status_date") or "").strip()
+            if is_en:
+                lines.append(f"Legal status: {label}"
+                             + (f" ({date})" if date else ""))
+            else:
+                lines.append(f"法律状态：{label}"
+                             + (f"（{date}）" if date else ""))
+            timeline = [t for t in (e.get("timeline") or [])
+                        if isinstance(t, dict)
+                        and (t.get("date") or t.get("lawStatus"))]
+            if timeline:
+                lines.append("Timeline:" if is_en else "状态时间线：")
+                for t in timeline[:LAW_TIMELINE_MAX_ITEMS]:
+                    lines.append(
+                        f"- {t.get('date', '')} {t.get('lawStatus', '')}".rstrip())
+            if country == "CN":
+                rendered = summarize_review_decisions(
+                    e.get("reviews") or [], lang=lang)
+                if rendered:
+                    lines.append(rendered)
+                elif e.get("reviews_checked"):
+                    lines.append(
+                        "No re-examination / invalidation decision records "
+                        "found." if is_en
+                        else "未检索到复审/无效决定记录。")
+                else:
+                    # 没查过就不能说"没有"——无据的否定比不回答更糟。
+                    lines.append(
+                        "Re-examination / invalidation decisions: not "
+                        "queried in this lookup." if is_en
+                        else "复审/无效决定：本次未查询。")
+        else:
+            checked = "、".join(e.get("checked") or []) if not is_en \
+                else ", ".join(e.get("checked") or [])
+            portal = official_portal(country)
+            if is_en:
+                lines.append(
+                    "Legal-status data for this number is not covered by "
+                    f"this system (sources checked: {checked or '-'}).")
+            else:
+                lines.append(
+                    "未获取到该号码的法律状态（已核验："
+                    f"{checked or '-'}）。本系统暂未覆盖该来源的法律状态数据。")
+            if portal:
+                lines.append(f"Official lookup: {portal}" if is_en
+                             else f"官方查询入口：{portal}")
+        blocks.append("\n".join(lines))
+
+    if not blocks:
+        return ""
+    blocks.append(LEGAL_STATUS_DISCLAIMER["en"] if is_en
+                  else LEGAL_STATUS_DISCLAIMER["zh"])
+    return "\n\n".join(blocks)
+
+
+async def _fill_missing_status(agent, entries: list) -> list:
+    """补齐没带状态的 CN 记录：用其申请号按号直查。
+
+    检索期附带的富化可能失败，于是记录落到这里时 ``covered=False``。但
+    只要手里有申请号就还能查——有键不查、转头对用户说"未覆盖"，是能力
+    上的谎报。没有键才如实标注。
+    """
+    for entry in entries:
+        if entry.get("covered") or str(entry.get("country")) != "CN":
+            continue
+        app_num = str(entry.get("app_num") or "").strip()
+        if not app_num:
+            continue
+        result = await _baiten_law_lookup(agent, app_num)
+        if not result:
+            continue
+        entry["status"] = str(result.get("status") or "")
+        entry["status_date"] = str(result.get("status_date") or "")
+        entry["timeline"] = result.get("timeline") or []
+        entry["reviews"] = result.get("reviews") or []
+        entry["reviews_checked"] = bool(result.get("reviews_checked"))
+        entry["covered"] = bool(entry["status"])
+    return entries
+
+
+async def _run_patent_legal_status(agent, args, lang: str) -> dict:
+    """kind='patent_legal_status' executor —— 确定性法律状态查询。"""
+    number_arg = str((args or {}).get("number") or "").strip()
+    source_text = number_arg or (getattr(agent, "_last_user_prompt", "") or "")
+    candidates: list = []
+    try:
+        from sources.patent_number_parser import (
+            NUMBER_PARSE_ENABLED, parse_patent_identifiers)
+        if NUMBER_PARSE_ENABLED:
+            candidates = parse_patent_identifiers(source_text)
+    except Exception:
+        candidates = []
+    if not candidates:
+        candidates = getattr(agent, "_number_candidates", None) or []
+    if not candidates:
+        return {"kind": "observation", "text": (
+            "Error: no recognizable patent number in the input — ask for "
+            "the full number (CN/US prefix optional) or rephrase as a "
+            "keyword search." if lang == "en"
+            else "未能识别出专利号格式——请提供完整号码（可含 CN/US 前缀），"
+                 "或用关键词描述技术内容进行检索。")}
+
+    merged, notes = await _lookup_number_candidates(agent, candidates)
+    entries = _legal_status_entries(merged, notes)
+    entries = await _fill_missing_status(agent, entries)
+    digest = _legal_status_digest(entries, lang)
+
+    if not digest:
+        # 需求#24 行为延续：禁止以"未找到"直接结案。
+        checked = ("\n".join(f"- {n}" for n in notes)
+                   if notes else "- (no source was queryable)")
+        hints = _candidate_confirmation_hints(candidates, lang)
+        if lang == "en":
+            digest = (f"No legal-status record found for the number. "
+                      f"Sources checked:\n{checked}")
+            if hints:
+                digest += f"\n\n{hints}"
+        else:
+            digest = f"未按该号码查到法律状态记录。已核验的数据源：\n{checked}"
+            if hints:
+                digest += f"\n\n{hints}"
+
+    _glog = getattr(agent, "logger", None)
+    if _glog is not None:
+        _glog.info(
+            "legal_status — candidates="
+            + str([c.get("display") for c in candidates])
+            + " entries=" + str(len(entries))
+            + " covered=" + str(sum(1 for e in entries if e.get("covered")))
+            + " legs=" + "; ".join(notes))
+    return {"kind": "observation", "text": digest}
+
+
 async def _auto_number_cross_round(agent, lang) -> Optional[Tuple[list, str, str]]:
     """Zero-hit cross-source verification for number questions.
 
@@ -3046,6 +3432,9 @@ async def make_action_executor(agent, registry, push_filter=None):
 
         if entry.kind == "patent_number":
             return await _run_patent_number_resolve(agent, args, lang)
+
+        if entry.kind == "patent_legal_status":
+            return await _run_patent_legal_status(agent, args, lang)
 
         if entry.kind == "patent_search":
             return await _run_patent_search(
