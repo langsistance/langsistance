@@ -2137,7 +2137,8 @@ async def _uspto_search_by_query(
                 response, used_q = await _search(trimmed_q)
                 if getattr(response, "status_code", 0) == 200:
                     trim_note = "uspto 404 retry — AND-budget trim"
-        if getattr(response, "status_code", 0) != 200:
+        if (USPTO_SPACE_FLATTEN_ENABLED
+                and getattr(response, "status_code", 0) != 200):
             # ★ 只作最后兜底的「去括号纯空格词形」：它会把 404 换成**含噪 200**
             # ——空格拼接在该端点是 OR 语义（dynamic_tool_params.py 的实测结论：
             # 单概念基线的命中数之和 == 空格拼接的命中数），约束全丢、结果与
@@ -2523,6 +2524,16 @@ _VENDOR_TERMS = (
     ("Baiten", "CN source"), ("baiten", "CN source"),
     ("BAITEN", "CN"), ("佰腾", "中国专利"),
 )
+
+
+# 空格兜底（去括号纯空格词形，OR 语义）**默认关闭**（2026-09-13）。
+# 生产实证：它每轮返回 20 条噪声，**全部**被后续 dead/评分过滤丢弃（30 条导出
+# 里美国只剩 2 条），却照常进入 observation 摘要 —— 模型于是把其中"活着"的
+# PCT/美国申请当成 Top 结果报给用户，实测 **9/10 在结果面板里根本不存在**。
+# 即：纯成本（每请求 ~16 次 USPTO 调用）+ 污染模型判断，零收益。
+# 设 REACT_USPTO_SPACE_FLATTEN=1 恢复旧行为。
+USPTO_SPACE_FLATTEN_ENABLED = (
+    os.getenv("REACT_USPTO_SPACE_FLATTEN", "0") == "1")
 
 
 def _neutral_source_text(text) -> str:

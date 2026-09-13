@@ -524,6 +524,46 @@ class TestLawEnrichmentPerRequestBudget(unittest.TestCase):
         self.assertLess(react_tools.LAW_ENRICH_MAX_PER_REQUEST, 50)
 
 
+class TestUsptoSpaceFlattenDisabled(unittest.TestCase):
+    """空格兜底（OR 语义）默认关闭。
+
+    2026-09-13 生产实证：它每轮返回 20 条噪声，**全部**被后续过滤丢弃（30 条
+    导出里美国只剩 2 条），却进入 observation 摘要 —— 模型把其中"活着"的
+    PCT/美国申请当成 Top 结果报给用户，实测 9/10 在结果面板里不存在。
+    纯成本 + 污染判断，零收益。
+    """
+
+    _Q = '"humidity sensor" AND "desiccant dryer" AND "dry air supply"'
+
+    def _attempts(self, enabled):
+        calls = []
+
+        async def _arequest(method, url, **kw):
+            calls.append((kw.get("json") or {}).get("q", ""))
+            return SimpleNamespace(status_code=404, json=lambda: {})
+
+        with patch.object(react_tools, "USPTO_SPACE_FLATTEN_ENABLED", enabled), \
+             patch("sources.http_outbound.outbound_http") as mock_http:
+            mock_http.arequest = AsyncMock(side_effect=_arequest)
+            items, note = asyncio.run(
+                react_tools._uspto_search_by_query(self._Q))
+        return calls, items, note
+
+    def test_disabled_by_default(self):
+        self.assertFalse(react_tools.USPTO_SPACE_FLATTEN_ENABLED)
+
+    def test_no_flatten_attempt_when_disabled(self):
+        # 原发 → 词级 → AND 裁尾，三发为止。
+        calls, items, _note = self._attempts(False)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(items, [])
+
+    def test_flatten_attempt_returns_when_enabled(self):
+        # 对照：打开后确实多一发（证明是这道闸门在拦，不是别的）。
+        calls, _items, _note = self._attempts(True)
+        self.assertEqual(len(calls), 4)
+
+
 class TestNormalizeUsptoItems(unittest.TestCase):
     def test_lifts_title_from_meta_invention_title(self):
         items = [{"applicationNumberText": "19511555", "applicationMetaData": {
