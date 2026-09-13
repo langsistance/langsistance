@@ -2308,8 +2308,11 @@ LAW_ENRICH_MAX_PER_CALL = int(
 # ~50 次；配额是每请求的硬约束，所以必须有总量闸门。默认与摘要展示条数一致
 # —— **每个请求只够富化一份完整摘要**。缓存命中不消耗预算，只有真正打到网关
 # 的调用才计数。0 = 不限（回到旧行为）。
+# 默认 35：2026-09-13 实测该查询导出 30 条 CN，预算 20 时**13 行状态列空白**
+# （16/29 有状态）——覆盖不全比多花几次更伤体验。35 覆盖整份导出，且仍比
+# 「每轮都富化」的旧行为（~55 次）省 36%。配额紧再往下压。
 LAW_ENRICH_MAX_PER_REQUEST = int(
-    os.getenv("REACT_LAW_ENRICH_MAX_PER_REQUEST", str(SEARCH_DIGEST_LIMIT)))
+    os.getenv("REACT_LAW_ENRICH_MAX_PER_REQUEST", "35"))
 
 
 def _compact_baiten_law_summary(c: dict) -> str:
@@ -2950,10 +2953,24 @@ async def _run_patent_search(agent, args, lang: str, dual: bool = True) -> dict:
             f"cn_hits={cn_hits} total={len(merged)}"
         )
 
-    digest = _items_digest(merged, lang=lang)
+    # 需求#26：摘要只渲染**可能进入交付集**的结果。此前用 merged 全量渲染，
+    # 模型于是会引用随即被失效过滤丢掉的行 —— 2026-09-13 生产实证：回答里
+    # 列出的 New York Air Brake / Bendix 两条美国专利，导出文件里根本没有，
+    # 用户照着 Top 榜去结果面板里找不到。
+    deliverable = [c for c in merged
+                   if isinstance(c, dict)
+                   and not is_dead_status(c.get("status"))]
+    digest = _items_digest(deliverable, lang=lang)
     if not digest:
-        digest = ("No results from any source." if lang == "en"
-                  else "两个数据源均未返回结果。")
+        if merged:
+            # 有命中但全部失效 —— 不能笼统说"未返回结果"，那会误导模型。
+            digest = ("All hits were filtered out as no longer in force "
+                      "(expired / abandoned)." if lang == "en"
+                      else "检索有命中，但全部为已失效专利（过期/放弃），"
+                           "无有效结果可展示。")
+        else:
+            digest = ("No results from any source." if lang == "en"
+                      else "两个数据源均未返回结果。")
     if notes:
         if _glog is not None:
             _glog.info("patent_search_notes — " + "; ".join(notes))

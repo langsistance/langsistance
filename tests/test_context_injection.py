@@ -475,6 +475,19 @@ class TestDeliveryFormatGuidance(unittest.TestCase):
         self.assertNotIn("干燥空气", guidance)
         self.assertNotIn("RGB", guidance)
 
+    def test_guidance_forbids_inferring_unstated_causes(self):
+        """记录里没写的成因，不得推断成事实。
+
+        2026-09-13 生产实证：数据里 timeline 只有「专利权的终止」，模型却
+        写成「专利权终止 | 因未缴年费失效」——把领域常识当成了记录内容。
+        """
+        guidance = self._agent()._loop_system_guidance()
+        self.assertIn("记录未载明", guidance)
+        self.assertIn("not stated in the record", guidance)
+        # 通用约束 —— 不得固化任何具体状态词
+        self.assertNotIn("未缴年费", guidance)
+        self.assertNotIn("干燥空气", guidance)
+
 
 class TestNotLoggedInPrompt(unittest.TestCase):
     """需求 4-2: 未认证提示可操作化 — 不得再指示 LLM 输出内部标记。"""

@@ -517,9 +517,11 @@ class TestLawEnrichmentPerRequestBudget(unittest.TestCase):
             asyncio.run(_enrich_baiten_law_status(client, cands, None))
         self.assertEqual(len(client.calls), 10)
 
-    def test_default_equals_the_digest_display_size(self):
-        self.assertEqual(react_tools.LAW_ENRICH_MAX_PER_REQUEST,
-                         react_tools.SEARCH_DIGEST_LIMIT)
+    def test_default_covers_a_full_export(self):
+        # 2026-09-13 实测：该查询导出 30 条 CN，预算 20 时 13 行状态列空白。
+        # 默认必须够覆盖整份导出，同时明显低于「每轮都富化」的旧行为。
+        self.assertGreaterEqual(react_tools.LAW_ENRICH_MAX_PER_REQUEST, 30)
+        self.assertLess(react_tools.LAW_ENRICH_MAX_PER_REQUEST, 50)
 
 
 class TestNormalizeUsptoItems(unittest.TestCase):
@@ -796,6 +798,31 @@ class TestRunPatentSearch(unittest.TestCase):
             agent = agent or _FakeAgent()
             result = await _run_patent_search(agent, args, lang)
             return agent, result
+
+    def test_digest_excludes_items_that_will_be_filtered(self):
+        # 需求#26：摘要只渲染**可能进入交付集**的结果。此前用全量 merged
+        # 渲染，模型会引用随即被失效过滤丢掉的行 —— 2026-09-13 生产实证：
+        # 回答里列出的美国专利，导出文件里根本没有。
+        dead = {"applicationNumberText": "11111111", "status": "Abandoned",
+                "applicationMetaData": {"inventionTitle": "DEADONE"}}
+        live = {"applicationNumberText": "22222222",
+                "status": "Patented Case",
+                "applicationMetaData": {"inventionTitle": "LIVEONE"}}
+        _agent, result = asyncio.run(self._run(
+            {"query_string_us": "ab:(cool)"},
+            us_result=([dead, live], "USPTO 2 hits")))
+        self.assertIn("22222222", result["text"])
+        self.assertNotIn("11111111", result["text"])
+
+    def test_all_hits_dead_says_so_instead_of_no_results(self):
+        # 有命中但全部失效时，不能笼统说"未返回结果"。
+        dead = {"applicationNumberText": "11111111", "status": "Abandoned",
+                "applicationMetaData": {"inventionTitle": "DEADONE"}}
+        _agent, result = asyncio.run(self._run(
+            {"query_string_us": "ab:(cool)"},
+            us_result=([dead], "USPTO 1 hits")))
+        self.assertIn("失效", result["text"])
+        self.assertNotIn("未返回结果", result["text"])
 
     def test_second_call_merges_instead_of_overwriting(self):
         # Production incident (2026-08-27): the LLM called patent_search_dual

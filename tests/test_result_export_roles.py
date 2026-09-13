@@ -17,6 +17,38 @@ VALID_ROLES = {
 }
 
 
+class TestInstructionsSheetNamesRealSheets(unittest.TestCase):
+    """使用说明必须列出**真实存在**的工作表名。
+
+    2026-09-13 生产实证：双源导出拆成「中国专利 / 美国专利」，而说明表仍写着
+    2. "Results" / 3. "Metadata" —— 用户照着找不到那张表。
+    """
+
+    def _instructions_xml(self, artifacts):
+        # 手写 OOXML 用内联字符串，没有 sharedStrings.xml —— 直接读说明表。
+        xlsx = next(a for a in artifacts if a["format"] == "xlsx")
+        with zipfile.ZipFile(io.BytesIO(xlsx["content"])) as archive:
+            return archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
+
+    def test_dual_source_lists_both_sheet_names(self):
+        cn = {"patent_id": "CN118000001A", "source": "cn", "title": "散热装置"}
+        us = {"applicationNumberText": "19511555", "source": "uspto",
+              "title": "Cooling device"}
+        blob = self._instructions_xml(
+            build_result_artifacts([cn, us], source="cn", lang="zh"))
+        self.assertIn("中国专利", blob)
+        self.assertIn("美国专利", blob)
+        self.assertNotIn('"Results"', blob)
+        self.assertNotIn('"Metadata"', blob)
+
+    def test_single_source_lists_the_one_sheet(self):
+        cn = {"patent_id": "CN118000001A", "source": "cn", "title": "散热装置"}
+        blob = self._instructions_xml(
+            build_result_artifacts([cn], source="cn", lang="zh"))
+        self.assertIn("中国专利", blob)
+        self.assertNotIn('"Results"', blob)
+
+
 class TestInferColumnRole(unittest.TestCase):
     def test_known_roles_across_sources(self):
         cases = {
