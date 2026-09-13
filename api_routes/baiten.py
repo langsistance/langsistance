@@ -40,19 +40,25 @@ async def download_baiten_file(
     if not cfg["app_key"] or not cfg["app_secret"]:
         logger.warning("Baiten download rejected: not configured")
         return JSONResponse(status_code=400,
-                            content={"error": "Baiten not configured"})
+                            content={"error": "CN patent source not configured"})
 
     try:
         client = BaitenClient(
             cfg["app_key"], cfg["app_secret"], cfg["gateway_url"])
         spool = await client.get_file(pub_num, pub_date)
     except BaitenError as exc:
+        # 上游原文只进日志：它自带供应商名与网关内部细节，不能出现在
+        # 响应体里（前端会拿到）。对外给通用文案 —— 与 patent_detail.py
+        # 的 spec/claims 端点同一契约。
         logger.warning(f"Baiten download rejected: {exc}")
-        return JSONResponse(status_code=502, content={"error": str(exc)})
+        return JSONResponse(
+            status_code=502,
+            content={"error": "CN patent document unavailable"})
     except Exception as exc:
         logger.error(f"Baiten download request failed: {exc}")
         return JSONResponse(
-            status_code=502, content={"error": "Baiten download failed"})
+            status_code=502,
+            content={"error": "CN patent download failed"})
 
     async def stream_spool():
         spool.seek(0)

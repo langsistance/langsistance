@@ -536,7 +536,7 @@ def format_number_guidance(
             "\n\nUser input carries a patent identifier. Deterministic "
             "parse (not a guess):\n" + block +
             "\nWhen a number lookup returns nothing, verify the OTHER data "
-            "source too (CN number → Baiten CN, US number → USPTO; "
+            "source too (CN number → China patent source, US number → USPTO; "
             "ambiguous numbers → both). If BOTH return nothing, tell the "
             "user which sources were checked and why the number may not "
             "match, then offer next steps (fix the format / keyword search "
@@ -546,7 +546,7 @@ def format_number_guidance(
     return (
         "\n\n用户输入包含专利标识号。以下是确定性解析结果（非猜测）：\n"
         + block +
-        "\n按号检索返回空时，必须先在另一数据源复核（中国号→佰腾、"
+        "\n按号检索返回空时，必须先在另一数据源复核（中国号→中国专利库、"
         "美国号→USPTO；歧义号码→两个源都查）。两侧都为空时，向用户说明"
         "已核验的数据源与号码可能不匹配的原因，并给出下一步（修正格式 / "
         "关键词检索 / 上传文档查重 / 询问号码来源），禁止仅回复“未找到”。"

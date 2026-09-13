@@ -253,7 +253,7 @@ class _DualPatentSearchArgs(BaseModel):
     )
     query_string_cn: str | None = Field(
         default=None,
-        description="Baiten CN search query (Chinese, from the guidance ladder)",
+        description="China patent search query (Chinese, from the guidance ladder)",
     )
     page: int = Field(default=1, description="Page number")
     page_size: int = Field(default=20, description="Results per page")
@@ -261,7 +261,7 @@ class _DualPatentSearchArgs(BaseModel):
 
 class _CnPatentSearchArgs(BaseModel):
     query_string_cn: str = Field(
-        description="Baiten CN search query (Chinese, from the guidance ladder)",
+        description="China patent search query (Chinese, from the guidance ladder)",
     )
     page: int = Field(default=1, description="Page number")
     page_size: int = Field(default=20, description="Results per page")
@@ -517,7 +517,7 @@ async def build_tool_set(
             "publication / grant / design number, US or CN). Use this "
             "when the user gives a number or patent identifier instead "
             "of a technical description. Runs a deterministic parse and "
-            "checks BOTH the USPTO and Baiten CN sources, attaching "
+            "checks BOTH the USPTO and China patent sources, attaching "
             "bibliographic data and legal status when found."
         ),
         args_schema=_NumberResolveArgs,
@@ -571,8 +571,8 @@ async def build_tool_set(
             search_schema = _DualPatentSearchArgs
             search_desc = (
                 "Search patents when the user does NOT specify a country: "
-                "returns BOTH US patents (USPTO) and Chinese patents "
-                "(Baiten) in one call. Pass the English ladder query as "
+                "returns BOTH US patents (USPTO) and Chinese patents in "
+                "one call. Pass the English ladder query as "
                 "query_string_us and the Chinese ladder query as "
                 "query_string_cn. One source failing returns only the "
                 "other source's results. When the user asks in Chinese "
@@ -584,7 +584,7 @@ async def build_tool_set(
             search_name = CN_PATENT_SEARCH_TOOL_NAME
             search_schema = _CnPatentSearchArgs
             search_desc = (
-                "Search Chinese patents (Baiten) for a user question "
+                "Search Chinese patents for a user question "
                 "about Chinese patents. Pass the Chinese ladder query "
                 "as query_string_cn."
             )
@@ -2391,6 +2391,24 @@ async def _enrich_baiten_law_status(client, candidates: list, glog) -> None:
         await asyncio.gather(*[_reviews(c) for c in candidates])
 
 
+# 商业数据供应商名 **绝不允许** 进入 LLM 可见面（2026-09-13 生产实证：模型
+# 在回答里写了「中国专利（佰腾）」）。异常/上游文本自带供应商名（baiten_client
+# 的异常消息就是），而 notes 会被渲染进 observation —— 构造 note 时中立化。
+# **日志仍用原始文本**（_glog），运维排查不受影响。
+_VENDOR_TERMS = (
+    ("Baiten", "CN source"), ("baiten", "CN source"),
+    ("BAITEN", "CN"), ("佰腾", "中国专利"),
+)
+
+
+def _neutral_source_text(text) -> str:
+    """把商业供应商名替换为中立表述。纯函数，永不抛。"""
+    out = str(text or "")
+    for vendor, neutral in _VENDOR_TERMS:
+        out = out.replace(vendor, neutral)
+    return out
+
+
 async def _baiten_search_by_query(
     q: str, page: int = 1, page_size: int = 20, agent=None,
 ) -> tuple[list, str]:
@@ -2416,7 +2434,7 @@ async def _baiten_search_by_query(
                 _glog.warning(
                     "baiten_search — not configured "
                     "(BAITEN_APP_KEY/APP_SECRET)")
-            return [], "Baiten not configured (BAITEN_APP_KEY/APP_SECRET)"
+            return [], "CN source not configured (key missing)"
         client = BaitenClient(
             cfg["app_key"], cfg["app_secret"], cfg["gateway_url"])
         body = await client.search(
@@ -2432,17 +2450,17 @@ async def _baiten_search_by_query(
                 f"rows={summary['rows']} candidates={len(items)}"
             )
         if summary["rows"] == 0:
-            return items, "Baiten 0 hits (gateway 0 records)"
+            return items, "CN 0 hits (gateway 0 records)"
         if not items:
             return [], (
-                f"Baiten 0 candidates (parsed from "
+                f"CN 0 candidates (parsed from "
                 f"{summary['rows']} records)"
             )
-        return items, f"Baiten {len(items)} hits"
+        return items, f"CN {len(items)} hits"
     except Exception as exc:
         if _glog is not None:
             _glog.warning(f"baiten_search — failed: {exc}")
-        return [], f"Baiten failed: {exc}"
+        return [], _neutral_source_text(f"CN source failed: {exc}")
 
 
 # ── Dual-source query resolution + preferred-source auto-ladder ─────────────
@@ -2914,8 +2932,9 @@ async def _lookup_number_candidates(
                 items, note = await _baiten_search_by_query(
                     q, page=1, page_size=10, agent=agent)
             except Exception as exc:
-                items, note = [], f"Baiten failed: {exc}"
-            notes.append(f"Baiten(q={q[:40]!r}) — {note}")
+                items, note = [], _neutral_source_text(
+                    f"CN source failed: {exc}")
+            notes.append(f"CN(q={q[:40]!r}) — {note}")
             if items:
                 merged.extend(items)
                 return
@@ -2951,7 +2970,7 @@ async def _lookup_number_candidates(
         if not result:
             return False
         status = str(result.get("status") or "")
-        notes.append(f"Baiten(app_num={native}) — {status or 'ok'}")
+        notes.append(f"CN(app_num={native}) — {status or 'ok'}")
         merged.append({
             "patent_id": str(c.get("display") or native),
             "patent_number": str(c.get("display") or native),
@@ -3208,10 +3227,27 @@ def _legal_status_entries(merged: list, notes: list) -> list:
             "timeline": item.get("legal_timeline") or [],
             "reviews": item.get("review_decisions") or [],
             "reviews_checked": bool(item.get("reviews_checked")),
-            "checked": ["Baiten FLZT/FSWX"] if is_baiten else ["USPTO"],
+            "checked": ["cn_legal_status"] if is_baiten else ["uspto"],
             "covered": bool(status),
         })
     return entries
+
+
+# 数据源在 observation 里必须**中立表述**：商业供应商名一旦进入 LLM 可见
+# 面，模型会在回答里照抄（2026-09-13 生产实证：「中国专利（佰腾）」）。
+# 条目里存**内部键**，展示名在这里映射 —— 数据与展示分离，改文案不动数据。
+_SOURCE_DISPLAY = {
+    "cn_legal_status": {"zh": "中国专利法律状态库",
+                        "en": "China patent legal-status source"},
+    "uspto": {"zh": "USPTO", "en": "USPTO"},
+}
+
+
+def _source_display(key, lang: str) -> str:
+    labels = _SOURCE_DISPLAY.get(str(key))
+    if not labels:
+        return str(key)
+    return labels["en"] if str(lang) == "en" else labels["zh"]
 
 
 def _legal_status_digest(entries: list, lang: str) -> str:
@@ -3275,8 +3311,8 @@ def _legal_status_digest(entries: list, lang: str) -> str:
                         "queried in this lookup." if is_en
                         else "复审/无效决定：本次未查询。")
         else:
-            checked = "、".join(e.get("checked") or []) if not is_en \
-                else ", ".join(e.get("checked") or [])
+            checked = ("、" if not is_en else ", ").join(
+                _source_display(k, lang) for k in (e.get("checked") or []))
             portal = official_portal(country)
             if is_en:
                 lines.append(

@@ -390,7 +390,7 @@ class TestBaitenSearchByQueryNotes(unittest.TestCase):
     def test_gateway_zero_records_note(self):
         items, note = asyncio.run(self._run({"code": "200"}))
         self.assertEqual(items, [])
-        self.assertEqual(note, "Baiten 0 hits (gateway 0 records)")
+        self.assertEqual(note, "CN 0 hits (gateway 0 records)")
 
     def test_gateway_error_note(self):
         # _request_json raises (HTTP non-200 / gateway error code) → the
@@ -399,7 +399,7 @@ class TestBaitenSearchByQueryNotes(unittest.TestCase):
         items, note = asyncio.run(self._run(
             {}, raise_exc=BaitenAPIError("Baiten API error code=404: msg")))
         self.assertEqual(items, [])
-        self.assertIn("Baiten failed", note)
+        self.assertIn("CN source failed", note)
         self.assertIn("error code=404", note)
 
     def test_records_but_parse_zero_note(self):
@@ -409,7 +409,7 @@ class TestBaitenSearchByQueryNotes(unittest.TestCase):
         ]}}
         items, note = asyncio.run(self._run(body))
         self.assertEqual(items, [])
-        self.assertEqual(note, "Baiten 0 candidates (parsed from 1 records)")
+        self.assertEqual(note, "CN 0 candidates (parsed from 1 records)")
 
     def test_valid_rows_note(self):
         body = {"code": "200", "data": {"fieldValues": [
@@ -418,13 +418,13 @@ class TestBaitenSearchByQueryNotes(unittest.TestCase):
         ]}}
         items, note = asyncio.run(self._run(body))
         self.assertEqual(len(items), 2)
-        self.assertEqual(note, "Baiten 2 hits")
+        self.assertEqual(note, "CN 2 hits")
 
     def test_not_configured_note(self):
         items, note = asyncio.run(self._run(None, cfg={
             "app_key": "", "app_secret": "", "gateway_url": "http://x"}))
         self.assertEqual(items, [])
-        self.assertEqual(note, "Baiten not configured (BAITEN_APP_KEY/APP_SECRET)")
+        self.assertEqual(note, "CN source not configured (key missing)")
 
     def test_api_level_from_config_reaches_client(self):
         received = {}

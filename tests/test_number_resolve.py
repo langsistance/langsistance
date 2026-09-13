@@ -66,7 +66,7 @@ class TestLookupPrimarySourceFirst(unittest.TestCase):
         agent = _agent(candidates)
         with patch.object(react_tools, "_baiten_search_by_query",
                           new=AsyncMock(return_value=([_BAITEN_ITEM],
-                                                       "Baiten 1 hits"))) as bm, \
+                                                       "CN 1 hits"))) as bm, \
              patch.object(react_tools, "_uspto_search_by_number",
                           new=AsyncMock(return_value=([], "USPTO 0 hits"))) as um:
             merged, notes = _run(
@@ -84,7 +84,7 @@ class TestLookupPrimarySourceFirst(unittest.TestCase):
                                    "117941643"]}]
         agent = _agent(candidates)
         with patch.object(react_tools, "_baiten_search_by_query",
-                          new=AsyncMock(return_value=([], "Baiten 0 hits"))), \
+                          new=AsyncMock(return_value=([], "CN 0 hits"))), \
              patch.object(react_tools, "_uspto_search_by_number",
                           new=AsyncMock(return_value=([_USPTO_ITEM],
                                                        "USPTO 1 hits"))) as um:
@@ -94,7 +94,7 @@ class TestLookupPrimarySourceFirst(unittest.TestCase):
         self.assertEqual(merged[0]["applicationNumberText"], "117941643")
         um.assert_awaited_once()
         self.assertTrue(any("USPTO" in n for n in notes))
-        self.assertTrue(any("Baiten" in n for n in notes))
+        self.assertTrue(any("CN" in n for n in notes))
 
     def test_us_candidate_zero_then_baiten(self):
         candidates = [{"country": "US", "display": "US19511555",
@@ -104,7 +104,7 @@ class TestLookupPrimarySourceFirst(unittest.TestCase):
                           new=AsyncMock(return_value=([], "USPTO 0 hits"))), \
              patch.object(react_tools, "_baiten_search_by_query",
                           new=AsyncMock(return_value=([_BAITEN_ITEM],
-                                                       "Baiten 1 hits"))) as bm:
+                                                       "CN 1 hits"))) as bm:
             merged, _notes = _run(
                 react_tools._lookup_number_candidates(agent, candidates))
         self.assertEqual(len(merged), 1)
@@ -115,7 +115,7 @@ class TestLookupPrimarySourceFirst(unittest.TestCase):
                        "lookups": ["CN117941643A", "117941643"]}]
         agent = _agent(candidates)
         with patch.object(react_tools, "_baiten_search_by_query",
-                          new=AsyncMock(return_value=([], "Baiten 0 hits"))), \
+                          new=AsyncMock(return_value=([], "CN 0 hits"))), \
              patch.object(react_tools, "_uspto_search_by_number",
                           new=AsyncMock(return_value=([_USPTO_ITEM], "USPTO 1"))) as um, \
              patch.object(react_tools, "NUMBER_CROSS_MAX_QUERIES", 1):
@@ -146,7 +146,7 @@ class TestCandidateConfirmationHints(unittest.TestCase):
                          "lookups": ["CN117941643A", "CN117941643",
                                      "117941643"]}])
         with patch.object(react_tools, "_lookup_number_candidates",
-                          new=AsyncMock(return_value=([], ["Baiten 0 hits",
+                          new=AsyncMock(return_value=([], ["CN 0 hits",
                                                            "USPTO 0 hits"]))), \
              patch.object(react_tools, "_merge_pending_items",
                           side_effect=lambda ex, new: list(ex or []) + list(new)), \
@@ -166,7 +166,7 @@ class TestCandidateConfirmationHints(unittest.TestCase):
                          "lookups": ["CN117941643A"]}])
         with patch.object(react_tools, "_lookup_number_candidates",
                           new=AsyncMock(return_value=([_BAITEN_ITEM],
-                                                       ["Baiten 1 hits"]))), \
+                                                       ["CN 1 hits"]))), \
              patch.object(react_tools, "_merge_pending_items",
                           side_effect=lambda ex, new: list(ex or []) + list(new)), \
              patch.object(react_tools, "_rank_builtin_patent_pool",
@@ -228,7 +228,7 @@ class TestResolveToolObservation(unittest.TestCase):
         obs, agent = self._resolve(
             [{"country": "CN", "display": "CN117941643",
               "lookups": ["CN117941643A"]}],
-            [_BAITEN_ITEM], ["Baiten 1 hits"])
+            [_BAITEN_ITEM], ["CN 1 hits"])
         self.assertEqual(obs["kind"], "observation")
         self.assertIn("CN117941643A", obs["text"])
         self.assertEqual(len(agent._pending_raw_items), 1)
@@ -237,7 +237,7 @@ class TestResolveToolObservation(unittest.TestCase):
         obs, _agent = self._resolve(
             [{"country": "CN", "display": "CN117941643",
               "lookups": ["CN117941643A"]}],
-            [], ["Baiten 0 hits", "USPTO 0 hits"])
+            [], ["CN 0 hits", "USPTO 0 hits"])
         self.assertIn("未按该号码查到专利记录", obs["text"])
         self.assertIn("USPTO 0 hits", obs["text"])
 
@@ -254,7 +254,7 @@ class TestAutoNumberCrossRound(unittest.TestCase):
                          "lookups": ["CN117941643A"]}])
         with patch.object(react_tools, "_lookup_number_candidates",
                           new=AsyncMock(return_value=([_BAITEN_ITEM],
-                                                       ["Baiten 1 hits"]))), \
+                                                       ["CN 1 hits"]))), \
              patch.object(react_tools, "_pool_candidates_for_items",
                           return_value=[{"patent_id": "CN117941643A",
                                          "_raw": _BAITEN_ITEM}]), \
@@ -279,7 +279,7 @@ class TestAutoNumberCrossRound(unittest.TestCase):
         agent = _agent([{"country": "CN", "display": "CN117941643",
                          "lookups": ["CN117941643A"]}])
         with patch.object(react_tools, "_lookup_number_candidates",
-                          new=AsyncMock(return_value=([], ["Baiten 0 hits"]))), \
+                          new=AsyncMock(return_value=([], ["CN 0 hits"]))), \
              patch.object(react_tools, "_rank_pending_pool",
                           new=AsyncMock(return_value=([], ""))):
             ranked, _rn, note = _run(
@@ -315,7 +315,7 @@ _ENTRY_CN = {
     ],
     "reviews": [],
     "reviews_checked": True,
-    "checked": ["Baiten FLZT"],
+    "checked": ["cn_legal_status"],
     "covered": True,
 }
 
@@ -467,7 +467,7 @@ class TestLegalStatusToolExecutor(unittest.TestCase):
             {"date": "2024-08-15", "lawStatus": "专利权终止"},
             {"date": "2023-11-20", "lawStatus": "授权"}]
         with patch.object(react_tools, "_lookup_number_candidates",
-                          new=AsyncMock(return_value=([item], ["Baiten 1"]))):
+                          new=AsyncMock(return_value=([item], ["CN 1"]))):
             obs = _run(react_tools._run_patent_legal_status(
                 agent, {"number": "CN117941643A"}, "zh"))
         self.assertIn("专利权终止", obs["text"])
@@ -479,7 +479,7 @@ class TestLegalStatusToolExecutor(unittest.TestCase):
         item = dict(_BAITEN_ITEM)
         item["app_num"] = "CN202311794164.0"
         with patch.object(react_tools, "_lookup_number_candidates",
-                          new=AsyncMock(return_value=([item], ["Baiten 1"]))), \
+                          new=AsyncMock(return_value=([item], ["CN 1"]))), \
              patch.object(react_tools, "_baiten_law_lookup",
                           new=AsyncMock(return_value={
                               "status": "专利权终止",
@@ -494,7 +494,7 @@ class TestLegalStatusToolExecutor(unittest.TestCase):
         agent = _agent()
         item = dict(_BAITEN_ITEM)          # 无 app_num
         with patch.object(react_tools, "_lookup_number_candidates",
-                          new=AsyncMock(return_value=([item], ["Baiten 1"]))), \
+                          new=AsyncMock(return_value=([item], ["CN 1"]))), \
              patch.object(react_tools, "_baiten_law_lookup",
                           new=AsyncMock()) as lm:
             obs = _run(react_tools._run_patent_legal_status(
@@ -506,7 +506,7 @@ class TestLegalStatusToolExecutor(unittest.TestCase):
         # 需求#24 行为必须延续：禁止以"未找到"直接结案。
         agent = _agent()
         with patch.object(react_tools, "_lookup_number_candidates",
-                          new=AsyncMock(return_value=([], ["Baiten 0 hits"]))):
+                          new=AsyncMock(return_value=([], ["CN 0 hits"]))):
             obs = _run(react_tools._run_patent_legal_status(
                 agent, {"number": "CN117941643A"}, "zh"))
         self.assertIn("您可能查的是", obs["text"])
@@ -529,7 +529,7 @@ class TestNativeKeyReadback(unittest.TestCase):
                               "timeline": [{"date": "2024-08-15",
                                             "lawStatus": "专利权终止"}]})), \
              patch.object(react_tools, "_baiten_search_by_query",
-                          new=AsyncMock(return_value=([], "Baiten 0"))) as bs, \
+                          new=AsyncMock(return_value=([], "CN 0"))) as bs, \
              patch.object(react_tools, "_uspto_search_by_number",
                           new=AsyncMock(return_value=([], "USPTO 0"))):
             merged, _notes = _run(
@@ -545,7 +545,7 @@ class TestNativeKeyReadback(unittest.TestCase):
                           new=AsyncMock(return_value={})), \
              patch.object(react_tools, "_baiten_search_by_query",
                           new=AsyncMock(return_value=([_BAITEN_ITEM],
-                                                      "Baiten 1"))) as bs:
+                                                      "CN 1"))) as bs:
             merged, _notes = _run(
                 react_tools._lookup_number_candidates(agent, [self._CAND]))
         self.assertEqual(len(merged), 1)
@@ -559,7 +559,7 @@ class TestNativeKeyReadback(unittest.TestCase):
                           new=AsyncMock()) as lm, \
              patch.object(react_tools, "_baiten_search_by_query",
                           new=AsyncMock(return_value=([_BAITEN_ITEM],
-                                                      "Baiten 1"))):
+                                                      "CN 1"))):
             _run(react_tools._lookup_number_candidates(agent, [cand]))
         lm.assert_not_awaited()
 
@@ -569,7 +569,7 @@ class TestNativeKeyReadback(unittest.TestCase):
         with patch.object(react_tools, "_baiten_law_lookup",
                           new=AsyncMock(return_value={})), \
              patch.object(react_tools, "_baiten_search_by_query",
-                          new=AsyncMock(return_value=([], "Baiten 0"))), \
+                          new=AsyncMock(return_value=([], "CN 0"))), \
              patch.object(react_tools, "_uspto_search_by_number",
                           new=AsyncMock(return_value=([_USPTO_ITEM],
                                                       "USPTO 1"))) as um:
