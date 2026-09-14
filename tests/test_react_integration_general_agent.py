@@ -360,6 +360,18 @@ class TestLoopGuidanceTopN(unittest.TestCase):
         self.assertNotIn("patents", text)
         self.assertNotIn("相关度", text)
 
+    def test_guidance_includes_solution_assessment_format(self):
+        # 需求#28/#30/#23/#25：用户带方案做评估/问途径时的交付骨架。
+        agent = _make_agent()
+        text = agent._loop_system_guidance()
+        self.assertIn("Solution Assessment Format", text)
+        self.assertIn("Closest prior art", text)
+        self.assertIn("not seen in the returned records", text)
+        self.assertIn("Reproducible queries", text)
+        # 保持语言中性 / 不固化任何领域词
+        self.assertNotIn("patents", text)
+        self.assertNotIn("相关度", text)
+
     def test_top_n_default_is_10(self):
         self.assertEqual(RELEVANT_TOP_N, 10)
 

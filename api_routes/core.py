@@ -1328,8 +1328,16 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                         anchor_block=anchor_block,
                     )
                 except Exception as e:
+                    # code=agent_not_started: 本轮**从未启动**（无检索、无后台
+                    # 任务）—— 前端必须据此告诉用户"可以直接重新发送"，而不是
+                    # 通用的"请勿重复提交"（2026-09-14 生产：连接中断文案让用户
+                    # 以为有任务在跑）。
                     app_logger.error(f"Failed to create agent: {str(e)}")
-                    await queue.put({'type': 'error', 'message': f'Failed to create agent: {str(e)}'})
+                    await queue.put({
+                        'type': 'error',
+                        'code': 'agent_not_started',
+                        'message': f'Failed to create agent: {str(e)}',
+                    })
                     await queue.put({'type': 'end'})
                     return
                 finally:
@@ -1797,7 +1805,11 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                                 yield f"data:{token_json}\n\n"
                                 token_buffer.clear()
                                 last_stream_time = asyncio.get_event_loop().time()
-                            error_json = json.dumps({'error': event.get('message', 'Unknown error')})
+                            error_payload = {
+                                'error': event.get('message', 'Unknown error')}
+                            if event.get('code'):
+                                error_payload['code'] = event['code']
+                            error_json = json.dumps(error_payload)
                             yield f"data:{error_json}\n\n"
                             last_stream_time = asyncio.get_event_loop().time()
                             break

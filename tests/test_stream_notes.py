@@ -80,6 +80,22 @@ class TestRunPatentSearchStreamNotes(unittest.TestCase):
             str(raw.get("applicationMetaData", {}).get("applicationNumberText")),
             "16544963")
 
+    def test_executed_queries_ride_the_digest(self):
+        # 需求#25：模型必须能看到本轮真正执行的检索式，才能逐字复述给用户
+        #（否则"给我检索式"只能靠编）。来源标注保持中立（不用供应商名）。
+        agent = _FakeAgent()
+        result = self._run(
+            agent,
+            us_items=[{"applicationNumberText": "18317505",
+                       "title": "Dry air apparatus"}],
+            cn_items=[{"patent_id": "CN220271258U", "source": "baiten",
+                       "title": "干燥气体发生装置"}],
+        )
+        text = result["text"]
+        self.assertIn("[US] us-tight", text)
+        self.assertIn("[CN] ti:(散热)", text)
+        self.assertNotIn("Baiten", text)       # 中立标注，供应商名不上可见面
+
     def test_notes_still_logged(self):
         agent = _FakeAgent()
         calls = []
@@ -197,13 +213,26 @@ class TestAndBudgetTrimRetry(unittest.TestCase):
         return result, note, calls
 
     def test_404_retry_trims_the_real_production_query(self):
-        # 线上形态：原发 404 → 词级降级 404 → 才轮到裁尾
+        # 2026-09-15 起：2 个 AND 属**合规形态**（≤MAX_USPTO_AND_OPS），404 = 标题域
+        # 真零 —— 只保留语义等价的词级降级（引号短语词序敏感）；放宽式裁尾交给
+        # 自动阶梯（同一轮里 ladder 的下一级就是同一条更松查询）。
         result, note, calls = self._run_then_200(self.Q_2AND, fail_times=2)
-        self.assertEqual(len(calls), 3, "应为 原发 → 词级降级 → 裁尾重发 三次")
-        self.assertEqual(
-            calls[2], self.Q_TRIMMED,
-            "重发必须把 AND 裁到 1；与首次逐字相同就等于没重发")
-        self.assertNotEqual(calls[0], calls[2], "重发查询不得等于原查询")
+        self.assertEqual(len(calls), 2, "应为 原发 → 词级降级 两次")
+        self.assertTrue(calls[1].startswith("(cervical AND rehabilitation"))
+        self.assertNotIn(self.Q_TRIMMED, calls,
+                         "合规形态不再就地放宽（阶梯负责降档）")
+        self.assertIn("true zero", note)
+        self.assertEqual(result, [])
+
+    def test_dialect_overflow_still_trims(self):
+        # 3+ 个 AND 算子 = 该端点方言超限，查询根本没被解析 —— 裁尾重发是唯一
+        # 不丢约束的救法，必须保留。
+        q = ('("cervical rehabilitation" OR "neck exercise") '
+             'AND ("head support assembly" OR "head restraint") '
+             'AND resistance AND (feedback OR sensor)')
+        result, note, calls = self._run_then_200(q, fail_times=2)
+        self.assertEqual(len(calls), 3, "超限形态：原发 → 词级降级 → 裁尾重发")
+        self.assertLess(calls[2].count(" AND "), q.count(" AND "))
         self.assertIn("AND-budget trim", note)
         self.assertEqual(len(result), 1)
 
@@ -214,3 +243,73 @@ class TestAndBudgetTrimRetry(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(len(result), 1)
         self.assertNotIn("trim", note)
+
+
+class TestSortFallbackDefaultOrder(unittest.TestCase):
+    """2026-09-15 (#31): 强制 sort=_score 在标题级语料上把短标题的临时申请/
+    失效件顶满整页（09-14 探针：前 20 槽位存活 _score 41/120 vs API 默认序
+    103/120，LED 类 0/20；09-12 生产 20 条美方候选 18 条失效）。存活占比低于
+    阈值时用 API 默认序（省略 sort）重取一次，按存活数择优。"""
+
+    @staticmethod
+    def _items(status, prefix):
+        return [{"applicationNumberText": "%s%04d" % (prefix, i),
+                 "applicationMetaData": {
+                     "inventionTitle": "wafer test",
+                     "applicationStatusDescriptionText": status}}
+                for i in range(20)]
+
+    def _run(self, first_items, second_items=None):
+        from unittest.mock import MagicMock
+
+        from sources.agents.react_tools import _uspto_search_by_query
+
+        calls = []
+
+        async def _fake_arequest(method, url, purpose=None, headers=None,
+                                 json=None, timeout=None):
+            calls.append((json.get("q"), "sort" in json))
+            resp = MagicMock()
+            resp.status_code = 200
+            payload = first_items if len(calls) == 1 else (second_items or [])
+            resp.json = lambda payload=payload: {
+                "patentFileWrapperDataBag": payload}
+            return resp
+
+        with patch("sources.http_outbound.outbound_http") as mock_http:
+            mock_http.arequest = _fake_arequest
+            (result, note) = asyncio.run(_uspto_search_by_query("wafer"))
+        return result, note, calls
+
+    def test_all_dead_page_refetches_with_default_order(self):
+        dead = self._items("Provisional Application Expired", "6100")
+        alive = self._items("Patented", "1900")
+        result, note, calls = self._run(dead, alive)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(calls[0][1], "首发仍是相关度序")
+        self.assertFalse(calls[1][1], "回退必须省略 sort（API 默认序）")
+        self.assertIn("sort fallback", note)
+        self.assertEqual(len(result), 20)
+        self.assertEqual(result[0]["applicationNumberText"], "19000000")
+
+    def test_healthy_page_not_refetched(self):
+        result, note, calls = self._run(self._items("Patented", "1900"))
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("sort fallback", note)
+        self.assertEqual(len(result), 20)
+
+    def test_keeps_primary_when_fallback_not_better(self):
+        dead = self._items("Provisional Application Expired", "6100")
+        also_dead = self._items("Abandoned  --  Failure to Respond", "6200")
+        result, note, calls = self._run(dead, also_dead)
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("sort fallback", note)
+        self.assertEqual(result[0]["applicationNumberText"], "61000000")
+
+    def test_disabled_when_sort_field_not_score(self):
+        dead = self._items("Provisional Application Expired", "6100")
+        with patch("sources.agents.react_tools.REACT_USPTO_SORT_FIELD",
+                   "applicationMetaData.filingDate"):
+            result, note, calls = self._run(dead, self._items("Patented", "1900"))
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("sort fallback", note)

@@ -133,6 +133,69 @@ class TestLoadCpcTitles(unittest.TestCase):
         self.assertEqual(load_cpc_titles("/nonexistent/titles.json"), [])
 
 
+class TestCpcAvailability(unittest.TestCase):
+    """2026-09-15 (需求#34)：扩档静默为空时必须说清缺哪个前置条件——
+    生产 2026-09-14 只打了 "no CPC matches"，运维无从下手。"""
+
+    def setUp(self):
+        import sources.long_task.cpc_semantic as mod
+        self.mod = mod
+        self._saved = mod._availability_cache
+        mod._availability_cache = None
+        self.addCleanup(
+            lambda: setattr(mod, "_availability_cache", self._saved))
+
+    def test_missing_titles_reports_path(self):
+        with patch.object(self.mod, "cpc_paths_for_level",
+                          return_value=("/nonexistent/t.json",
+                                        "/nonexistent/v.npy")):
+            info = self.mod.cpc_availability()
+        self.assertFalse(info["ok"])
+        self.assertIn("titles", info["reason"])
+
+    def test_titles_without_vectors_reports_rebuild(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            titles = os.path.join(tmp, "t.json")
+            with open(titles, "w", encoding="utf-8") as f:
+                json.dump([{"code": "H05B45/00", "title": "Led"}], f)
+            with patch.object(self.mod, "cpc_paths_for_level",
+                              return_value=(titles,
+                                            os.path.join(tmp, "v.npy"))):
+                info = self.mod.cpc_availability()
+        self.assertFalse(info["ok"])
+        self.assertIn("vector cache missing", info["reason"])
+        self.assertIn("build_cpc_vectors", info["reason"])
+
+    def test_healthy_data_is_ok(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("numpy not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            titles = os.path.join(tmp, "t.json")
+            vectors = os.path.join(tmp, "v.npy")
+            with open(titles, "w", encoding="utf-8") as f:
+                json.dump([
+                    {"code": "H05B45/00", "title": "Led"},
+                    {"code": "G09G3/00", "title": "Display"},
+                ], f)
+            np.save(vectors, np.zeros((2, 4), dtype="float32"))
+            with patch.object(self.mod, "cpc_paths_for_level",
+                              return_value=(titles, vectors)):
+                info = self.mod.cpc_availability()
+        self.assertTrue(info["ok"], info)
+        self.assertEqual(info["titles"], 2)
+        self.assertEqual(info["vectors"], 2)
+
+    def test_probe_is_cached_until_refresh(self):
+        with patch.object(self.mod, "cpc_paths_for_level",
+                          return_value=("/nonexistent/t.json",
+                                        "/nonexistent/v.npy")):
+            first = self.mod.cpc_availability()
+            second = self.mod.cpc_availability()
+        self.assertIs(first, second, "每轮重复探测会拖慢失败路径")
+
+
 class TestMatchCpcCodes(unittest.TestCase):
     def _entries(self):
         return [

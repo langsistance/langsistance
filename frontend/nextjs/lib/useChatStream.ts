@@ -376,7 +376,13 @@ export function useChatStream() {
             }
           }
           if (evt && typeof evt === 'object' && 'error' in evt && evt.error) {
-            throw new Error(String(evt.error))
+            // Carry the backend's error code so the catch below can tell a
+            // turn that never started (safe to resend) from a lost
+            // connection (a background task may exist — don't duplicate).
+            const errCode = (evt as { code?: unknown }).code
+            const streamError = new Error(String(evt.error)) as Error & { code?: string }
+            streamError.code = typeof errCode === 'string' ? errCode : undefined
+            throw streamError
           }
 
           const token = typeof evt === 'string'
@@ -402,7 +408,18 @@ export function useChatStream() {
         }
       }
     } catch (err) {
-      if ((err as Error).name !== 'AbortError' && !longTaskReceivedRef.current) {
+      if ((err as Error & { code?: string }).code === 'agent_not_started') {
+        // Backend told us the turn never started: nothing was searched and
+        // no background task exists — resending is safe (2026-09-14: the
+        // generic "do not resubmit" copy made users wait for nothing).
+        setMessages((m) =>
+          m.map((msg) =>
+            msg.id === assistantId
+              ? { ...msg, content: t('chat.queryNotStarted') }
+              : msg
+          )
+        )
+      } else if ((err as Error).name !== 'AbortError' && !longTaskReceivedRef.current) {
         // SSE may have timed out after the backend already created a long task
         setMessages((m) =>
           m.map((msg) =>

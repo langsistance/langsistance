@@ -156,6 +156,7 @@ export default {
     queryFailed: '查询失败',
     queryRecovering: '⏳ 连接中断，正在确认后台任务是否已提交...',
     queryFailedWithHint: '⚠️ 连接中断，未能确认任务状态。\n\n若分析已在后台运行，请稍候并在对话历史中查看进度，请勿重复提交相同问题。',
+    queryNotStarted: '⚠️ 本轮未能启动，未执行任何检索。\n\n你可以直接重新发送这个问题。',
     toolQueryFailed: '❌ 工具查询失败：{error}\n\n正在尝试其他方式...',
     directQueryFailed: '直接查询失败',
     toolDataObtained: '📊 已获取工具数据，正在分析...',

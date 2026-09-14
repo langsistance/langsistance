@@ -11,6 +11,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from sources.agents.react_tools import (
+    BUILTIN_DEEP_ANALYSIS_TOOL_NAME,
     MAX_PATENT_LIST_ITEMS,
     SEARCH_KNOWLEDGE_TOOL_NAME,
     _cap_patent_list,
@@ -196,8 +197,10 @@ class TestBuildToolSet(unittest.TestCase):
             (_Knowledge(4, ktype=1), _ToolInfo("cnipa search")),   # normal
         ]
         agent = _FakeAgent()
+        # 查询必须携带专利号才具备 long_task 资格（需求#1 资格门）。
         registry, tools = asyncio.run(
-            build_tool_set(agent, "u1", "专利检索", push_filter=None))
+            build_tool_set(agent, "u1", "分析专利 11701773 的审查历史",
+                           push_filter=None))
 
         self.assertIn(SEARCH_KNOWLEDGE_TOOL_NAME, registry)
         kinds = {e.name: e.kind for e in registry.values()}
@@ -208,6 +211,44 @@ class TestBuildToolSet(unittest.TestCase):
         lt_names = [n for n, k in kinds.items() if k == "long_task"]
         self.assertEqual(len(lt_names), 1)
         self.assertEqual(len(tools), len(registry))
+
+    @patch("sources.agents.react_tools.get_knowledge_tool_candidates")
+    def test_no_patent_reference_binds_no_long_task_tool(self, mock_candidates):
+        """需求#1 资格门：无专利引用的文本诉求不得绑定任何 long_task 工具
+        （生产 4 例误路由：公司分析 / 能力咨询 / 申请人检索 / 时间过滤检索）。"""
+        mock_candidates.return_value = [
+            (_Knowledge(1, ktype=3), None),
+            (_Knowledge(3, ktype=1), _ToolInfo("uspto search")),
+        ]
+        registry, _tools = asyncio.run(
+            build_tool_set(_FakeAgent(), "u1",
+                           "帮我分析一下江苏维锂最近的专利", push_filter=None))
+        kinds = {e.name: e.kind for e in registry.values()}
+        self.assertNotIn("long_task", kinds.values())
+        self.assertIn("uspto_search", kinds)   # 普通知识工具不受影响
+        self.assertNotIn(BUILTIN_DEEP_ANALYSIS_TOOL_NAME, registry)
+
+    @patch("sources.agents.react_tools.get_knowledge_tool_candidates")
+    def test_followup_with_prior_results_keeps_eligibility(self, mock_candidates):
+        """追问（指代关键词）+ 历史里有前序结果 → 仍进管道。"""
+        mock_candidates.return_value = [(_Knowledge(1, ktype=3), None)]
+        history = [{"role": "assistant", "content": "结果",
+                    "patent_ids": ["CN114948588A"]}]
+        registry, _tools = asyncio.run(
+            build_tool_set(_FakeAgent(), "u1", "帮我分析第一个专利",
+                           push_filter=None, conversation_history=history))
+        kinds = {e.name: e.kind for e in registry.values()}
+        self.assertIn("long_task", kinds.values())
+
+    @patch("sources.agents.react_tools.get_knowledge_tool_candidates")
+    def test_followup_without_history_is_blocked(self, mock_candidates):
+        """历史丢失时的追问 → chat 兜底（不再进管道空转）。"""
+        mock_candidates.return_value = [(_Knowledge(1, ktype=3), None)]
+        registry, _tools = asyncio.run(
+            build_tool_set(_FakeAgent(), "u1", "帮我分析第一个专利",
+                           push_filter=None, conversation_history=[]))
+        kinds = {e.name: e.kind for e in registry.values()}
+        self.assertNotIn("long_task", kinds.values())
 
     @patch("sources.agents.react_tools.get_knowledge_tool_candidates")
     def test_build_tool_set_supports_sync_get_dynamic_tool_for(self, mock_candidates):
@@ -316,6 +357,8 @@ class TestExecuteAction(unittest.TestCase):
 
     def test_long_task_action_returns_intent(self):
         agent = _FakeAgent()
+        # 资格门（需求#1）：带专利号的请求照常返回 long_task intent。
+        agent._last_user_prompt = "分析专利 11701773 的审查历史"
         k = _Knowledge(9, ktype=3)
         registry = {
             "批量专利分析": type("E", (), {
@@ -327,6 +370,23 @@ class TestExecuteAction(unittest.TestCase):
         result = asyncio.run(executor("批量专利分析", {"query": "分析"}, 1))
         self.assertEqual(result["kind"], "long_task")
         self.assertEqual(result["knowledge"], k)
+
+    def test_long_task_action_blocked_without_patent_reference(self):
+        """执行时复查：注册表来自别的构建路径时也不得把无引用的文本诉求
+        送进分析管道（返回可读 observation，循环继续走 chat）。"""
+        agent = _FakeAgent()
+        agent._last_user_prompt = "帮我分析一下江苏维锂最近的专利"
+        k = _Knowledge(9, ktype=3)
+        registry = {
+            "批量专利分析": type("E", (), {
+                "name": "批量专利分析", "kind": "long_task",
+                "knowledge": k, "tool_info": None, "tool": None,
+            })(),
+        }
+        executor = asyncio.run(make_action_executor(agent, registry, None))
+        result = asyncio.run(executor("批量专利分析", {"query": "分析"}, 1))
+        self.assertEqual(result["kind"], "observation")
+        self.assertIn("专利号", result["text"])
 
     def test_unknown_tool_returns_error_observation(self):
         agent = _FakeAgent()

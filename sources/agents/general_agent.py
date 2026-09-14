@@ -1202,6 +1202,35 @@ Whenever a search tool was called and returned candidates, structure the final a
 
 This structure overrides other formatting preferences; only when the search returned no candidates should you honestly say no matching results were found.
 
+## Solution Assessment Format (MANDATORY — when the user brings their own solution)
+
+When the user presents a technical solution of their own (pasted text, a title,
+a feature list) and asks an evaluation-style question — whether it can be
+granted, what already covers it, how to implement it, which approaches exist —
+do NOT answer with a bare result list. Deliver a structured assessment, built
+ONLY from the records actually returned in this conversation:
+
+1. **Closest prior art** — up to 3 identifiers from the returned records, each
+   with one sentence naming the part of the user's solution it already covers.
+2. **Feature-by-feature comparison** — for each feature the user stated: covered
+   / partially covered / not seen in the returned records. Never assert that a
+   feature does not exist in the field; only that this round's records did not
+   show it.
+3. **Risk and room** — where the overlap is strongest, and where the returned
+   records leave space. Ground both in the comparison above, not in outside
+   knowledge.
+4. **Suggested directions** — concrete, checkable next steps for the user's
+   solution.
+5. **Reproducible queries** — when the search observation lists the query
+   strings run this round, repeat them verbatim in a copyable code block, one
+   line per source, with a one-line note on the field prefixes used (title /
+   abstract / claims).
+
+When the question instead asks which approaches or methods exist, group the
+returned records into the approach families they represent — naming each family
+from the records' own wording, never from a fixed list — and give one
+representative identifier per family before the overall summary.
+
 ## Record-Fact Boundary (MANDATORY — applies unconditionally)
 
 Report ONLY what the returned records state. When a record lists a status,
@@ -2076,6 +2105,11 @@ Begin your response now:
         self._patent_auto_used = {"us": 0, "cn": 0}  # built-in patent tool auto-ladder, per source per request
         self._recall_done = False  # recall expansion (family/CPC) fired, per request
         self._tried_queries = []  # queries already sent to the search tool, per request
+        # 轮内检索结果缓存（2026-09-15, 需求#27）：同一请求里重发的同一条 CN
+        # 检索式直接复用（生产实证：同一轮的两组同义词轮询把完全相同的
+        # ti/ab 检索式重发了一遍）。**必须在这里重置** —— agent 池复用会让
+        # 缓存跨请求泄漏（本项目已踩过同类坑）。
+        self._search_result_cache = {}
         self._cpc_hints = None  # matched CPC codes for the question, per request
         self.knowledgeTool = (None, None)  # (knowledge_item, tool_info) — selected inside the loop
         self.tools = []
@@ -2341,7 +2375,8 @@ Begin your response now:
 
         registry, bind_tools = await build_tool_set(
             self, user_id, prompt, push_filter,
-            patent_source=getattr(self, "_patent_tool_source", "auto"))
+            patent_source=getattr(self, "_patent_tool_source", "auto"),
+            conversation_history=conversation_history)
         if not allow_long_task:
             # Low-confidence long-task refusal (core.py chat_fallback):
             # strip every long-task entry so the pre-route matcher below
@@ -2367,7 +2402,8 @@ Begin your response now:
         ]
         if long_task_entries:
             matched = await _match_long_task_intent(
-                self, prompt, long_task_entries, lang)
+                self, prompt, long_task_entries, lang,
+                conv_history=conversation_history)
             if matched is not None:
                 self.logger.info(
                     "Long task intent routed by query match — returning intent")

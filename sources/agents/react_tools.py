@@ -104,6 +104,27 @@ RECALL_POOL_HEAD = 20
 # built by scripts/build_cpc_vectors.py on the server.
 CPC_EXPANSION_ENABLED = os.getenv("REACT_CPC_EXPANSION", "0") == "1"
 REACT_USPTO_SORT_FIELD = os.getenv("REACT_USPTO_SORT_FIELD", "_score")
+
+
+def _env_float(name: str, default: float) -> float:
+    """Float env knob that never raises at import (bad value → default)."""
+    try:
+        return float(os.getenv(name, "") or default)
+    except (TypeError, ValueError):
+        return default
+
+
+# 排序按需回退 (2026-09-15)：在 applications/search 的**标题级语料**上强制
+# sort=_score 会让短标题的临时申请/失效件顶满整页 —— 2026-09-14 探针实测
+# 前 20 槽位存活 _score 41/120 vs API 默认序 (filingDate desc) 103/120，最坏类
+# (LED/RGB) 0/20；2026-09-12 生产同向（20 条美方候选 18 条失效、次轮 10/10 全灭）。
+# 常态仍用相关度序；仅当本轮存活候选占比低于阈值时，用 API 默认序重取一次并按
+# 存活数择优。默认 0.25 = 只在“近乎整页失效”时回退，避免把 USPTO 请求量翻倍
+# （生产已观测 429 限流）。阈值是产品旋钮；REACT_USPTO_SORT_FALLBACK=0 关闭。
+REACT_USPTO_SORT_FALLBACK_ENABLED = (
+    os.getenv("REACT_USPTO_SORT_FALLBACK", "1") == "1")
+REACT_USPTO_SORT_FALLBACK_ALIVE_RATIO = _env_float(
+    "REACT_USPTO_SORT_FALLBACK_ALIVE_RATIO", 0.25)
 LADDER_MAX_HITS = int(os.getenv("REACT_LADDER_MAX_HITS")
                       or os.getenv("REACT_TIGHTEN_SUGGEST_THRESHOLD", "300"))
 # Per-number verification tools (search_patent_by_identifying_number_...)
@@ -471,6 +492,7 @@ async def build_tool_set(
     question: str,
     push_filter: Optional[int] = None,
     patent_source: str = "dual",
+    conversation_history=None,
 ) -> Tuple[Dict[str, ToolEntry], List[dict]]:
     """Build (registry, tools) for one query.
 
@@ -486,6 +508,9 @@ async def build_tool_set(
     """
     registry: Dict[str, ToolEntry] = {}
     tools: List[dict] = []
+    # 资格门（需求#1）：无专利引用的文本诉求不绑定任何 long_task 工具，
+    # 消灭「ReAct 循环里 LLM 自主调 long_task」这条误路由路径。
+    long_task_eligible = _is_long_task_eligible(question, conversation_history)
 
     def add(entry: ToolEntry) -> None:
         if entry.name in registry:
@@ -615,6 +640,8 @@ async def build_tool_set(
 
         title = _clean_tool_name(knowledge)
         if k_type == 3:
+            if not long_task_eligible:
+                continue
             tool = StructuredTool.from_function(
                 func=_long_task_stub,
                 name=title,
@@ -645,7 +672,8 @@ async def build_tool_set(
     # knowledge=None keeps it out of the deterministic pre-route (see
     # _match_long_task_intent guard) — it stays reachable via ReAct tool
     # choice, which is the intended gap-fill.
-    if not any(e.kind == "long_task" for e in registry.values()):
+    if long_task_eligible and not any(
+            e.kind == "long_task" for e in registry.values()):
         builtin_tool = StructuredTool.from_function(
             func=_long_task_stub,
             name=BUILTIN_DEEP_ANALYSIS_TOOL_NAME,
@@ -861,6 +889,57 @@ def _is_retrieval_request(query: str) -> bool:
     return has_verb and has_object
 
 
+# ── long_task 资格门（需求#1, P0）────────────────────────────────────────────
+# long_task 是「对已有专利对象做分析」的管道，合法前提是请求携带专利引用：
+# 查询里的专利号，或（追问意图 + 对话历史里有前序结果）。无引用的文本诉求
+# 进管道必然以 no_patents_found 失败——生产 2026-08 四例（公司分析/能力咨询/
+# 申请人检索/时间过滤检索）耗时 23s～9分17秒，chat 侧从未获得处理机会。
+_PATENT_ID_PATTERNS = (
+    re.compile(r"\b\d{8}\b"),                   # US 8 位申请/授权号
+    re.compile(r"\b\d{2}/\d{6}\b"),             # US 回执号 30/076,484
+    re.compile(r"\bUS\d{6,}\b", re.I),          # US30076484 / US20250103146A1
+    re.compile(r"\b20[12]\d{8,9}(?:\.\d)?\b"),  # CN 申请号 202310123456.7
+    re.compile(r"\bCN\d{7,12}[A-Z]?\d?\b", re.I),   # CN 公开/公告号
+)
+
+# 追问指代：命中关键词只说明「可能是在指代前文」，还必须历史里真有结果。
+FOLLOWUP_KEYWORDS = ("这", "上述", "前面", "以上", "其中", "筛选", "挑出",
+                     "选出", "哪些", "哪个", "第一个", "第几", "这些", "上面",
+                     "刚才", "继续", "接着", "然后", "再分析", "this", "these",
+                     "above", "first", "continue")
+
+
+def _query_has_patent_id(text: str) -> bool:
+    """查询文本中出现任一专利号形态。纯函数，永不抛。"""
+    raw = str(text or "")
+    return any(p.search(raw) for p in _PATENT_ID_PATTERNS)
+
+
+def _conversation_has_patent_refs(conv_history) -> bool:
+    """对话历史里任一消息携带 hidden patent_ids / patent_data。"""
+    for msg in conv_history or []:
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("patent_ids") or msg.get("patent_data"):
+            return True
+    return False
+
+
+def _is_long_task_eligible(query: str, conv_history=None) -> bool:
+    """请求可否进 long_task 管道：必须携带专利引用。
+
+    宽松预检（真正的裁决仍在分类器）：8 位数字误判只保留旧行为，不会
+    制造新失败；反之无引用的文本诉求被挡在管道外，秒级转 chat。
+    """
+    raw = str(query or "")
+    if _query_has_patent_id(raw):
+        return True
+    lowered = raw.lower()
+    if not any(k in raw or k in lowered for k in FOLLOWUP_KEYWORDS):
+        return False
+    return _conversation_has_patent_refs(conv_history)
+
+
 def _common_substring_len(a: str, b: str) -> int:
     """Length of the longest common CONTIGUOUS substring of a and b."""
     if not a or not b:
@@ -877,7 +956,8 @@ def _common_substring_len(a: str, b: str) -> int:
 
 
 async def _match_long_task_intent(agent, query: str, entries: list,
-                                  lang: str) -> Optional[ToolEntry]:
+                                  lang: str,
+                                  conv_history=None) -> Optional[ToolEntry]:
     """Deterministic long-task routing.
 
     The LLM freely choosing the long-task tool from the bound list is
@@ -912,6 +992,15 @@ async def _match_long_task_intent(agent, query: str, entries: list,
     # BEFORE the LLM call so the classifier's "宁可命中不可漏判" bias
     # cannot hijack a document download.
     if _is_retrieval_request(query_text):
+        return None
+    # 资格门（需求#1）：无专利引用的文本诉求不进分析管道 —— 分类器的
+    #「宁可命中不可漏判」偏见会把公司检索/能力咨询也判成长任务。
+    if not _is_long_task_eligible(query_text, conv_history):
+        _glog = getattr(agent, "logger", None)
+        if _glog is not None:
+            _glog.info(
+                "Long task intent rejected (no patent reference) — "
+                "falling back to chat")
         return None
     provider = _get_flash_provider(agent)
     if provider is None:
@@ -1327,10 +1416,16 @@ async def _maybe_append_missing_directions(agent, ranked: list, note: str,
     if CPC_EXPANSION_ENABLED and not cpc_hints:
         _glog = getattr(agent, "logger", None)
         if _glog is not None:
+            # 说清缺的是哪个前置条件（标题 json / 向量缓存 / numpy）——
+            # 只是"no CPC matches"时运维无从下手（2026-09-14 生产连报两轮）。
+            try:
+                from sources.long_task.cpc_semantic import cpc_availability
+                _why = cpc_availability().get("reason") or "unknown"
+            except Exception:
+                _why = "availability probe failed"
             _glog.warning(
                 "cpc expansion enabled but no CPC matches — "
-                "check data/cpc titles json and vector cache "
-                "(scripts/build_cpc_vectors.py)")
+                f"availability: {_why}")
     queries = await build_missing_direction_queries(
         getattr(agent, "_last_user_prompt", "") or "", titles, provider,
         cpc_hints=cpc_hints)
@@ -2072,14 +2167,44 @@ def _word_level_query(q: str) -> str | None:
     return out if out != q else None
 
 
+def _alive_counts(items: list) -> tuple:
+    """(alive, total) over raw USPTO items via the shared dead-status rule.
+
+    Pure; returns (0, 0) when the item shape cannot be parsed.
+    """
+    try:
+        from sources.long_task.candidate_metadata import (
+            build_candidates, is_dead_status)
+        candidates = build_candidates(items or [])
+    except Exception:
+        return (0, 0)
+    if not candidates:
+        return (0, 0)
+    alive = sum(1 for c in candidates
+                if not is_dead_status(c.get("status")))
+    return (alive, len(candidates))
+
+
 async def _uspto_search_by_query(
     q: str, page: int = 1, page_size: int = 20,
 ) -> tuple[list, str]:
     """POST USPTO applications/search; returns (raw_items, note).
 
-    On 404 (zero hits), retries once with quoted phrases rewritten to
-    word-level AND — phrase matching on this endpoint is order-sensitive
-    and unstable, word-level matching is not.
+    404 handling is routed by the AND-operator count (2026-09-15):
+
+    - **>2 AND** = the endpoint's dialect overflow (verified 2026-09-07:
+      ≤2 operators parse, 3+ always 404 whatever the bracket layout) — the
+      query never reached the corpus, so trim trailing conjuncts and resend
+      (the only retry that does not silently drop a constraint).
+    - **≤2 AND** = the query is well-formed and the corpus genuinely has no
+      title-level match ("true zero") — retrying only burns requests
+      (production 2026-09-14: 34 requests per 4 usable answers).  Keep the
+      quoted-phrase word-level retry (phrase matching here is order-
+      sensitive — a different failure mode) and stop.
+
+    After a 200, a page whose candidates are almost all dead (expired /
+    abandoned / parked) is re-fetched once under the API default order and
+    the better page wins — see REACT_USPTO_SORT_FALLBACK_* above.
     """
     try:
         from sources.http_outbound import outbound_http
@@ -2092,7 +2217,16 @@ async def _uspto_search_by_query(
         if uspto_key:
             headers["X-API-Key"] = uspto_key
 
-        async def _search(query: str) -> tuple:
+        try:
+            from sources.long_task.search_query_builder import (
+                MAX_USPTO_AND_OPS, trim_uspto_and_overflow,
+                uspto_and_op_count)
+            dialect_overflow = uspto_and_op_count(q) > MAX_USPTO_AND_OPS
+        except Exception:
+            trim_uspto_and_overflow = None
+            dialect_overflow = False
+
+        async def _search(query: str, use_sort: bool = True) -> tuple:
             body = {
                 "q": query,
                 "pagination": {
@@ -2100,8 +2234,10 @@ async def _uspto_search_by_query(
                     "limit": page_size,
                 },
                 "fields": RECALL_SEARCH_FIELDS,
-                "sort": [{"field": "_score", "order": "desc"}],
             }
+            if use_sort:
+                body["sort"] = [
+                    {"field": REACT_USPTO_SORT_FIELD, "order": "desc"}]
             resp = await outbound_http.arequest(
                 "POST", USPTO_SEARCH_URL, purpose="dual_patent_search",
                 headers=headers, json=body, timeout=30,
@@ -2115,7 +2251,8 @@ async def _uspto_search_by_query(
             if word_q:
                 response, used_q = await _search(word_q)
         trim_note = ""
-        if getattr(response, "status_code", 0) != 200:
+        if (getattr(response, "status_code", 0) != 200
+                and dialect_overflow):
             # 3+ 个 AND 连接组在该端点**必 404**（2026-09-07 实测：≤2 AND 可
             # 解析计数，3+ 无论括号怎么套都 404）。按预算裁掉尾部 AND 合取项
             # 是**唯一不丢约束**的救法，与 dynamic_tool_params 里 KB 路径用的
@@ -2127,19 +2264,19 @@ async def _uspto_search_by_query(
             #     AND ("head support assembly" OR "head restraint") AND resistance
             # 它在默认预算下**判定为合规、不裁**——于是"重发"与"原发"是同一条，
             # 修复形同空转。既然已经 404 了，就是这条查询过不了，只能裁得更狠。
-            try:
-                from sources.long_task.search_query_builder import (
-                    trim_uspto_and_overflow)
-                trimmed_q = trim_uspto_and_overflow(q, max_and_ops=1)
-            except Exception:
-                trimmed_q = ""
+            trimmed_q = ""
+            if trim_uspto_and_overflow is not None:
+                try:
+                    trimmed_q = trim_uspto_and_overflow(q, max_and_ops=1)
+                except Exception:
+                    trimmed_q = ""
             if trimmed_q and trimmed_q not in (q, word_q):
                 response, used_q = await _search(trimmed_q)
                 if getattr(response, "status_code", 0) == 200:
                     trim_note = "uspto 404 retry — AND-budget trim"
-        if (USPTO_SPACE_FLATTEN_ENABLED
+        if (USPTO_SPACE_FLATTEN_ENABLED and dialect_overflow
                 and getattr(response, "status_code", 0) != 200):
-            # ★ 只作最后兜底的「去括号纯空格词形」：它会把 404 换成**含噪 200**
+            # ★ 只作**方言超限**的末位兜底的「去括号纯空格词形」：它会把 404 换成**含噪 200**
             # ——空格拼接在该端点是 OR 语义（dynamic_tool_params.py 的实测结论：
             # 单概念基线的命中数之和 == 空格拼接的命中数），约束全丢、结果与
             # 原查询不可比。2026-09-03 起它被当作"救援"，实测是拿噪声换 200；
@@ -2155,12 +2292,33 @@ async def _uspto_search_by_query(
                 if getattr(response, "status_code", 0) == 200:
                     trim_note = "uspto 404 fallback — space-flatten (OR semantics, noisy)"
         if getattr(response, "status_code", 0) != 200:
-            return [], f"USPTO HTTP {response.status_code}"
+            # 合规形态 (≤2 AND) 的 404 = 标题域真零：重试链已跳过，标注出来
+            # 便于把「真零」与「方言超限」在日志里分开数。
+            true_zero = (not dialect_overflow
+                         and getattr(response, "status_code", 0) == 404)
+            return [], f"USPTO HTTP {response.status_code}" + (
+                " (true zero, no retry)" if true_zero else "")
         data = response.json()
         items = _normalize_uspto_items(
             data.get("patentFileWrapperDataBag") or [])
-        return items, f"USPTO {len(items)} hits" + (
-            f" ({trim_note})" if trim_note else "")
+        sort_note = ""
+        if (REACT_USPTO_SORT_FALLBACK_ENABLED
+                and REACT_USPTO_SORT_FIELD == "_score"):
+            alive, total = _alive_counts(items)
+            if total and (alive / total) < REACT_USPTO_SORT_FALLBACK_ALIVE_RATIO:
+                resp2, _q2 = await _search(used_q, use_sort=False)
+                if getattr(resp2, "status_code", 0) == 200:
+                    items2 = _normalize_uspto_items(
+                        resp2.json().get("patentFileWrapperDataBag") or [])
+                    alive2, total2 = _alive_counts(items2)
+                    if alive2 > alive:
+                        items = items2
+                        sort_note = (
+                            "uspto sort fallback — default order "
+                            f"(alive {alive}/{total} -> {alive2}/{total2})")
+        note_bits = [b for b in (trim_note, sort_note) if b]
+        suffix = f" ({'; '.join(note_bits)})" if note_bits else ""
+        return items, f"USPTO {len(items)} hits" + suffix
     except Exception as exc:
         return [], f"USPTO failed: {exc}"
 
@@ -2558,6 +2716,23 @@ async def _baiten_search_by_query(
     schema drift is never mistaken for an empty result set.
     """
     _glog = getattr(agent, "logger", None)
+    # 轮内复用（2026-09-15, 需求#27）：同一请求里重发的同一条检索式直接返回
+    # 上次结果（生产实证：不同 US 同义词组轮询时，CN 阶梯被原样重跑）。
+    # 缓存按请求重置（general_agent.create_agent 的重置块），不会跨请求泄漏。
+    _cache = getattr(agent, "_search_result_cache", None)
+    _cache_key = ("cn", q, int(page or 1), int(page_size or 20))
+    if isinstance(_cache, dict) and _cache_key in _cache:
+        if _glog is not None:
+            _glog.info(
+                f"baiten_search_map — query={q[:60]!r} "
+                f"(cached, same turn)")
+        return _cache[_cache_key]
+
+    def _remember(payload):
+        if isinstance(_cache, dict):
+            _cache[_cache_key] = payload
+        return payload
+
     try:
         from sources.baiten_client import (
             BaitenClient, summarize_search_response,
@@ -2580,19 +2755,30 @@ async def _baiten_search_by_query(
         items = _baiten_results_to_candidates(body)
         if items and enrich:
             await _enrich_baiten_law_status(client, items, _glog, agent=agent)
+        _total = summary.get("total")
+        _capped = summary["rows"] >= int(page_size or 20)
         if _glog is not None:
+            # 需求#9：单查询恒 rows=page_size（页上限）时，真实命中数只有
+            # 网关的 total 能回答 —— 一并落日志，别再靠"rows 恒 10"猜。
             _glog.info(
                 f"baiten_search_map — query={q[:60]!r} "
-                f"rows={summary['rows']} candidates={len(items)}"
+                f"rows={summary['rows']} candidates={len(items)} "
+                f"total={_total}"
+                + (" (page-capped)" if _capped else "")
             )
         if summary["rows"] == 0:
-            return items, "CN 0 hits (gateway 0 records)"
+            return _remember((items, "CN 0 hits (gateway 0 records)"))
         if not items:
-            return [], (
+            return _remember(([], (
                 f"CN 0 candidates (parsed from "
                 f"{summary['rows']} records)"
-            )
-        return items, f"CN {len(items)} hits"
+            )))
+        _note = f"CN {len(items)} hits"
+        if _capped:
+            _note += (f" (showing {summary['rows']} of {_total})"
+                      if _total is not None
+                      else f" (page-capped at {summary['rows']})")
+        return _remember((items, _note))
     except Exception as exc:
         if _glog is not None:
             _glog.warning(f"baiten_search — failed: {exc}")
@@ -3003,6 +3189,30 @@ async def _run_patent_search(agent, args, lang: str, dual: bool = True) -> dict:
             digest = f"{digest}\n\n{citing_note}"
     except Exception:
         pass  # annotation is an enhancement — never breaks the search
+
+    # 需求#25：把本轮**实际执行**的检索式带进模型可见的摘要 —— 用户要
+    #「可复现检索式」时，模型必须能逐字复述，而不是凭记忆编造。只列真正
+    # 发出过的式子（首轮 + 本请求内的阶梯补跑）。
+    try:
+        primary = []
+        if us_q:
+            primary.append(f"[US] {us_q}")
+        if cn_q:
+            primary.append(f"[CN] {cn_q}")
+        extra = []
+        seen_q = {us_q, cn_q}
+        for q in (getattr(agent, "_tried_queries", None) or []):
+            if q and q not in seen_q:
+                seen_q.add(q)
+                extra.append(q)
+        if primary or extra:
+            header = ("Query strings actually run this round (copyable):"
+                      if lang == "en"
+                      else "本轮实际执行的检索式（可复制）：")
+            block = "\n".join(f"- {q}" for q in (primary + extra)[:12])
+            digest = f"{digest}\n\n{header}\n{block}"
+    except Exception:
+        pass  # reproducibility block is an enhancement — never breaks the search
     return {"kind": "observation", "text": digest}
 
 
@@ -3650,6 +3860,22 @@ async def make_action_executor(agent, registry, push_filter=None):
             return await _run_search_knowledge(agent, registry, user_id, args, push_filter)
 
         if entry.kind == "long_task":
+            # 资格门复查（需求#1，防御纵深）：即便注册表来自别的构建路径，
+            # 无专利引用的文本诉求也不得进入分析管道（否则必然
+            # no_patents_found 空转数分钟）。
+            if not _is_long_task_eligible(
+                    getattr(agent, "_last_user_prompt", "") or "",
+                    getattr(agent, "_conversation_history", None)):
+                return {
+                    "kind": "observation",
+                    "text": (
+                        "该请求未包含具体专利号或前序结果引用，无需深度分析"
+                        "任务，请直接回答用户或改用专利检索工具。"
+                        if lang == "zh" else
+                        "No patent number or prior-result reference in this "
+                        "request — answer directly or use the patent search "
+                        "tools instead of submitting a deep task."),
+                }
             # The loop terminates and core.py's existing long-task branch
             # handles classification + Celery submission.
             return {"kind": "long_task", "text": "",

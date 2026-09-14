@@ -155,6 +155,62 @@ def load_cpc_vectors(npy_path: Optional[str] = None) -> Optional[Any]:
     return arr
 
 
+_availability_cache: Optional[dict] = None
+
+
+def cpc_availability(refresh: bool = False) -> dict:
+    """Report whether the CPC expansion data is usable — and, when it is
+    not, WHICH prerequisite failed.
+
+    The per-round "no CPC matches" warning cannot tell a missing titles
+    json from a stale vector cache from a missing numpy; production
+    2026-09-14 logged it twice with the expansion silently doing nothing.
+    Probed once per process (the answer only changes on redeploy) and
+    logged at INFO on first probe.  Pure read; never raises.
+    """
+    global _availability_cache
+    if _availability_cache is not None and not refresh:
+        return _availability_cache
+    info: dict = {"ok": False, "reason": "path resolution failed"}
+    try:
+        titles_path, vectors_path = cpc_paths_for_level()
+        entries = load_cpc_titles(titles_path)
+        vectors = load_cpc_vectors(vectors_path)
+        try:
+            import numpy  # noqa: F401
+            has_numpy = True
+        except ImportError:
+            has_numpy = False
+        info = {
+            "titles_path": titles_path,
+            "titles": len(entries),
+            "vectors_path": vectors_path,
+            "vectors": None if vectors is None else len(vectors),
+            "numpy": has_numpy,
+            "ok": True,
+            "reason": "",
+        }
+        if not entries:
+            info["ok"] = False
+            info["reason"] = f"titles json missing/empty ({titles_path})"
+        elif vectors is None:
+            info["ok"] = False
+            info["reason"] = (
+                "vector cache missing — rebuild with "
+                f"scripts/build_cpc_vectors.py ({vectors_path})")
+        elif len(entries) != len(vectors):
+            info["ok"] = False
+            info["reason"] = (
+                f"json/npy drift: titles={len(entries)} "
+                f"vectors={len(vectors)} — rebuild with "
+                "scripts/build_cpc_vectors.py")
+    except Exception as exc:  # diagnostics must never raise
+        info = {"ok": False, "reason": f"probe failed: {exc}"}
+    _availability_cache = info
+    logger.info(f"cpc availability — {info}")
+    return info
+
+
 def match_cpc_codes(query_vector: Any, vectors: Any, entries: list,
                     top_k: int = 8) -> list:
     """Cosine-rank *entries* against *query_vector* using *vectors*.

@@ -525,7 +525,8 @@ class TestLawEnrichmentPerRequestBudget(unittest.TestCase):
 
 
 class TestUsptoSpaceFlattenDisabled(unittest.TestCase):
-    """空格兜底（OR 语义）默认关闭。
+    """空格兜底（OR 语义）默认关闭，且 2026-09-15 起**仅在方言超限形态**下才会
+    被考虑（合规形态的 404 = 标题域真零，拍平只会拿 OR 噪声换 200）。
 
     2026-09-13 生产实证：它每轮返回 20 条噪声，**全部**被后续过滤丢弃（30 条
     导出里美国只剩 2 条），却进入 observation 摘要 —— 模型把其中"活着"的
@@ -533,9 +534,11 @@ class TestUsptoSpaceFlattenDisabled(unittest.TestCase):
     纯成本 + 污染判断，零收益。
     """
 
-    _Q = '"humidity sensor" AND "desiccant dryer" AND "dry air supply"'
+    # 3 个 AND 算子 = 该端点方言超限（唯一还会走满重试链的形态）。
+    _Q = ('"humidity sensor" AND "desiccant dryer" AND "air supply" '
+          'AND (feedback OR sensor)')
 
-    def _attempts(self, enabled):
+    def _attempts(self, enabled, q=None):
         calls = []
 
         async def _arequest(method, url, **kw):
@@ -546,14 +549,14 @@ class TestUsptoSpaceFlattenDisabled(unittest.TestCase):
              patch("sources.http_outbound.outbound_http") as mock_http:
             mock_http.arequest = AsyncMock(side_effect=_arequest)
             items, note = asyncio.run(
-                react_tools._uspto_search_by_query(self._Q))
+                react_tools._uspto_search_by_query(q or self._Q))
         return calls, items, note
 
     def test_disabled_by_default(self):
         self.assertFalse(react_tools.USPTO_SPACE_FLATTEN_ENABLED)
 
     def test_no_flatten_attempt_when_disabled(self):
-        # 原发 → 词级 → AND 裁尾，三发为止。
+        # 超限形态：原发 → 词级 → AND 裁尾，三发为止。
         calls, items, _note = self._attempts(False)
         self.assertEqual(len(calls), 3)
         self.assertEqual(items, [])
@@ -562,6 +565,14 @@ class TestUsptoSpaceFlattenDisabled(unittest.TestCase):
         # 对照：打开后确实多一发（证明是这道闸门在拦，不是别的）。
         calls, _items, _note = self._attempts(True)
         self.assertEqual(len(calls), 4)
+
+    def test_compliant_query_never_flattens(self):
+        # 合规形态（≤2 AND）即使打开兜底也不拍平：真零只标注、不再换噪声。
+        q = '"humidity sensor" AND "desiccant dryer" AND "dry air supply"'
+        calls, items, note = self._attempts(True, q=q)
+        self.assertEqual(len(calls), 2, "原发 → 词级降级，两发为止")
+        self.assertEqual(items, [])
+        self.assertIn("true zero", note)
 
 
 class TestNormalizeUsptoItems(unittest.TestCase):
@@ -775,6 +786,23 @@ class TestBaitenSearchByQueryNotes(unittest.TestCase):
         self.assertEqual(len(items), 2)
         self.assertEqual(note, "CN 2 hits")
 
+    def test_page_capped_note_reports_gateway_total(self):
+        # 需求#9：单查询恒 rows=page_size（页上限）时，真实命中数只有网关的
+        # total 能回答 —— 必须出现在备注里，不能继续靠"rows 恒 10"猜。
+        body = {"code": "200", "total_hits": 347,
+                "data": {"fieldValues": [
+                    {"pn": "CN118%06dA" % i, "ti": "散热装置"}
+                    for i in range(20)]}}
+        items, note = asyncio.run(self._run(body))
+        self.assertEqual(len(items), 20)
+        self.assertIn("showing 20 of 347", note)
+
+    def test_page_capped_without_total_marks_cap(self):
+        body = {"code": "200", "data": {"fieldValues": [
+            {"pn": "CN118%06dA" % i, "ti": "散热装置"} for i in range(20)]}}
+        items, note = asyncio.run(self._run(body))
+        self.assertIn("page-capped at 20", note)
+
     def test_not_configured_note(self):
         items, note = asyncio.run(self._run(None, cfg={
             "app_key": "", "app_secret": "", "gateway_url": "http://x"}))
@@ -798,6 +826,66 @@ class TestBaitenSearchByQueryNotes(unittest.TestCase):
                                  "api_level": "TWO"}):
             asyncio.run(_baiten_search_by_query("ti:(散热)", agent=_FakeAgent()))
         self.assertEqual(received["api_level"], "TWO")
+
+
+class TestTurnLevelSearchCache(unittest.TestCase):
+    """2026-09-15 需求#27：同 turn 相同的 CN 检索式复用上次结果。
+
+    生产实证（2026-09-14 1309…）：不同 US 同义词组轮询时，CN 阶梯被逐字重跑
+    （两次 `ab:(泌乳计划…) AND ab:(智能提醒…)` 各返回同样的 10 行）。缓存按请求
+    重置（general_agent.create_agent 的重置块），不得跨请求泄漏。
+    """
+
+    _BODY = {"code": "200", "data": {"fieldValues": [
+        {"pn": "CN118000001A", "ti": "散热装置"}]}}
+
+    def _agent_and_client(self, calls):
+        body = self._BODY
+
+        class _FakeClient:
+            async def search(self, q, page=1, page_size=20,
+                             api_level="ONE"):
+                calls.append(q)
+                return body
+        return _FakeAgent(), _FakeClient()
+
+    def test_same_query_in_one_turn_hits_cache(self):
+        calls = []
+        agent = _FakeAgent()
+        agent._search_result_cache = {}
+        _, client = self._agent_and_client(calls)
+
+        async def _go():
+            with patch("sources.baiten_client.BaitenClient",
+                       return_value=client), \
+                 patch("sources.long_task.config.get_baiten_config",
+                       return_value={"app_key": "k", "app_secret": "s",
+                                     "gateway_url": "http://x"}):
+                first = await _baiten_search_by_query("ti:(散热)", agent=agent)
+                second = await _baiten_search_by_query("ti:(散热)", agent=agent)
+            return first, second
+
+        (items1, note1), (items2, note2) = asyncio.run(_go())
+        self.assertEqual(calls, ["ti:(散热)"], "同 turn 同式只应外发一次")
+        self.assertEqual(note2, note1)
+        self.assertEqual(items2, items1)
+
+    def test_no_cache_without_agent(self):
+        # agent=None（KB 路径的旧调用形态）不缓存，保持旧行为。
+        calls = []
+        _, client = self._agent_and_client(calls)
+
+        async def _go():
+            with patch("sources.baiten_client.BaitenClient",
+                       return_value=client), \
+                 patch("sources.long_task.config.get_baiten_config",
+                       return_value={"app_key": "k", "app_secret": "s",
+                                     "gateway_url": "http://x"}):
+                await _baiten_search_by_query("ti:(散热)")
+                await _baiten_search_by_query("ti:(散热)")
+
+        asyncio.run(_go())
+        self.assertEqual(len(calls), 2)
 
 
 class TestBaitenConfig(unittest.TestCase):

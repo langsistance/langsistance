@@ -293,6 +293,22 @@ def _lookup_url_param(name: str, value_sources: list[dict]) -> str | None:
     return None
 
 
+def _is_placeholder_value(value: Any) -> bool:
+    """True when a request value is itself a ``{template}`` literal.
+
+    The LLM sometimes echoes the schema's placeholder as the argument
+    value (``applicationNumberText: "{applicationNumberText}"``) instead
+    of the real number — 2026-09-14 production: 4 of 5 documents calls
+    sent the literal template and USPTO answered 403 each time.
+    """
+    return bool(re.fullmatch(r"\{[^{}]+\}", str(value or "").strip()))
+
+
+def _unresolved_placeholders(url: str) -> list:
+    """``{name}`` templates still present in the final URL.  Pure."""
+    return re.findall(r"\{([^{}]+)\}", url or "")
+
+
 def _substitute_url_placeholders(url: str, value_sources: list[dict]) -> str:
     """Replace ``{name}`` path templates in a tool URL with request values.
 
@@ -300,11 +316,13 @@ def _substitute_url_placeholders(url: str, value_sources: list[dict]) -> str:
     denies an unsubstituted path with 403 "explicit deny in an
     identity-based policy" (observed for
     ``/patent/applications/{applicationNumberText}/documents``).
-    Unresolved placeholders are left intact.
+    Unresolved placeholders are left intact; a value that is itself a
+    placeholder counts as unresolved (see ``_is_placeholder_value``) — the
+    caller refuses the request instead of sending the literal.
     """
     def _replace(match) -> str:
         value = _lookup_url_param(match.group(1), value_sources)
-        if value is None:
+        if value is None or _is_placeholder_value(value):
             return match.group(0)
         return quote(value, safe="")
 
@@ -599,6 +617,22 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
     else:
         url = _append_path_to_url(tool_info.url, _path_value)
     url = _substitute_url_placeholders(url, _value_sources)
+
+    # 出站前的占位符闸门 (2026-09-15, 需求#33)：参数没带到具体值时，
+    # 宁可当场回一条可读错误，也不要把 ``{applicationNumberText}`` 这种
+    # 模板字面量发出去换一个 403（2026-09-14 生产：5 次取件调用里 4 次
+    # 如此，全部报废）。错误里点名缺哪个参数，模型可直接补齐重试。
+    _missing = _unresolved_placeholders(url)
+    if _missing:
+        logger.warning(
+            f"backend_tool: unresolved URL placeholder(s) {_missing} — "
+            f"refusing to send the template literal to {url[:120]}")
+        return {"data": (
+            "Request failed: missing value for URL parameter(s): "
+            + ", ".join(_missing)
+            + " — pass the concrete value (for example the application "
+              "number), not the {template} literal."),
+            "raw_items": None}
 
     method = params_data.get("method", "GET").upper()
     content_type = params_data.get("Content-Type", "application/json")

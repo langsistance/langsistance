@@ -14,7 +14,84 @@ import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
+from sources.logger import Logger
+
+logger = Logger("react_loop.log")
+
 MAX_ROUNDS = int(os.getenv("REACT_MAX_ROUNDS", "10"))
+
+
+def sanitize_tool_message_pairs(messages: List[dict]) -> List[dict]:
+    """Return *messages* with every assistant tool_call paired to a result.
+
+    OpenAI-compatible APIs reject a history whose assistant message carries a
+    tool_call without its tool output — 400 "No tool output found for function
+    call …" (production 2026-09-14: the whole turn died, the user only saw a
+    connection-interrupted notice).  Missing outputs are filled in with a
+    placeholder tool message (the pairing the API demands, without rewriting
+    the assistant turn); orphan tool messages — no owning call — are dropped.
+
+    Pure; never raises; returns a new list.  Applied at the llm_call choke
+    point so no caller path can leak an unpaired history to the provider.
+    """
+    source = [m for m in (messages or []) if isinstance(m, dict)]
+    call_ids = set()
+    for msg in source:
+        if msg.get("role") != "assistant":
+            continue
+        for call in msg.get("tool_calls") or []:
+            cid = (call or {}).get("id")
+            if cid:
+                call_ids.add(cid)
+    have_result = {
+        m.get("tool_call_id") for m in source
+        if m.get("role") == "tool" and m.get("tool_call_id")
+    }
+    out: List[dict] = []
+    repaired = 0
+    dropped = 0
+    idx = 0
+    total = len(source)
+    while idx < total:
+        msg = source[idx]
+        role = msg.get("role")
+        if role == "tool":
+            if msg.get("tool_call_id") in call_ids:
+                out.append(msg)
+            else:
+                dropped += 1
+            idx += 1
+            continue
+        out.append(msg)
+        idx += 1
+        if role != "assistant":
+            continue
+        # Keep the round's results contiguous: the tool messages that follow
+        # this assistant turn come first (call order preserved), then a
+        # placeholder for every call the round never produced a result for.
+        while idx < total and source[idx].get("role") == "tool":
+            follow = source[idx]
+            if follow.get("tool_call_id") in call_ids:
+                out.append(follow)
+            else:
+                dropped += 1
+            idx += 1
+        for call in msg.get("tool_calls") or []:
+            cid = (call or {}).get("id")
+            if not cid or cid in have_result:
+                continue
+            out.append({
+                "role": "tool",
+                "tool_call_id": cid,
+                "name": (call or {}).get("name", ""),
+                "content": "Error: tool output missing (recovered).",
+            })
+            repaired += 1
+    if repaired or dropped:
+        logger.warning(
+            f"sanitize_tool_message_pairs — repaired={repaired} "
+            f"dropped={dropped} (unpaired tool call in history)")
+    return out
 
 # messages: list of {"role", "content", ("name"), ("tool_calls"), ("tool_call_id")}
 # tools: list of {"name", "description", "parameters"} (bind_tools dict form)
@@ -232,7 +309,8 @@ def make_llm_call(provider, handler=None) -> LLMCall:
         llm = provider._get_langchain_llm(streaming=True)
         if tools:
             llm = llm.bind_tools(tools)
-        lc_messages = [_to_message(m) for m in messages]
+        lc_messages = [
+            _to_message(m) for m in sanitize_tool_message_pairs(messages)]
 
         # Narration routing (2026-09-06 stream-semantics fix): whether a round
         # produced tool calls is only known after the stream ends, and some
