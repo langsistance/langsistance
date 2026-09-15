@@ -144,6 +144,8 @@ git commit -m "feat(weapp): 分享载荷纯模块 —— 品牌常量 + buildSha
 - Consumes: `frontend/weapp/src/assets/brand-logo.png`（已存在，480×546 透明底）
 - Produces: `frontend/weapp/src/assets/share-card.png`（500×400），供 Task 3 以 `import` 引用
 
+> **实现后修订（977a314）**：下面 Step 1 的脚本已按评审意见加固，**以仓库中的实际文件为准**，与本计划的代码块不再逐字一致。加固内容：画布溢出守卫（防止调大 `LOGO_W` 后 `top` 变负、图被静默裁切而脚本仍报成功）、源图存在性检查、打印选中的字体路径。视觉常量与布局数学未变，产物逐字节未变（md5 `4954aaeac1a2823a94ab91465f7f8f31`）。
+
 - [ ] **Step 1: 写生成脚本**
 
 创建 `frontend/weapp/scripts/make-share-card.py`：
