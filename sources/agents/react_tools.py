@@ -2857,7 +2857,7 @@ REACT_SEARCH_LANG_BALANCE = (
 # 取几页；佰腾按调用计费，调大等于按倍数增加检索调用与后续法律状态富化量。
 REACT_CN_PAGES_PER_QUERY = int(os.getenv("REACT_CN_PAGES_PER_QUERY", "2"))
 REACT_NONPREFERRED_LADDER_MAX = int(os.getenv(
-    "REACT_NONPREFERRED_LADDER_MAX", "1"))
+    "REACT_NONPREFERRED_LADDER_MAX", "3"))
 REACT_NONPREFERRED_DIGEST_ROWS = int(os.getenv(
     "REACT_NONPREFERRED_DIGEST_ROWS", "8"))
 
@@ -3015,7 +3015,8 @@ async def _rank_builtin_patent_pool(agent, items: list, lang: str) -> list:
 async def _auto_run_patent_ladder(agent, ladder: list, search_fn, merged: list,
                                   notes: list, lang: str, source: str,
                                   page: int, page_size: int,
-                                  max_queries: Optional[int] = None) -> int:
+                                  max_queries: Optional[int] = None,
+                                  stop_when_found: bool = False) -> int:
     """System-run untried ladder queries for one patent source.
 
     Triggered when the preferred source returned nothing displayable;
@@ -3070,6 +3071,10 @@ async def _auto_run_patent_ladder(agent, ladder: list, search_fn, merged: list,
         merged.extend(items)
         if note:
             notes.append(note)
+        if stop_when_found and gained > 0:
+            # 非优选源：取到结果就收手 —— "少取"不等于"一次不中就归零"
+            #（2026-09-15 生产：US 首发是真零 + 只放行 1 条补跑 → 整轮 0 条美国）。
+            break
     if executed:
         _glog = getattr(agent, "logger", None)
         if _glog is not None:
@@ -3188,13 +3193,17 @@ async def _run_patent_search(agent, args, lang: str, dual: bool = True) -> dict:
             return
         ladder = cn_ladder if source == "cn" else us_ladder
         fn = _baiten if source == "cn" else _uspto
-        # 语言配额：双源（未指定国家）时收窄非优选源的补跑预算。
+        # 语言配额：双源（未指定国家）时收窄非优选源的补跑预算 —— 但只收窄
+        # "深度"，保证它有拿到结果的机会（取到即停，最多 REACT_NONPREFERRED_
+        # LADDER_MAX 条）。
         _cap = None
+        _stop = False
         if REACT_SEARCH_LANG_BALANCE and dual and source != preferred:
             _cap = REACT_NONPREFERRED_LADDER_MAX
+            _stop = True
         await _auto_run_patent_ladder(
             agent, ladder, fn, merged, notes, lang, source,
-            page, page_size, max_queries=_cap)
+            page, page_size, max_queries=_cap, stop_when_found=_stop)
 
     await _run_for(preferred)
     await _run_for("us" if preferred == "cn" else "cn")

@@ -111,6 +111,7 @@ class TestRunPatentSearchStreamNotes(unittest.TestCase):
                             "query_string_cn": "ti:(q0)"}, lang)
             return list(us_calls), list(cn_calls)
 
+        # 全零场景：非优选源跑满配额也拿不到结果（配额是上限，不是保证）
         us, cn = asyncio.run(_go("zh"))
         self.assertLessEqual(len(us), 1 + REACT_NONPREFERRED_LADDER_MAX)
         self.assertGreater(len(cn), len(us), "中文提问 CN 应比 US 取更多")
@@ -118,6 +119,36 @@ class TestRunPatentSearchStreamNotes(unittest.TestCase):
         us_en, cn_en = asyncio.run(_go("en"))
         self.assertLessEqual(len(cn_en), 1 + REACT_NONPREFERRED_LADDER_MAX)
         self.assertGreater(len(us_en), len(cn_en), "英文提问 US 应比 CN 取更多")
+
+    def test_nonpreferred_stops_after_first_hit(self):
+        """非优选源取到结果即停 —— 生产 2026-09-15：中文提问下美国侧首发
+        是真零 + 只放行 1 条补跑，整轮 0 条美国专利；"少取"不该是"不中即归零"。"""
+        from sources.agents.react_tools import _run_patent_search
+        agent = _FakeAgent()
+        agent._search_rewrite = {"queries": ["us-q%d" % i for i in range(6)]}
+        agent._search_rewrite_cn = {"queries": ["ti:(q0)"]}
+        us_calls = []
+
+        async def _us(q, page=1, page_size=20):
+            us_calls.append(q)
+            if q == "us-q1":          # 第 2 条阶梯式才命中
+                return [{"applicationNumberText": "19511555",
+                         "title": "Air dryer"}], "USPTO 1 hits"
+            return [], "USPTO HTTP 404 (true zero, no retry)"
+
+        async def _cn(q, page=1, page_size=20, agent=None, enrich=True):
+            return [], "CN 0 hits (gateway 0 records)"
+
+        async def _go():
+            with patch("sources.agents.react_tools._uspto_search_by_query", _us), \
+                 patch("sources.agents.react_tools._baiten_search_by_query", _cn):
+                return await _run_patent_search(
+                    agent, {"query_string_us": "us-q0",
+                            "query_string_cn": "ti:(q0)"}, "zh")
+
+        asyncio.run(_go())
+        self.assertEqual(us_calls, ["us-q0", "us-q1"],
+                         "命中后不得继续消耗美国侧查询")
 
     def test_executed_queries_ride_the_digest(self):
         # 需求#25：模型必须能看到本轮真正执行的检索式，才能逐字复述给用户
