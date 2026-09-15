@@ -58,6 +58,8 @@ import {
   resolvePrivacy,
   subscribePrivacy,
 } from '../../services/privacy'
+// 分享卡配图：由 scripts/make-share-card.py 生成，本产物是在 Windows 上用 msyhbd.ttc 渲染的。
+// 跨平台重跑会换字体、字面随之改变，请勿在本机之外重新生成。
 import shareCard from '../../assets/share-card.png'
 import { SHARE_PATH, buildShareCard } from '../../utils/share'
 import { parseMarkdown } from '../../utils/markdown'
