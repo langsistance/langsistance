@@ -58,6 +58,8 @@ import {
   resolvePrivacy,
   subscribePrivacy,
 } from '../../services/privacy'
+import shareCard from '../../assets/share-card.png'
+import { SHARE_PATH, buildShareCard } from '../../utils/share'
 import { parseMarkdown } from '../../utils/markdown'
 import { decodeArtifactChunks, ResultsPayload } from '../../utils/results'
 import { resultsStore } from '../../services/resultsStore'
@@ -258,17 +260,13 @@ export default function ChatPage() {
     if (activeTaskIds().length > 0) startPolling()
   })
 
-  // 分享：只做转发卡片，path 指向首页。不做分享特定会话——会话有归属校验，
-  // 转发出去对方只会看到「会话不存在」。
-  useShareAppMessage(() => ({
-    title: sessionTitle ? `CopiioAI：${sessionTitle}` : 'CopiioAI 专利助手',
-    path: '/pages/chat/index',
-  }))
+  // 分享：只做转发卡片，path 指向首页，标题与配图固定为品牌。
+  // 不做分享特定会话——会话有归属校验，转发出去对方只会看到「会话不存在」；
+  // 也不能把 sessionTitle 写进标题——那是用户首问原文，会随卡片进群聊/朋友圈。
+  // 详见 docs/superpowers/specs/2026-09-15-weapp-landing-share-design.md
+  useShareAppMessage(() => ({ ...buildShareCard(shareCard), path: SHARE_PATH }))
 
-  useShareTimeline(() => ({
-    title: sessionTitle ? `CopiioAI：${sessionTitle}` : 'CopiioAI 专利助手',
-    query: '',
-  }))
+  useShareTimeline(() => ({ ...buildShareCard(shareCard), query: '' }))
 
   useEffect(() => {
     Taro.showShareMenu({
