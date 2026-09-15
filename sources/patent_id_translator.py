@@ -259,7 +259,7 @@ def _decide(candidate: dict | None) -> dict:
     if country == "CN":
         return {
             "verdict": "resolvable", "evidence": "local",
-            "reason": candidate.get("reason") or "中国号码可查佰腾。",
+            "reason": candidate.get("reason") or "中国号码可直接查询。",
             "confidence": conf,
             "uspto_resolvable": False, "needs_us_reverse": False,
             "lookups": lookups,

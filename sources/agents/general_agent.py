@@ -29,6 +29,7 @@ from sources.tool_result_filter import (
 )
 from sources.result_export import build_result_artifacts
 from sources.agents.react_loop import ReActLoop, make_event_emitter, make_llm_call
+from sources.agents.patent_id_records import extract_patent_id_records
 from sources.agents.react_tools import (
     CPC_EXPANSION_ENABLED,
     build_tool_set,
@@ -228,23 +229,86 @@ def _splice_anchor_block(conversation_block, anchor_block) -> str:
     return conversation_block or ""
 
 
-def _read_recent_patent_ids(user_id) -> list:
-    """Read the user's recent patent IDs from Redis (written after every
-    artifact generation, 1h TTL — 需求 2 跨会话记忆).  Failure degrades
-    silently to empty."""
+def _read_recent_patent_records(user_id) -> list:
+    """Read the user's recent patent-ID **records** from Redis.
+
+    Records carry the owning source and that source's native key
+    (需求#29), so a later turn can fetch a number directly instead of
+    re-deriving it through a free-text search.  Tolerates the v1
+    list-of-strings shape — during a rolling restart the old value may
+    still be in Redis.  Failure degrades silently to empty.
+    """
     if not user_id:
         return []
     try:
+        from sources.agents.patent_id_records import decode_records
         r = get_redis_connection()
         stored = r.get(f"{_CONV_PATENT_IDS_KEY_PREFIX}:{user_id}:patent_ids")
-        if not stored:
-            return []
-        ids = json.loads(stored)
-        if not isinstance(ids, list):
-            return []
-        return [str(pid).strip() for pid in ids if str(pid).strip()]
+        return decode_records(stored)
     except Exception:
         return []
+
+
+def _read_recent_patent_ids(user_id) -> list:
+    """Flat-string view of :func:`_read_recent_patent_records` — the shape
+    the system-prompt injection consumes (written after every artifact
+    generation, 1h TTL — 需求 2 跨会话记忆)."""
+    return [rec["id"] for rec in _read_recent_patent_records(user_id)]
+
+
+# 指代词分类（需求#29）：用户用这些词回指上一轮结果时，号码本身不在
+# 当前提问里。这是**指代层面**的词表，与任何具体提问的领域词汇无关。
+_PRIOR_REF_ZH = ("这些", "这个专利", "这几个", "这批", "上述", "前面",
+                 "上面", "刚才", "前述", "它们")
+
+# 英文必须按**词边界**匹配：子串匹配会把 theme / themes / theming 里的
+# "them"、以及 "they" 的任意嵌合当成指代词，从而给普通语义提问注入上一轮
+# 的号码。中文无词边界概念，仍按子串匹配。
+_PRIOR_REF_EN_RE = re.compile(
+    r"\b(?:these|those|them|they|the above|the results|just found)\b",
+    re.IGNORECASE)
+
+
+def _refers_to_prior_results(prompt: str) -> bool:
+    """提问是否在回指上一轮的检索结果。纯函数，永不抛。
+
+    仅在提问里**没有**号码时才会被使用 —— 它是"要不要从历史记录补水
+    候选"的闸门，不是检索意图分类器。
+    """
+    text = str(prompt or "").strip().lower()
+    if not text:
+        return False
+    if any(m in text for m in _PRIOR_REF_ZH):
+        return True
+    return bool(_PRIOR_REF_EN_RE.search(text))
+
+
+def _record_to_candidate(record: dict, lang: str = "zh") -> dict:
+    """持久化记录 → 号码解析器的候选形状。
+
+    有原生键时**用原生键作首选 lookup**，这样回读走的是按键寻址而不是
+    自由文本检索（需求#29 的正面修法）。
+    """
+    pid = str(record.get("id") or "").strip()
+    native = str(record.get("native_key") or "").strip()
+    native_kind = str(record.get("native_key_kind") or "")
+    return {
+        "raw": pid,
+        "display": pid,
+        "country": "CN" if pid.upper().startswith("CN") else "US",
+        "id_type": ("application"
+                    if native_kind == "applicationNumberText"
+                    else "publication"),
+        "confidence": "medium",
+        # 语言取自本轮回答语言，不从号码内容猜 —— 号码里没有中文，
+        # 按内容猜会把英文说明发给中文用户。
+        "reason": ("from an earlier result in this session"
+                   if str(lang) == "en"
+                   else "来自本会话此前的检索结果"),
+        "lookups": [native] if native else [pid],
+        "native_key": native,
+        "native_key_kind": native_kind,
+    }
 
 
 def _summary_system_prompt(ranked: bool, lang: str) -> str:
@@ -289,21 +353,22 @@ def _store_conversation_patent_ids(agent, items_for_export: list) -> list | None
     also emit them to the frontend via SSE.
     """
     user_id = getattr(agent, '_last_user_id', None)
-    patent_ids = _extract_patent_ids_from_items(items_for_export)
-    if not patent_ids:
+    records = extract_patent_id_records(items_for_export)
+    if not records:
         return None
+    patent_ids = [rec["id"] for rec in records]
     if user_id:
         try:
-            from sources.knowledge.knowledge import get_redis_connection
-            from sources.logger import Logger
+            from sources.agents.patent_id_records import encode_records
             _store_logger = Logger("general_agent.log")
             r = get_redis_connection()
             key = f"{_CONV_PATENT_IDS_KEY_PREFIX}:{user_id}:patent_ids"
-            r.set(key, json.dumps(patent_ids, ensure_ascii=False),
-                  ex=_CONV_PATENT_IDS_TTL)
+            r.set(key, encode_records(records), ex=_CONV_PATENT_IDS_TTL)
             _store_logger.info(
                 f"stored_conversation_patent_ids — "
-                f"count={len(patent_ids)}, key={key}"
+                f"count={len(patent_ids)}, "
+                f"retrievable={sum(1 for r_ in records if r_['retrievable'])}, "
+                f"key={key}"
             )
         except Exception:
             pass  # Non-critical: long task will fall back to text extraction
@@ -315,17 +380,30 @@ async def _emit_patent_ids_to_frontend(agent, items_for_export, callback_handler
 
     The frontend stores these IDs in the assistant message (not displayed),
     so follow-up conversation_refs queries include them in conversation_history.
+
+    ``patent_ids`` stays a flat list of strings — that is the frontend
+    contract (useChatStream does ``Array.isArray`` and the history round-trip
+    re-sends it verbatim).  The retrievability annotation rides alongside in
+    ``patent_id_meta``, which today's frontend ignores.  The native resolver
+    key is deliberately NOT sent — it is an internal detail.
     """
-    patent_ids = _extract_patent_ids_from_items(items_for_export)
-    if not patent_ids:
+    records = extract_patent_id_records(items_for_export)
+    if not records:
         return
     cb_queue = getattr(callback_handler, 'queue', None)
     if cb_queue is None:
         agent.logger.warning("_emit_patent_ids_to_frontend: callback_handler has no queue")
         return
+    patent_ids = [rec["id"] for rec in records]
     await cb_queue.put({
         'type': 'patent_ids',
         'patent_ids': patent_ids,
+        'patent_id_meta': [
+            {'id': rec['id'], 'source': rec['source'],
+             'retrievable': rec['retrievable'],
+             'native_key_kind': rec['native_key_kind']}
+            for rec in records
+        ],
     })
     agent.logger.info(
         f"_emit_patent_ids_to_frontend — count={len(patent_ids)}, "
@@ -334,46 +412,17 @@ async def _emit_patent_ids_to_frontend(agent, items_for_export, callback_handler
 
 
 def _extract_patent_ids_from_items(items: list) -> list:
-    """Extract patent application numbers from raw search result items.
+    """Flat patent-ID list for raw search result items.
 
     Handles both USPTO (8-digit applicationNumberText) and CNIPA
-    (YYYY + 8+ digits in various fields) formats.
+    (YYYY + 8+ digits in various fields) formats.  Thin projection of
+    :func:`~sources.agents.patent_id_records.extract_patent_id_records`,
+    which additionally carries each number's source and native key
+    (需求#29); this wrapper preserves the historical flat-list contract
+    that the SSE payload and every existing consumer rely on.
     """
-    patent_ids = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        # USPTO: applicationNumberText is the primary field
-        app_num = str(item.get('applicationNumberText', '')).strip()
-        if app_num and app_num.isdigit() and 7 <= len(app_num) <= 12:
-            patent_ids.append(app_num)
-            continue
-        # CNIPA / other sources: check common patent ID field names —
-        # Baiten flat candidates carry patent_id (publication number) /
-        # patent_number / app_num, none of which matched before, so CN
-        # patents never reached the conversation_refs channel.
-        for key in ('patent_id', 'patent_number', 'app_num',
-                    'applicationNumber', 'patentApplicationNumber',
-                    'apc', 'patentNumber', '专利申请号'):
-            val = str(item.get(key, '')).strip()
-            if val and len(val) >= 8:
-                patent_ids.append(val)
-                break
-        # Check nested applicationMetaData
-        meta = item.get('applicationMetaData')
-        if isinstance(meta, dict):
-            pn = str(meta.get('patentNumber', '')).strip()
-            if pn and pn.isdigit() and len(pn) >= 8 and pn not in patent_ids:
-                # This is a granted patent number — also check for app number
-                pass  # applicationNumberText already handled above
-    # Deduplicate preserving order
-    seen = set()
-    result = []
-    for pid in patent_ids:
-        if pid not in seen:
-            seen.add(pid)
-            result.append(pid)
-    return result
+    from sources.agents.patent_id_records import extract_patent_id_records
+    return [rec["id"] for rec in extract_patent_id_records(items)]
 
 
 def _infer_result_source(tool_info) -> str:
@@ -1176,6 +1225,46 @@ Whenever a search tool was called and returned candidates, structure the final a
 3. Close by telling the user the full results are available in the results panel (JSON/CSV/Excel download).
 
 This structure overrides other formatting preferences; only when the search returned no candidates should you honestly say no matching results were found.
+
+## Solution Assessment Format (MANDATORY — when the user brings their own solution)
+
+When the user presents a technical solution of their own (pasted text, a title,
+a feature list) and asks an evaluation-style question — whether it can be
+granted, what already covers it, how to implement it, which approaches exist —
+do NOT answer with a bare result list. Deliver a structured assessment, built
+ONLY from the records actually returned in this conversation:
+
+1. **Closest prior art** — up to 3 identifiers from the returned records, each
+   with one sentence naming the part of the user's solution it already covers.
+2. **Feature-by-feature comparison** — for each feature the user stated: covered
+   / partially covered / not seen in the returned records. Never assert that a
+   feature does not exist in the field; only that this round's records did not
+   show it.
+3. **Risk and room** — where the overlap is strongest, and where the returned
+   records leave space. Ground both in the comparison above, not in outside
+   knowledge.
+4. **Suggested directions** — concrete, checkable next steps for the user's
+   solution.
+5. **Reproducible queries** — when the search observation lists the query
+   strings run this round, repeat them verbatim in a copyable code block, one
+   line per source, with a one-line note on the field prefixes used (title /
+   abstract / claims).
+
+When the question instead asks which approaches or methods exist, group the
+returned records into the approach families they represent — naming each family
+from the records' own wording, never from a fixed list — and give one
+representative identifier per family before the overall summary.
+
+## Record-Fact Boundary (MANDATORY — applies unconditionally)
+
+Report ONLY what the returned records state. When a record lists a status,
+event or outcome WITHOUT a cause, never supply that cause from general domain
+knowledge — doing so turns an inference into a stated fact the data does not
+support. If the reason IS recorded, quote it as recorded; if it is not, say so
+plainly (记录未载明 / not stated in the record). The same applies to dates,
+outcome categories and legal consequences: describe the category the record
+gives, and do not attach a specific reason, trigger or severity that the
+record does not carry.
 
 ## Deep Analysis Task Boundary
 
@@ -2015,6 +2104,12 @@ Begin your response now:
         self._number_candidates = []  # parsed patent identifiers, per request
         self._number_cross_done = False  # cross-source zero-hit check fired
         self._number_cross_used = 0  # number-resolution gateway-call budget
+        self._legal_status_used = 0  # 需求#18 legal-status lookup budget
+        # lawInfos 每请求缓存（2026-09-13）：同号不重查。**必须在这里重置**
+        # —— agent 池复用会让缓存跨请求泄漏（本项目已踩过同类坑）。
+        self._law_flzt_cache = {}
+        self._law_fswx_cache = {}
+        self._law_budget_used = 0  # 每请求 lawInfos 配额预算
         self._search_interpretation = None  # architecture-level interpretation, per request
         self._request_started = time.monotonic()  # whole-request timer (agent_elapsed origin)
         self._grounded_done = False  # post-retrieval grounded synthesis, once per request
@@ -2034,6 +2129,11 @@ Begin your response now:
         self._patent_auto_used = {"us": 0, "cn": 0}  # built-in patent tool auto-ladder, per source per request
         self._recall_done = False  # recall expansion (family/CPC) fired, per request
         self._tried_queries = []  # queries already sent to the search tool, per request
+        # 轮内检索结果缓存（2026-09-15, 需求#27）：同一请求里重发的同一条 CN
+        # 检索式直接复用（生产实证：同一轮的两组同义词轮询把完全相同的
+        # ti/ab 检索式重发了一遍）。**必须在这里重置** —— agent 池复用会让
+        # 缓存跨请求泄漏（本项目已踩过同类坑）。
+        self._search_result_cache = {}
         self._cpc_hints = None  # matched CPC codes for the question, per request
         self.knowledgeTool = (None, None)  # (knowledge_item, tool_info) — selected inside the loop
         self.tools = []
@@ -2094,6 +2194,31 @@ Begin your response now:
                                 "confidence")}
                      for c in self._number_candidates],
                     ensure_ascii=False))
+        else:
+            # 需求#29: 提问本身没带号码，但用指代词回指了上一轮结果
+            # （"这些专利什么状态"）—— 从持久化记录补水候选，使其能按
+            # 来源原生键直接取用。仅在有指代意图时触发，上限 3 条。
+            try:
+                # 先跑免费的纯字符串闸门，再读 Redis —— 绝大多数提问都
+                # 不带指代意图，不该为此付一次 I/O。
+                _records = (_read_recent_patent_records(
+                                getattr(self, "_last_user_id", None))
+                            if _refers_to_prior_results(prompt) else [])
+                if _records:
+                    self._number_candidates = [
+                        _record_to_candidate(r, getattr(self, "_lang", "zh"))
+                        for r in _records[:3]]
+                    self.logger.info(
+                        "number_candidates hydrated from history — "
+                        + json.dumps(
+                            [c.get("display")
+                             for c in self._number_candidates],
+                            ensure_ascii=False)
+                        + " native_keys="
+                        + str([bool(c.get("native_key"))
+                               for c in self._number_candidates]))
+            except Exception:
+                pass
 
         if callback_handler:
             await _emit_status(callback_handler,
@@ -2274,7 +2399,8 @@ Begin your response now:
 
         registry, bind_tools = await build_tool_set(
             self, user_id, prompt, push_filter,
-            patent_source=getattr(self, "_patent_tool_source", "auto"))
+            patent_source=getattr(self, "_patent_tool_source", "auto"),
+            conversation_history=conversation_history)
         if not allow_long_task:
             # Low-confidence long-task refusal (core.py chat_fallback):
             # strip every long-task entry so the pre-route matcher below
@@ -2300,7 +2426,8 @@ Begin your response now:
         ]
         if long_task_entries:
             matched = await _match_long_task_intent(
-                self, prompt, long_task_entries, lang)
+                self, prompt, long_task_entries, lang,
+                conv_history=conversation_history)
             if matched is not None:
                 self.logger.info(
                     "Long task intent routed by query match — returning intent")

@@ -899,6 +899,29 @@ async def _run_pipeline(
                     f"pending={len(pending)}"
                 )
 
+    # ==== 无分析目标快速失败 (需求#1, 2026-09-15) ====
+    # 走到这里仍无任何分析目标（无号、无文件、无正文）——这在路由资格门
+    # 上线后不应发生（react_tools._is_long_task_eligible 已在预路由/工具
+    # 绑定/执行三处拦截）。此前该形态会被 scene 检索空转数分钟后以
+    # no_patents_found 收场（生产 2026-08：9 分 17 秒）；在这里变成秒级、
+    # 语义明确的失败。放在 Redis 兜底之后，不误伤 conversation_refs 恢复。
+    if (not patent_ids and not is_file_upload_mode
+            and not is_direct_id_mode and not patent_texts):
+        _fail_msg = (
+            "未识别到专利号或上传文件，无法执行专利分析。请提供专利号、"
+            "上传专利文件，或直接描述检索需求（将由对话助手处理）。"
+            if batch_lang != 'en' else
+            "No patent number or uploaded file found — cannot run a patent "
+            "analysis. Provide a patent number, upload a patent document, "
+            "or describe your search in chat instead."
+        )
+        _pipeline_logger.warning(
+            f"[task={task_id}] no_analysis_target — refusing to spin the "
+            f"scene search: patent_ids=0, files=0, texts=0")
+        set_task_failed(task_id, _fail_msg)
+        return {"status": "failed", "task_id": task_id,
+                "error": "no_analysis_target"}
+
     # ==== Phase 0: Search patents via scene tools (if no patent_ids provided) ====
     if not patent_ids and scene_candidates:
         from sources.long_task.scene_tools import (
@@ -6144,29 +6167,23 @@ def _store_long_task_patent_ids(
     if not user_id or not table_rows:
         return
 
-    # Use the first column (typically '专利号' / 'patent_number') as the ID source.
-    id_column = columns[0] if columns else None
-    if not id_column:
-        return
-
-    patent_ids = []
-    for row in table_rows:
-        pid = str(row.get(id_column, '')).strip()
-        if pid and not row.get('_failed'):
-            patent_ids.append(pid)
-
-    if not patent_ids:
+    # The first column is typically '专利号' / 'patent_number'; the shared
+    # helper owns the row→record mapping so this writer and the general-agent
+    # writer can never drift into different shapes for the same Redis key.
+    from sources.agents.patent_id_records import (
+        encode_records, records_from_long_task_rows)
+    records = records_from_long_task_rows(table_rows, columns)
+    if not records:
         return
 
     try:
         from sources.knowledge.knowledge import get_redis_connection
         r = get_redis_connection()
         key = f"lt:conv:{user_id}:patent_ids"
-        r.set(key, json.dumps(patent_ids, ensure_ascii=False),
-              ex=_CONV_PATENT_IDS_TTL)
+        r.set(key, encode_records(records), ex=_CONV_PATENT_IDS_TTL)
         _pipeline_logger.info(
             f"[task={task_id}] stored_patent_ids_for_followup — "
-            f"count={len(patent_ids)}, key={key}"
+            f"count={len(records)}, key={key}"
         )
     except Exception as e:
         _pipeline_logger.warning(

@@ -503,6 +503,43 @@ class TestPathTemplateSubstitution(unittest.TestCase):
             "18%2F893954/documents",
         )
 
+    def _result(self, tool, params):
+        from unittest.mock import patch
+        from sources.dynamic_tool_params import execute_backend_tool_request
+        with patch("sources.dynamic_tool_params.outbound_http.request",
+                   return_value=self._resp()) as mock_req:
+            result = execute_backend_tool_request(tool, params)
+        return result, mock_req
+
+    def _docs_tool(self):
+        return self._tool(
+            '{"method":"GET","query":{},"body":{}}',
+            "https://api.uspto.gov/api/v1/patent/applications/"
+            "{applicationNumberText}/documents",
+        )
+
+    def test_missing_value_refuses_to_send_literal_template(self):
+        # 2026-09-14 生产：LLM 没给申请号，模板字面量被原样发出 → USPTO 403。
+        # 现在必须在出站前拦下并回一条点名缺参的可读错误。
+        result, mock_req = self._result(self._docs_tool(), {"query": {}})
+        self.assertFalse(mock_req.called, "模板未替换时不得出站")
+        self.assertIn("applicationNumberText", result["data"])
+        self.assertIsNone(result["raw_items"])
+
+    def test_placeholder_echoed_as_value_is_not_sent_literally(self):
+        # LLM 把模板字面量当参数值回传的形态。
+        result, mock_req = self._result(
+            self._docs_tool(),
+            {"query": {"applicationNumberText": "{applicationNumberText}"}})
+        self.assertFalse(mock_req.called)
+        self.assertIn("applicationNumberText", result["data"])
+
+    def test_concrete_value_still_goes_out(self):
+        result, mock_req = self._result(
+            self._docs_tool(), {"query": {"applicationNumberText": "61156905"}})
+        self.assertTrue(mock_req.called, "带真实号时必须照常出站")
+        self.assertIn("61156905", mock_req.call_args[0][1])
+
     def test_dict_path_params_feed_substitution_without_append(self):
         # The LLM sometimes passes path as an object
         # ({"path":{"applicationNumber":"18893954"}}) instead of a literal
@@ -543,18 +580,18 @@ class TestPathTemplateSubstitution(unittest.TestCase):
         )
 
     def test_unresolved_template_left_untouched(self):
-        # No matching param value — the URL must not crash or be mangled.
-        tool = self._tool(
-            '{"method":"GET","query":{},"body":{}}',
-            "https://api.uspto.gov/api/v1/patent/applications/"
-            "{applicationNumberText}/documents",
-        )
-        url = self._sent_url(tool, {"query": {"q": "anything"}})
+        # No matching param value — the substitution itself must not crash or
+        # mangle the URL (pure-function contract, unchanged)…
+        from sources.dynamic_tool_params import _substitute_url_placeholders
+        url = ("https://api.uspto.gov/api/v1/patent/applications/"
+               "{applicationNumberText}/documents")
         self.assertEqual(
-            url,
-            "https://api.uspto.gov/api/v1/patent/applications/"
-            "{applicationNumberText}/documents",
-        )
+            _substitute_url_placeholders(url, [{"q": "anything"}]), url)
+        # …and 2026-09-15 起出站闸门把它拦下：宁可当场报缺参，也不发字面量。
+        result, mock_req = self._result(self._docs_tool(),
+                                        {"query": {"q": "anything"}})
+        self.assertFalse(mock_req.called)
+        self.assertIn("applicationNumberText", result["data"])
 
 
 class TestQueryObjectEnvelopeCollision(unittest.TestCase):

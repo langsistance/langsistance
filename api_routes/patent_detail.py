@@ -23,11 +23,15 @@ from html import unescape
 from fastapi import APIRouter, HTTPException, Request
 
 from sources.logger import Logger
+from sources.patent_source_detect import is_cn_source
 from sources.user.passport import verify_firebase_token
 
 logger = Logger("backend.log")
 
-VALID_SOURCES = {"uspto", "google_patents", "baiten"}
+# "cn" 是产出侧的当前取值；"baiten" 保留以兼容前端**已持久化**的结果行与
+# 旧客户端 —— 剔除它会让 CN 行被 400 拒绝或路由到 US 端点
+# （2026-08-29 事故：/patent/uspto/CN213905456U/spec）。
+VALID_SOURCES = {"uspto", "google_patents", "cn", "baiten"}
 
 _CLAIM_START_PATTERN = re.compile(r"(?m)^\s*(\d{1,3})\.\s*")
 
@@ -614,7 +618,7 @@ async def _fetch_spec_pdf(source: str, patent_id: str,
     the original PDF in an inline viewer without exposing the upstream
     API key — the same mechanism patent document rows already use.
     """
-    if source == "baiten" or _is_cn_patent_id(patent_id):
+    if is_cn_source(source) or _is_cn_patent_id(patent_id):
         return await _fetch_baiten_spec(patent_id, pub_date)
     _reason = _uspto_guidance_reason(patent_id)
     if _reason:
@@ -669,7 +673,7 @@ async def _fetch_claims(source: str, patent_id: str) -> dict:
        frontend show the original PDF in the inline viewer (scanned
        documents never get OCR'd).
     """
-    if source == "baiten" or _is_cn_patent_id(patent_id):
+    if is_cn_source(source) or _is_cn_patent_id(patent_id):
         return await _fetch_baiten_claims(patent_id)
     _reason = _uspto_guidance_reason(patent_id)
     if _reason:

@@ -330,3 +330,79 @@ class TestLLMCallStreamSemantics(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(reasoning, "")
         self.assertEqual(rec.tokens, [])
+
+
+class TestToolMessagePairing(unittest.TestCase):
+    """2026-09-15 (需求#32)：assistant 的每个 tool_call 都必须有配对的 tool
+    结果，否则 OpenAI 兼容端点整轮 400 "No tool output found for function
+    call …"（2026-09-14 生产：整轮中断，用户只看到"连接中断"）。
+    sanitize_tool_message_pairs 在 llm_call 出站前补齐/清理 —— 任何上游路径
+    都不能把残缺历史送到 provider。
+    """
+
+    def test_placeholder_added_for_missing_output(self):
+        from sources.agents.react_loop import sanitize_tool_message_pairs
+        messages = [
+            {"role": "user", "content": "?"},
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "call_X", "name": "fetch", "args": {}}]},
+        ]
+        out = sanitize_tool_message_pairs(messages)
+        self.assertEqual(len(out), 3)
+        self.assertEqual(out[2]["role"], "tool")
+        self.assertEqual(out[2]["tool_call_id"], "call_X")
+        self.assertEqual(out[2]["name"], "fetch")
+        self.assertIn("missing", out[2]["content"])
+
+    def test_second_call_of_a_round_filled_too(self):
+        from sources.agents.react_loop import sanitize_tool_message_pairs
+        messages = [
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "call_1", "name": "a", "args": {}},
+                            {"id": "call_2", "name": "b", "args": {}}]},
+            {"role": "tool", "tool_call_id": "call_1", "name": "a",
+             "content": "ok"},
+        ]
+        out = sanitize_tool_message_pairs(messages)
+        self.assertEqual([m.get("tool_call_id") for m in out
+                          if m["role"] == "tool"], ["call_1", "call_2"])
+
+    def test_paired_history_untouched_and_orphan_dropped(self):
+        from sources.agents.react_loop import sanitize_tool_message_pairs
+        paired = [
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "c1", "name": "t", "args": {}}]},
+            {"role": "tool", "tool_call_id": "c1", "name": "t", "content": "ok"},
+        ]
+        self.assertEqual(sanitize_tool_message_pairs(paired), paired)
+        orphan = [{"role": "tool", "tool_call_id": "ghost", "content": "x"}]
+        self.assertEqual(sanitize_tool_message_pairs(orphan), [])
+
+    def test_llm_call_sends_repaired_history_to_provider(self):
+        # 落点验证：make_llm_call 出站前确实跑了 sanitizer。
+        seen = {}
+
+        class _RecordingLLM:
+            def bind_tools(self, tools):
+                return self
+
+            async def astream(self, messages):
+                seen["messages"] = list(messages)
+                yield AIMessageChunk(content="ok")
+
+        class _Provider:
+            def _get_langchain_llm(self, streaming=True):
+                return _RecordingLLM()
+
+        llm_call = make_llm_call(_Provider())
+        messages = [
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "call_X", "name": "t", "args": {}}]},
+        ]
+        text, calls, _reasoning = asyncio.run(llm_call(messages, []))
+        roles = [type(m).__name__ for m in seen["messages"]]
+        self.assertIn("ToolMessage", roles)
+        self.assertEqual(
+            seen["messages"][-1].tool_call_id, "call_X",
+            "provider 必须看到与 tool_call 配对的 ToolMessage")
+        self.assertEqual(text, "ok")

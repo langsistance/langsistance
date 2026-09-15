@@ -8,11 +8,14 @@
 - _read_recent_patent_ids: Redis 最近专利号注入 + 静默降级
 - get_or_create_agent: agent 池按 user 键控 (同 user 复用、异 user 隔离、LRU 驱逐)
 """
+import asyncio
+import json
 import os
 import sys
 import unittest
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # api_routes.core 依赖 firebase_admin (未安装) 与 REDIS_* 环境变量
 # (sources/user/passport.py 模块级 get_redis_connection())。
@@ -26,9 +29,14 @@ from sources.agents.general_agent import (  # noqa: E402
     RELEVANT_TOP_N,
     _build_previous_conversation_block,
     _conversation_history_turns,
+    _emit_patent_ids_to_frontend,
     _is_history_noise,
     _read_recent_patent_ids,
+    _read_recent_patent_records,
+    _record_to_candidate,
+    _refers_to_prior_results,
     _splice_anchor_block,
+    _store_conversation_patent_ids,
 )
 from sources.long_task.session_anchor import build_anchor_block  # noqa: E402
 from api_routes.core import get_or_create_agent  # noqa: E402
@@ -161,6 +169,197 @@ class TestReadRecentPatentIds(unittest.TestCase):
         mock_redis.return_value.get.return_value = "not-json"
         self.assertEqual(_read_recent_patent_ids("u1"), [])
 
+    @patch("sources.agents.general_agent.get_redis_connection")
+    def test_reads_v2_records_as_flat_strings(self, mock_redis):
+        # 注入系统提示的用法必须保持「字符串列表」，不受 v2 记录化影响。
+        mock_redis.return_value.get.return_value = json.dumps(
+            {"v": 2, "ids": [{"id": "CN116570413A", "source": "baiten",
+                              "native_key": "CN202310123456.7",
+                              "native_key_kind": "app_num",
+                              "retrievable": True}]})
+        self.assertEqual(_read_recent_patent_ids("u1"), ["CN116570413A"])
+
+
+class TestReadRecentPatentRecords(unittest.TestCase):
+    """需求#29: 回读需要来源与原键，不能只有号码字符串。"""
+
+    @patch("sources.agents.general_agent.get_redis_connection")
+    def test_reads_v2_records_with_native_key(self, mock_redis):
+        mock_redis.return_value.get.return_value = json.dumps(
+            {"v": 2, "ids": [{"id": "CN116570413A", "source": "baiten",
+                              "native_key": "CN202310123456.7",
+                              "native_key_kind": "app_num",
+                              "retrievable": True}]})
+        recs = _read_recent_patent_records("u1")
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["native_key"], "CN202310123456.7")
+        self.assertTrue(recs[0]["retrievable"])
+
+    @patch("sources.agents.general_agent.get_redis_connection")
+    def test_reads_v1_legacy_as_unretrievable_records(self, mock_redis):
+        # 部署顺序安全：Redis 里可能还是旧格式。
+        mock_redis.return_value.get.return_value = '["8388852"]'
+        recs = _read_recent_patent_records("u1")
+        self.assertEqual([r["id"] for r in recs], ["8388852"])
+        self.assertFalse(recs[0]["retrievable"])
+
+    @patch("sources.agents.general_agent.get_redis_connection")
+    def test_silent_degrade_on_redis_error(self, mock_redis):
+        mock_redis.side_effect = RuntimeError("redis down")
+        self.assertEqual(_read_recent_patent_records("u1"), [])
+
+    def test_no_user_id_returns_empty(self):
+        self.assertEqual(_read_recent_patent_records(None), [])
+        self.assertEqual(_read_recent_patent_records(""), [])
+
+
+class TestStoreConversationPatentIds(unittest.TestCase):
+    """需求#29: 落盘必须带来源与原生键 —— 否则回读只能从头重查。"""
+
+    _ITEMS = [{"source": "baiten", "patent_id": "CN116570413A",
+               "patent_number": "CN116570413A",
+               "app_num": "CN202310123456.7"}]
+
+    @patch("sources.agents.general_agent.get_redis_connection")
+    def test_writes_versioned_records(self, mock_redis):
+        agent = SimpleNamespace(_last_user_id="u1")
+        out = _store_conversation_patent_ids(agent, self._ITEMS)
+        # 平铺契约不变（前端 SSE 仍收到字符串列表）
+        self.assertEqual(out, ["CN116570413A"])
+        key, blob = mock_redis.return_value.set.call_args[0][:2]
+        self.assertIn("u1", key)
+        payload = json.loads(blob)
+        self.assertEqual(payload["v"], 2)
+        self.assertEqual(payload["ids"][0]["id"], "CN116570413A")
+        self.assertEqual(payload["ids"][0]["native_key"],
+                         "CN202310123456.7")
+        self.assertTrue(payload["ids"][0]["retrievable"])
+
+    @patch("sources.agents.general_agent.get_redis_connection")
+    def test_returns_none_when_nothing_extractable(self, mock_redis):
+        agent = SimpleNamespace(_last_user_id="u1")
+        self.assertIsNone(
+            _store_conversation_patent_ids(agent, [{"title": "x"}]))
+        mock_redis.return_value.set.assert_not_called()
+
+
+class TestEmitPatentIdMeta(unittest.TestCase):
+    """需求#29: 下发时附带可取件性标注 —— 但不破坏前端契约。"""
+
+    _ITEMS = [
+        {"source": "baiten", "patent_id": "CN116570413A",
+         "app_num": "CN202310123456.7"},
+        {"source": "baiten", "patent_id": "CN118453362A"},
+    ]
+
+    def _emit(self, items):
+        agent = SimpleNamespace(logger=MagicMock())
+        queue = MagicMock()
+        queue.put = AsyncMock()
+        cb = SimpleNamespace(queue=queue)
+        asyncio.run(_emit_patent_ids_to_frontend(agent, items, cb))
+        return queue.put.call_args[0][0]
+
+    def test_flat_patent_ids_stay_flat_strings(self):
+        event = self._emit(self._ITEMS)
+        self.assertEqual(event["type"], "patent_ids")
+        self.assertEqual(event["patent_ids"],
+                         ["CN116570413A", "CN118453362A"])
+        for pid in event["patent_ids"]:
+            self.assertIsInstance(pid, str)
+
+    def test_meta_reports_retrievability(self):
+        event = self._emit(self._ITEMS)
+        meta = {m["id"]: m for m in event["patent_id_meta"]}
+        self.assertTrue(meta["CN116570413A"]["retrievable"])
+        self.assertFalse(meta["CN118453362A"]["retrievable"])
+
+    def test_native_key_never_leaves_the_backend(self):
+        event = self._emit(self._ITEMS)
+        for m in event["patent_id_meta"]:
+            self.assertNotIn("native_key", m)
+
+    def test_no_event_when_nothing_extractable(self):
+        agent = SimpleNamespace(logger=MagicMock())
+        queue = MagicMock()
+        queue.put = AsyncMock()
+        asyncio.run(_emit_patent_ids_to_frontend(
+            agent, [{"title": "x"}], SimpleNamespace(queue=queue)))
+        queue.put.assert_not_awaited()
+
+
+class TestReferentialIntent(unittest.TestCase):
+    """需求#29: 用户用指代词引用上一轮结果时，号码不在当前提问里 ——
+    必须能从持久化记录补水，否则"这些专利什么状态"无从解析。
+
+    指代检测必须是**通用指代词分类**，不得匹配任何具体提问的词汇。"""
+
+    def test_chinese_referential_phrases(self):
+        for q in ["这些专利的法律状态如何", "上面那几个号现在什么状态",
+                  "刚才那两件的复审情况", "前述专利有没有被驳回",
+                  "它们授权了吗", "这批结果的申请号是什么"]:
+            self.assertTrue(_refers_to_prior_results(q), q)
+
+    def test_english_referential_phrases(self):
+        for q in ["what is the legal status of these patents",
+                  "check those applications", "are the above granted",
+                  "are they still in force",
+                  "show me the results you just found"]:
+            self.assertTrue(_refers_to_prior_results(q), q)
+
+    def test_plain_queries_are_not_referential(self):
+        for q in ["帮我找工业机器人专利", "检索利勃海尔的相关专利",
+                  "find patents about LED drivers",
+                  "CN116570413A 的法律状态"]:
+            self.assertFalse(_refers_to_prior_results(q), q)
+
+    def test_english_tokens_do_not_match_inside_other_words(self):
+        # 子串匹配会把 theme/themes/theming 里的 "them" 当成指代词 ——
+        # 误判会给普通语义提问注入上一轮的号码，必须以词边界匹配。
+        for q in ["find patents about theme park technology",
+                  "show me theming patents",
+                  "themes in industrial design patents",
+                  "thematic mapping"]:
+            self.assertFalse(_refers_to_prior_results(q), q)
+
+    def test_empty_prompt(self):
+        self.assertFalse(_refers_to_prior_results(""))
+        self.assertFalse(_refers_to_prior_results(None))
+
+
+class TestRecordToCandidate(unittest.TestCase):
+    """持久化记录 → 解析器候选形状，必须带上原生键供直查使用。"""
+
+    def test_native_key_becomes_the_lookup(self):
+        rec = {"id": "CN116570413A", "source": "baiten",
+               "native_key": "CN202310123456.7", "native_key_kind": "app_num",
+               "retrievable": True}
+        cand = _record_to_candidate(rec)
+        self.assertEqual(cand["display"], "CN116570413A")
+        self.assertEqual(cand["country"], "CN")
+        self.assertEqual(cand["native_key"], "CN202310123456.7")
+        self.assertEqual(cand["native_key_kind"], "app_num")
+        self.assertEqual(cand["lookups"][0], "CN202310123456.7")
+
+    def test_without_native_key_falls_back_to_display(self):
+        rec = {"id": "CN118453362A", "source": "", "native_key": "",
+               "native_key_kind": "", "retrievable": False}
+        cand = _record_to_candidate(rec)
+        self.assertEqual(cand["lookups"], ["CN118453362A"])
+        self.assertEqual(cand["native_key_kind"], "")
+
+    def test_us_number_gets_us_country(self):
+        rec = {"id": "19511555", "source": "uspto", "native_key": "19511555",
+               "native_key_kind": "applicationNumberText", "retrievable": True}
+        self.assertEqual(_record_to_candidate(rec)["country"], "US")
+
+    def test_reason_follows_response_language(self):
+        # 号码本身不含中文，按号码内容猜语言会把英文理由发给中文用户。
+        rec = {"id": "CN116570413A", "source": "baiten", "native_key": "",
+               "native_key_kind": "", "retrievable": False}
+        self.assertIn("此前", _record_to_candidate(rec, lang="zh")["reason"])
+        self.assertIn("earlier", _record_to_candidate(rec, lang="en")["reason"])
+
 
 class TestAgentPoolUserKeyed(unittest.TestCase):
     """get_or_create_agent: 池按 user 键控 — 追问必命中同一实例。"""
@@ -275,6 +474,19 @@ class TestDeliveryFormatGuidance(unittest.TestCase):
         # 通用指令 — 不得固化任何测试提问词
         self.assertNotIn("干燥空气", guidance)
         self.assertNotIn("RGB", guidance)
+
+    def test_guidance_forbids_inferring_unstated_causes(self):
+        """记录里没写的成因，不得推断成事实。
+
+        2026-09-13 生产实证：数据里 timeline 只有「专利权的终止」，模型却
+        写成「专利权终止 | 因未缴年费失效」——把领域常识当成了记录内容。
+        """
+        guidance = self._agent()._loop_system_guidance()
+        self.assertIn("记录未载明", guidance)
+        self.assertIn("not stated in the record", guidance)
+        # 通用约束 —— 不得固化任何具体状态词
+        self.assertNotIn("未缴年费", guidance)
+        self.assertNotIn("干燥空气", guidance)
 
 
 class TestNotLoggedInPrompt(unittest.TestCase):

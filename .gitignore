@@ -218,4 +218,9 @@ out
 
 frontend/nextjs/.agents
 frontend/nextjs/.npm-cache
+
+# WeChat mini-program build output and local devtools state — source lives in frontend/weapp/src
+frontend/weapp/.swc/
+frontend/weapp/dist-test/
+frontend/weapp/project.private.config.json
 frontend/web-app/.npm-cache

@@ -1,13 +1,14 @@
 """Tests for the built-in dual/single-source patent search tool."""
 import asyncio
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from types import SimpleNamespace
 
 from sources.agents.react_tools import (
     BUILTIN_DEEP_ANALYSIS_TOOL_NAME,
     _us_citing_note,
+    REACT_CN_PAGES_PER_QUERY,
     REACT_PATENT_AUTO_LADDER_MAX,
     _auto_run_patent_ladder,
     _baiten_results_to_candidates,
@@ -20,8 +21,11 @@ from sources.agents.react_tools import (
     _rank_builtin_patent_pool,
     _resolve_patent_queries,
     _run_patent_search,
+    PATENT_LEGAL_STATUS_TOOL_NAME,
+    _builtin_deep_analysis_description,
     build_tool_set,
 )
+from sources.agents import react_tools
 from sources.patent_source_detect import (
     detect_patent_source_text,
     map_source_for_tool_route,
@@ -209,6 +213,369 @@ class TestEnrichBaitenLawStatus(unittest.TestCase):
         self.assertIn("复审/无效决定1条(最近2024-08-01)", digest)
 
 
+class TestLawLookupMemoization(unittest.TestCase):
+    """同一请求内、同一申请号的 FLZT 只查一次。
+
+    2026-09-13 生产日志实测：一次提问的 ~100 次 lawInfos 里有 40 次是
+    **完全重复**——自动补跑阶梯把同一条检索式又发了一遍，同一批 10 件
+    专利被重复查了两遍法律状态。缓存按**线调用**分开（FLZT / FSWX），
+    这样大列表没查过 FSWX 时，法律状态工具仍会按需补查，但不会重查
+    昂贵的 FLZT。
+    """
+
+    class _CountingClient:
+        def __init__(self, timeline=None, decisions=None):
+            self.timeline_calls = []
+            self.review_calls = []
+            self._timeline = timeline or []
+            self._decisions = decisions or []
+
+        async def query_legal_state_timeline(self, app_num):
+            self.timeline_calls.append(app_num)
+            return self._timeline
+
+        async def query_patent_review(self, app_num):
+            self.review_calls.append(app_num)
+            return self._decisions
+
+    _TIMELINE = [{"date": "2025-09-09", "lawStatus": "授权"}]
+
+    def _cands(self, app_num="CN202311111111.1"):
+        return [{"patent_id": "CN111A", "app_num": app_num, "status": ""}]
+
+    def test_repeat_search_of_same_app_num_hits_cache(self):
+        agent = SimpleNamespace(logger=None)
+        client = self._CountingClient(self._TIMELINE)
+        asyncio.run(_enrich_baiten_law_status(
+            client, self._cands(), None, agent=agent))
+        asyncio.run(_enrich_baiten_law_status(
+            client, self._cands(), None, agent=agent))
+        self.assertEqual(client.timeline_calls, ["CN202311111111.1"])
+
+    def test_cached_row_still_gets_the_status_filled(self):
+        # 命中缓存的行也必须被填上状态 —— 缓存的是线调用，不是跳过赋值。
+        agent = SimpleNamespace(logger=None)
+        client = self._CountingClient(self._TIMELINE)
+        asyncio.run(_enrich_baiten_law_status(
+            client, self._cands(), None, agent=agent))
+        fresh = self._cands()
+        asyncio.run(_enrich_baiten_law_status(client, fresh, None, agent=agent))
+        self.assertEqual(fresh[0]["status"], "授权")
+        self.assertEqual(len(fresh[0]["legal_timeline"]), 1)
+
+    def test_empty_result_is_cached_too(self):
+        # "查过且为空" 也要缓存，否则空结果会被反复重查。
+        agent = SimpleNamespace(logger=None)
+        client = self._CountingClient([])
+        asyncio.run(_enrich_baiten_law_status(
+            client, self._cands(), None, agent=agent))
+        asyncio.run(_enrich_baiten_law_status(
+            client, self._cands(), None, agent=agent))
+        self.assertEqual(client.timeline_calls, ["CN202311111111.1"])
+
+    def test_cache_is_per_agent_not_global(self):
+        # per-request：两个 agent（两次请求）不得互相污染。
+        a1, a2 = SimpleNamespace(logger=None), SimpleNamespace(logger=None)
+        client = self._CountingClient(self._TIMELINE)
+        asyncio.run(_enrich_baiten_law_status(
+            client, self._cands(), None, agent=a1))
+        asyncio.run(_enrich_baiten_law_status(
+            client, self._cands(), None, agent=a2))
+        self.assertEqual(len(client.timeline_calls), 2)
+
+    def test_no_agent_still_works_uncached(self):
+        # 向后兼容：不传 agent 时保持旧行为（既有测试就这么调）。
+        client = self._CountingClient(self._TIMELINE)
+        cands = self._cands()
+        asyncio.run(_enrich_baiten_law_status(client, cands, None))
+        self.assertEqual(cands[0]["status"], "授权")
+
+    def test_fswx_only_cached_when_actually_fetched(self):
+        # 大列表不查 FSWX；此时缓存里不该留下"已查"的痕迹，
+        # 否则法律状态工具会误以为查过而不补查。
+        agent = SimpleNamespace(logger=None)
+        client = self._CountingClient(self._TIMELINE)
+        big = [{"patent_id": f"CN{i}A", "app_num": f"CN2023{i}", "status": ""}
+               for i in range(5)]
+        asyncio.run(_enrich_baiten_law_status(client, big, None, agent=agent))
+        self.assertEqual(client.review_calls, [])
+        # 缓存字典本身是惰性创建的：没查过 FSWX 就不该留下任何条目。
+        self.assertNotIn("CN20230", getattr(agent, "_law_fswx_cache", {}))
+
+
+class TestLawEnrichmentConcurrency(unittest.TestCase):
+    """富化必须限并发 —— 佰腾网关对并发敏感。
+
+    2026-09-13 生产日志：单轮 30 条候选一起去（30 路并发）时，约一半的
+    FLZT 调用返回 500 ``no access for this api: DATA_PAT_PATAFFAIRSDATA_ONE``；
+    同一个号码先失败、26 秒后重试成功，说明不是权限缺失而是**并发节流**。
+    改动前是「每次检索 10 路」，改动后变成「单轮 N 路」——去重省了调用，
+    却把瞬时并发放宽了，必须设上限。
+    """
+
+    class _TrackingClient:
+        def __init__(self):
+            self.in_flight = 0
+            self.peak = 0
+
+        async def query_legal_state_timeline(self, app_num):
+            self.in_flight += 1
+            self.peak = max(self.peak, self.in_flight)
+            # 让出控制权，使所有并发任务都有机会进入临界区
+            await asyncio.sleep(0)
+            self.in_flight -= 1
+            return [{"date": "2025-09-09", "lawStatus": "授权"}]
+
+        async def query_patent_review(self, app_num):
+            return []
+
+    _CANDS = [{"patent_id": "CN%dA" % i, "app_num": "CN2023%d" % i,
+               "status": ""} for i in range(24)]
+
+    def test_flzt_concurrency_is_capped(self):
+        client = self._TrackingClient()
+        with patch.object(react_tools, "LAW_ENRICH_CONCURRENCY", 4):
+            asyncio.run(_enrich_baiten_law_status(
+                client, self._CANDS, None))
+        self.assertLessEqual(client.peak, 4)
+        self.assertGreater(client.peak, 1)   # 仍然是并发，不是串行
+
+    def test_cap_is_configurable(self):
+        client = self._TrackingClient()
+        with patch.object(react_tools, "LAW_ENRICH_CONCURRENCY", 2):
+            asyncio.run(_enrich_baiten_law_status(
+                client, self._CANDS, None))
+        self.assertLessEqual(client.peak, 2)
+
+    def test_default_cap_is_conservative(self):
+        # 默认值必须明显低于改动前的「单轮不限并发」。
+        self.assertLessEqual(react_tools.LAW_ENRICH_CONCURRENCY, 5)
+        self.assertGreaterEqual(react_tools.LAW_ENRICH_CONCURRENCY, 1)
+
+    def test_all_candidates_still_enriched_under_the_cap(self):
+        # 限并发不得丢候选。用 12 条（< 每次调用配额上限）以便只考并发。
+        client = self._TrackingClient()
+        cands = [dict(c) for c in self._CANDS[:12]]
+        with patch.object(react_tools, "LAW_ENRICH_CONCURRENCY", 3):
+            asyncio.run(_enrich_baiten_law_status(client, cands, None))
+        for c in cands:
+            self.assertEqual(c["status"], "授权")
+
+
+class TestLawEnrichmentPerCallBudget(unittest.TestCase):
+    """每次工具调用的 lawInfos 条数上限。
+
+    配额是硬约束（2026-09-13 账号额度耗尽 → 大片 500），而自动补跑阶梯
+    一次可能收进 30+ 条候选，全查一遍是配额的主要消耗方式。
+
+    取舍（明确记录）：**超出上限的行没有法律状态** —— 摘要的状态列与
+    导出文件的状态列都会空着。上限默认等于摘要展示条数，可用 env
+    ``REACT_LAW_ENRICH_MAX_PER_CALL`` 按配额松紧调整；设为 0 表示不限。
+    """
+
+    class _Client:
+        def __init__(self):
+            self.calls = []
+
+        async def query_legal_state_timeline(self, app_num):
+            self.calls.append(app_num)
+            return [{"date": "2025-09-09", "lawStatus": "授权"}]
+
+        async def query_patent_review(self, app_num):
+            return []
+
+    def _cands(self, n):
+        return [{"patent_id": "CN%dA" % i, "app_num": "CN2023%d" % i,
+                 "status": ""} for i in range(n)]
+
+    def test_enriches_at_most_the_cap(self):
+        client = self._Client()
+        cands = self._cands(30)
+        with patch.object(react_tools, "LAW_ENRICH_MAX_PER_CALL", 20):
+            asyncio.run(_enrich_baiten_law_status(client, cands, None))
+        self.assertEqual(len(client.calls), 20)
+
+    def test_rows_beyond_the_cap_keep_empty_status(self):
+        client = self._Client()
+        cands = self._cands(30)
+        with patch.object(react_tools, "LAW_ENRICH_MAX_PER_CALL", 20):
+            asyncio.run(_enrich_baiten_law_status(client, cands, None))
+        for c in cands[:20]:
+            self.assertEqual(c["status"], "授权")
+        for c in cands[20:]:
+            self.assertEqual(c["status"], "")
+
+    def test_cap_is_tunable(self):
+        client = self._Client()
+        with patch.object(react_tools, "LAW_ENRICH_MAX_PER_CALL", 5):
+            asyncio.run(_enrich_baiten_law_status(
+                client, self._cands(30), None))
+        self.assertEqual(len(client.calls), 5)
+
+    def test_zero_means_unlimited(self):
+        client = self._Client()
+        with patch.object(react_tools, "LAW_ENRICH_MAX_PER_CALL", 0):
+            asyncio.run(_enrich_baiten_law_status(
+                client, self._cands(30), None))
+        self.assertEqual(len(client.calls), 30)
+
+    def test_small_lists_are_unaffected(self):
+        client = self._Client()
+        asyncio.run(_enrich_baiten_law_status(client, self._cands(3), None))
+        self.assertEqual(len(client.calls), 3)
+
+    def test_default_cap_equals_the_digest_display_size(self):
+        self.assertEqual(react_tools.LAW_ENRICH_MAX_PER_CALL,
+                         react_tools.SEARCH_DIGEST_LIMIT)
+
+
+class TestLawEnrichmentPerRequestBudget(unittest.TestCase):
+    """每**请求**的 lawInfos 总预算 —— 按调用限流治不了总量。
+
+    一次提问会跑 5–6 次工具调用（阶梯 + 自动补跑），每次调用各自限 20 条
+    仍然合计 ~50 次。配额是每请求的硬约束，所以必须有总量闸门。
+
+    默认与 ``SEARCH_DIGEST_LIMIT`` 一致，含义：**每个请求只够富化一份完整
+    摘要**。0 = 不限（回到旧行为）。
+    """
+
+    class _Client:
+        def __init__(self):
+            self.calls = []
+
+        async def query_legal_state_timeline(self, app_num):
+            self.calls.append(app_num)
+            return [{"date": "2025-09-09", "lawStatus": "授权"}]
+
+        async def query_patent_review(self, app_num):
+            self.calls.append("FSWX:" + app_num)
+            return []
+
+    def _cands(self, n, offset=0):
+        return [{"patent_id": "CN%dA" % i, "app_num": "CN2023%d" % i,
+                 "status": ""} for i in range(offset, offset + n)]
+
+    def _agent(self):
+        return SimpleNamespace(logger=None, _law_budget_used=0)
+
+    def test_total_across_passes_is_capped(self):
+        client = self._Client()
+        agent = self._agent()
+        with patch.object(react_tools, "LAW_ENRICH_MAX_PER_REQUEST", 20):
+            for r in range(4):          # 模拟 4 轮工具调用
+                asyncio.run(_enrich_baiten_law_status(
+                    client, self._cands(10, offset=r * 10), None, agent=agent))
+        self.assertEqual(len(client.calls), 20)
+        self.assertEqual(agent._law_budget_used, 20)
+
+    def test_budget_is_per_request_flag_not_module_state(self):
+        # 两个 agent（两次请求）各自有预算，互不扣减。
+        client = self._Client()
+        with patch.object(react_tools, "LAW_ENRICH_MAX_PER_REQUEST", 5):
+            for _ in range(2):
+                asyncio.run(_enrich_baiten_law_status(
+                    client, self._cands(10), None, agent=self._agent()))
+        self.assertEqual(len(client.calls), 10)
+
+    def test_cache_hits_do_not_consume_budget(self):
+        client = self._Client()
+        agent = self._agent()
+        with patch.object(react_tools, "LAW_ENRICH_MAX_PER_REQUEST", 10):
+            cands = self._cands(5)
+            asyncio.run(_enrich_baiten_law_status(client, cands, None,
+                                                  agent=agent))
+            asyncio.run(_enrich_baiten_law_status(
+                client, self._cands(5), None, agent=agent))
+        self.assertEqual(len(client.calls), 5)      # 第二次全命中缓存
+        self.assertEqual(agent._law_budget_used, 5)
+
+    def test_exhausted_budget_leaves_the_rest_empty(self):
+        client = self._Client()
+        agent = self._agent()
+        with patch.object(react_tools, "LAW_ENRICH_MAX_PER_REQUEST", 3):
+            cands = self._cands(10)
+            asyncio.run(_enrich_baiten_law_status(client, cands, None,
+                                                  agent=agent))
+        self.assertEqual(len(client.calls), 3)
+        # 恰好 3 条拿到状态，其余 7 条留空（不指定是哪 3 条：并发顺序不定）
+        enriched = [c for c in cands if c["status"]]
+        self.assertEqual(len(enriched), 3)
+
+    def test_zero_means_unlimited(self):
+        client = self._Client()
+        agent = self._agent()
+        with patch.object(react_tools, "LAW_ENRICH_MAX_PER_REQUEST", 0):
+            for r in range(3):
+                asyncio.run(_enrich_baiten_law_status(
+                    client, self._cands(10, offset=r * 10), None, agent=agent))
+        self.assertEqual(len(client.calls), 30)
+
+    def test_no_agent_is_unbudgeted(self):
+        # 向后兼容：不传 agent 时保持旧行为（既有测试就这么调）。
+        client = self._Client()
+        with patch.object(react_tools, "LAW_ENRICH_MAX_PER_REQUEST", 2):
+            cands = self._cands(10)
+            asyncio.run(_enrich_baiten_law_status(client, cands, None))
+        self.assertEqual(len(client.calls), 10)
+
+    def test_default_covers_a_full_export(self):
+        # 2026-09-13 实测：该查询导出 30 条 CN，预算 20 时 13 行状态列空白。
+        # 默认必须够覆盖整份导出，同时明显低于「每轮都富化」的旧行为。
+        self.assertGreaterEqual(react_tools.LAW_ENRICH_MAX_PER_REQUEST, 30)
+        self.assertLess(react_tools.LAW_ENRICH_MAX_PER_REQUEST, 50)
+
+
+class TestUsptoSpaceFlattenDisabled(unittest.TestCase):
+    """空格兜底（OR 语义）默认关闭，且 2026-09-15 起**仅在方言超限形态**下才会
+    被考虑（合规形态的 404 = 标题域真零，拍平只会拿 OR 噪声换 200）。
+
+    2026-09-13 生产实证：它每轮返回 20 条噪声，**全部**被后续过滤丢弃（30 条
+    导出里美国只剩 2 条），却进入 observation 摘要 —— 模型把其中"活着"的
+    PCT/美国申请当成 Top 结果报给用户，实测 9/10 在结果面板里不存在。
+    纯成本 + 污染判断，零收益。
+    """
+
+    # 3 个 AND 算子 = 该端点方言超限（唯一还会走满重试链的形态）。
+    _Q = ('"humidity sensor" AND "desiccant dryer" AND "air supply" '
+          'AND (feedback OR sensor)')
+
+    def _attempts(self, enabled, q=None):
+        calls = []
+
+        async def _arequest(method, url, **kw):
+            calls.append((kw.get("json") or {}).get("q", ""))
+            return SimpleNamespace(status_code=404, json=lambda: {})
+
+        with patch.object(react_tools, "USPTO_SPACE_FLATTEN_ENABLED", enabled), \
+             patch("sources.http_outbound.outbound_http") as mock_http:
+            mock_http.arequest = AsyncMock(side_effect=_arequest)
+            items, note = asyncio.run(
+                react_tools._uspto_search_by_query(q or self._Q))
+        return calls, items, note
+
+    def test_disabled_by_default(self):
+        self.assertFalse(react_tools.USPTO_SPACE_FLATTEN_ENABLED)
+
+    def test_no_flatten_attempt_when_disabled(self):
+        # 超限形态：原发 → 词级 → AND 裁尾，三发为止。
+        calls, items, _note = self._attempts(False)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(items, [])
+
+    def test_flatten_attempt_returns_when_enabled(self):
+        # 对照：打开后确实多一发（证明是这道闸门在拦，不是别的）。
+        calls, _items, _note = self._attempts(True)
+        self.assertEqual(len(calls), 4)
+
+    def test_compliant_query_never_flattens(self):
+        # 合规形态（≤2 AND）即使打开兜底也不拍平：真零只标注、不再换噪声。
+        q = '"humidity sensor" AND "desiccant dryer" AND "dry air supply"'
+        calls, items, note = self._attempts(True, q=q)
+        self.assertEqual(len(calls), 2, "原发 → 词级降级，两发为止")
+        self.assertEqual(items, [])
+        self.assertIn("true zero", note)
+
+
 class TestNormalizeUsptoItems(unittest.TestCase):
     def test_lifts_title_from_meta_invention_title(self):
         items = [{"applicationNumberText": "19511555", "applicationMetaData": {
@@ -251,7 +618,9 @@ class TestBaitenResultsToCandidates(unittest.TestCase):
         self.assertEqual(len(cands), 1)
         c = cands[0]
         self.assertEqual(c["patent_id"], "CN118000001A")
-        self.assertEqual(c["source"], "baiten")
+        # 中立取值：用户可下载的导出文件里不得出现供应商名（见
+        # test_cn_source_value.py）。读取侧仍接受历史值 "baiten"。
+        self.assertEqual(c["source"], "cn")
         self.assertEqual(c["title"], "一种散热装置")
         self.assertEqual(c["app_num"], "CN202310123456")
         self.assertEqual(c["pub_date"], "2024-01-01")
@@ -376,7 +745,8 @@ class TestBaitenSearchByQueryNotes(unittest.TestCase):
                              api_level="ONE"):
                 if raise_exc is not None:
                     raise raise_exc
-                return body
+                # 翻页：只第一页有数据，第二页起为空（真实网关的形态）
+                return body if page == 1 else {"code": "200"}
         effective_cfg = cfg if cfg is not None else {
             "app_key": "k", "app_secret": "s", "gateway_url": "http://x"}
         with patch("sources.baiten_client.BaitenClient",
@@ -388,7 +758,7 @@ class TestBaitenSearchByQueryNotes(unittest.TestCase):
     def test_gateway_zero_records_note(self):
         items, note = asyncio.run(self._run({"code": "200"}))
         self.assertEqual(items, [])
-        self.assertEqual(note, "Baiten 0 hits (gateway 0 records)")
+        self.assertEqual(note, "CN 0 hits (gateway 0 records)")
 
     def test_gateway_error_note(self):
         # _request_json raises (HTTP non-200 / gateway error code) → the
@@ -397,7 +767,7 @@ class TestBaitenSearchByQueryNotes(unittest.TestCase):
         items, note = asyncio.run(self._run(
             {}, raise_exc=BaitenAPIError("Baiten API error code=404: msg")))
         self.assertEqual(items, [])
-        self.assertIn("Baiten failed", note)
+        self.assertIn("CN source failed", note)
         self.assertIn("error code=404", note)
 
     def test_records_but_parse_zero_note(self):
@@ -407,7 +777,7 @@ class TestBaitenSearchByQueryNotes(unittest.TestCase):
         ]}}
         items, note = asyncio.run(self._run(body))
         self.assertEqual(items, [])
-        self.assertEqual(note, "Baiten 0 candidates (parsed from 1 records)")
+        self.assertEqual(note, "CN 0 candidates (parsed from 1 records)")
 
     def test_valid_rows_note(self):
         body = {"code": "200", "data": {"fieldValues": [
@@ -416,13 +786,30 @@ class TestBaitenSearchByQueryNotes(unittest.TestCase):
         ]}}
         items, note = asyncio.run(self._run(body))
         self.assertEqual(len(items), 2)
-        self.assertEqual(note, "Baiten 2 hits")
+        self.assertEqual(note, "CN 2 hits")
+
+    def test_page_capped_note_reports_gateway_total(self):
+        # 需求#9：单查询恒 rows=page_size（页上限）时，真实命中数只有网关的
+        # total 能回答 —— 必须出现在备注里，不能继续靠"rows 恒 10"猜。
+        body = {"code": "200", "total_hits": 347,
+                "data": {"fieldValues": [
+                    {"pn": "CN118%06dA" % i, "ti": "散热装置"}
+                    for i in range(20)]}}
+        items, note = asyncio.run(self._run(body))
+        self.assertEqual(len(items), 20)
+        self.assertIn("CN 20 hits (of 347)", note)
+
+    def test_page_capped_without_total_marks_cap(self):
+        body = {"code": "200", "data": {"fieldValues": [
+            {"pn": "CN118%06dA" % i, "ti": "散热装置"} for i in range(20)]}}
+        items, note = asyncio.run(self._run(body))
+        self.assertIn("page-capped at 20", note)
 
     def test_not_configured_note(self):
         items, note = asyncio.run(self._run(None, cfg={
             "app_key": "", "app_secret": "", "gateway_url": "http://x"}))
         self.assertEqual(items, [])
-        self.assertEqual(note, "Baiten not configured (BAITEN_APP_KEY/APP_SECRET)")
+        self.assertEqual(note, "CN source not configured (key missing)")
 
     def test_api_level_from_config_reaches_client(self):
         received = {}
@@ -441,6 +828,125 @@ class TestBaitenSearchByQueryNotes(unittest.TestCase):
                                  "api_level": "TWO"}):
             asyncio.run(_baiten_search_by_query("ti:(散热)", agent=_FakeAgent()))
         self.assertEqual(received["api_level"], "TWO")
+
+
+class TestBaitenPaging(unittest.TestCase):
+    """2026-09-15：网关单页硬限 10 条，单查询恒 rows=10 —— 中文提问的 CN
+    供给被这一页卡死（生产实证 total 上千只拿 10 条，结果被美国专利挤成少数）。
+    按 REACT_CN_PAGES_PER_QUERY 续页取回。"""
+
+    def _run(self, pages, max_pages=None):
+        calls = []
+
+        class _FakeClient:
+            async def search(self, q, page=1, page_size=20,
+                             api_level="ONE"):
+                calls.append(page)
+                return pages.get(page, {"code": "200"})
+
+        async def _go():
+            with patch("sources.baiten_client.BaitenClient",
+                       return_value=_FakeClient()), \
+                 patch("sources.long_task.config.get_baiten_config",
+                       return_value={"app_key": "k", "app_secret": "s",
+                                     "gateway_url": "http://x"}), \
+                 patch("sources.agents.react_tools.REACT_CN_PAGES_PER_QUERY",
+                       max_pages if max_pages is not None
+                       else REACT_CN_PAGES_PER_QUERY):
+                return await _baiten_search_by_query("ti:(散热)",
+                                                     agent=_FakeAgent())
+
+        return asyncio.run(_go()), calls
+
+    @staticmethod
+    def _page(prefix, rows, total):
+        return {"code": "200", "total_hits": total,
+                "data": {"fieldValues": [
+                    {"pn": "%s%06dA" % (prefix, i), "ti": "散热"}
+                    for i in range(rows)]}}
+
+    def test_second_page_is_fetched_and_deduped(self):
+        pages = {1: self._page("CN118", 10, 25),
+                 2: self._page("CN119", 10, 25)}
+        (items, note), calls = self._run(pages)
+        self.assertEqual(calls, [1, 2])
+        self.assertEqual(len(items), 20)
+        self.assertIn("over 2 pages", note)
+        self.assertIn("(of 25)", note)
+
+    def test_single_page_when_total_reached(self):
+        (items, note), calls = self._run({1: self._page("CN118", 3, 3)})
+        self.assertEqual(calls, [1])
+        self.assertEqual(len(items), 3)
+        self.assertEqual(note, "CN 3 hits")
+
+    def test_page_budget_bounds_calls(self):
+        pages = {i: self._page("CN118", 10, 100) for i in range(1, 6)}
+        (_items, note), calls = self._run(pages, max_pages=1)
+        self.assertEqual(calls, [1])
+        self.assertIn("(of 100)", note)
+
+
+class TestTurnLevelSearchCache(unittest.TestCase):
+    """2026-09-15 需求#27：同 turn 相同的 CN 检索式复用上次结果。
+
+    生产实证（2026-09-14 1309…）：不同 US 同义词组轮询时，CN 阶梯被逐字重跑
+    （两次 `ab:(泌乳计划…) AND ab:(智能提醒…)` 各返回同样的 10 行）。缓存按请求
+    重置（general_agent.create_agent 的重置块），不得跨请求泄漏。
+    """
+
+    _BODY = {"code": "200", "total_hits": 1,
+             "data": {"fieldValues": [
+                 {"pn": "CN118000001A", "ti": "散热装置"}]}}
+
+    def _agent_and_client(self, calls):
+        body = self._BODY
+
+        class _FakeClient:
+            async def search(self, q, page=1, page_size=20,
+                             api_level="ONE"):
+                calls.append(q)
+                # 翻页：只第一页有数据（一次逻辑查询 = 一次 HTTP 调用）
+                return body if page == 1 else {"code": "200"}
+        return _FakeAgent(), _FakeClient()
+
+    def test_same_query_in_one_turn_hits_cache(self):
+        calls = []
+        agent = _FakeAgent()
+        agent._search_result_cache = {}
+        _, client = self._agent_and_client(calls)
+
+        async def _go():
+            with patch("sources.baiten_client.BaitenClient",
+                       return_value=client), \
+                 patch("sources.long_task.config.get_baiten_config",
+                       return_value={"app_key": "k", "app_secret": "s",
+                                     "gateway_url": "http://x"}):
+                first = await _baiten_search_by_query("ti:(散热)", agent=agent)
+                second = await _baiten_search_by_query("ti:(散热)", agent=agent)
+            return first, second
+
+        (items1, note1), (items2, note2) = asyncio.run(_go())
+        self.assertEqual(calls, ["ti:(散热)"], "同 turn 同式只应外发一次")
+        self.assertEqual(note2, note1)
+        self.assertEqual(items2, items1)
+
+    def test_no_cache_without_agent(self):
+        # agent=None（KB 路径的旧调用形态）不缓存，保持旧行为。
+        calls = []
+        _, client = self._agent_and_client(calls)
+
+        async def _go():
+            with patch("sources.baiten_client.BaitenClient",
+                       return_value=client), \
+                 patch("sources.long_task.config.get_baiten_config",
+                       return_value={"app_key": "k", "app_secret": "s",
+                                     "gateway_url": "http://x"}):
+                await _baiten_search_by_query("ti:(散热)")
+                await _baiten_search_by_query("ti:(散热)")
+
+        asyncio.run(_go())
+        self.assertEqual(len(calls), 2)
 
 
 class TestBaitenConfig(unittest.TestCase):
@@ -469,14 +975,43 @@ class TestRunPatentSearch(unittest.TestCase):
         async def _us(q, page=1, page_size=20, agent=None):
             return us_result if us_result is not None else ([], "USPTO n/a")
 
-        async def _cn(q, page=1, page_size=20, agent=None):
+        async def _cn(q, page=1, page_size=20, agent=None, enrich=True):
             return cn_result if cn_result is not None else ([], "Baiten n/a")
 
         with patch("sources.agents.react_tools._uspto_search_by_query", _us), \
-             patch("sources.agents.react_tools._baiten_search_by_query", _cn):
+             patch("sources.agents.react_tools._baiten_search_by_query", _cn), \
+             patch("sources.agents.react_tools._enrich_baiten_law_status",
+                   new=AsyncMock()), \
+             patch("sources.agents.react_tools._baiten_client_or_none",
+                   return_value=None):
             agent = agent or _FakeAgent()
             result = await _run_patent_search(agent, args, lang)
             return agent, result
+
+    def test_digest_excludes_items_that_will_be_filtered(self):
+        # 需求#26：摘要只渲染**可能进入交付集**的结果。此前用全量 merged
+        # 渲染，模型会引用随即被失效过滤丢掉的行 —— 2026-09-13 生产实证：
+        # 回答里列出的美国专利，导出文件里根本没有。
+        dead = {"applicationNumberText": "11111111", "status": "Abandoned",
+                "applicationMetaData": {"inventionTitle": "DEADONE"}}
+        live = {"applicationNumberText": "22222222",
+                "status": "Patented Case",
+                "applicationMetaData": {"inventionTitle": "LIVEONE"}}
+        _agent, result = asyncio.run(self._run(
+            {"query_string_us": "ab:(cool)"},
+            us_result=([dead, live], "USPTO 2 hits")))
+        self.assertIn("22222222", result["text"])
+        self.assertNotIn("11111111", result["text"])
+
+    def test_all_hits_dead_says_so_instead_of_no_results(self):
+        # 有命中但全部失效时，不能笼统说"未返回结果"。
+        dead = {"applicationNumberText": "11111111", "status": "Abandoned",
+                "applicationMetaData": {"inventionTitle": "DEADONE"}}
+        _agent, result = asyncio.run(self._run(
+            {"query_string_us": "ab:(cool)"},
+            us_result=([dead], "USPTO 1 hits")))
+        self.assertIn("失效", result["text"])
+        self.assertNotIn("未返回结果", result["text"])
 
     def test_second_call_merges_instead_of_overwriting(self):
         # Production incident (2026-08-27): the LLM called patent_search_dual
@@ -577,7 +1112,7 @@ class TestRunPatentSearch(unittest.TestCase):
         # the CN leg silently never ran.  Now the CN tightest is auto-filled.
         cn_calls = []
 
-        async def _cn(q, page=1, page_size=20, agent=None):
+        async def _cn(q, page=1, page_size=20, agent=None, enrich=True):
             cn_calls.append(q)
             return [{"patent_id": "CN118000001A", "source": "baiten",
                      "title": "散热装置"}], "Baiten 1 hits"
@@ -601,7 +1136,7 @@ class TestRunPatentSearch(unittest.TestCase):
         # 中文提问：CN 首轮 0 命中 → 系统自动补跑未尝试的 CN 阶梯式。
         cn_calls = []
 
-        async def _cn(q, page=1, page_size=20, agent=None):
+        async def _cn(q, page=1, page_size=20, agent=None, enrich=True):
             cn_calls.append(q)
             if q == "ti:(载体)":
                 return [{"patent_id": "CN118000002A", "source": "baiten",
@@ -641,7 +1176,7 @@ class TestRunPatentSearch(unittest.TestCase):
                              "filingDate": "2024-01-01"}}], "USPTO 1 hits"
             return [], "USPTO 0 hits"
 
-        async def _cn(q, page=1, page_size=20, agent=None):
+        async def _cn(q, page=1, page_size=20, agent=None, enrich=True):
             return [], "Baiten 0 hits (gateway 0 records)"
 
         with patch("sources.agents.react_tools._uspto_search_by_query", _us), \
@@ -661,7 +1196,7 @@ class TestRunPatentSearch(unittest.TestCase):
         cn_calls = []
         us_calls = []
 
-        async def _cn(q, page=1, page_size=20, agent=None):
+        async def _cn(q, page=1, page_size=20, agent=None, enrich=True):
             cn_calls.append(q)
             if q == "ti:(载体)":
                 return [{"patent_id": "CN118000002A", "source": "baiten",
@@ -695,7 +1230,7 @@ class TestRunPatentSearch(unittest.TestCase):
         # 预算按源独立:CN 已用 3/4,补跑只能再执行 1 条(US 侧另有自己的 4 条)。
         cn_calls = []
 
-        async def _cn(q, page=1, page_size=20, agent=None):
+        async def _cn(q, page=1, page_size=20, agent=None, enrich=True):
             cn_calls.append(q)
             return [], "Baiten 0 hits (gateway 0 records)"
 
@@ -718,7 +1253,7 @@ class TestRunPatentSearch(unittest.TestCase):
         # 预算按源独立后,US 用尽不再影响 CN 兜底。
         cn_calls = []
 
-        async def _cn(q, page=1, page_size=20, agent=None):
+        async def _cn(q, page=1, page_size=20, agent=None, enrich=True):
             cn_calls.append(q)
             if q == "ti:(载体)":
                 return [{"patent_id": "CN118000002A", "source": "baiten",
@@ -810,6 +1345,113 @@ class TestBuildToolSetRegistration(unittest.TestCase):
         # 未指定国别（默认）→ 双源工具注册（未传 patent_source）
         registry, _ = asyncio.run(self._build(None))
         self.assertIn("patent_search_dual", registry)
+
+    def test_legal_status_tool_registered_in_every_mode(self):
+        # 需求#18: 法律状态问题可能在任何国别模式下到来，确定性路径
+        # 不能依赖 LLM 挑到合适的 KB 工具 —— 无条件注册。
+        for src in ("dual", "cn", "uspto"):
+            registry, _ = asyncio.run(self._build(src))
+            entry = registry.get(PATENT_LEGAL_STATUS_TOOL_NAME)
+            self.assertIsNotNone(entry, src)
+            self.assertEqual(entry.kind, "patent_legal_status", src)
+
+
+class TestEnrichmentOncePerToolCall(unittest.TestCase):
+    """富化从「每次佰腾检索一次」改为「每次工具调用一次」。
+
+    生产日志（2026-09-13）：一次 ``patent_search_dual`` 会跑 2–4 次佰腾
+    检索（首轮 + 自动补跑阶梯），每次都内联 ``await`` 富化（~1.5s），全部
+    串在关键路径上。改为收尾统一跑一遍 —— 仍在**排名之前**，因为排名要读
+    ``status``；配合每请求缓存，同号也不会重查。
+    """
+
+    _CN_ITEM = {"patent_id": "CN118000001A", "source": "baiten",
+                "app_num": "CN202311111111.1", "title": "散热装置"}
+
+    def _drive(self, cn_runs):
+        """cn_runs: 连续几次佰腾检索的返回值（最后一次起循环复用）。"""
+        calls = {"n": 0}
+
+        async def _cn(q, page=1, page_size=20, agent=None, enrich=True):
+            idx = min(calls["n"], len(cn_runs) - 1)
+            calls["n"] += 1
+            return cn_runs[idx]
+
+        async def _us(q, page=1, page_size=20):
+            return [], "USPTO 0 hits"
+
+        with patch.object(react_tools, "_baiten_search_by_query", _cn), \
+             patch.object(react_tools, "_uspto_search_by_query", _us), \
+             patch.object(react_tools, "_enrich_baiten_law_status",
+                          new=AsyncMock()) as enrich_mock, \
+             patch.object(react_tools, "_baiten_client_or_none",
+                          return_value=object()):
+            agent = _FakeAgent()
+            asyncio.run(_run_patent_search(
+                agent, {"query_string_cn": "ti:(散热)"}, "zh"))
+        return calls["n"], enrich_mock
+
+    def test_one_enrichment_for_a_single_search(self):
+        n, enrich_mock = self._drive([([self._CN_ITEM], "CN 1 hits")])
+        self.assertEqual(n, 1)
+        self.assertEqual(enrich_mock.await_count, 1)
+
+    def test_one_enrichment_across_auto_ladder_rounds(self):
+        # 首轮 0 命中 → 自动补跑阶梯多发几次检索；富化仍然只跑一次。
+        n, enrich_mock = self._drive(
+            [([], "CN 0 hits"), ([self._CN_ITEM], "CN 1 hits")])
+        self.assertGreater(n, 1)
+        self.assertEqual(enrich_mock.await_count, 1)
+
+    def test_enrichment_receives_only_cn_candidates(self):
+        _n, enrich_mock = self._drive([([self._CN_ITEM], "CN 1 hits")])
+        passed = enrich_mock.await_args[0][1]
+        self.assertTrue(passed)
+        self.assertTrue(all(c.get("source") == "baiten" for c in passed))
+
+    def test_no_baiten_client_skips_enrichment(self):
+        with patch.object(react_tools, "_baiten_search_by_query",
+                          new=AsyncMock(return_value=(
+                              [self._CN_ITEM], "CN 1 hits"))), \
+             patch.object(react_tools, "_uspto_search_by_query",
+                          new=AsyncMock(return_value=([], "USPTO 0"))), \
+             patch.object(react_tools, "_enrich_baiten_law_status",
+                          new=AsyncMock()) as enrich_mock, \
+             patch.object(react_tools, "_baiten_client_or_none",
+                          return_value=None):
+            asyncio.run(_run_patent_search(
+                _FakeAgent(), {"query_string_cn": "ti:(散热)"}, "zh"))
+        enrich_mock.assert_not_awaited()
+
+
+class TestCnPoolCandidateKeepsNativeKey(unittest.TestCase):
+    """需求#29: 池化曾丢弃 app_num，导致下游再也拿不到 CN 申请号 ——
+    而它正是佰腾法律状态/取件 API 需要的键。"""
+
+    def test_app_num_survives_pool_mapping(self):
+        item = {"patent_id": "CN116570413A", "patent_number": "CN116570413A",
+                "title": "某方法", "applicant": "某公司",
+                "app_num": "CN202310123456.7", "source": "baiten"}
+        pool = _cn_item_to_pool_candidate(item)
+        self.assertEqual(pool["app_num"], "CN202310123456.7")
+
+    def test_missing_app_num_is_empty_string(self):
+        item = {"patent_id": "CN116570413A", "source": "baiten"}
+        self.assertEqual(_cn_item_to_pool_candidate(item)["app_num"], "")
+
+
+class TestDeepAnalysisDescriptionRedirect(unittest.TestCase):
+    """需求#18: 法律状态问题此前被 deep_analysis 描述推回关键词检索
+    （"请走检索"），而检索答不了状态级问题 —— 必须改指专用工具。"""
+
+    def test_zh_redirects_to_legal_status_tool(self):
+        d = _builtin_deep_analysis_description("zh")
+        self.assertNotIn("请走检索", d)
+        self.assertIn(PATENT_LEGAL_STATUS_TOOL_NAME, d)
+
+    def test_en_redirects_to_legal_status_tool(self):
+        d = _builtin_deep_analysis_description("en")
+        self.assertIn(PATENT_LEGAL_STATUS_TOOL_NAME, d)
 
 
 

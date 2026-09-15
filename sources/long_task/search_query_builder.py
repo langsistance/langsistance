@@ -441,7 +441,7 @@ def _render_ladder_guidance(rewrite: dict, lang: str, cn: bool) -> str:
     if cn:
         if lang == "en":
             header = (
-                "Available Baiten (China patent) search queries for the "
+                "Available China patent search queries for the "
                 "user's question, ordered tightest to loosest. Field "
                 "prefixes: ti=title, ab=abstract, clm=claims. Chinese has "
                 "no word forms, so queries carry no wildcards — synonyms "
@@ -453,7 +453,7 @@ def _render_ladder_guidance(rewrite: dict, lang: str, cn: bool) -> str:
             )
         else:
             header = (
-                "针对用户问题可用的佰腾（中国专利）检索式（由紧到松排列）。"
+                "针对用户问题可用的中国专利检索式（由紧到松排列）。"
                 "字段前缀语义：ti=标题 ab=摘要 clm=权利要求。中文无词形变化，"
                 "检索式不使用通配符，同义词用 OR 连接。你可以直接用其中"
                 "任一条调用中国专利检索工具，也可以根据观察到的命中数"

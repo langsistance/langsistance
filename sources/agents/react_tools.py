@@ -47,6 +47,7 @@ from sources.long_task.semantic_rerank import (
     RERANK_ENABLED,
     semantic_scores_batch,
 )
+from sources.patent_source_detect import is_cn_source
 
 TOP_N = int(os.getenv("REACT_TOOL_TOP_N", "5"))
 LOW_HIT_FEEDBACK_THRESHOLD = int(os.getenv(
@@ -103,6 +104,27 @@ RECALL_POOL_HEAD = 20
 # built by scripts/build_cpc_vectors.py on the server.
 CPC_EXPANSION_ENABLED = os.getenv("REACT_CPC_EXPANSION", "0") == "1"
 REACT_USPTO_SORT_FIELD = os.getenv("REACT_USPTO_SORT_FIELD", "_score")
+
+
+def _env_float(name: str, default: float) -> float:
+    """Float env knob that never raises at import (bad value → default)."""
+    try:
+        return float(os.getenv(name, "") or default)
+    except (TypeError, ValueError):
+        return default
+
+
+# 排序按需回退 (2026-09-15)：在 applications/search 的**标题级语料**上强制
+# sort=_score 会让短标题的临时申请/失效件顶满整页 —— 2026-09-14 探针实测
+# 前 20 槽位存活 _score 41/120 vs API 默认序 (filingDate desc) 103/120，最坏类
+# (LED/RGB) 0/20；2026-09-12 生产同向（20 条美方候选 18 条失效、次轮 10/10 全灭）。
+# 常态仍用相关度序；仅当本轮存活候选占比低于阈值时，用 API 默认序重取一次并按
+# 存活数择优。默认 0.25 = 只在“近乎整页失效”时回退，避免把 USPTO 请求量翻倍
+# （生产已观测 429 限流）。阈值是产品旋钮；REACT_USPTO_SORT_FALLBACK=0 关闭。
+REACT_USPTO_SORT_FALLBACK_ENABLED = (
+    os.getenv("REACT_USPTO_SORT_FALLBACK", "1") == "1")
+REACT_USPTO_SORT_FALLBACK_ALIVE_RATIO = _env_float(
+    "REACT_USPTO_SORT_FALLBACK_ALIVE_RATIO", 0.25)
 LADDER_MAX_HITS = int(os.getenv("REACT_LADDER_MAX_HITS")
                       or os.getenv("REACT_TIGHTEN_SUGGEST_THRESHOLD", "300"))
 # Per-number verification tools (search_patent_by_identifying_number_...)
@@ -212,6 +234,32 @@ async def _patent_number_stub(number: str) -> str:
     raise NotImplementedError("executed via dispatch, not directly")
 
 
+# ── Built-in legal-status lookup (需求#18, CN-first) ─────────────────────────
+# Registered on every request, like the number tool: a legal-status question
+# can arrive in any country mode and must not depend on the LLM picking a
+# pushed KB tool.  Deterministic — the number is parsed system-side, then the
+# owning source's legal-status API is queried by key.
+
+PATENT_LEGAL_STATUS_TOOL_NAME = "patent_legal_status"
+
+# FLZT/FSWX are a DIFFERENT gateway method from /openService/search: they are
+# key-addressed and cost no search fan-out.  They therefore get their own
+# per-request cap rather than sharing NUMBER_CROSS_MAX_QUERIES — conflating
+# the two would let one status question starve a later number lookup.
+LEGAL_STATUS_MAX_LOOKUPS = int(os.getenv("REACT_LEGAL_STATUS_MAX_LOOKUPS", "3"))
+
+
+class _LegalStatusArgs(BaseModel):
+    number: str = Field(
+        description=("专利号/公开号/申请号原文，可含 CN/US 前缀；"
+                     "系统会解析格式并查询法律状态事件与复审/无效决定"),
+    )
+
+
+async def _patent_legal_status_stub(number: str) -> str:
+    raise NotImplementedError("executed via dispatch, not directly")
+
+
 # ── Built-in dual/single-source patent search (USPTO + Baiten CN) ────────────
 # Registered per query in build_tool_set based on the detected patent
 # source; executed via make_action_executor (kind="patent_search").
@@ -227,7 +275,7 @@ class _DualPatentSearchArgs(BaseModel):
     )
     query_string_cn: str | None = Field(
         default=None,
-        description="Baiten CN search query (Chinese, from the guidance ladder)",
+        description="China patent search query (Chinese, from the guidance ladder)",
     )
     page: int = Field(default=1, description="Page number")
     page_size: int = Field(default=20, description="Results per page")
@@ -235,7 +283,7 @@ class _DualPatentSearchArgs(BaseModel):
 
 class _CnPatentSearchArgs(BaseModel):
     query_string_cn: str = Field(
-        description="Baiten CN search query (Chinese, from the guidance ladder)",
+        description="China patent search query (Chinese, from the guidance ladder)",
     )
     page: int = Field(default=1, description="Page number")
     page_size: int = Field(default=20, description="Results per page")
@@ -376,13 +424,15 @@ def _builtin_deep_analysis_description(lang: str = "zh") -> str:
             "the user the analysis task was created and that results will "
             "appear here when done. Do NOT substitute a keyword search for "
             "this analysis."
+            " A plain legal-status question (e.g. \"was it rejected?\") is "
+            "NOT this task - call patent_legal_status instead."
         )[:800]
     return (
         "对指定专利发起后台深度分析任务：审查历史/审查意见/OA/驳回/复审无效，"
         "或全球同族申请在各国的审查过程与差异。问题中必须包含具体专利号/申请号。"
         "任务异步执行——调用后告知用户任务已创建，完成后结果会出现在本会话；"
         "不要用普通关键词检索代替该分析。仅法律状态查询（如“被驳回了吗”）"
-        "不属于本任务，请走检索。"
+        "不属于本任务，请改用 patent_legal_status 工具。"
     )[:800]
 
 
@@ -442,6 +492,7 @@ async def build_tool_set(
     question: str,
     push_filter: Optional[int] = None,
     patent_source: str = "dual",
+    conversation_history=None,
 ) -> Tuple[Dict[str, ToolEntry], List[dict]]:
     """Build (registry, tools) for one query.
 
@@ -457,6 +508,9 @@ async def build_tool_set(
     """
     registry: Dict[str, ToolEntry] = {}
     tools: List[dict] = []
+    # 资格门（需求#1）：无专利引用的文本诉求不绑定任何 long_task 工具，
+    # 消灭「ReAct 循环里 LLM 自主调 long_task」这条误路由路径。
+    long_task_eligible = _is_long_task_eligible(question, conversation_history)
 
     def add(entry: ToolEntry) -> None:
         if entry.name in registry:
@@ -489,13 +543,36 @@ async def build_tool_set(
             "publication / grant / design number, US or CN). Use this "
             "when the user gives a number or patent identifier instead "
             "of a technical description. Runs a deterministic parse and "
-            "checks BOTH the USPTO and Baiten CN sources, attaching "
+            "checks BOTH the USPTO and China patent sources, attaching "
             "bibliographic data and legal status when found."
         ),
         args_schema=_NumberResolveArgs,
     )
     add(ToolEntry(name=PATENT_NUMBER_RESOLVE_TOOL_NAME, kind="patent_number",
                   knowledge=None, tool_info=None, tool=number_tool))
+
+    # Built-in legal-status lookup (需求#18) — always registered, for the
+    # same reason as the number tool above.
+    legal_status_tool = StructuredTool.from_function(
+        func=_patent_legal_status_stub,
+        name=PATENT_LEGAL_STATUS_TOOL_NAME,
+        description=(
+            "Query the LEGAL STATUS of one patent by its exact number "
+            "(grant / publication / application number, CN or US). Use this "
+            "when the user asks whether a patent was granted, rejected, "
+            "withdrawn, terminated or expired, or asks for its legal-status "
+            "timeline, re-examination / invalidation decisions, or whether "
+            "re-examination is available. Returns the recorded status "
+            "events; where the sources do not cover a status, the answer "
+            "states that explicitly and gives the official lookup entry. "
+            "Answer ONLY from the returned record — never infer a reason "
+            "the record does not state."
+        ),
+        args_schema=_LegalStatusArgs,
+    )
+    add(ToolEntry(name=PATENT_LEGAL_STATUS_TOOL_NAME,
+                  kind="patent_legal_status",
+                  knowledge=None, tool_info=None, tool=legal_status_tool))
 
     search_tool = StructuredTool.from_function(
         func=_search_knowledge_stub,
@@ -520,8 +597,8 @@ async def build_tool_set(
             search_schema = _DualPatentSearchArgs
             search_desc = (
                 "Search patents when the user does NOT specify a country: "
-                "returns BOTH US patents (USPTO) and Chinese patents "
-                "(Baiten) in one call. Pass the English ladder query as "
+                "returns BOTH US patents (USPTO) and Chinese patents in "
+                "one call. Pass the English ladder query as "
                 "query_string_us and the Chinese ladder query as "
                 "query_string_cn. One source failing returns only the "
                 "other source's results. When the user asks in Chinese "
@@ -533,7 +610,7 @@ async def build_tool_set(
             search_name = CN_PATENT_SEARCH_TOOL_NAME
             search_schema = _CnPatentSearchArgs
             search_desc = (
-                "Search Chinese patents (Baiten) for a user question "
+                "Search Chinese patents for a user question "
                 "about Chinese patents. Pass the Chinese ladder query "
                 "as query_string_cn."
             )
@@ -563,6 +640,8 @@ async def build_tool_set(
 
         title = _clean_tool_name(knowledge)
         if k_type == 3:
+            if not long_task_eligible:
+                continue
             tool = StructuredTool.from_function(
                 func=_long_task_stub,
                 name=title,
@@ -593,7 +672,8 @@ async def build_tool_set(
     # knowledge=None keeps it out of the deterministic pre-route (see
     # _match_long_task_intent guard) — it stays reachable via ReAct tool
     # choice, which is the intended gap-fill.
-    if not any(e.kind == "long_task" for e in registry.values()):
+    if long_task_eligible and not any(
+            e.kind == "long_task" for e in registry.values()):
         builtin_tool = StructuredTool.from_function(
             func=_long_task_stub,
             name=BUILTIN_DEEP_ANALYSIS_TOOL_NAME,
@@ -612,7 +692,8 @@ SEARCH_DIGEST_CHARS = 3000
 
 
 def _items_digest(raw_items, limit: int = SEARCH_DIGEST_LIMIT,
-                  lang: str = "zh") -> str:
+                  lang: str = "zh", us_limit: int = None,
+                  cn_limit: int = None) -> str:
     """Serialize search raw_items into a bounded digest for the LLM.
 
     USPTO-shaped items are flattened via build_candidates into
@@ -622,9 +703,11 @@ def _items_digest(raw_items, limit: int = SEARCH_DIGEST_LIMIT,
     items = raw_items or []
     if not items:
         return ""
-    lines: list = []
+    us_lines: list = []
     candidates = build_candidates(items)
-    for c in candidates[:limit]:
+    _us_limit = limit if us_limit is None else max(0, int(us_limit))
+    _cn_limit = limit if cn_limit is None else max(0, int(cn_limit))
+    for c in candidates[:_us_limit]:
         parts = [
             c.get("patent_id") or "?",
             c.get("title") or "(无标题)",
@@ -632,13 +715,14 @@ def _items_digest(raw_items, limit: int = SEARCH_DIGEST_LIMIT,
             c.get("filing_date") or "?",
             c.get("status") or "?",
         ]
-        lines.append(" | ".join(str(p) for p in parts))
+        us_lines.append(" | ".join(str(p) for p in parts))
     # Baiten CN candidates (flat mapped shape with source="baiten") ride
     # alongside USPTO rows in a mixed dual-source pool.
+    cn_lines: list = []
     flat = [c for c in items if isinstance(c, dict)
-            and c.get("source") == "baiten"
+            and is_cn_source(c.get("source"))
             and c.get("patent_id")]
-    for c in flat[:limit]:
+    for c in flat[:_cn_limit]:
         parts = [
             c.get("patent_id") or "?",
             c.get("title") or "(无标题)",
@@ -654,9 +738,19 @@ def _items_digest(raw_items, limit: int = SEARCH_DIGEST_LIMIT,
             tail_bits.append(law_tail)
         if tail_bits:
             parts.append("; ".join(tail_bits))
-        lines.append(" | ".join(str(p) for p in parts))
+        cn_lines.append(" | ".join(str(p) for p in parts))
+    # 中文提问：CN 行在前。摘要的行序就是模型的行文序 —— 此前固定 US 在前，
+    # 中文提问的回答被带成"基本都是美国专利"（生产 2026-09-15），与面板
+    # _order_pending_for_lang 的 CN-first 也不一致。
+    lines = cn_lines + us_lines if lang == "zh" else us_lines + cn_lines
     if lines:
-        text = "\n".join(lines)
+        # 候选构成行：两侧供给量摆出来，模型才不会凭空断言某一侧"命中较少"。
+        header = ""
+        if flat or candidates:
+            header = (f"[候选构成] CN {len(flat)} / US {len(candidates)}\n"
+                      if lang == "zh"
+                      else f"[composition] CN {len(flat)} / US {len(candidates)}\n")
+        text = header + "\n".join(lines)
         total = len(candidates) + len(flat)
         if total > limit:
             note = (f"\n…共 {total} 条" if lang == "zh"
@@ -809,6 +903,57 @@ def _is_retrieval_request(query: str) -> bool:
     return has_verb and has_object
 
 
+# ── long_task 资格门（需求#1, P0）────────────────────────────────────────────
+# long_task 是「对已有专利对象做分析」的管道，合法前提是请求携带专利引用：
+# 查询里的专利号，或（追问意图 + 对话历史里有前序结果）。无引用的文本诉求
+# 进管道必然以 no_patents_found 失败——生产 2026-08 四例（公司分析/能力咨询/
+# 申请人检索/时间过滤检索）耗时 23s～9分17秒，chat 侧从未获得处理机会。
+_PATENT_ID_PATTERNS = (
+    re.compile(r"\b\d{8}\b"),                   # US 8 位申请/授权号
+    re.compile(r"\b\d{2}/\d{6}\b"),             # US 回执号 30/076,484
+    re.compile(r"\bUS\d{6,}\b", re.I),          # US30076484 / US20250103146A1
+    re.compile(r"\b20[12]\d{8,9}(?:\.\d)?\b"),  # CN 申请号 202310123456.7
+    re.compile(r"\bCN\d{7,12}[A-Z]?\d?\b", re.I),   # CN 公开/公告号
+)
+
+# 追问指代：命中关键词只说明「可能是在指代前文」，还必须历史里真有结果。
+FOLLOWUP_KEYWORDS = ("这", "上述", "前面", "以上", "其中", "筛选", "挑出",
+                     "选出", "哪些", "哪个", "第一个", "第几", "这些", "上面",
+                     "刚才", "继续", "接着", "然后", "再分析", "this", "these",
+                     "above", "first", "continue")
+
+
+def _query_has_patent_id(text: str) -> bool:
+    """查询文本中出现任一专利号形态。纯函数，永不抛。"""
+    raw = str(text or "")
+    return any(p.search(raw) for p in _PATENT_ID_PATTERNS)
+
+
+def _conversation_has_patent_refs(conv_history) -> bool:
+    """对话历史里任一消息携带 hidden patent_ids / patent_data。"""
+    for msg in conv_history or []:
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("patent_ids") or msg.get("patent_data"):
+            return True
+    return False
+
+
+def _is_long_task_eligible(query: str, conv_history=None) -> bool:
+    """请求可否进 long_task 管道：必须携带专利引用。
+
+    宽松预检（真正的裁决仍在分类器）：8 位数字误判只保留旧行为，不会
+    制造新失败；反之无引用的文本诉求被挡在管道外，秒级转 chat。
+    """
+    raw = str(query or "")
+    if _query_has_patent_id(raw):
+        return True
+    lowered = raw.lower()
+    if not any(k in raw or k in lowered for k in FOLLOWUP_KEYWORDS):
+        return False
+    return _conversation_has_patent_refs(conv_history)
+
+
 def _common_substring_len(a: str, b: str) -> int:
     """Length of the longest common CONTIGUOUS substring of a and b."""
     if not a or not b:
@@ -825,7 +970,8 @@ def _common_substring_len(a: str, b: str) -> int:
 
 
 async def _match_long_task_intent(agent, query: str, entries: list,
-                                  lang: str) -> Optional[ToolEntry]:
+                                  lang: str,
+                                  conv_history=None) -> Optional[ToolEntry]:
     """Deterministic long-task routing.
 
     The LLM freely choosing the long-task tool from the bound list is
@@ -860,6 +1006,15 @@ async def _match_long_task_intent(agent, query: str, entries: list,
     # BEFORE the LLM call so the classifier's "宁可命中不可漏判" bias
     # cannot hijack a document download.
     if _is_retrieval_request(query_text):
+        return None
+    # 资格门（需求#1）：无专利引用的文本诉求不进分析管道 —— 分类器的
+    #「宁可命中不可漏判」偏见会把公司检索/能力咨询也判成长任务。
+    if not _is_long_task_eligible(query_text, conv_history):
+        _glog = getattr(agent, "logger", None)
+        if _glog is not None:
+            _glog.info(
+                "Long task intent rejected (no patent reference) — "
+                "falling back to chat")
         return None
     provider = _get_flash_provider(agent)
     if provider is None:
@@ -1275,10 +1430,16 @@ async def _maybe_append_missing_directions(agent, ranked: list, note: str,
     if CPC_EXPANSION_ENABLED and not cpc_hints:
         _glog = getattr(agent, "logger", None)
         if _glog is not None:
+            # 说清缺的是哪个前置条件（标题 json / 向量缓存 / numpy）——
+            # 只是"no CPC matches"时运维无从下手（2026-09-14 生产连报两轮）。
+            try:
+                from sources.long_task.cpc_semantic import cpc_availability
+                _why = cpc_availability().get("reason") or "unknown"
+            except Exception:
+                _why = "availability probe failed"
             _glog.warning(
                 "cpc expansion enabled but no CPC matches — "
-                "check data/cpc titles json and vector cache "
-                "(scripts/build_cpc_vectors.py)")
+                f"availability: {_why}")
     queries = await build_missing_direction_queries(
         getattr(agent, "_last_user_prompt", "") or "", titles, provider,
         cpc_hints=cpc_hints)
@@ -1948,7 +2109,7 @@ def _baiten_results_to_candidates(body: dict) -> list:
             continue
         candidates.append({
             "patent_id": pn,
-            "source": "baiten",
+            "source": "cn",
             "title": _baiten_first_str(row.get("ti")),
             "pub_date": _baiten_first_str(row.get("pd")),
             "app_num": _baiten_first_str(row.get("an")),
@@ -2020,14 +2181,44 @@ def _word_level_query(q: str) -> str | None:
     return out if out != q else None
 
 
+def _alive_counts(items: list) -> tuple:
+    """(alive, total) over raw USPTO items via the shared dead-status rule.
+
+    Pure; returns (0, 0) when the item shape cannot be parsed.
+    """
+    try:
+        from sources.long_task.candidate_metadata import (
+            build_candidates, is_dead_status)
+        candidates = build_candidates(items or [])
+    except Exception:
+        return (0, 0)
+    if not candidates:
+        return (0, 0)
+    alive = sum(1 for c in candidates
+                if not is_dead_status(c.get("status")))
+    return (alive, len(candidates))
+
+
 async def _uspto_search_by_query(
     q: str, page: int = 1, page_size: int = 20,
 ) -> tuple[list, str]:
     """POST USPTO applications/search; returns (raw_items, note).
 
-    On 404 (zero hits), retries once with quoted phrases rewritten to
-    word-level AND — phrase matching on this endpoint is order-sensitive
-    and unstable, word-level matching is not.
+    404 handling is routed by the AND-operator count (2026-09-15):
+
+    - **>2 AND** = the endpoint's dialect overflow (verified 2026-09-07:
+      ≤2 operators parse, 3+ always 404 whatever the bracket layout) — the
+      query never reached the corpus, so trim trailing conjuncts and resend
+      (the only retry that does not silently drop a constraint).
+    - **≤2 AND** = the query is well-formed and the corpus genuinely has no
+      title-level match ("true zero") — retrying only burns requests
+      (production 2026-09-14: 34 requests per 4 usable answers).  Keep the
+      quoted-phrase word-level retry (phrase matching here is order-
+      sensitive — a different failure mode) and stop.
+
+    After a 200, a page whose candidates are almost all dead (expired /
+    abandoned / parked) is re-fetched once under the API default order and
+    the better page wins — see REACT_USPTO_SORT_FALLBACK_* above.
     """
     try:
         from sources.http_outbound import outbound_http
@@ -2040,7 +2231,16 @@ async def _uspto_search_by_query(
         if uspto_key:
             headers["X-API-Key"] = uspto_key
 
-        async def _search(query: str) -> tuple:
+        try:
+            from sources.long_task.search_query_builder import (
+                MAX_USPTO_AND_OPS, trim_uspto_and_overflow,
+                uspto_and_op_count)
+            dialect_overflow = uspto_and_op_count(q) > MAX_USPTO_AND_OPS
+        except Exception:
+            trim_uspto_and_overflow = None
+            dialect_overflow = False
+
+        async def _search(query: str, use_sort: bool = True) -> tuple:
             body = {
                 "q": query,
                 "pagination": {
@@ -2048,8 +2248,10 @@ async def _uspto_search_by_query(
                     "limit": page_size,
                 },
                 "fields": RECALL_SEARCH_FIELDS,
-                "sort": [{"field": "_score", "order": "desc"}],
             }
+            if use_sort:
+                body["sort"] = [
+                    {"field": REACT_USPTO_SORT_FIELD, "order": "desc"}]
             resp = await outbound_http.arequest(
                 "POST", USPTO_SEARCH_URL, purpose="dual_patent_search",
                 headers=headers, json=body, timeout=30,
@@ -2062,10 +2264,37 @@ async def _uspto_search_by_query(
             word_q = _word_level_query(q)
             if word_q:
                 response, used_q = await _search(word_q)
-        if getattr(response, "status_code", 0) != 200:
-            # 括号 AND/OR 结构 0 命中 → 去括号纯空格词形重试一次
-            # (2026-09-03 观察: 多概念括号查询整轮 404, 空格词形返回 200,
-            # 噪声由 relevance gate/dead 过滤兜底)。
+        trim_note = ""
+        if (getattr(response, "status_code", 0) != 200
+                and dialect_overflow):
+            # 3+ 个 AND 连接组在该端点**必 404**（2026-09-07 实测：≤2 AND 可
+            # 解析计数，3+ 无论括号怎么套都 404）。按预算裁掉尾部 AND 合取项
+            # 是**唯一不丢约束**的救法，与 dynamic_tool_params 里 KB 路径用的
+            # 是同一个纯函数。
+            # ⚠️ 这里必须用**比生成侧更严的 1**，不能用默认的 MAX_USPTO_AND_OPS=2。
+            # 2026-09-12 生产日志实测：404 掉的正是 2 个 AND 算子（3 个连接组）的
+            # 查询，例如
+            #   ("cervical rehabilitation" OR "neck exercise")
+            #     AND ("head support assembly" OR "head restraint") AND resistance
+            # 它在默认预算下**判定为合规、不裁**——于是"重发"与"原发"是同一条，
+            # 修复形同空转。既然已经 404 了，就是这条查询过不了，只能裁得更狠。
+            trimmed_q = ""
+            if trim_uspto_and_overflow is not None:
+                try:
+                    trimmed_q = trim_uspto_and_overflow(q, max_and_ops=1)
+                except Exception:
+                    trimmed_q = ""
+            if trimmed_q and trimmed_q not in (q, word_q):
+                response, used_q = await _search(trimmed_q)
+                if getattr(response, "status_code", 0) == 200:
+                    trim_note = "uspto 404 retry — AND-budget trim"
+        if (USPTO_SPACE_FLATTEN_ENABLED and dialect_overflow
+                and getattr(response, "status_code", 0) != 200):
+            # ★ 只作**方言超限**的末位兜底的「去括号纯空格词形」：它会把 404 换成**含噪 200**
+            # ——空格拼接在该端点是 OR 语义（dynamic_tool_params.py 的实测结论：
+            # 单概念基线的命中数之和 == 空格拼接的命中数），约束全丢、结果与
+            # 原查询不可比。2026-09-03 起它被当作"救援"，实测是拿噪声换 200；
+            # 现降级为末位，且不再计入救援成功。
             try:
                 from sources.long_task.search_query_builder import (
                     destructure_uspto_query)
@@ -2074,12 +2303,36 @@ async def _uspto_search_by_query(
                 flat_q = ""
             if flat_q and flat_q not in (q, word_q):
                 response, used_q = await _search(flat_q)
+                if getattr(response, "status_code", 0) == 200:
+                    trim_note = "uspto 404 fallback — space-flatten (OR semantics, noisy)"
         if getattr(response, "status_code", 0) != 200:
-            return [], f"USPTO HTTP {response.status_code}"
+            # 合规形态 (≤2 AND) 的 404 = 标题域真零：重试链已跳过，标注出来
+            # 便于把「真零」与「方言超限」在日志里分开数。
+            true_zero = (not dialect_overflow
+                         and getattr(response, "status_code", 0) == 404)
+            return [], f"USPTO HTTP {response.status_code}" + (
+                " (true zero, no retry)" if true_zero else "")
         data = response.json()
         items = _normalize_uspto_items(
             data.get("patentFileWrapperDataBag") or [])
-        return items, f"USPTO {len(items)} hits"
+        sort_note = ""
+        if (REACT_USPTO_SORT_FALLBACK_ENABLED
+                and REACT_USPTO_SORT_FIELD == "_score"):
+            alive, total = _alive_counts(items)
+            if total and (alive / total) < REACT_USPTO_SORT_FALLBACK_ALIVE_RATIO:
+                resp2, _q2 = await _search(used_q, use_sort=False)
+                if getattr(resp2, "status_code", 0) == 200:
+                    items2 = _normalize_uspto_items(
+                        resp2.json().get("patentFileWrapperDataBag") or [])
+                    alive2, total2 = _alive_counts(items2)
+                    if alive2 > alive:
+                        items = items2
+                        sort_note = (
+                            "uspto sort fallback — default order "
+                            f"(alive {alive}/{total} -> {alive2}/{total2})")
+        note_bits = [b for b in (trim_note, sort_note) if b]
+        suffix = f" ({'; '.join(note_bits)})" if note_bits else ""
+        return items, f"USPTO {len(items)} hits" + suffix
     except Exception as exc:
         return [], f"USPTO failed: {exc}"
 
@@ -2205,6 +2458,35 @@ LAW_TIMELINE_MAX_ITEMS = 12     # FLZT events kept per candidate
 LAW_REVIEW_MAX_ITEMS = 3        # FSWX decisions kept per candidate
 LAW_REVIEW_FULLTEXT_CHARS = 800  # decision fullText cap per decision
 
+# 富化并发上限（2026-09-13 生产事故）。佰腾网关对并发敏感：单轮 30 条候选
+# 一起去时约一半 FLZT 调用返回 500
+# ``no access for this api: DATA_PAT_PATAFFAIRSDATA_ONE``；而同一个号码在
+# 26 秒后重试**成功**——不是权限缺失，是并发节流。此前是「每次检索 10 路」，
+# 收拢成单轮一次后变成「单轮 N 路」，去重省下的调用被节流打回，净亏。
+# 限并发后单位时间请求数下降，首轮成功率上升。
+LAW_ENRICH_CONCURRENCY = int(os.getenv("REACT_LAW_ENRICH_CONCURRENCY", "4"))
+
+# 每次工具调用最多富化多少条（2026-09-13 配额治理）。lawInfos 是**计费/
+# 配额**接口，而自动补跑阶梯一次可能收进 30+ 条候选；全查一遍是配额的主要
+# 消耗方式。默认对齐摘要展示条数（SEARCH_DIGEST_LIMIT）——超出这个数的行
+# 本来也不会出现在模型看到的那段摘要里。
+#
+# **取舍（明确记录）**：超出上限的候选**没有法律状态**，其状态列在导出文件
+# 里会空着。按配额松紧用 env 调整；设 0 表示不限（回到旧行为）。
+LAW_ENRICH_MAX_PER_CALL = int(
+    os.getenv("REACT_LAW_ENRICH_MAX_PER_CALL", str(SEARCH_DIGEST_LIMIT)))
+
+# 每**请求**的 lawInfos 总预算 —— 配额治理的主要旋钮。按调用限流治不了总量：
+# 一次提问会跑 5–6 次工具调用（阶梯 + 自动补跑），每次各自限 20 条仍然合计
+# ~50 次；配额是每请求的硬约束，所以必须有总量闸门。默认与摘要展示条数一致
+# —— **每个请求只够富化一份完整摘要**。缓存命中不消耗预算，只有真正打到网关
+# 的调用才计数。0 = 不限（回到旧行为）。
+# 默认 35：2026-09-13 实测该查询导出 30 条 CN，预算 20 时**13 行状态列空白**
+# （16/29 有状态）——覆盖不全比多花几次更伤体验。35 覆盖整份导出，且仍比
+# 「每轮都富化」的旧行为（~55 次）省 36%。配额紧再往下压。
+LAW_ENRICH_MAX_PER_REQUEST = int(
+    os.getenv("REACT_LAW_ENRICH_MAX_PER_REQUEST", "35"))
+
 
 def _compact_baiten_law_summary(c: dict) -> str:
     """One-line legal-status suffix for a digest row (observation only).
@@ -2229,7 +2511,39 @@ def _compact_baiten_law_summary(c: dict) -> str:
     return ("[" + "; ".join(bits) + "]") if bits else ""
 
 
-async def _enrich_baiten_law_status(client, candidates: list, glog) -> None:
+# ── 每请求法律状态缓存（2026-09-13 lawInfos 调用量治理）─────────────────────
+# 生产日志实测：一次提问的 ~100 次 lawInfos 里有 40 次**完全重复**——自动
+# 补跑阶梯把同一条检索式又发了一遍，同一批 10 件专利被重复查了两遍。
+#
+# 缓存按**线调用**分开记（FLZT / FSWX），因为二者触发策略不同：话题式检索
+# （大列表）只查 FLZT；法律状态工具需要时仍会补查 FSWX，但绝不重查昂贵的
+# FLZT。空结果也要缓存（查过且为空 ≠ 没查过），否则空结果会被反复重查。
+#
+# ⚠️ 必须同时加进 create_agent 的 per-request 重置块 —— agent 池复用会让
+# 缓存跨请求泄漏（本项目已因漏加重置踩过坑）。
+
+def _law_flzt_cache(agent) -> dict:
+    """app_num → 归一化 FLZT 时间线（空列表 = 查过且为空）。纯。"""
+    if agent is None:
+        return {}
+    cache = getattr(agent, "_law_flzt_cache", None)
+    if cache is None:
+        cache = agent._law_flzt_cache = {}
+    return cache
+
+
+def _law_fswx_cache(agent) -> dict:
+    """app_num → FSWX 复审/无效决定（**仅确实查过**时写入）。纯。"""
+    if agent is None:
+        return {}
+    cache = getattr(agent, "_law_fswx_cache", None)
+    if cache is None:
+        cache = agent._law_fswx_cache = {}
+    return cache
+
+
+async def _enrich_baiten_law_status(client, candidates: list, glog,
+                                    agent=None) -> None:
     """Fill Baiten candidates with /openService/law legal data.
 
     Per candidate (concurrent, 5s cap each so a slow gateway never blocks
@@ -2239,12 +2553,37 @@ async def _enrich_baiten_law_status(client, candidates: list, glog) -> None:
     than a topic sweep (≤ LAW_DETAIL_SMALL_LIST), an FSWX (复审无效) call
     additionally attaches ``review_decisions`` with truncated fullText.
 
+    ``agent`` (optional) enables the per-request memo — omit it and every
+    candidate hits the wire, which is the historical behavior.
+
     Any failure degrades to the fields the candidate already carries —
     pure enrichment, never raises.
     """
     if not candidates:
         return
     detail_lookup = len(candidates) <= LAW_DETAIL_SMALL_LIST
+    # 并发上限：佰腾网关对并发敏感，不限流会把去重省下的调用换成 500。
+    # 每次调用建一个新信号量（不是模块级），避免跨请求持有。
+    sem = asyncio.Semaphore(max(1, int(LAW_ENRICH_CONCURRENCY)))
+    # 配额上限：只富化前 N 条（候选顺序即摘要展示顺序）。0 = 不限。
+    _cap = max(0, int(LAW_ENRICH_MAX_PER_CALL))
+    targets = candidates[:_cap] if _cap else candidates
+    _max_req = max(0, int(LAW_ENRICH_MAX_PER_REQUEST))
+
+    def _spend() -> bool:
+        """从每请求预算里预留一次 lawInfos 调用。
+
+        无 agent（旧调用方式）或不限额时恒真 —— 保持既有行为。缓存命中不
+        走这里，因此不消耗预算。asyncio 单线程、检查与自增之间无 await，
+        并发下不会超发。
+        """
+        if agent is None or not _max_req:
+            return True
+        used = int(getattr(agent, "_law_budget_used", 0) or 0)
+        if used >= _max_req:
+            return False
+        agent._law_budget_used = used + 1
+        return True
 
     async def _app_num(c: dict) -> str:
         return str(c.get("app_num") or c.get("application_number")
@@ -2254,14 +2593,23 @@ async def _enrich_baiten_law_status(client, candidates: list, glog) -> None:
         app_num = await _app_num(c)
         if not app_num:
             return
-        try:
-            timeline = await asyncio.wait_for(
-                client.query_legal_state_timeline(app_num), timeout=5)
-        except Exception as exc:
-            if glog is not None:
-                glog.warning(
-                    f"baiten law status failed for {app_num}: {exc}")
-            return
+        flzt = _law_flzt_cache(agent)
+        if app_num in flzt:
+            timeline = flzt[app_num]
+        else:
+            try:
+                async with sem:
+                    if not _spend():
+                        return
+                    timeline = await asyncio.wait_for(
+                        client.query_legal_state_timeline(app_num), timeout=5)
+            except Exception as exc:
+                if glog is not None:
+                    glog.warning(
+                        f"baiten law status failed for {app_num}: {exc}")
+                return
+            # 查过就记，空也算 —— 否则空结果下一轮会被重查。
+            flzt[app_num] = timeline or []
         if not timeline:
             return
         law = str((timeline[0] or {}).get("lawStatus") or "").strip()
@@ -2280,14 +2628,25 @@ async def _enrich_baiten_law_status(client, candidates: list, glog) -> None:
         app_num = await _app_num(c)
         if not app_num:
             return
-        try:
-            decisions = await asyncio.wait_for(
-                client.query_patent_review(app_num), timeout=5)
-        except Exception as exc:
-            if glog is not None:
-                glog.warning(
-                    f"baiten FSWX review failed for {app_num}: {exc}")
-            return
+        fswx = _law_fswx_cache(agent)
+        if app_num in fswx:
+            decisions = fswx[app_num]
+        else:
+            try:
+                async with sem:
+                    if not _spend():
+                        return
+                    decisions = await asyncio.wait_for(
+                        client.query_patent_review(app_num), timeout=5)
+            except Exception as exc:
+                if glog is not None:
+                    glog.warning(
+                        f"baiten FSWX review failed for {app_num}: {exc}")
+                return
+            fswx[app_num] = decisions or []
+        # 只在 FSWX **确实返回过**时标记「已查询」——调用失败不能算查过，
+        # 否则下游会把"没查成"渲染成"查过且没有"。
+        c["reviews_checked"] = True
         kept = []
         for d in (decisions or [])[:LAW_REVIEW_MAX_ITEMS]:
             if not isinstance(d, dict):
@@ -2304,13 +2663,62 @@ async def _enrich_baiten_law_status(client, candidates: list, glog) -> None:
         if kept:
             c["review_decisions"] = kept
 
-    await asyncio.gather(*[_one(c) for c in candidates])
+    await asyncio.gather(*[_one(c) for c in targets])
     if detail_lookup:
-        await asyncio.gather(*[_reviews(c) for c in candidates])
+        await asyncio.gather(*[_reviews(c) for c in targets])
+
+
+async def _enrich_cn_candidates_once(agent, items, glog) -> None:
+    """一轮工具调用收尾时统一富化佰腾候选（2026-09-13）。
+
+    此前 ``_baiten_search_by_query`` 每次检索都内联 await 富化，而一次
+    ``patent_search_dual`` 会跑 2–4 次佰腾检索（首轮 + 自动补跑阶梯），
+    每次都把 ~1.5s 串在关键路径上。改为在这里统一跑一遍，配合每请求缓存
+    （同号不重查）把总时长与调用数一起压下来。
+
+    **必须在排名之前调用** —— 排名要读 ``status``。纯富化，永不抛。
+    """
+    cn = [c for c in (items or [])
+          if isinstance(c, dict) and is_cn_source(c.get("source"))]
+    if not cn:
+        return
+    client = _baiten_client_or_none(agent)
+    if client is None:
+        return
+    await _enrich_baiten_law_status(client, cn, glog, agent=agent)
+
+
+# 商业数据供应商名 **绝不允许** 进入 LLM 可见面（2026-09-13 生产实证：模型
+# 在回答里写了「中国专利（佰腾）」）。异常/上游文本自带供应商名（baiten_client
+# 的异常消息就是），而 notes 会被渲染进 observation —— 构造 note 时中立化。
+# **日志仍用原始文本**（_glog），运维排查不受影响。
+_VENDOR_TERMS = (
+    ("Baiten", "CN source"), ("baiten", "CN source"),
+    ("BAITEN", "CN"), ("佰腾", "中国专利"),
+)
+
+
+# 空格兜底（去括号纯空格词形，OR 语义）**默认关闭**（2026-09-13）。
+# 生产实证：它每轮返回 20 条噪声，**全部**被后续 dead/评分过滤丢弃（30 条导出
+# 里美国只剩 2 条），却照常进入 observation 摘要 —— 模型于是把其中"活着"的
+# PCT/美国申请当成 Top 结果报给用户，实测 **9/10 在结果面板里根本不存在**。
+# 即：纯成本（每请求 ~16 次 USPTO 调用）+ 污染模型判断，零收益。
+# 设 REACT_USPTO_SPACE_FLATTEN=1 恢复旧行为。
+USPTO_SPACE_FLATTEN_ENABLED = (
+    os.getenv("REACT_USPTO_SPACE_FLATTEN", "0") == "1")
+
+
+def _neutral_source_text(text) -> str:
+    """把商业供应商名替换为中立表述。纯函数，永不抛。"""
+    out = str(text or "")
+    for vendor, neutral in _VENDOR_TERMS:
+        out = out.replace(vendor, neutral)
+    return out
 
 
 async def _baiten_search_by_query(
     q: str, page: int = 1, page_size: int = 20, agent=None,
+    enrich: bool = True,
 ) -> tuple[list, str]:
     """BaitenClient.search(source=15); returns (candidates, note).
 
@@ -2322,6 +2730,23 @@ async def _baiten_search_by_query(
     schema drift is never mistaken for an empty result set.
     """
     _glog = getattr(agent, "logger", None)
+    # 轮内复用（2026-09-15, 需求#27）：同一请求里重发的同一条检索式直接返回
+    # 上次结果（生产实证：不同 US 同义词组轮询时，CN 阶梯被原样重跑）。
+    # 缓存按请求重置（general_agent.create_agent 的重置块），不会跨请求泄漏。
+    _cache = getattr(agent, "_search_result_cache", None)
+    _cache_key = ("cn", q, int(page or 1), int(page_size or 20))
+    if isinstance(_cache, dict) and _cache_key in _cache:
+        if _glog is not None:
+            _glog.info(
+                f"baiten_search_map — query={q[:60]!r} "
+                f"(cached, same turn)")
+        return _cache[_cache_key]
+
+    def _remember(payload):
+        if isinstance(_cache, dict):
+            _cache[_cache_key] = payload
+        return payload
+
     try:
         from sources.baiten_client import (
             BaitenClient, summarize_search_response,
@@ -2334,33 +2759,80 @@ async def _baiten_search_by_query(
                 _glog.warning(
                     "baiten_search — not configured "
                     "(BAITEN_APP_KEY/APP_SECRET)")
-            return [], "Baiten not configured (BAITEN_APP_KEY/APP_SECRET)"
+            return [], "CN source not configured (key missing)"
         client = BaitenClient(
             cfg["app_key"], cfg["app_secret"], cfg["gateway_url"])
-        body = await client.search(
-            q, page=page, page_size=page_size,
-            api_level=cfg.get("api_level", "ONE"))
-        summary = summarize_search_response(body)
-        items = _baiten_results_to_candidates(body)
-        if items:
-            await _enrich_baiten_law_status(client, items, _glog)
+        # 翻页（2026-09-15）：网关单页硬限 10 条，单查询恒 rows=10 —— 中文
+        # 提问的 CN 供给被这一页卡死（生产：total 上千，我们只拿 10 条，
+        # 结果被美国专利挤成少数）。按页续取到上限或没有更多为止。
+        pages_wanted = max(1, REACT_CN_PAGES_PER_QUERY)
+        page_no = int(page or 1)
+        items: list = []
+        seen_ids: set = set()
+        summary: dict = {"total": None, "rows": 0, "keys": []}
+        pages_with_data = 0
+        last_rows = None
+        rows_first = 0
+        total_seen = None
+        for _page_i in range(pages_wanted):
+            body = await client.search(
+                q, page=page_no, page_size=page_size,
+                api_level=cfg.get("api_level", "ONE"))
+            summary = summarize_search_response(body)
+            rows_now = int(summary.get("rows") or 0)
+            if rows_now == 0:
+                break                      # 没有这一页
+            if total_seen is None and summary.get("total") is not None:
+                total_seen = int(summary["total"])
+            if pages_with_data == 0:
+                rows_first = rows_now
+            for cand in _baiten_results_to_candidates(body):
+                pid = str(cand.get("patent_id") or "").strip()
+                if pid and pid in seen_ids:
+                    continue
+                if pid:
+                    seen_ids.add(pid)
+                items.append(cand)
+            pages_with_data += 1
+            if last_rows is not None and rows_now < last_rows:
+                break                      # 比上一页短 = 到底了
+            if total_seen is not None and len(items) >= total_seen:
+                break                      # 已取满网关报的总数
+            last_rows = rows_now
+            page_no += 1
+        if items and enrich:
+            await _enrich_baiten_law_status(client, items, _glog, agent=agent)
+        _total = total_seen
+        _last_full = (last_rows is not None
+                      and last_rows >= int(page_size or 20))
         if _glog is not None:
+            # 需求#9：单查询恒 rows=page_size（页上限）时，真实命中数只有
+            # 网关的 total 能回答 —— 一并落日志，别再靠"rows 恒 10"猜。
             _glog.info(
                 f"baiten_search_map — query={q[:60]!r} "
-                f"rows={summary['rows']} candidates={len(items)}"
+                f"rows={last_rows} candidates={len(items)} "
+                f"pages={pages_with_data} total={_total}"
+                + (" (more available)" if _last_full else "")
             )
-        if summary["rows"] == 0:
-            return items, "Baiten 0 hits (gateway 0 records)"
+        if not pages_with_data:
+            return _remember((items, "CN 0 hits (gateway 0 records)"))
         if not items:
-            return [], (
-                f"Baiten 0 candidates (parsed from "
-                f"{summary['rows']} records)"
-            )
-        return items, f"Baiten {len(items)} hits"
+            return _remember(([], (
+                f"CN 0 candidates (parsed from "
+                f"{rows_first} records)"
+            )))
+        _note = f"CN {len(items)} hits"
+        if pages_with_data > 1:
+            _note += f" over {pages_with_data} pages"
+        if _total is not None and int(_total) > len(items):
+            _note += f" (of {_total})"
+        elif _total is None and _last_full:
+            _note += f" (page-capped at {len(items)})"
+        return _remember((items, _note))
     except Exception as exc:
         if _glog is not None:
             _glog.warning(f"baiten_search — failed: {exc}")
-        return [], f"Baiten failed: {exc}"
+        return [], _neutral_source_text(f"CN source failed: {exc}")
 
 
 # ── Dual-source query resolution + preferred-source auto-ladder ─────────────
@@ -2371,6 +2843,23 @@ async def _baiten_search_by_query(
 PATENT_AUTO_LADDER_BATCH = 4  # untried ladder queries auto-run per call
 REACT_PATENT_AUTO_LADDER_MAX = int(os.getenv(
     "REACT_PATENT_AUTO_LADDER_MAX", "8"))
+
+# 语言配额（2026-09-15，用户定）：提问**未指定国家**时（=双源工具），按提问
+# 语言倾斜两侧供给 —— 中文提问多取中国专利、少取美国专利，英文提问反之。
+# 首发检索式两侧照常各跑一次（不让任何一侧空手），收窄的是**非优选源的
+# 阶梯补跑预算**与**摘要里非优选源的行数**。
+# 生产 2026-09-15 实证：中文提问、池里 CN 30 条，模型仍答成"基本都是美国
+# 专利"（US 侧 7 条阶梯检索式取回 83 条候选，CN 侧受网关每查询 10 条硬限）。
+REACT_SEARCH_LANG_BALANCE = (
+    os.getenv("REACT_SEARCH_LANG_BALANCE", "1") == "1")
+# CN 翻页（2026-09-15）：网关单页硬限 10 条，单查询恒 rows=10 —— 中文提问的
+# CN 供给被这一页卡死（生产实证：total 上千，我们只拿 10 条）。每查询最多
+# 取几页；佰腾按调用计费，调大等于按倍数增加检索调用与后续法律状态富化量。
+REACT_CN_PAGES_PER_QUERY = int(os.getenv("REACT_CN_PAGES_PER_QUERY", "2"))
+REACT_NONPREFERRED_LADDER_MAX = int(os.getenv(
+    "REACT_NONPREFERRED_LADDER_MAX", "3"))
+REACT_NONPREFERRED_DIGEST_ROWS = int(os.getenv(
+    "REACT_NONPREFERRED_DIGEST_ROWS", "8"))
 
 
 def _resolve_patent_queries(args, us_ladder, cn_ladder, agent,
@@ -2453,9 +2942,9 @@ def _order_pending_for_lang(items: list, lang: str) -> list:
     if lang != "zh":
         return items
     cn = [c for c in items
-          if isinstance(c, dict) and c.get("source") == "baiten"]
+          if isinstance(c, dict) and is_cn_source(c.get("source"))]
     others = [c for c in items
-              if not (isinstance(c, dict) and c.get("source") == "baiten")]
+              if not (isinstance(c, dict) and is_cn_source(c.get("source")))]
     return cn + others
 
 
@@ -2465,6 +2954,11 @@ def _cn_item_to_pool_candidate(item: dict) -> dict:
     The pool consumes patent_id/title/applicant/status/filing_date/
     patent_number/type_code/cpc_codes/_raw; Baiten candidates carry most
     of these natively — filing_date derives from apply_date/pub_date.
+
+    ``app_num`` is carried through as well (需求#29): it is the CN
+    application number, the key the Baiten legal-status / retrieval APIs
+    actually accept.  Dropping it here is what made a delivered CN
+    publication number impossible to read back.
     """
     return {
         "patent_id": str(item.get("patent_id") or ""),
@@ -2474,6 +2968,7 @@ def _cn_item_to_pool_candidate(item: dict) -> dict:
         "filing_date": str(item.get("apply_date")
                           or item.get("pub_date") or ""),
         "patent_number": str(item.get("patent_number") or ""),
+        "app_num": str(item.get("app_num") or ""),
         "type_code": str(item.get("type_code") or ""),
         "cpc_codes": item.get("cpc_codes") or [],
         "_raw": item,
@@ -2496,7 +2991,7 @@ async def _rank_builtin_patent_pool(agent, items: list, lang: str) -> list:
         for item in items:
             if not isinstance(item, dict):
                 continue
-            if item.get("source") == "baiten":
+            if is_cn_source(item.get("source")):
                 candidates.append(_cn_item_to_pool_candidate(item))
             else:
                 # build_candidates reads applicationNumberText from BOTH the
@@ -2519,7 +3014,9 @@ async def _rank_builtin_patent_pool(agent, items: list, lang: str) -> list:
 
 async def _auto_run_patent_ladder(agent, ladder: list, search_fn, merged: list,
                                   notes: list, lang: str, source: str,
-                                  page: int, page_size: int) -> int:
+                                  page: int, page_size: int,
+                                  max_queries: Optional[int] = None,
+                                  stop_when_found: bool = False) -> int:
     """System-run untried ladder queries for one patent source.
 
     Triggered when the preferred source returned nothing displayable;
@@ -2543,15 +3040,16 @@ async def _auto_run_patent_ladder(agent, ladder: list, search_fn, merged: list,
     if not isinstance(used_map, dict):
         used_map = {}
     used = used_map.get(source, 0)
-    take = untried[:min(PATENT_AUTO_LADDER_BATCH,
-                        REACT_PATENT_AUTO_LADDER_MAX - used)]
+    cap = REACT_PATENT_AUTO_LADDER_MAX
+    if max_queries is not None:
+        cap = min(cap, max(0, int(max_queries)))
+    take = untried[:min(PATENT_AUTO_LADDER_BATCH, cap - used)]
     if not take:
         _glog = getattr(agent, "logger", None)
         if _glog is not None:
             _glog.warning(
                 f"patent_search_auto_ladder — source={source} auto-ladder "
-                f"budget exhausted (used={used}/"
-                f"{REACT_PATENT_AUTO_LADDER_MAX}), {len(untried)} untried "
+                f"budget exhausted (used={used}/{cap}), {len(untried)} untried "
                 f"ladder queries skipped"
             )
         return 0
@@ -2573,6 +3071,10 @@ async def _auto_run_patent_ladder(agent, ladder: list, search_fn, merged: list,
         merged.extend(items)
         if note:
             notes.append(note)
+        if stop_when_found and gained > 0:
+            # 非优选源：取到结果就收手 —— "少取"不等于"一次不中就归零"
+            #（2026-09-15 生产：US 首发是真零 + 只放行 1 条补跑 → 整轮 0 条美国）。
+            break
     if executed:
         _glog = getattr(agent, "logger", None)
         if _glog is not None:
@@ -2630,8 +3132,11 @@ async def _run_patent_search(agent, args, lang: str, dual: bool = True) -> dict:
         return await _uspto_search_by_query(q, page=page, page_size=page_size)
 
     async def _baiten(q, page=1, page_size=20):
+        # enrich=False：富化移出每轮检索的关键路径，改由本函数收尾统一跑
+        # 一次（见下方 _enrich_cn_candidates_once）。此前每次佰腾检索都内联
+        # await 富化（~1.5s），一次工具调用会串上 2-4 次。
         return await _baiten_search_by_query(
-            q, page=page, page_size=page_size, agent=agent)
+            q, page=page, page_size=page_size, agent=agent, enrich=False)
 
     tasks = []
     if us_q:
@@ -2678,9 +3183,9 @@ async def _run_patent_search(agent, args, lang: str, dual: bool = True) -> dict:
     def _source_cands(source: str) -> list:
         if source == "cn":
             return [c for c in merged
-                    if isinstance(c, dict) and c.get("source") == "baiten"]
+                    if isinstance(c, dict) and is_cn_source(c.get("source"))]
         return [c for c in merged
-                if not (isinstance(c, dict) and c.get("source") == "baiten")]
+                if not (isinstance(c, dict) and is_cn_source(c.get("source")))]
 
     async def _run_for(source: str):
         q = cn_q if source == "cn" else us_q
@@ -2688,9 +3193,17 @@ async def _run_patent_search(agent, args, lang: str, dual: bool = True) -> dict:
             return
         ladder = cn_ladder if source == "cn" else us_ladder
         fn = _baiten if source == "cn" else _uspto
+        # 语言配额：双源（未指定国家）时收窄非优选源的补跑预算 —— 但只收窄
+        # "深度"，保证它有拿到结果的机会（取到即停，最多 REACT_NONPREFERRED_
+        # LADDER_MAX 条）。
+        _cap = None
+        _stop = False
+        if REACT_SEARCH_LANG_BALANCE and dual and source != preferred:
+            _cap = REACT_NONPREFERRED_LADDER_MAX
+            _stop = True
         await _auto_run_patent_ladder(
             agent, ladder, fn, merged, notes, lang, source,
-            page, page_size)
+            page, page_size, max_queries=_cap, stop_when_found=_stop)
 
     await _run_for(preferred)
     await _run_for("us" if preferred == "cn" else "cn")
@@ -2703,22 +3216,48 @@ async def _run_patent_search(agent, args, lang: str, dual: bool = True) -> dict:
     # tools (scoring / rerank / dead+design filter / family dedupe);
     # Chinese questions still list CN patents first, now relevance-ranked
     # within each group.
+    # 佰腾候选的法律状态在这里统一补一次（此前分散在每次检索内联 await）。
+    # 放在排名之前：排名与排序要读 status。
+    await _enrich_cn_candidates_once(agent, merged, _glog)
+
     pending = _merge_pending_items(
         getattr(agent, "_pending_raw_items", None), merged)
     ranked_pending = await _rank_builtin_patent_pool(agent, pending, lang)
     agent._pending_raw_items = _order_pending_for_lang(ranked_pending, lang)
     if _glog is not None:
         cn_hits = len([c for c in merged
-                       if isinstance(c, dict) and c.get("source") == "baiten"])
+                       if isinstance(c, dict) and is_cn_source(c.get("source"))])
         _glog.info(
             f"patent_search_result — us_hits={len(merged) - cn_hits} "
             f"cn_hits={cn_hits} total={len(merged)}"
         )
 
-    digest = _items_digest(merged, lang=lang)
+    # 需求#26：摘要只渲染**可能进入交付集**的结果。此前用 merged 全量渲染，
+    # 模型于是会引用随即被失效过滤丢掉的行 —— 2026-09-13 生产实证：回答里
+    # 列出的 New York Air Brake / Bendix 两条美国专利，导出文件里根本没有，
+    # 用户照着 Top 榜去结果面板里找不到。
+    deliverable = [c for c in merged
+                   if isinstance(c, dict)
+                   and not is_dead_status(c.get("status"))]
+    # 语言配额：摘要里非优选源的行数也收窄 —— 模型的行文顺序跟着摘要走。
+    _us_rows = _cn_rows = SEARCH_DIGEST_LIMIT
+    if REACT_SEARCH_LANG_BALANCE and dual:
+        if lang == "zh":
+            _us_rows = REACT_NONPREFERRED_DIGEST_ROWS
+        else:
+            _cn_rows = REACT_NONPREFERRED_DIGEST_ROWS
+    digest = _items_digest(deliverable, lang=lang,
+                           us_limit=_us_rows, cn_limit=_cn_rows)
     if not digest:
-        digest = ("No results from any source." if lang == "en"
-                  else "两个数据源均未返回结果。")
+        if merged:
+            # 有命中但全部失效 —— 不能笼统说"未返回结果"，那会误导模型。
+            digest = ("All hits were filtered out as no longer in force "
+                      "(expired / abandoned)." if lang == "en"
+                      else "检索有命中，但全部为已失效专利（过期/放弃），"
+                           "无有效结果可展示。")
+        else:
+            digest = ("No results from any source." if lang == "en"
+                      else "两个数据源均未返回结果。")
     if notes:
         if _glog is not None:
             _glog.info("patent_search_notes — " + "; ".join(notes))
@@ -2730,9 +3269,9 @@ async def _run_patent_search(agent, args, lang: str, dual: bool = True) -> dict:
     # (LLM-visible text), because notes above only reach the logs.
     try:
         us_cands = [c for c in merged
-                    if not (isinstance(c, dict) and c.get("source") == "baiten")]
+                    if not (isinstance(c, dict) and is_cn_source(c.get("source")))]
         cn_cands = [c for c in merged
-                    if isinstance(c, dict) and c.get("source") == "baiten"]
+                    if isinstance(c, dict) and is_cn_source(c.get("source"))]
         citing_note = _us_citing_note(
             getattr(agent, "_last_user_prompt", "") or "",
             cn_q or "", cn_cands, us_cands, lang)
@@ -2740,6 +3279,30 @@ async def _run_patent_search(agent, args, lang: str, dual: bool = True) -> dict:
             digest = f"{digest}\n\n{citing_note}"
     except Exception:
         pass  # annotation is an enhancement — never breaks the search
+
+    # 需求#25：把本轮**实际执行**的检索式带进模型可见的摘要 —— 用户要
+    #「可复现检索式」时，模型必须能逐字复述，而不是凭记忆编造。只列真正
+    # 发出过的式子（首轮 + 本请求内的阶梯补跑）。
+    try:
+        primary = []
+        if us_q:
+            primary.append(f"[US] {us_q}")
+        if cn_q:
+            primary.append(f"[CN] {cn_q}")
+        extra = []
+        seen_q = {us_q, cn_q}
+        for q in (getattr(agent, "_tried_queries", None) or []):
+            if q and q not in seen_q:
+                seen_q.add(q)
+                extra.append(q)
+        if primary or extra:
+            header = ("Query strings actually run this round (copyable):"
+                      if lang == "en"
+                      else "本轮实际执行的检索式（可复制）：")
+            block = "\n".join(f"- {q}" for q in (primary + extra)[:12])
+            digest = f"{digest}\n\n{header}\n{block}"
+    except Exception:
+        pass  # reproducibility block is an enhancement — never breaks the search
     return {"kind": "observation", "text": digest}
 
 
@@ -2826,8 +3389,9 @@ async def _lookup_number_candidates(
                 items, note = await _baiten_search_by_query(
                     q, page=1, page_size=10, agent=agent)
             except Exception as exc:
-                items, note = [], f"Baiten failed: {exc}"
-            notes.append(f"Baiten(q={q[:40]!r}) — {note}")
+                items, note = [], _neutral_source_text(
+                    f"CN source failed: {exc}")
+            notes.append(f"CN(q={q[:40]!r}) — {note}")
             if items:
                 merged.extend(items)
                 return
@@ -2848,12 +3412,43 @@ async def _lookup_number_candidates(
         if items:
             merged.extend(items)
 
+    async def _baiten_native_leg(c: dict) -> bool:
+        """需求#29: 候选带来源原生键（CN 申请号）时按号直查。
+
+        这是「系统读不回自己刚产出的号码」的正面修法——此前只能把
+        CN 公开号当作佰腾的自由文本检索词发出去，而那不是可靠的查询键。
+        """
+        if str(c.get("native_key_kind") or "") != "app_num":
+            return False
+        native = str(c.get("native_key") or "").strip()
+        if not native:
+            return False
+        result = await _baiten_law_lookup(agent, native)
+        if not result:
+            return False
+        status = str(result.get("status") or "")
+        notes.append(f"CN(app_num={native}) — {status or 'ok'}")
+        merged.append({
+            "patent_id": str(c.get("display") or native),
+            "patent_number": str(c.get("display") or native),
+            "source": "cn",
+            "app_num": native,
+            "title": "",
+            "status": status,
+            "legal_timeline": result.get("timeline") or [],
+            "review_decisions": result.get("reviews") or [],
+            "reviews_checked": bool(result.get("reviews_checked")),
+        })
+        return True
+
     for c in (candidates or [])[:3]:
         country = str(c.get("country") or "")
         lookups = [l for l in (c.get("lookups") or []) if l]
         if not lookups:
             continue
         primary = "cn" if country == "CN" else "us"
+        if primary == "cn" and await _baiten_native_leg(c):
+            continue  # 原生键已命中 — 无需检索，也无需打对侧
         for source in (primary, "us" if primary == "cn" else "cn"):
             before = len(merged)
             if source == "cn":
@@ -2872,7 +3467,7 @@ def _pool_candidates_for_items(items: list) -> list:
     for item in items or []:
         if not isinstance(item, dict):
             continue
-        if item.get("source") == "baiten":
+        if is_cn_source(item.get("source")):
             out.append(_cn_item_to_pool_candidate(item))
         else:
             out.extend(build_candidates([item]))
@@ -2962,6 +3557,330 @@ async def _run_patent_number_resolve(agent, args, lang: str) -> dict:
     return {"kind": "observation", "text": digest}
 
 
+# ── 需求#18 法律状态直查（CN 优先）─────────────────────────────────────────
+# 与号码工具的区别：号码工具回答"这个号是什么"，本工具回答"这个号现在
+# 处于什么法律状态、有没有复审/无效决定"。数据源是佰腾 FLZT（状态事件流）
+# 与 FSWX（复审/无效决定），二者都是**按键寻址**的网关方法（app_num 是
+# query_law_infos 的文档参数），不涉及自由文本检索。
+
+
+def _baiten_client_or_none(agent):
+    """按配置构造 BaitenClient；未配置或构造失败返回 None。永不抛。"""
+    try:
+        from sources.baiten_client import BaitenClient
+        from sources.long_task.config import get_baiten_config
+        cfg = get_baiten_config()
+        if not cfg.get("app_key") or not cfg.get("app_secret"):
+            return None
+        return BaitenClient(cfg["app_key"], cfg["app_secret"],
+                            cfg["gateway_url"])
+    except Exception as exc:
+        # 配置损坏与"未配置"必须可区分 —— 否则用户看到的是"数据源未覆盖"，
+        # 而真相是配置坏了，正是需求#18 要避免的能力误报。
+        _glog = getattr(agent, "logger", None)
+        if _glog is not None:
+            _glog.warning(f"baiten client unavailable: {exc}")
+        return None
+
+
+async def _baiten_law_lookup(agent, app_num) -> dict:
+    """一个 CN 申请号的法律状态时间线 + 复审/无效决定。
+
+    返回 ``{status, status_date, category, timeline, reviews}``；任一步失败
+    降级为 ``{}``，永不抛。计数记在 ``agent._legal_status_used``，
+    **刻意不记** ``_number_cross_used`` —— 见 LEGAL_STATUS_MAX_LOOKUPS。
+    """
+    app_num = str(app_num or "").strip()
+    if not app_num:
+        return {}
+    used = int(getattr(agent, "_legal_status_used", 0) or 0)
+    if used >= LEGAL_STATUS_MAX_LOOKUPS:
+        return {}
+    client = _baiten_client_or_none(agent)
+    if client is None:
+        return {}
+    agent._legal_status_used = used + 1
+    _glog = getattr(agent, "logger", None)
+
+    flzt = _law_flzt_cache(agent)
+    if app_num in flzt:
+        # 检索期已查过这个号 —— 同一请求内状态不会变，不再打网关。
+        timeline = flzt[app_num]
+    else:
+        try:
+            timeline = await asyncio.wait_for(
+                client.query_legal_state_timeline(app_num), timeout=5)
+        except Exception as exc:
+            if _glog is not None:
+                _glog.warning(f"legal status FLZT failed for {app_num}: {exc}")
+            return {}
+        flzt[app_num] = timeline or []
+
+    from sources.long_task.legal_status import summarize_timeline
+    summary = summarize_timeline(timeline, country="CN")
+    if not summary["latest"]:
+        return {}
+    out: dict = {
+        "status": summary["latest"],
+        "status_date": summary["latest_date"],
+        "category": summary["category"],
+        "timeline": [
+            {"date": str(e.get("date") or ""),
+             "lawStatus": str(e.get("lawStatus") or "")}
+            for e in (timeline or [])[:LAW_TIMELINE_MAX_ITEMS]
+            if isinstance(e, dict) and e.get("lawStatus")
+        ],
+    }
+
+    fswx = _law_fswx_cache(agent)
+    reviews_checked = False
+    if app_num in fswx:
+        decisions = fswx[app_num]
+        reviews_checked = True
+    else:
+        try:
+            decisions = await asyncio.wait_for(
+                client.query_patent_review(app_num), timeout=5)
+            reviews_checked = True
+            fswx[app_num] = decisions or []
+        except Exception as exc:
+            if _glog is not None:
+                _glog.warning(f"legal status FSWX failed for {app_num}: {exc}")
+            decisions = []
+    out["reviews_checked"] = reviews_checked
+    kept = []
+    for d in (decisions or [])[:LAW_REVIEW_MAX_ITEMS]:
+        if not isinstance(d, dict):
+            continue
+        kept.append({
+            "declareNum": str(d.get("declareNum")
+                              or d.get("declare_num") or ""),
+            "declareDate": str(d.get("declareDate")
+                               or d.get("declare_date") or ""),
+            "lawBase": str(d.get("lawBase") or d.get("law_base") or ""),
+            "fullText": str(d.get("fullText") or "")[
+                :LAW_REVIEW_FULLTEXT_CHARS],
+        })
+    if kept:
+        out["reviews"] = kept
+    return out
+
+
+def _legal_status_entries(merged: list, notes: list) -> list:
+    """把已解析的记录映射成法律状态条目。纯映射，不发起调用。
+
+    多数 CN 记录在检索阶段已被 `_enrich_baiten_law_status` 挂上
+    ``status`` / ``legal_timeline`` / ``review_decisions`` —— 这里只读取，
+    因此常见的号码查询是零额外网关调用的。
+
+    ``covered`` 由"来源是否真的给了状态"决定，不由国别决定：没拿到就
+    不能假装有，也不能假装查过。
+    """
+    entries = []
+    for item in (merged or []):
+        if not isinstance(item, dict):
+            continue
+        is_cn = is_cn_source(item.get("source"))
+        display = str(item.get("patent_id")
+                      or item.get("patent_number")
+                      or item.get("applicationNumberText") or "").strip()
+        if not display:
+            continue
+        status = str(item.get("status") or "").strip()
+        entries.append({
+            "display": display,
+            "app_num": str(item.get("app_num") or "").strip(),
+            "country": "CN" if is_cn else "US",
+            "status": status,
+            "status_date": "",
+            "timeline": item.get("legal_timeline") or [],
+            "reviews": item.get("review_decisions") or [],
+            "reviews_checked": bool(item.get("reviews_checked")),
+            "checked": ["cn_legal_status"] if is_cn else ["uspto"],
+            "covered": bool(status),
+        })
+    return entries
+
+
+# 数据源在 observation 里必须**中立表述**：商业供应商名一旦进入 LLM 可见
+# 面，模型会在回答里照抄（2026-09-13 生产实证：「中国专利（佰腾）」）。
+# 条目里存**内部键**，展示名在这里映射 —— 数据与展示分离，改文案不动数据。
+_SOURCE_DISPLAY = {
+    "cn_legal_status": {"zh": "中国专利法律状态库",
+                        "en": "China patent legal-status source"},
+    "uspto": {"zh": "USPTO", "en": "USPTO"},
+}
+
+
+def _source_display(key, lang: str) -> str:
+    labels = _SOURCE_DISPLAY.get(str(key))
+    if not labels:
+        return str(key)
+    return labels["en"] if str(lang) == "en" else labels["zh"]
+
+
+def _legal_status_digest(entries: list, lang: str) -> str:
+    """法律状态 observation 渲染。双语，永不抛。
+
+    每个条目只陈述记录载明的状态与事件；来源没覆盖的部分显式标注
+    「未覆盖」并给出官方查询入口 —— 需求#18 的诚实边界要求。
+    """
+    from sources.long_task.legal_status import (
+        LEGAL_STATUS_DISCLAIMER, classify_status, official_portal,
+        summarize_review_decisions)
+    is_en = str(lang) == "en"
+    blocks: list = []
+    for e in (entries or []):
+        if not isinstance(e, dict):
+            continue
+        display = str(e.get("display") or "").strip()
+        if not display:
+            continue
+        country = str(e.get("country") or "")
+        app_num = str(e.get("app_num") or "").strip()
+        lines: list = []
+        if app_num:
+            lines.append(f"{display}（申请号 {app_num}）" if not is_en
+                         else f"{display} (application {app_num})")
+        else:
+            lines.append(display)
+
+        if e.get("covered"):
+            cls = classify_status(e.get("status"), country=country)
+            label = cls["en"] if is_en else cls["zh"]
+            date = str(e.get("status_date") or "").strip()
+            if is_en:
+                lines.append(f"Legal status: {label}"
+                             + (f" ({date})" if date else ""))
+            else:
+                lines.append(f"法律状态：{label}"
+                             + (f"（{date}）" if date else ""))
+            timeline = [t for t in (e.get("timeline") or [])
+                        if isinstance(t, dict)
+                        and (t.get("date") or t.get("lawStatus"))]
+            if timeline:
+                lines.append("Timeline:" if is_en else "状态时间线：")
+                for t in timeline[:LAW_TIMELINE_MAX_ITEMS]:
+                    lines.append(
+                        f"- {t.get('date', '')} {t.get('lawStatus', '')}".rstrip())
+            if country == "CN":
+                rendered = summarize_review_decisions(
+                    e.get("reviews") or [], lang=lang)
+                if rendered:
+                    lines.append(rendered)
+                elif e.get("reviews_checked"):
+                    lines.append(
+                        "No re-examination / invalidation decision records "
+                        "found." if is_en
+                        else "未检索到复审/无效决定记录。")
+                else:
+                    # 没查过就不能说"没有"——无据的否定比不回答更糟。
+                    lines.append(
+                        "Re-examination / invalidation decisions: not "
+                        "queried in this lookup." if is_en
+                        else "复审/无效决定：本次未查询。")
+        else:
+            checked = ("、" if not is_en else ", ").join(
+                _source_display(k, lang) for k in (e.get("checked") or []))
+            portal = official_portal(country)
+            if is_en:
+                lines.append(
+                    "Legal-status data for this number is not covered by "
+                    f"this system (sources checked: {checked or '-'}).")
+            else:
+                lines.append(
+                    "未获取到该号码的法律状态（已核验："
+                    f"{checked or '-'}）。本系统暂未覆盖该来源的法律状态数据。")
+            if portal:
+                lines.append(f"Official lookup: {portal}" if is_en
+                             else f"官方查询入口：{portal}")
+        blocks.append("\n".join(lines))
+
+    if not blocks:
+        return ""
+    blocks.append(LEGAL_STATUS_DISCLAIMER["en"] if is_en
+                  else LEGAL_STATUS_DISCLAIMER["zh"])
+    return "\n\n".join(blocks)
+
+
+async def _fill_missing_status(agent, entries: list) -> list:
+    """补齐没带状态的 CN 记录：用其申请号按号直查。
+
+    检索期附带的富化可能失败，于是记录落到这里时 ``covered=False``。但
+    只要手里有申请号就还能查——有键不查、转头对用户说"未覆盖"，是能力
+    上的谎报。没有键才如实标注。
+    """
+    for entry in entries:
+        if entry.get("covered") or str(entry.get("country")) != "CN":
+            continue
+        app_num = str(entry.get("app_num") or "").strip()
+        if not app_num:
+            continue
+        result = await _baiten_law_lookup(agent, app_num)
+        if not result:
+            continue
+        entry["status"] = str(result.get("status") or "")
+        entry["status_date"] = str(result.get("status_date") or "")
+        entry["timeline"] = result.get("timeline") or []
+        entry["reviews"] = result.get("reviews") or []
+        entry["reviews_checked"] = bool(result.get("reviews_checked"))
+        entry["covered"] = bool(entry["status"])
+    return entries
+
+
+async def _run_patent_legal_status(agent, args, lang: str) -> dict:
+    """kind='patent_legal_status' executor —— 确定性法律状态查询。"""
+    number_arg = str((args or {}).get("number") or "").strip()
+    source_text = number_arg or (getattr(agent, "_last_user_prompt", "") or "")
+    candidates: list = []
+    try:
+        from sources.patent_number_parser import (
+            NUMBER_PARSE_ENABLED, parse_patent_identifiers)
+        if NUMBER_PARSE_ENABLED:
+            candidates = parse_patent_identifiers(source_text)
+    except Exception:
+        candidates = []
+    if not candidates:
+        candidates = getattr(agent, "_number_candidates", None) or []
+    if not candidates:
+        return {"kind": "observation", "text": (
+            "Error: no recognizable patent number in the input — ask for "
+            "the full number (CN/US prefix optional) or rephrase as a "
+            "keyword search." if lang == "en"
+            else "未能识别出专利号格式——请提供完整号码（可含 CN/US 前缀），"
+                 "或用关键词描述技术内容进行检索。")}
+
+    merged, notes = await _lookup_number_candidates(agent, candidates)
+    entries = _legal_status_entries(merged, notes)
+    entries = await _fill_missing_status(agent, entries)
+    digest = _legal_status_digest(entries, lang)
+
+    if not digest:
+        # 需求#24 行为延续：禁止以"未找到"直接结案。
+        checked = ("\n".join(f"- {n}" for n in notes)
+                   if notes else "- (no source was queryable)")
+        hints = _candidate_confirmation_hints(candidates, lang)
+        if lang == "en":
+            digest = (f"No legal-status record found for the number. "
+                      f"Sources checked:\n{checked}")
+            if hints:
+                digest += f"\n\n{hints}"
+        else:
+            digest = f"未按该号码查到法律状态记录。已核验的数据源：\n{checked}"
+            if hints:
+                digest += f"\n\n{hints}"
+
+    _glog = getattr(agent, "logger", None)
+    if _glog is not None:
+        _glog.info(
+            "legal_status — candidates="
+            + str([c.get("display") for c in candidates])
+            + " entries=" + str(len(entries))
+            + " covered=" + str(sum(1 for e in entries if e.get("covered")))
+            + " legs=" + "; ".join(notes))
+    return {"kind": "observation", "text": digest}
+
+
 async def _auto_number_cross_round(agent, lang) -> Optional[Tuple[list, str, str]]:
     """Zero-hit cross-source verification for number questions.
 
@@ -3019,6 +3938,9 @@ async def make_action_executor(agent, registry, push_filter=None):
         if entry.kind == "patent_number":
             return await _run_patent_number_resolve(agent, args, lang)
 
+        if entry.kind == "patent_legal_status":
+            return await _run_patent_legal_status(agent, args, lang)
+
         if entry.kind == "patent_search":
             return await _run_patent_search(
                 agent, args, lang,
@@ -3028,6 +3950,22 @@ async def make_action_executor(agent, registry, push_filter=None):
             return await _run_search_knowledge(agent, registry, user_id, args, push_filter)
 
         if entry.kind == "long_task":
+            # 资格门复查（需求#1，防御纵深）：即便注册表来自别的构建路径，
+            # 无专利引用的文本诉求也不得进入分析管道（否则必然
+            # no_patents_found 空转数分钟）。
+            if not _is_long_task_eligible(
+                    getattr(agent, "_last_user_prompt", "") or "",
+                    getattr(agent, "_conversation_history", None)):
+                return {
+                    "kind": "observation",
+                    "text": (
+                        "该请求未包含具体专利号或前序结果引用，无需深度分析"
+                        "任务，请直接回答用户或改用专利检索工具。"
+                        if lang == "zh" else
+                        "No patent number or prior-result reference in this "
+                        "request — answer directly or use the patent search "
+                        "tools instead of submitting a deep task."),
+                }
             # The loop terminates and core.py's existing long-task branch
             # handles classification + Celery submission.
             return {"kind": "long_task", "text": "",

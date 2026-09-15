@@ -9,6 +9,7 @@ from html import escape
 from typing import Any
 
 from sources.export_labels import uspto_field_label
+from sources.patent_source_detect import is_cn_source
 
 # Export for any non-empty result list: the pipeline already curates
 # (dead/design filtered, relevance ranked), so even a 1-item list is a
@@ -324,7 +325,31 @@ def _worksheet_xml(
 
 
 # ── Instructions sheet ────────────────────────────────────────────────
-def _instructions_rows(lang: str) -> list[dict[str, str]]:
+def _instructions_rows(lang: str, result_sheet_names: list[str] = None,
+                       meta_sheet_name: str = None) -> list[dict[str, str]]:
+    """Instructions sheet rows.
+
+    ``result_sheet_names`` are the ACTUAL result sheet titles — a
+    dual-source export splits into 中国专利 / 美国专利, so hardcoding
+    "Results" told the reader to look for a sheet that does not exist
+    (observed 2026-09-13 in a shipped workbook).
+    """
+    _zh = lang != "en"
+    _names = [str(n) for n in (result_sheet_names or []) if str(n).strip()]
+    _meta = str(meta_sheet_name or ("元数据" if _zh else "Metadata"))
+    if not _names:
+        _names = ["结果" if _zh else "Results"]
+    if _zh:
+        _result_line = "2. " + " / ".join(_names) + " 结果工作表"
+    else:
+        _result_line = "2. " + " / ".join(_names) + " result sheet(s)"
+    _meta_line = ("3. {} 元数据工作表".format(_meta) if _zh
+                  else "3. {} sheet".format(_meta))
+    return _instructions_rows_body(lang, _result_line, _meta_line)
+
+
+def _instructions_rows_body(lang: str, result_line: str,
+                            meta_line: str) -> list[dict[str, str]]:
     """Return row data for the localized instructions sheet."""
     if lang == "en":
         return [
@@ -337,10 +362,10 @@ def _instructions_rows(lang: str) -> list[dict[str, str]]:
             {"A": "1. Instructions (this sheet)",
              "B": "Usage guide and field descriptions.",
              "C": ""},
-            {"A": '2. "Results" sheet',
+            {"A": result_line,
              "B": "Patent search results — one patent per row, key fields as columns.",
              "C": ""},
-            {"A": '3. "Metadata" sheet',
+            {"A": meta_line,
              "B": "Query statistics (search scope, result count, timestamp).",
              "C": ""},
             {"A": "", "B": "", "C": ""},
@@ -364,10 +389,10 @@ def _instructions_rows(lang: str) -> list[dict[str, str]]:
         {"A": "1. 使用说明（本工作表）",
          "B": "引导说明和字段描述。",
          "C": ""},
-        {"A": '2. "Results" 结果工作表',
+        {"A": result_line,
          "B": "专利检索结果——每行一条专利，关键字段按列排列。",
          "C": ""},
-        {"A": '3. "Metadata" 元数据工作表',
+        {"A": meta_line,
          "B": "查询统计信息（搜索范围、结果数量、生成时间）。",
          "C": ""},
         {"A": "", "B": "", "C": ""},
@@ -383,9 +408,10 @@ def _instructions_rows(lang: str) -> list[dict[str, str]]:
     ]
 
 
-def _instructions_sheet_xml(lang: str) -> str:
+def _instructions_sheet_xml(lang: str, result_sheet_names=None,
+                              meta_sheet_name: str = None) -> str:
     """Build the instructions sheet XML (no header formatting, no freeze)."""
-    rows = _instructions_rows(lang)
+    rows = _instructions_rows(lang, result_sheet_names, meta_sheet_name)
     xml_parts: list[str] = [
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
         '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
@@ -540,7 +566,11 @@ def build_xlsx_bytes(
         # Sheet 1 — Instructions
         archive.writestr(
             f"xl/worksheets/sheet{instr_sheet_id}.xml",
-            _instructions_sheet_xml(lang),
+            _instructions_sheet_xml(
+                lang,
+                [name for name, _cols, _rows in result_sheets],
+                meta_sheet_name,
+            ),
         )
 
         # Result sheets (with localized headers + formatting)
@@ -633,9 +663,9 @@ def build_result_artifacts(
     # Split CN (baiten) and other (USPTO) rows into separate workbook
     # sheets — a dual-source result set must not be dumped into one sheet.
     cn_rows = [r for r in rows
-               if str(r.get("source", "")).strip().lower() == "baiten"]
+               if is_cn_source(r.get("source"))]
     other_rows = [r for r in rows
-                  if str(r.get("source", "")).strip().lower() != "baiten"]
+                  if not is_cn_source(r.get("source"))]
     if lang == "zh":
         cn_name, us_name = "中国专利", "美国专利"
     else:
