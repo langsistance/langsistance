@@ -80,6 +80,45 @@ class TestRunPatentSearchStreamNotes(unittest.TestCase):
             str(raw.get("applicationMetaData", {}).get("applicationNumberText")),
             "16544963")
 
+    def test_language_quota_caps_nonpreferred_source_ladder(self):
+        """中文提问：非优选源（美国）阶梯补跑预算收窄，CN 取得更多。
+
+        生产 2026-09-15：中文提问下美国侧跑了 7 条阶梯检索式取回 83 条候选，
+        而 CN 侧受每查询 10 条硬限 —— 结果答成"基本都是美国专利"。
+        """
+        from sources.agents.react_tools import (
+            REACT_NONPREFERRED_LADDER_MAX, _run_patent_search)
+        agent = _FakeAgent()
+        agent._search_rewrite = {"queries": ["us-q%d" % i for i in range(6)]}
+        agent._search_rewrite_cn = {"queries": ["ti:(q%d)" % i for i in range(6)]}
+        us_calls, cn_calls = [], []
+
+        async def _us(q, page=1, page_size=20):
+            us_calls.append(q)
+            return [], "USPTO HTTP 404 (true zero, no retry)"
+
+        async def _cn(q, page=1, page_size=20, agent=None, enrich=True):
+            cn_calls.append(q)
+            return [], "CN 0 hits (gateway 0 records)"
+
+        async def _go(lang):
+            us_calls.clear()
+            cn_calls.clear()
+            with patch("sources.agents.react_tools._uspto_search_by_query", _us), \
+                 patch("sources.agents.react_tools._baiten_search_by_query", _cn):
+                await _run_patent_search(
+                    agent, {"query_string_us": "us-q0",
+                            "query_string_cn": "ti:(q0)"}, lang)
+            return list(us_calls), list(cn_calls)
+
+        us, cn = asyncio.run(_go("zh"))
+        self.assertLessEqual(len(us), 1 + REACT_NONPREFERRED_LADDER_MAX)
+        self.assertGreater(len(cn), len(us), "中文提问 CN 应比 US 取更多")
+
+        us_en, cn_en = asyncio.run(_go("en"))
+        self.assertLessEqual(len(cn_en), 1 + REACT_NONPREFERRED_LADDER_MAX)
+        self.assertGreater(len(us_en), len(cn_en), "英文提问 US 应比 CN 取更多")
+
     def test_executed_queries_ride_the_digest(self):
         # 需求#25：模型必须能看到本轮真正执行的检索式，才能逐字复述给用户
         #（否则"给我检索式"只能靠编）。来源标注保持中立（不用供应商名）。

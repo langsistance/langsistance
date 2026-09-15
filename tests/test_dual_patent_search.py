@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from sources.agents.react_tools import (
     BUILTIN_DEEP_ANALYSIS_TOOL_NAME,
     _us_citing_note,
+    REACT_CN_PAGES_PER_QUERY,
     REACT_PATENT_AUTO_LADDER_MAX,
     _auto_run_patent_ladder,
     _baiten_results_to_candidates,
@@ -744,7 +745,8 @@ class TestBaitenSearchByQueryNotes(unittest.TestCase):
                              api_level="ONE"):
                 if raise_exc is not None:
                     raise raise_exc
-                return body
+                # 翻页：只第一页有数据，第二页起为空（真实网关的形态）
+                return body if page == 1 else {"code": "200"}
         effective_cfg = cfg if cfg is not None else {
             "app_key": "k", "app_secret": "s", "gateway_url": "http://x"}
         with patch("sources.baiten_client.BaitenClient",
@@ -795,7 +797,7 @@ class TestBaitenSearchByQueryNotes(unittest.TestCase):
                     for i in range(20)]}}
         items, note = asyncio.run(self._run(body))
         self.assertEqual(len(items), 20)
-        self.assertIn("showing 20 of 347", note)
+        self.assertIn("CN 20 hits (of 347)", note)
 
     def test_page_capped_without_total_marks_cap(self):
         body = {"code": "200", "data": {"fieldValues": [
@@ -828,6 +830,63 @@ class TestBaitenSearchByQueryNotes(unittest.TestCase):
         self.assertEqual(received["api_level"], "TWO")
 
 
+class TestBaitenPaging(unittest.TestCase):
+    """2026-09-15：网关单页硬限 10 条，单查询恒 rows=10 —— 中文提问的 CN
+    供给被这一页卡死（生产实证 total 上千只拿 10 条，结果被美国专利挤成少数）。
+    按 REACT_CN_PAGES_PER_QUERY 续页取回。"""
+
+    def _run(self, pages, max_pages=None):
+        calls = []
+
+        class _FakeClient:
+            async def search(self, q, page=1, page_size=20,
+                             api_level="ONE"):
+                calls.append(page)
+                return pages.get(page, {"code": "200"})
+
+        async def _go():
+            with patch("sources.baiten_client.BaitenClient",
+                       return_value=_FakeClient()), \
+                 patch("sources.long_task.config.get_baiten_config",
+                       return_value={"app_key": "k", "app_secret": "s",
+                                     "gateway_url": "http://x"}), \
+                 patch("sources.agents.react_tools.REACT_CN_PAGES_PER_QUERY",
+                       max_pages if max_pages is not None
+                       else REACT_CN_PAGES_PER_QUERY):
+                return await _baiten_search_by_query("ti:(散热)",
+                                                     agent=_FakeAgent())
+
+        return asyncio.run(_go()), calls
+
+    @staticmethod
+    def _page(prefix, rows, total):
+        return {"code": "200", "total_hits": total,
+                "data": {"fieldValues": [
+                    {"pn": "%s%06dA" % (prefix, i), "ti": "散热"}
+                    for i in range(rows)]}}
+
+    def test_second_page_is_fetched_and_deduped(self):
+        pages = {1: self._page("CN118", 10, 25),
+                 2: self._page("CN119", 10, 25)}
+        (items, note), calls = self._run(pages)
+        self.assertEqual(calls, [1, 2])
+        self.assertEqual(len(items), 20)
+        self.assertIn("over 2 pages", note)
+        self.assertIn("(of 25)", note)
+
+    def test_single_page_when_total_reached(self):
+        (items, note), calls = self._run({1: self._page("CN118", 3, 3)})
+        self.assertEqual(calls, [1])
+        self.assertEqual(len(items), 3)
+        self.assertEqual(note, "CN 3 hits")
+
+    def test_page_budget_bounds_calls(self):
+        pages = {i: self._page("CN118", 10, 100) for i in range(1, 6)}
+        (_items, note), calls = self._run(pages, max_pages=1)
+        self.assertEqual(calls, [1])
+        self.assertIn("(of 100)", note)
+
+
 class TestTurnLevelSearchCache(unittest.TestCase):
     """2026-09-15 需求#27：同 turn 相同的 CN 检索式复用上次结果。
 
@@ -836,8 +895,9 @@ class TestTurnLevelSearchCache(unittest.TestCase):
     重置（general_agent.create_agent 的重置块），不得跨请求泄漏。
     """
 
-    _BODY = {"code": "200", "data": {"fieldValues": [
-        {"pn": "CN118000001A", "ti": "散热装置"}]}}
+    _BODY = {"code": "200", "total_hits": 1,
+             "data": {"fieldValues": [
+                 {"pn": "CN118000001A", "ti": "散热装置"}]}}
 
     def _agent_and_client(self, calls):
         body = self._BODY
@@ -846,7 +906,8 @@ class TestTurnLevelSearchCache(unittest.TestCase):
             async def search(self, q, page=1, page_size=20,
                              api_level="ONE"):
                 calls.append(q)
-                return body
+                # 翻页：只第一页有数据（一次逻辑查询 = 一次 HTTP 调用）
+                return body if page == 1 else {"code": "200"}
         return _FakeAgent(), _FakeClient()
 
     def test_same_query_in_one_turn_hits_cache(self):

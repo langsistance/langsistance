@@ -692,7 +692,8 @@ SEARCH_DIGEST_CHARS = 3000
 
 
 def _items_digest(raw_items, limit: int = SEARCH_DIGEST_LIMIT,
-                  lang: str = "zh") -> str:
+                  lang: str = "zh", us_limit: int = None,
+                  cn_limit: int = None) -> str:
     """Serialize search raw_items into a bounded digest for the LLM.
 
     USPTO-shaped items are flattened via build_candidates into
@@ -702,9 +703,11 @@ def _items_digest(raw_items, limit: int = SEARCH_DIGEST_LIMIT,
     items = raw_items or []
     if not items:
         return ""
-    lines: list = []
+    us_lines: list = []
     candidates = build_candidates(items)
-    for c in candidates[:limit]:
+    _us_limit = limit if us_limit is None else max(0, int(us_limit))
+    _cn_limit = limit if cn_limit is None else max(0, int(cn_limit))
+    for c in candidates[:_us_limit]:
         parts = [
             c.get("patent_id") or "?",
             c.get("title") or "(无标题)",
@@ -712,13 +715,14 @@ def _items_digest(raw_items, limit: int = SEARCH_DIGEST_LIMIT,
             c.get("filing_date") or "?",
             c.get("status") or "?",
         ]
-        lines.append(" | ".join(str(p) for p in parts))
+        us_lines.append(" | ".join(str(p) for p in parts))
     # Baiten CN candidates (flat mapped shape with source="baiten") ride
     # alongside USPTO rows in a mixed dual-source pool.
+    cn_lines: list = []
     flat = [c for c in items if isinstance(c, dict)
             and is_cn_source(c.get("source"))
             and c.get("patent_id")]
-    for c in flat[:limit]:
+    for c in flat[:_cn_limit]:
         parts = [
             c.get("patent_id") or "?",
             c.get("title") or "(无标题)",
@@ -734,9 +738,19 @@ def _items_digest(raw_items, limit: int = SEARCH_DIGEST_LIMIT,
             tail_bits.append(law_tail)
         if tail_bits:
             parts.append("; ".join(tail_bits))
-        lines.append(" | ".join(str(p) for p in parts))
+        cn_lines.append(" | ".join(str(p) for p in parts))
+    # 中文提问：CN 行在前。摘要的行序就是模型的行文序 —— 此前固定 US 在前，
+    # 中文提问的回答被带成"基本都是美国专利"（生产 2026-09-15），与面板
+    # _order_pending_for_lang 的 CN-first 也不一致。
+    lines = cn_lines + us_lines if lang == "zh" else us_lines + cn_lines
     if lines:
-        text = "\n".join(lines)
+        # 候选构成行：两侧供给量摆出来，模型才不会凭空断言某一侧"命中较少"。
+        header = ""
+        if flat or candidates:
+            header = (f"[候选构成] CN {len(flat)} / US {len(candidates)}\n"
+                      if lang == "zh"
+                      else f"[composition] CN {len(flat)} / US {len(candidates)}\n")
+        text = header + "\n".join(lines)
         total = len(candidates) + len(flat)
         if total > limit:
             note = (f"\n…共 {total} 条" if lang == "zh"
@@ -2748,36 +2762,72 @@ async def _baiten_search_by_query(
             return [], "CN source not configured (key missing)"
         client = BaitenClient(
             cfg["app_key"], cfg["app_secret"], cfg["gateway_url"])
-        body = await client.search(
-            q, page=page, page_size=page_size,
-            api_level=cfg.get("api_level", "ONE"))
-        summary = summarize_search_response(body)
-        items = _baiten_results_to_candidates(body)
+        # 翻页（2026-09-15）：网关单页硬限 10 条，单查询恒 rows=10 —— 中文
+        # 提问的 CN 供给被这一页卡死（生产：total 上千，我们只拿 10 条，
+        # 结果被美国专利挤成少数）。按页续取到上限或没有更多为止。
+        pages_wanted = max(1, REACT_CN_PAGES_PER_QUERY)
+        page_no = int(page or 1)
+        items: list = []
+        seen_ids: set = set()
+        summary: dict = {"total": None, "rows": 0, "keys": []}
+        pages_with_data = 0
+        last_rows = None
+        rows_first = 0
+        total_seen = None
+        for _page_i in range(pages_wanted):
+            body = await client.search(
+                q, page=page_no, page_size=page_size,
+                api_level=cfg.get("api_level", "ONE"))
+            summary = summarize_search_response(body)
+            rows_now = int(summary.get("rows") or 0)
+            if rows_now == 0:
+                break                      # 没有这一页
+            if total_seen is None and summary.get("total") is not None:
+                total_seen = int(summary["total"])
+            if pages_with_data == 0:
+                rows_first = rows_now
+            for cand in _baiten_results_to_candidates(body):
+                pid = str(cand.get("patent_id") or "").strip()
+                if pid and pid in seen_ids:
+                    continue
+                if pid:
+                    seen_ids.add(pid)
+                items.append(cand)
+            pages_with_data += 1
+            if last_rows is not None and rows_now < last_rows:
+                break                      # 比上一页短 = 到底了
+            if total_seen is not None and len(items) >= total_seen:
+                break                      # 已取满网关报的总数
+            last_rows = rows_now
+            page_no += 1
         if items and enrich:
             await _enrich_baiten_law_status(client, items, _glog, agent=agent)
-        _total = summary.get("total")
-        _capped = summary["rows"] >= int(page_size or 20)
+        _total = total_seen
+        _last_full = (last_rows is not None
+                      and last_rows >= int(page_size or 20))
         if _glog is not None:
             # 需求#9：单查询恒 rows=page_size（页上限）时，真实命中数只有
             # 网关的 total 能回答 —— 一并落日志，别再靠"rows 恒 10"猜。
             _glog.info(
                 f"baiten_search_map — query={q[:60]!r} "
-                f"rows={summary['rows']} candidates={len(items)} "
-                f"total={_total}"
-                + (" (page-capped)" if _capped else "")
+                f"rows={last_rows} candidates={len(items)} "
+                f"pages={pages_with_data} total={_total}"
+                + (" (more available)" if _last_full else "")
             )
-        if summary["rows"] == 0:
+        if not pages_with_data:
             return _remember((items, "CN 0 hits (gateway 0 records)"))
         if not items:
             return _remember(([], (
                 f"CN 0 candidates (parsed from "
-                f"{summary['rows']} records)"
+                f"{rows_first} records)"
             )))
         _note = f"CN {len(items)} hits"
-        if _capped:
-            _note += (f" (showing {summary['rows']} of {_total})"
-                      if _total is not None
-                      else f" (page-capped at {summary['rows']})")
+        if pages_with_data > 1:
+            _note += f" over {pages_with_data} pages"
+        if _total is not None and int(_total) > len(items):
+            _note += f" (of {_total})"
+        elif _total is None and _last_full:
+            _note += f" (page-capped at {len(items)})"
         return _remember((items, _note))
     except Exception as exc:
         if _glog is not None:
@@ -2793,6 +2843,23 @@ async def _baiten_search_by_query(
 PATENT_AUTO_LADDER_BATCH = 4  # untried ladder queries auto-run per call
 REACT_PATENT_AUTO_LADDER_MAX = int(os.getenv(
     "REACT_PATENT_AUTO_LADDER_MAX", "8"))
+
+# 语言配额（2026-09-15，用户定）：提问**未指定国家**时（=双源工具），按提问
+# 语言倾斜两侧供给 —— 中文提问多取中国专利、少取美国专利，英文提问反之。
+# 首发检索式两侧照常各跑一次（不让任何一侧空手），收窄的是**非优选源的
+# 阶梯补跑预算**与**摘要里非优选源的行数**。
+# 生产 2026-09-15 实证：中文提问、池里 CN 30 条，模型仍答成"基本都是美国
+# 专利"（US 侧 7 条阶梯检索式取回 83 条候选，CN 侧受网关每查询 10 条硬限）。
+REACT_SEARCH_LANG_BALANCE = (
+    os.getenv("REACT_SEARCH_LANG_BALANCE", "1") == "1")
+# CN 翻页（2026-09-15）：网关单页硬限 10 条，单查询恒 rows=10 —— 中文提问的
+# CN 供给被这一页卡死（生产实证：total 上千，我们只拿 10 条）。每查询最多
+# 取几页；佰腾按调用计费，调大等于按倍数增加检索调用与后续法律状态富化量。
+REACT_CN_PAGES_PER_QUERY = int(os.getenv("REACT_CN_PAGES_PER_QUERY", "2"))
+REACT_NONPREFERRED_LADDER_MAX = int(os.getenv(
+    "REACT_NONPREFERRED_LADDER_MAX", "1"))
+REACT_NONPREFERRED_DIGEST_ROWS = int(os.getenv(
+    "REACT_NONPREFERRED_DIGEST_ROWS", "8"))
 
 
 def _resolve_patent_queries(args, us_ladder, cn_ladder, agent,
@@ -2947,7 +3014,8 @@ async def _rank_builtin_patent_pool(agent, items: list, lang: str) -> list:
 
 async def _auto_run_patent_ladder(agent, ladder: list, search_fn, merged: list,
                                   notes: list, lang: str, source: str,
-                                  page: int, page_size: int) -> int:
+                                  page: int, page_size: int,
+                                  max_queries: Optional[int] = None) -> int:
     """System-run untried ladder queries for one patent source.
 
     Triggered when the preferred source returned nothing displayable;
@@ -2971,15 +3039,16 @@ async def _auto_run_patent_ladder(agent, ladder: list, search_fn, merged: list,
     if not isinstance(used_map, dict):
         used_map = {}
     used = used_map.get(source, 0)
-    take = untried[:min(PATENT_AUTO_LADDER_BATCH,
-                        REACT_PATENT_AUTO_LADDER_MAX - used)]
+    cap = REACT_PATENT_AUTO_LADDER_MAX
+    if max_queries is not None:
+        cap = min(cap, max(0, int(max_queries)))
+    take = untried[:min(PATENT_AUTO_LADDER_BATCH, cap - used)]
     if not take:
         _glog = getattr(agent, "logger", None)
         if _glog is not None:
             _glog.warning(
                 f"patent_search_auto_ladder — source={source} auto-ladder "
-                f"budget exhausted (used={used}/"
-                f"{REACT_PATENT_AUTO_LADDER_MAX}), {len(untried)} untried "
+                f"budget exhausted (used={used}/{cap}), {len(untried)} untried "
                 f"ladder queries skipped"
             )
         return 0
@@ -3119,9 +3188,13 @@ async def _run_patent_search(agent, args, lang: str, dual: bool = True) -> dict:
             return
         ladder = cn_ladder if source == "cn" else us_ladder
         fn = _baiten if source == "cn" else _uspto
+        # 语言配额：双源（未指定国家）时收窄非优选源的补跑预算。
+        _cap = None
+        if REACT_SEARCH_LANG_BALANCE and dual and source != preferred:
+            _cap = REACT_NONPREFERRED_LADDER_MAX
         await _auto_run_patent_ladder(
             agent, ladder, fn, merged, notes, lang, source,
-            page, page_size)
+            page, page_size, max_queries=_cap)
 
     await _run_for(preferred)
     await _run_for("us" if preferred == "cn" else "cn")
@@ -3157,7 +3230,15 @@ async def _run_patent_search(agent, args, lang: str, dual: bool = True) -> dict:
     deliverable = [c for c in merged
                    if isinstance(c, dict)
                    and not is_dead_status(c.get("status"))]
-    digest = _items_digest(deliverable, lang=lang)
+    # 语言配额：摘要里非优选源的行数也收窄 —— 模型的行文顺序跟着摘要走。
+    _us_rows = _cn_rows = SEARCH_DIGEST_LIMIT
+    if REACT_SEARCH_LANG_BALANCE and dual:
+        if lang == "zh":
+            _us_rows = REACT_NONPREFERRED_DIGEST_ROWS
+        else:
+            _cn_rows = REACT_NONPREFERRED_DIGEST_ROWS
+    digest = _items_digest(deliverable, lang=lang,
+                           us_limit=_us_rows, cn_limit=_cn_rows)
     if not digest:
         if merged:
             # 有命中但全部失效 —— 不能笼统说"未返回结果"，那会误导模型。

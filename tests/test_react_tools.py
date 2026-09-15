@@ -459,6 +459,39 @@ class TestItemsDigest(unittest.TestCase):
         self.assertEqual(_items_digest([]), "")
         self.assertEqual(_items_digest(None), "")
 
+    def test_chinese_question_lists_cn_rows_first(self):
+        # 2026-09-15 生产：摘要固定 US 在前，中文提问的回答被带成"基本都是
+        # 美国专利"（面板已是 CN 在前，摘要必须一致）。
+        items = [
+            _usp_raw_item("19511555", "Air dryer control"),
+            {"patent_id": "CN118000001A", "source": "cn",
+             "title": "干燥空气源控制装置", "pub_date": "2024-05-01"},
+        ]
+        text = _items_digest(items, lang="zh")
+        self.assertLess(text.index("CN118000001A"), text.index("19511555"))
+        self.assertIn("[候选构成] CN 1 / US 1", text)
+        text_en = _items_digest(items, lang="en")
+        self.assertLess(text_en.index("19511555"), text_en.index("CN118000001A"))
+
+    def test_nonpreferred_us_rows_capped_in_digest(self):
+        # 语言配额：中文提问时摘要里的美国行数收窄（供给与可见面一起倾斜）。
+        items = [_usp_raw_item(str(19500000 + i), "us%d" % i)
+                 for i in range(20)]
+        items += [{"patent_id": "CN11800000%dA" % i, "source": "cn",
+                   "title": "cn"} for i in range(3)]
+        text = _items_digest(items, lang="zh", us_limit=8, cn_limit=20)
+        self.assertIn("us7", text)
+        self.assertNotIn("us8", text)
+        self.assertIn("CN118000002A", text)
+
+    def test_digest_reports_side_counts_so_model_cannot_guess(self):
+        # 生产误判："中国专利（CN）：命中较少" —— 实际池里有 30 条 CN。
+        items = [_usp_raw_item("19511555", "us")]
+        items += [{"patent_id": "CN11800000%dA" % i, "source": "cn",
+                   "title": "cn"} for i in range(3)]
+        text = _items_digest(items, lang="zh")
+        self.assertIn("CN 3 / US 1", text)
+
 
 class TestSearchObservationContent(unittest.TestCase):
     """Search results observation carries real items, not just counts."""
