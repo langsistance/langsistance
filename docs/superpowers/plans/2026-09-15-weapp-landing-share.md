@@ -75,12 +75,19 @@ test('path 指向落地页', () => {
 - [ ] **Step 2: 运行测试确认它失败**
 
 ```bash
-cd frontend/weapp && npx tsc -p tsconfig.test.json
+cd frontend/weapp && npx tsc -p tsconfig.test.json && node --test dist-test/src/utils/share.test.mjs
 ```
 
-预期：FAIL，报 `error TS2307: Cannot find module './share.js' or its corresponding type declarations.`
+预期：**`tsc` 退出码为 0 且无输出** —— 实测确认 `allowJs` 下 `./share.js` 解析失败**不会**升级为 TS 错误，所以 `tsc` 这一步是绿灯。红灯出现在 `node --test` 层：
 
-此时 `share.ts` 尚不存在，编译在 `node --test` 之前就中止——这就是本轮的 RED。
+```
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module
+  '...\frontend\weapp\dist-test\src\utils\share.js'
+```
+
+此刻 `share.ts` 尚不存在，这就是本轮的 RED。
+
+**不要为了让 `tsc` 报错去改 `tsconfig.test.json`** —— 那是 Global Constraints 明令禁止的。红灯落在 `node --test` 层属正常，如实记录即可。
 
 - [ ] **Step 3: 写最小实现**
 
@@ -111,10 +118,12 @@ export function buildShareCard(imagePath: string) {
 - [ ] **Step 4: 运行测试确认通过**
 
 ```bash
-cd frontend/weapp && npx tsc -p tsconfig.test.json && node --test dist-test/utils/share.test.mjs
+cd frontend/weapp && npx tsc -p tsconfig.test.json && node --test dist-test/src/utils/share.test.mjs
 ```
 
 预期：PASS，`# pass 4` / `# fail 0`
+
+> 注意产物路径是 `dist-test/**src**/utils/`（源码树结构被保留），不是 `dist-test/utils/`。
 
 - [ ] **Step 5: 提交**
 
