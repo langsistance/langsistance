@@ -34,11 +34,15 @@ OUT = ROOT / 'src' / 'assets' / 'share-card.png'
 def load_font(size):
     for path in FONT_CANDIDATES:
         if Path(path).exists():
+            print(f'font: {path}')  # 平台不同命中不同字体，打印出来便于追溯产物来源。
             return ImageFont.truetype(path, size)
     raise SystemExit(f'找不到可用的中文字体，候选路径：{FONT_CANDIDATES}')
 
 
 def main():
+    if not SRC_LOGO.exists():
+        raise SystemExit(f'找不到品牌图 {SRC_LOGO}，请确认 src/assets/brand-logo.png 存在')
+
     logo = Image.open(SRC_LOGO).convert('RGBA')
     logo_h = round(LOGO_W * logo.height / logo.width)
     logo = logo.resize((LOGO_W, logo_h), Image.LANCZOS)
@@ -48,7 +52,21 @@ def main():
     bbox = font.getbbox(SLOGAN)
     text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
 
-    top = (CANVAS_H - (logo_h + GAP + text_h)) // 2
+    # 先校验再画：内容块放不下时居中量会变负，图和字会被静默裁掉，脚本却仍报成功。
+    content_h = logo_h + GAP + text_h
+    if content_h > CANVAS_H:
+        raise SystemExit(
+            f'内容块溢出画布：LOGO_W={LOGO_W} 缩放后品牌图高 {logo_h}px + GAP={GAP} + '
+            f'FONT_SIZE={FONT_SIZE} 文字高 {text_h}px = {content_h}px，超出 CANVAS_H={CANVAS_H} '
+            f'共 {content_h - CANVAS_H}px。请调小 LOGO_W / GAP / FONT_SIZE。'
+        )
+    if (CANVAS_W - LOGO_W) // 2 < 0 or (CANVAS_W - text_w) // 2 < 0:
+        raise SystemExit(
+            f'内容块溢出画布：LOGO_W={LOGO_W}、文字宽 {text_w}px，任一者超过 CANVAS_W={CANVAS_W} '
+            f'就无法水平居中。请调小 LOGO_W / FONT_SIZE。'
+        )
+
+    top = (CANVAS_H - content_h) // 2
 
     canvas = Image.new('RGB', (CANVAS_W, CANVAS_H), BG)
     # 第三个参数是 mask：品牌图有透明通道，必须走 alpha 合成，否则会糊成黑块。
