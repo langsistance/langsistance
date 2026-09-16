@@ -65,7 +65,7 @@ const COPY = {
       },
       {
         h: '5. 数据共享',
-        p: '我们不会出售或出租您的数据。数据仅在以下情况被处理：为提供核心服务功能而进行的技术处理；您主动选择分享知识库条目时；法律法规要求时。',
+        p: '我们不会出售或出租您的数据。为提供检索、分析与模型理解能力，您的数据会经过必要的技术处理；此外，仅在您主动选择分享知识库条目时，或法律法规要求时，才会用于其他用途。',
       },
       {
         h: '6. 数据留存与您的控制',
@@ -125,7 +125,7 @@ const COPY = {
       },
       {
         h: '5. Data Sharing',
-        p: 'We do not sell or rent your data. Data is processed only to provide core service functionality, when you choose to share a knowledge base entry, or when required by law.',
+        p: 'We do not sell or rent your data. To provide search, analysis, and model-understanding capabilities, your data undergoes necessary technical processing. Beyond that, it is used only when you choose to share a knowledge base entry, or when required by law.',
       },
       {
         h: '6. Retention and Your Control',
