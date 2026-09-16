@@ -2119,6 +2119,11 @@ button { cursor: pointer; }
   flex-shrink: 0;
 }
 
+.trust-notice-desc {
+  flex: 1;
+  min-width: 0;
+}
+
 .trust-notice-more {
   display: inline-block;
   margin-top: 12px;
@@ -2144,6 +2149,11 @@ button { cursor: pointer; }
   font-size: 12px;
   color: #9ca3af;
   animation: trust-hint-fade 150ms ease-out;
+}
+
+/* 移动端不展示聚焦提示：键盘弹起后会被遮挡，且输入区空间紧张 */
+@media (max-width: 767px) {
+  .trust-hint { display: none; }
 }
 
 @keyframes trust-hint-fade {
