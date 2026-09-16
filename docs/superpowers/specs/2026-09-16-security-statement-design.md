@@ -62,46 +62,64 @@
 
 | 动作 | 文件 | 说明 |
 |---|---|---|
-| 增 | `components/app/TrustNotice.tsx` | 信任模块组件，`'use client'`，用 `useI18n` |
+| 增 | `lib/trustNotice.js` | **三条承诺的唯一事实来源** + 两个短句变体，见 §3.2 |
+| 增 | `lib/trustNotice.test.mjs` | 回归测试，见 §8.1 |
+| 增 | `components/app/TrustNotice.tsx` | 信任模块组件，`'use client'`，从 `lib/trustNotice.js` 取文案 |
 | 增 | `app/(landing)/security/page.tsx` | 静态页，`metadata` + `JsonLd`，服务端组件 |
 | 改 | `components/app/ChatLanding.tsx` | 在 `chat-landing-slogan` 与 `chat-landing-composer` 之间插入 `<TrustNotice />` |
-| 改 | `components/app/LoginModal.tsx` | `.modal-body` 内 `LoginForm` 之后加信任行（`LoginModal.tsx:29`） |
-| 改 | `components/app/AppLayout.tsx` | 侧边栏 `.sidebar-footer`（`AppLayout.tsx:303`）加「信息安全」入口，见 §3.6 |
+| 改 | `components/app/LoginForm.tsx` | 提交按钮下方加信任行（`LoginModal` 通过 `.modal-body` 渲染 `LoginForm`，见 `LoginModal.tsx:29`） |
 | 改 | `components/app/ChatComposer.tsx` | textarea 下方加聚焦态信任提示 |
-| 改 | `lib/app-i18n/locales/zh.ts` | 新增 `trust.*` 与 `security.*` 键 |
+| 改 | `components/app/AppLayout.tsx` | 侧边栏 `.sidebar-footer`（`AppLayout.tsx:303`）加「信息安全」入口，见 §3.6 |
+| 改 | `lib/app-i18n/locales/zh.ts` | 新增 `security.*` 页键；`security.promises` 从 `lib/trustNotice.js` 取 |
 | 改 | `lib/app-i18n/locales/en.ts` | 同上 |
 | 改 | `styles/app.css` | `.trust-notice` 系列样式 |
 
-### 3.2 组件形态（`TrustNotice`）
+### 3.2 文案的存放位置（有意偏离仓库惯例）
 
-三条承诺是**单一事实来源**，定义在 i18n 的 `trust.items` 数组中：
+三条承诺**不写在 i18n locale 文件里**，而是放在 `lib/trustNotice.js`，由 `TrustNotice.tsx` 与 `/security` 页共同引用。理由是仓库的测试惯例倒逼的：
 
-- **`card` variant** 逐字使用这三条。
-- **`inline` / `hint` variant 是这三条的短句子集**（受界面空间限制），非独立文案。修改 `items` 内容时需同步核对两句短句是否仍然成立——这是本方案唯一的文案同步点，实现时需在 `trust` 块内加注释标明。
+- `lib/app-i18n/locales/*.ts` 是 TypeScript。`tsconfig.json:19` 为 `"moduleResolution": "bundler"`，该模式**不允许** import 时带 `.ts` 扩展名；而 `node --test` 解析 ESM 相对导入**必须**带扩展名（实测 Node v22.22.3：`import zh from './locales/zh'` → `ERR_MODULE_NOT_FOUND`；`'./locales/zh.ts'` → 成功）。两者直接冲突。
+- 仓库既有的 30+ 个 `lib/*.js` + `lib/*.test.mjs` 全部是纯 JS 模块 + Node 内置测试运行器（`node --test`，无 vitest/jest 配置），零配置摩擦。把文案放进去，既符合惯例，又让 §8.1 的回归测试成为可能。
 
-```ts
-trust: {
-  headline: '您的专有信息只留在您的账号里',
-  items: [
-    { key: 'train',  label: '不外传', desc: '提问与分析结果不用于训练任何 AI 模型' },
-    { key: 'isolate', label: '不外泄', desc: '对话记录按账号隔离，仅您本人可读取' },
-    { key: 'upload', label: '不外流', desc: '上传的专利文件处理完成后从服务器删除' },
-  ],
-  more: '了解更多',
-  loginNote: '🔒 传输全程加密 · 您的内容不会用于训练 AI 模型',
-  focusNote: '您的内容不会用于训练 AI 模型，上传文件处理完成后删除',
+文案结构：
+
+```js
+// lib/trustNotice.js
+export const TRUST_COPY = {
+  zh: {
+    headline: '您的专有信息只留在您的账号里',
+    items: [
+      { key: 'train',   label: '不外传', desc: '提问与分析结果不用于训练任何 AI 模型' },
+      { key: 'isolate', label: '不外泄', desc: '对话记录按账号隔离，仅您本人可读取' },
+      { key: 'upload',  label: '不外流', desc: '上传的专利文件处理完成后从服务器删除' },
+    ],
+    more: '了解更多',
+  },
+  en: { /* 同结构 */ },
 }
+
+export const TRUST_NOTES = {
+  zh: {
+    login: '🔒 传输全程加密 · 您的内容不会用于训练 AI 模型',
+    focus: '您的内容不会用于训练 AI 模型，上传文件处理完成后删除',
+  },
+  en: { /* 同结构 */ },
+}
+
+export const TRUST_VARIANTS = ['card', 'inline', 'hint']
 ```
+
+**同步约束**：`TRUST_NOTES` 的两句短句是 `items` 的**子集**（受界面空间限制的缩写），不是独立文案。修改 `items` 时必须同步核对短句是否仍然成立——这是本方案唯一的文案同步点，需在模块内以注释标明，并由 §8.1 的测试兜底。
 
 `TrustNotice` 接受一个 `variant` prop：
 
 | variant | 位置 | 形态 |
 |---|---|---|
-| `card` | 首屏（默认） | 标题 + 三条竖排（移动端）/ 横排（桌面端）+ 「了解更多」链接 |
-| `inline` | 登录弹窗 | 单行小字，仅取 `loginNote` |
-| `hint` | 输入框聚焦 | 单行小字，仅取 `focusNote` |
+| `card` | 首屏（默认） | `headline` + `items` 三条（移动端竖排 / 桌面端横排）+ `more` 链接 |
+| `inline` | 登录弹窗 | 单行小字，取 `TRUST_NOTES[lang].login` |
+| `hint` | 输入框聚焦 | 单行小字，取 `TRUST_NOTES[lang].focus` |
 
-三个 variant 共用 i18n 键，改文案只改一处。
+`zh` / `en` 的选取沿用 `useI18n()` 提供的 `lang`，不新增语言判断逻辑。
 
 ### 3.3 视觉
 
@@ -216,7 +234,7 @@ trust: {
 
 ### 7.1 与声明的耦合点
 
-W2 完成后需同步修改：`lib/app-i18n/locales/{zh,en}.ts` 的 `trust.items`、`/security` 页对应段落、`Version` 号。文案结构已为此预留（三条承诺各自独立成条，升级时只改措辞不改版式）。
+W2 完成后需同步修改：`lib/trustNotice.js` 的 `TRUST_COPY`、`/security` 页对应段落、`Version` 号。文案结构已为此预留（三条承诺各自独立成条，升级时只改措辞不改版式）。`TRUST_NOTES` 的短句若涉及被升级的条目，须一并核对（见 §3.2 同步约束）。
 
 ---
 
@@ -230,8 +248,17 @@ W2 完成后需同步修改：`lib/app-i18n/locales/{zh,en}.ts` 的 `trust.items
 | `/security` 可达且 SSR 可爬 | 构造后 `curl` 检查纯 HTML 含正文；应用侧边栏入口（§3.6）可点击到达 |
 | 移动端不挤压输入区 | 375px 宽度下首屏检查；输入框聚焦提示在移动端不出现 |
 | 无动画偏好生效 | 系统开启 reduced-motion 后淡入动画禁用 |
-| 构建通过 | `npm run build` |
+| 构建通过 | `npm run build`（`frontend/nextjs`） |
+| 单元测试通过 | `node --test lib/trustNotice.test.mjs` |
 
 ### 8.1 回归测试
 
-`lib/` 下的纯逻辑改动需补 `.test.mjs`（与仓库现有 `*.test.mjs` 惯例一致）。本轮新增逻辑仅 i18n 键定义，测试覆盖：`trust.items` 三条键在 zh/en 下均存在且非空、`variants` 取值合法。
+`lib/trustNotice.test.mjs`，用 Node 内置运行器（`node --test lib/trustNotice.test.mjs`，与仓库既有 `lib/*.test.mjs` 同一套，无 vitest/jest 依赖）。覆盖：
+
+1. `TRUST_COPY.zh` / `TRUST_COPY.en` 均存在，且 `headline`、`more` 非空字符串
+2. 两种语言的 `items` **长度相同**，且各条 `key` **集合一致**（防止加了一条承诺只改了中文）
+3. 每条 `items` 的 `key` / `label` / `desc` 均为非空字符串
+4. `TRUST_NOTES.zh` / `TRUST_NOTES.en` 的 `login` 与 `focus` 非空
+5. `TRUST_VARIANTS` 恰为 `['card', 'inline', 'hint']`，且 `TrustNotice` 的 `variant` prop 取值不超出该集合
+
+第 2 条是关键——它把 §3.2 的「同步约束」从注释约定变成会失败的测试。
