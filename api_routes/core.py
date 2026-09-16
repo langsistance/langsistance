@@ -62,6 +62,12 @@ _token_cache = {}
 _token_cache_lock = asyncio.Lock()
 TOKEN_CACHE_TTL = 86400  # 24 hours
 
+# 日志中的提问内容上限。对外声明承诺「仅保留前 80 个字符」
+# （app/(landing)/security/page.tsx 与 privacy-policy/page.tsx），
+# 此处必须与之保持一致——改任一处都要同步另一处。
+MAX_LOG_QUERY = 80
+
+
 async def get_cached_token_validation(auth_header: str):
     """Cache token validation results to reduce Firebase API calls"""
     async with _token_cache_lock:
@@ -725,7 +731,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
 
         user_id = user['uid']
 
-        app_logger.info(f"[user={user_id}] Processing query: {request.query}")
+        app_logger.info(f"[user={user_id}] Processing query: {request.query[:MAX_LOG_QUERY]}")
         track_event("query", user_id=str(user_id), query_text=request.query,
                     query_id=request.query_id)
 
@@ -976,7 +982,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
                 )
 
             app_logger.info(
-                f"[user={user_id}] File upload: received {len(patent_files)} files, query={query[:80]}"
+                f"[user={user_id}] File upload: received {len(patent_files)} files, query={query[:MAX_LOG_QUERY]}"
             )
 
             # Save files to disk for async processing by Celery worker.
@@ -1257,7 +1263,7 @@ def register_core_routes(app_logger, interaction_ref, query_resp_history_ref, co
 
         user_id = user['uid']
 
-        app_logger.info(f"[user={user_id}] Processing query_stream: {request.query}")
+        app_logger.info(f"[user={user_id}] Processing query_stream: {request.query[:MAX_LOG_QUERY]}")
         track_event("query_stream", user_id=str(user_id), query_text=request.query,
                     query_id=request.query_id,
                     session_id=request.session_id or None)

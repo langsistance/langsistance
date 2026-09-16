@@ -319,6 +319,7 @@ export default function LandingPage() {
               <p className="text-gray-600 mb-4">{t('footer.tagline')}</p>
               <div className="flex justify-center space-x-6 text-sm text-gray-600">
                 <a href="/privacy-policy" className="hover:text-teal-600 transition">{t('footer.privacy')}</a>
+                <a href="/security" className="hover:text-teal-600 transition">{t('footer.security')}</a>
                 <a href="mailto:support@copiioai.com" className="hover:text-teal-600 transition">{t('footer.contact')}</a>
               </div>
               <p className="text-gray-500 text-xs mt-4">{t('footer.copyright')}</p>

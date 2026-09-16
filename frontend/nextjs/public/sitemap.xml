@@ -20,6 +20,14 @@
     <priority>0.5</priority>
   </url>
 
+  <!-- Information Security -->
+  <url>
+    <loc>https://copiioai.com/security</loc>
+    <lastmod>2026-09-16</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+
   <!-- Use Case Examples -->
   <url>
     <loc>https://copiioai.com/examples/uspto-china</loc>

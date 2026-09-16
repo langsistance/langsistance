@@ -1,7 +1,8 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useI18n } from '@/lib/app-i18n'
+import TrustNotice from './TrustNotice'
 
 export type ChatComposerProps = {
   input: string
@@ -29,6 +30,11 @@ export default function ChatComposer({
   const { t } = useI18n()
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  // 聚焦后不因失焦隐藏：反复弹扰比不提示更糟。组件卸载即重置。
+  const [showTrustHint, setShowTrustHint] = useState(false)
+  // 用户一旦开始打字就不再提示（设计文档 §3.5：专心打字时不再需要说服）。
+  // 用 latch 而非直接看 input：清空输入框不应让提示复活。
+  const [hasTyped, setHasTyped] = useState(false)
 
   // Reset the auto-growing textarea height after a send empties the input.
   useEffect(() => {
@@ -45,6 +51,9 @@ export default function ChatComposer({
   }
 
   function handleInput(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    // 按内容而非按事件置位：中文输入法预编辑也会触发 onChange 且此时 value 仍为空，
+    // 纯空白输入同理——两者都不该让「正在专心打字」的提示提前消失。
+    if (e.target.value.trim()) setHasTyped(true)
     setInput(e.target.value)
     e.target.style.height = 'auto'
     e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px'
@@ -145,6 +154,7 @@ export default function ChatComposer({
           onChange={handleInput}
           onKeyDown={handleKeyDown}
           onPaste={handleFilePaste}
+          onFocus={() => setShowTrustHint(true)}
           placeholder={t('chat.placeholder')}
           rows={1}
         />
@@ -171,6 +181,7 @@ export default function ChatComposer({
           </button>
         )}
       </div>
+      {showTrustHint && !hasTyped && <TrustNotice variant="hint" />}
     </>
   )
 }

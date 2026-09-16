@@ -6,6 +6,7 @@ import { validateSignupPasswordConfirmation } from '@/lib/authValidation'
 import { useAuth } from '@/contexts/AuthContext'
 import { useI18n } from '@/lib/app-i18n'
 import LanguageToggleButton from '@/components/app/LanguageToggleButton'
+import TrustNotice from '@/components/app/TrustNotice'
 
 /**
  * Extract a clean auth error code from various error formats:
@@ -199,6 +200,8 @@ export default function LoginForm() {
             {isSignUp ? (lang === 'en' ? 'Sign In' : '登录') : (lang === 'en' ? 'Sign Up' : '注册')}
           </button>
         </p>
+
+        <TrustNotice variant="inline" />
       </div>
     </div>
   )
