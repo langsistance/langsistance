@@ -72,7 +72,7 @@ const COPY = {
         items: [
           '您的对话记录与知识库条目会保留至您主动删除，或通过下方邮箱请求删除账号数据为止。',
           '您可以在产品内随时删除自己的对话记录与知识库条目。',
-          '您也可以通过下方邮箱联系我们，请求删除账号数据。',
+          '您也可以发送邮件至下方邮箱，主题注明「删除账号数据」，我们会在 30 天内处理。',
         ],
       },
       {
@@ -132,7 +132,7 @@ const COPY = {
         items: [
           'Your conversation records and knowledge base entries are retained until you delete them, or until you request deletion of your account data via the email address below.',
           'You may delete your conversation records and knowledge base entries within the product.',
-          'You may contact us at the address below to request deletion of your account data.',
+          'You may also email the address below with the subject "Delete my account data"; we will process it within 30 days.',
         ],
       },
       {
@@ -172,7 +172,7 @@ function PolicyCopy({ copy }: { copy: (typeof COPY)[CopyLang] }) {
       <h3 className="text-xl font-bold text-gray-900 mt-8 mb-3">{copy.contactH}</h3>
       <p className="text-gray-700 mb-2">{copy.contactP}</p>
       <p className="text-gray-700">
-        <strong>Email:</strong> copiioai.com@gmail.com
+        <strong>Email:</strong> support@copiioai.com
       </p>
     </section>
   )
