@@ -2069,3 +2069,98 @@ button { cursor: pointer; }
   opacity: 0.8;
 }
 .agent-step-action, .agent-step-observation { margin: 2px 0; overflow-wrap: anywhere; }
+
+/* ── 信息安全声明 ─────────────────────────────────────────────
+   三处触点共用：card（首屏）/ inline（登录表单）/ hint（输入框聚焦）
+   克制的视觉：不加阴影、不加渐变，避免读起来像营销位 */
+
+.trust-notice {
+  max-width: 680px;
+  margin: 0 auto 28px;
+  padding: 16px 20px;
+  background: #f0fdfa;
+  border-left: 3px solid #0d9488;
+  text-align: left;
+}
+
+.trust-notice-headline {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #0f766e;
+}
+
+.trust-notice-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.trust-notice-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #4b5563;
+}
+
+.trust-notice-icon {
+  display: inline-flex;
+  color: #0d9488;
+  flex-shrink: 0;
+}
+
+.trust-notice-label {
+  font-weight: 600;
+  color: #374151;
+  flex-shrink: 0;
+}
+
+.trust-notice-more {
+  display: inline-block;
+  margin-top: 12px;
+  font-size: 12px;
+  color: #0d9488;
+  text-decoration: none;
+}
+
+.trust-notice-more:hover {
+  text-decoration: underline;
+}
+
+.trust-inline {
+  margin: 16px 0 0;
+  text-align: center;
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.5;
+}
+
+.trust-hint {
+  margin: 6px 2px 0;
+  font-size: 12px;
+  color: #9ca3af;
+  animation: trust-hint-fade 150ms ease-out;
+}
+
+@keyframes trust-hint-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trust-hint { animation: none; }
+}
+
+@media (max-width: 767px) {
+  .trust-notice {
+    padding: 14px 16px;
+    margin-bottom: 20px;
+  }
+  .trust-notice-item {
+    align-items: flex-start;
+  }
+}

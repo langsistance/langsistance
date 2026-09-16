@@ -4,6 +4,7 @@ import { useI18n } from '@/lib/app-i18n'
 import ChatComposer, { type ChatComposerProps } from './ChatComposer'
 import SceneHint from './SceneHint'
 import PatentOnboardingWizard from './PatentOnboardingWizard'
+import TrustNotice from './TrustNotice'
 
 // Linear icons matching the app's existing stroke-2px style (feather/lucide
 // family). cap1 adds a star inside the magnifier for the US element.
@@ -66,6 +67,7 @@ export default function ChatLanding(composerProps: ChatComposerProps) {
   return (
     <div className="chat-landing">
       <h2 className="chat-landing-slogan">{t('chat.landing.slogan')}</h2>
+      <TrustNotice />
       <div className="chat-landing-composer">
         <ChatComposer {...composerProps} />
       </div>
