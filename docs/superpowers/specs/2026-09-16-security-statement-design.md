@@ -2,7 +2,7 @@
 
 - 日期：2026-09-16（brainstorm 定稿）
 - 状态：设计已确认，待实现
-- 分支：`main`（前端工作，建议分支 `feat/security-statement`）
+- 分支：`feat/security-statement`（自 `main` @ `4db28ef` 切出）
 - 目标：在用户即将输入专有技术方案的位置，给出三天可核实的保密承诺
 
 ---
