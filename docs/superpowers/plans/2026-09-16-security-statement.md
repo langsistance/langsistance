@@ -742,11 +742,14 @@ Expected: 上述 6 项全部符合
 Run（在 `frontend/nextjs` 下）：
 
 ```bash
-npm run build && npx next start -p 3100 &
+npm run build
+npx serve@latest out -p 3100 &
 sleep 5
 curl -s http://localhost:3100/security | grep -c "不外传"
 kill %1
 ```
+
+**注意**：本项目 Next 配置为 `output: 'export'`（静态导出），**`npx next start` 不可用**——它会直接报错 `"next start" does not work with "output: export" configuration`。必须用静态服务器指向导出目录 `out/`。
 
 Expected: 输出 ≥ `1`（说明纯 HTML 里含正文，百度/AI 搜索不执行 JS 也能读到）
 
