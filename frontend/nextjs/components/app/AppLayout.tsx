@@ -316,7 +316,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             </button>
             <Link href="/security" style={{ textDecoration: 'none' }}>
               <button
-                className={`nav-item${pathname === '/security' ? ' active' : ''}`}
+                className={`nav-item sidebar-nav-link${pathname === '/security' ? ' active' : ''}`}
                 title={lang === 'en' ? 'Information Security' : '信息安全'}
               >
                 <span>{lang === 'en' ? 'Information Security' : '信息安全'}</span>

@@ -2124,6 +2124,15 @@ button { cursor: pointer; }
   min-width: 0;
 }
 
+/* ── 侧边栏操作区的导航链接 ────────────────────────────────────────────
+   .sidebar-footer .nav-item 把内容居中（为「开发者模式」的开关让位），
+   但同区的信息安全入口是普通导航链接，应与上方操作区的导航项一样左对齐。
+   只重置对齐，其余继承 .nav-item。 */
+
+.sidebar-footer .nav-item.sidebar-nav-link {
+  justify-content: flex-start;
+}
+
 .trust-notice-more {
   display: inline-block;
   margin-top: 12px;
