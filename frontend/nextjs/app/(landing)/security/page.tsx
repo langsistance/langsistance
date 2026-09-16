@@ -48,6 +48,7 @@ const COPY = {
     transportItems: [
       '所有请求经 HTTPS 加密传输。',
       '登录密码以 AES-GCM 加密后传输，服务端不落明文。',
+      '您的对话记录与知识库条目会保留至您主动删除，或通过邮箱请求删除账号数据为止。',
     ],
     logsTitle: '日志',
     logsBody: '用于诊断的日志中，提问内容仅保留前 80 个字符。',
@@ -76,6 +77,7 @@ const COPY = {
     transportItems: [
       'All requests are transmitted over HTTPS.',
       'Login passwords are encrypted with AES-GCM in transit; no plaintext is stored server-side.',
+      'Your conversation records and knowledge base entries are retained until you delete them, or until you request deletion of your account data by email.',
     ],
     logsTitle: 'Logging',
     logsBody: 'In diagnostic logs, prompt content is truncated to the first 80 characters.',

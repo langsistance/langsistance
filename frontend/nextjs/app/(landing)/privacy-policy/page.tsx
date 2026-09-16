@@ -47,7 +47,7 @@ const COPY = {
           '在您的账号下保存对话记录，以便您随时回看。',
           '改进产品可靠性与使用体验。',
         ],
-        note: '我们不会将您的数据用于广告、追踪或用户画像。匿名统计仅用于产品改进。',
+        note: '我们不会将您的数据用于广告、追踪或用户画像。匿名统计仅用于产品改进。用于诊断的日志中，提问内容仅保留前 80 个字符。',
       },
       {
         h: '3. AI 训练政策',
@@ -70,9 +70,9 @@ const COPY = {
       {
         h: '6. 数据留存与您的控制',
         items: [
-          '我们仅在提供服务所必需的期间内保留数据。',
-          '您可以在产品内删除自己的对话记录与知识库条目。',
-          '您可以通过下方邮箱联系我们，请求删除账号数据。',
+          '您的对话记录与知识库条目会保留至您主动删除，或通过下方邮箱请求删除账号数据为止。',
+          '您可以在产品内随时删除自己的对话记录与知识库条目。',
+          '您也可以通过下方邮箱联系我们，请求删除账号数据。',
         ],
       },
       {
@@ -107,7 +107,7 @@ const COPY = {
           'To store conversation records under your account so you can revisit them.',
           'To improve product reliability and user experience.',
         ],
-        note: 'We do not use your data for advertising, tracking, or profiling. Anonymous statistics are used solely for product improvement.',
+        note: 'We do not use your data for advertising, tracking, or profiling. Anonymous statistics are used solely for product improvement. In diagnostic logs, prompt content is truncated to the first 80 characters.',
       },
       {
         h: '3. AI Training Policy',
@@ -130,7 +130,7 @@ const COPY = {
       {
         h: '6. Retention and Your Control',
         items: [
-          'We retain data only as long as necessary to provide the service.',
+          'Your conversation records and knowledge base entries are retained until you delete them, or until you request deletion of your account data via the email address below.',
           'You may delete your conversation records and knowledge base entries within the product.',
           'You may contact us at the address below to request deletion of your account data.',
         ],
