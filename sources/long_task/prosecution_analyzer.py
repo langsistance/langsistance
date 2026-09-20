@@ -1067,6 +1067,38 @@ def _build_markdown_table(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+def family_report_strategy(
+    table_rows: list,
+    columns: list,
+    cn_exam_data: dict | None,
+    jp_exam_data: dict | None,
+    ep_exam_data: dict | None,
+) -> str:
+    """族报告走哪条路 —— 由**实际拿到的数据**决定。返回下列之一：
+
+    - ``"cross_jurisdiction"`` —— 有 CN/JP/EP 审查数据，走跨国模板；
+    - ``"us_only"`` —— 有美国分析表、无跨国数据，走既有 US-only 报告；
+    - ``"nothing"`` —— 两边都没有：**不得**走 US-only，那会用空表生成一份空
+      报告。调用方应如实说明"本次未取得可用于分析的数据"。
+
+    纯函数，无 I/O —— 它守的正是"美国数据缺失时该不该出报告"这条边界。
+    """
+    has_cn = bool(cn_exam_data and (
+        cn_exam_data.get('events') or cn_exam_data.get('timeline_md')
+        or cn_exam_data.get('legal_md') or cn_exam_data.get('claims_md')
+    ))
+    has_jp = bool(jp_exam_data and (
+        jp_exam_data.get('progress') or jp_exam_data.get('timeline_md')))
+    has_ep = bool(ep_exam_data and (
+        ep_exam_data.get('events') or ep_exam_data.get('timeline_md')))
+
+    if has_cn or has_jp or has_ep:
+        return "cross_jurisdiction"
+    if table_rows:
+        return "us_only"
+    return "nothing"
+
+
 async def generate_family_prosecution_report(
     table_rows: list[dict],
     columns: list[str],
@@ -1096,15 +1128,25 @@ async def generate_family_prosecution_report(
       6. Final Assessment (grant status, complexity, key insights)
       7. Appendix: analysis tables + claim chart
     """
-    _has_cn = bool(cn_exam_data and (
-        cn_exam_data.get('events') or cn_exam_data.get('timeline_md')
-        or cn_exam_data.get('legal_md') or cn_exam_data.get('claims_md')
-    ))
-    _has_jp = bool(jp_exam_data and (jp_exam_data.get('progress') or jp_exam_data.get('timeline_md')))
-    _has_ep = bool(ep_exam_data and (ep_exam_data.get('events') or ep_exam_data.get('timeline_md')))
+    _strategy = family_report_strategy(
+        table_rows, columns, cn_exam_data, jp_exam_data, ep_exam_data)
+
+    if _strategy == "nothing":
+        # 两边都没有数据 —— 此前会走 US-only 回退，用空 table_rows 生成一份空
+        # 报告。用户问一件纯国内 CN 申请（族里无美国成员）时正是这条路：CN 数据
+        # 其实取到了，却因为回退判据没看"美国数据是否存在"而走错分支。
+        _logger.warning(
+            "[prosecution] family_report_nothing — no US table rows and no "
+            "CN/JP/EP examination data; refusing to emit an empty report")
+        if lang == "en":
+            return ("No analyzable data was obtained for this family: the "
+                    "report needs either US prosecution documents or "
+                    "examination data from CN/JP/EP.")
+        return ("本次未取得可用于分析的数据：族报告需要美国审查文件，"
+                "或中国/日本/欧洲的审查数据。")
 
     # ── Fallback to US-only when no cross-jurisdiction data ──
-    if not _has_cn and not _has_jp and not _has_ep:
+    if _strategy == "us_only":
         _logger.info("[prosecution] family_report_fallback — no CN/JP/EP data, using US-only report")
         return await generate_prosecution_report(
             table_rows, columns, query, patent_id,

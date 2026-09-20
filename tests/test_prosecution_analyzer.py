@@ -8,6 +8,7 @@ from sources.long_task.prosecution_analyzer import (
     generate_report_outline,
     generate_report_section,
     build_failed_row,
+    family_report_strategy,
 )
 
 
@@ -296,3 +297,44 @@ class TestBuildFailedRow(unittest.TestCase):
         row = build_failed_row("OA001", "text extraction failed",
                                ["Document Type", "Description", "Key Content"], "en")
         self.assertEqual(row["Document Type"], "Analysis Failed")
+
+
+class TestFamilyReportStrategy(unittest.TestCase):
+    """需求：族报告该走哪条路 —— 由**实际拿到的数据**决定，而不是默认美国。
+
+    当前 `generate_family_prosecution_report` 的回退判据是"无 CN/JP/EP 数据
+    → 走 US-only 报告"，**没有判断美国数据是否存在**。用户问一件纯国内 CN
+    申请（族里没有美国成员）时，table_rows 为空却仍走 US-only，产出的是空
+    报告 —— 而 CN 数据其实取到了（Phase 0.3），只是走不到跨国模板那一条。
+
+    判据抽成纯函数：可离线钉住，且是 US 阶段可选化（任务#7）的决策内核。
+    """
+
+    def test_cross_jurisdiction_when_foreign_data_present(self):
+        assert family_report_strategy(
+            [], [], {"timeline_md": "x"}, {}, {}) == "cross_jurisdiction"
+        assert family_report_strategy(
+            [], [], {}, {"progress": "p"}, {}) == "cross_jurisdiction"
+        assert family_report_strategy(
+            [], [], {}, {}, {"events": [1]}) == "cross_jurisdiction"
+
+    def test_us_only_when_us_table_present_and_no_foreign_data(self):
+        rows = [{"doc": "OA"}]
+        assert family_report_strategy(
+            rows, ["doc"], {}, {}, {}) == "us_only"
+
+    def test_nothing_when_neither_us_nor_foreign_data(self):
+        """两边都没有数据时不得走 US-only —— 那会产出一份空报告。"""
+        assert family_report_strategy([], [], {}, {}, {}) == "nothing"
+
+    def test_us_table_with_foreign_data_prefers_cross_jurisdiction(self):
+        rows = [{"doc": "OA"}]
+        assert family_report_strategy(
+            rows, ["doc"], {"timeline_md": "x"}, {}, {}) == "cross_jurisdiction"
+
+    def test_empty_foreign_dicts_do_not_count_as_data(self):
+        """空 dict / 只有空串的字段不算"有数据"。"""
+        assert family_report_strategy(
+            [], [], {}, {}, {}) == "nothing"
+        assert family_report_strategy(
+            [], [], {"timeline_md": ""}, {}, {}) == "nothing"
