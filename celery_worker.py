@@ -1857,6 +1857,7 @@ def execute_family_analysis(self, task_id: str, params: dict):
     from sources.long_task.prosecution_downloader import (
         classify_prosecution_documents,
         download_single_document,
+        fetch_us_prosecution,
     )
     from sources.long_task.storage import create_storage
     from sources.llm_provider import Provider
@@ -2453,352 +2454,85 @@ def execute_family_analysis(self, task_id: str, params: dict):
                             _j['detail'] = str(e)[:60]
 
         # ═════════════════════════════════════════════════════════════════
-        # Phase 0.5: Fetch USPTO document list + classify
+        # Phase 0.5 ~ 2: 美国审查文件（取数 → 表头 → 流水线下载与分析）
         # ═════════════════════════════════════════════════════════════════
-        # 需求：无美国同族时不该整任务失败（CN/JP/EP 的取数已在 0.3/0.4/0.45
-        # 完成）。但下面的 Phase 1 产出 columns/table_rows、Phase 2 逐份分析
-        # 美国审查文件，Phase 3 的报告直接依赖它们 —— 跳过它们需要把这段整体
-        # 缩进到 if 里，属机械但大范围的改动。
+        # 这一段已抽成 `fetch_us_prosecution`（行为等价，含流水线并发、文本
+        # 提取链与 vision 回退、失败行、stop/pause 探测），因此可离线单测。
         #
-        # 在此之前先如实收口：说明本系统当前的族分析以美国审查文件为报告主干，
-        # 该族没有美国成员，并列出实际覆盖的辖区。**不要再报"未找到美国同族
-        # 成员"就了事** —— 那句话对"查这件中国专利的全球审查历史"毫无信息量。
+        # 关键语义变化：美国段失败**不再是终态**。族里 CN/JP/EP 的数据在
+        # Phase 0.3/0.4/0.45 已经取到 —— 美国段失败时若还有其它辖区数据，
+        # 继续走 Phase 3（报告层用 family_report_strategy 决定走跨国模板）；
+        # 两边都没有数据才失败。
+        columns: list = []
+        table_rows: list = []
+        _us_error = ""
         if us_member is None:
-            _pipeline_logger.warning(
-                f"[task={task_id}] FAMILY PHASE0.5 no_us_member — "
-                f"report backbone requires US prosecution documents; "
-                f"analyzable_offices={sorted(_analyzable)}"
-            )
-            if lang == 'zh':
-                msg = (
-                    f"该同族中没有美国成员，而本系统的族分析报告以美国审查文件"
-                    f"为主干，本次无法生成完整报告。"
-                    f"同族覆盖: {', '.join(family.jurisdictions)}；"
-                    f"其中可分析的局: {', '.join(sorted(_analyzable))}。"
-                )
-            else:
-                msg = (
-                    f"This family has no US member, and the family report is "
-                    f"built on US prosecution documents, so a full report "
-                    f"cannot be produced. Family covers: "
-                    f"{', '.join(family.jurisdictions)}; analyzable offices: "
-                    f"{', '.join(sorted(_analyzable))}."
-                )
-            return {'status': 'failed', 'task_id': task_id, 'error': msg}
-
-        update_task_status(task_id, 'preparing', _advance_progress(15),
-                           _t('fetching_uspto', lang))
-
-        headers = {'Accept': 'application/json'}
-        uspto_key = _os.getenv('USPTO_API_KEY', '')
-        if uspto_key:
-            headers['X-API-Key'] = uspto_key
-
-        doc_list_url = (
-            f"https://api.uspto.gov/api/v1/patent/applications/"
-            f"{us_app_number}/documents"
-        )
-        _pipeline_logger.info(
-            f"[task={task_id}] FAMILY PHASE0 fetch_doc_list — "
-            f"app_number={us_app_number}, url={doc_list_url}"
-        )
-        resp = await _uspto_get_with_retry(doc_list_url, headers, timeout=20)
-        if resp.status_code != 200:
-            _pipeline_logger.error(
-                f"[task={task_id}] FAMILY PHASE0 doc_list_failed — status={resp.status_code}"
-            )
-            # Terminal failure — single-exit writes failed (spec §5.4).
-            return {'status': 'failed', 'task_id': task_id,
-                    'error': f'USPTO API status {resp.status_code}'}
-
-        doc_list = resp.json() if resp.text else {}
-        documents = (
-            doc_list.get('documentBag', [])
-            if isinstance(doc_list, dict)
-            else []
-        )
-        if not documents:
-            if lang == 'zh':
-                msg = f"USPTO未返回专利申请 {us_app_number} 的任何文件。可能原因：申请号不存在、无权访问、或尚未公开。"
-            else:
-                msg = f"USPTO returned no documents for application {us_app_number}. The application may not exist, may not be accessible, or may not yet be published."
-            # Terminal failure — single-exit writes failed (spec §5.4).
-            return {'status': 'failed', 'task_id': task_id, 'error': msg}
-
-        manifest = classify_prosecution_documents(documents)
-        docs_to_download = manifest.must_download.copy()
-        if include_priority_2:
-            docs_to_download.extend(manifest.recommended)
-
-        _pipeline_logger.info(
-            f"[task={task_id}] FAMILY PHASE0 classified — "
-            f"total_in_bag={len(documents)}, "
-            f"must_download={len(manifest.must_download)}, "
-            f"recommended={len(manifest.recommended)}, "
-            f"skipped={len(manifest.skipped)}, "
-            f"to_download={len(docs_to_download)}"
-        )
-
-        if not docs_to_download:
-            if lang == 'zh':
-                msg = "未找到可分析的审查文件（无 Office Action、Response 或 Amendment）。可能该专利尚未进入实质审查阶段。"
-            else:
-                msg = "No analyzable prosecution documents found (no Office Actions, Responses, or Amendments). The patent may not have entered substantive examination."
-            # Terminal failure — single-exit writes failed (spec §5.4).
-            return {'status': 'failed', 'task_id': task_id, 'error': msg}
-
-        # ═════════════════════════════════════════════════════════════════
-        # Phase 1: Generate table columns (Flash LLM)
-        # ═════════════════════════════════════════════════════════════════
-        from sources.long_task.prosecution_analyzer import (
-            generate_table_columns,
-            analyze_single_document,
-            generate_document_summary,
-            build_failed_row,
-            generate_prosecution_report as gen_report,
-        )
-
-        update_task_status(task_id, 'generating_columns', 10,
-                           _t('prosecution_framework', lang, total=len(docs_to_download)))
-        _pipeline_logger.info(
-            f"[task={task_id}] FAMILY PHASE1 generate_table_columns — "
-            f"query={query[:100]}, doc_count={len(docs_to_download)}"
-        )
-        columns = await generate_table_columns(
-            query=query, doc_count=len(docs_to_download),
-            provider=flash_provider, lang=lang,
-        )
-        _pipeline_logger.info(
-            f"[task={task_id}] FAMILY PHASE1 columns_generated — "
-            f"column_count={len(columns)}, columns={columns}"
-        )
-        update_task_status(task_id, 'generating_columns', 12,
-                           f'分析维度：{" | ".join(columns[1:4])}...',
-                           table_columns=columns,
-                           analysis_type='family')
-        _update_mysql_progress(task_id, 'generating_columns', 12)
-
-        # ═════════════════════════════════════════════════════════════════
-        # Phase 2: Sequential download + pipelined parallel analysis
-        # ═════════════════════════════════════════════════════════════════
-        # Each document is downloaded sequentially.  As soon as download
-        # completes, analysis (OCR -> LLM analyze -> LLM summarize) is launched
-        # immediately via asyncio.create_task().  All analysis steps run under
-        # a Semaphore(100), so multiple OCR + LLM calls execute concurrently.
-        # (Same pattern as execute_prosecution_analysis Phase 2.)
-        total_dl = len(docs_to_download)
-        _pipeline_logger.info(
-            f"[task={task_id}] FAMILY PHASE2 START — "
-            f"pending_count={total_dl}, total={total_dl}"
-        )
-
-        # ── Activate US jurisdiction for Phase 2 document analysis ──
-        for _j in _jurisdictions:
-            if _j['code'] == 'US':
-                _j['status'] = 'analyzing'
-                _j['detail'] = _t('prosecution_downloading', lang, current=0, total=total_dl)
-                _j['file_count'] = total_dl
-                _j['files_done'] = 0
-
-        _push_jurisdictions(15, 'downloading',
-                            _t('prosecution_downloading', lang, current=0, total=total_dl))
-
-        async def _fetch_prosecution(url: str, hdrs: dict, timeout: int):
-            return await _uspto_get_with_retry(url, hdrs, timeout)
-
-        _table_rows: list[dict] = [None] * total_dl  # preserve order by index
-        _analyze_sem = asyncio.Semaphore(100)  # caps concurrent OCR + LLM calls
-        _pending_tasks = []  # list of asyncio.Task
-        _downloaded = 0  # documents downloaded so far
-        _analyzed = 0    # documents with completed (or skipped) analysis
-        from typing import Any as _AnyFam  # for type annotation in inner function
-
-        async def _analyze_one(_doc: _AnyFam, _i: int) -> None:
-            nonlocal _analyzed, _downloaded
-            async with _analyze_sem:
-                doc_index = _i + 1
-                # Update US jurisdiction progress
-                for _j in _jurisdictions:
-                    if _j['code'] == 'US':
-                        _j['detail'] = _t('prosecution_analyzing', lang, current=_j['files_done'], total=_j['file_count'], desc=_doc.description[:30])
-                        _j['progress'] = int((_j['files_done'] / max(_j['file_count'], 1)) * 55) + 45
-
-                # ── Text extraction (local-first -> Vision fallback) ──
-                if not _doc.text and _doc.binary:
-                    from sources.long_task.text_extractor import extract_text_from_binary
-                    _local_text = extract_text_from_binary(
-                        _doc.binary, skip_pdf_extraction=False,
-                    )
-                    if _local_text and len(_local_text.strip()) > 50:
-                        _doc.text = _local_text.strip()
-                        _pipeline_logger.info(
-                            f"[task={task_id}] FAMILY PHASE2 local_extract_ok — "
-                            f"code={_doc.document_code}, idx={doc_index}/{total_dl}, "
-                            f"chars={len(_doc.text)}"
-                        )
-                    elif vision_enabled:
-                        try:
-                            _text = await _extract_text_via_vision(
-                                _doc.binary, _doc.description, vision_provider,
-                            )
-                            if _text and len(_text.strip()) > 50:
-                                _doc.text = _text.strip()
-                                _pipeline_logger.info(
-                                    f"[task={task_id}] FAMILY PHASE2 vision_ok — "
-                                    f"code={_doc.document_code}, idx={doc_index}/{total_dl}, "
-                                    f"chars={len(_doc.text)}"
-                                )
-                        except Exception as _e:
-                            _pipeline_logger.warning(
-                                f"[task={task_id}] FAMILY PHASE2 vision_error — "
-                                f"code={_doc.document_code}: {type(_e).__name__}: {_e}"
-                            )
-
-                if not _doc.text or len(_doc.text.strip()) < 50:
-                    row = build_failed_row(_doc.document_code, "text extraction failed", columns, lang)
-                    row["_failed"] = True
-                    row["_summary"] = ""
-                    _table_rows[_i] = row
-                    _analyzed += 1
-                    for _j in _jurisdictions:
-                        if _j['code'] == 'US':
-                            _j['files_done'] += 1
-                            _j['detail'] = _t('prosecution_analyzing', lang, current=_j['files_done'], total=_j['file_count'], desc=_doc.description[:30])
-                            _j['progress'] = int((_j['files_done'] / max(_j['file_count'], 1)) * 55) + 45
-                    _push_jurisdictions(
-                        int((_analyzed + _downloaded) / max(total_dl, 1) * 70) + 15,
-                        'analyzing',
-                        _t('prosecution_analyzing', lang, current=_analyzed, total=total_dl))
-                    return
-
-                # ── Analyze (LLM) ──
-                try:
-                    row = await analyze_single_document(
-                        doc_text=_doc.text,
-                        doc_code=_doc.document_code,
-                        doc_desc=_doc.description,
-                        doc_category=_doc.category,
-                        columns=columns,
-                        query=query,
-                        provider=pro_provider,
-                        lang=lang,
-                    )
-                except Exception as e:
-                    _pipeline_logger.warning(
-                        f"[task={task_id}] FAMILY PHASE2 analyze_error — "
-                        f"code={_doc.document_code}, idx={doc_index}/{total_dl}: "
-                        f"{type(e).__name__}: {e}"
-                    )
-                    row = build_failed_row(_doc.document_code, str(e), columns, lang)
-                    row["_failed"] = True
-
-                # ── Summarize (LLM) ──
-                try:
-                    summary = await generate_document_summary(
-                        doc_text=_doc.text, row=row, query=query,
-                        provider=pro_provider, lang=lang,
-                    )
-                except Exception as e:
-                    _pipeline_logger.warning(
-                        f"[task={task_id}] FAMILY PHASE2 summary_error — "
-                        f"code={_doc.document_code}: {type(e).__name__}: {e}"
-                    )
-                    summary = ""
-                row["_summary"] = summary
-                _table_rows[_i] = row
-                _analyzed += 1
-                # Update US jurisdiction: increment files_done, update progress
-                for _j in _jurisdictions:
-                    if _j['code'] == 'US':
-                        _j['files_done'] += 1
-                        _j['progress'] = int((_j['files_done'] / max(_j['file_count'], 1)) * 55) + 45
-                        if _j['files_done'] >= _j['file_count']:
-                            _j['status'] = 'done'
-                            _j['progress'] = 100
-                        _j['detail'] = _t('prosecution_progress', lang, current=_j['files_done'], total=_j['file_count'])
-
-                _p = max(_downloaded, _analyzed)
-                update_task_status(
-                    task_id, 'analyzing',
-                    progress_pct(_p, total_dl),
-                    _t('prosecution_analyzing', lang,
-                       current=_analyzed, total=total_dl,
-                       desc=_doc.description[:40]),
-                    table_rows=[r for r in _table_rows if r is not None],
-                    table_columns=columns,
-                    jurisdictions=_jurisdictions,
-                )
-                _pipeline_logger.info(
-                    f"[task={task_id}] FAMILY PHASE2 analysis_done — "
-                    f"code={_doc.document_code}, idx={doc_index}/{total_dl}, "
-                    f"analyzed={_analyzed}/{total_dl}"
-                )
-
-        # ── Main pipeline: download sequentially, launch analysis immediately ──
-        for _i, _doc in enumerate(docs_to_download):
-            doc_index = _i + 1
-
-            _result = _handle_task_stop(task_id, user_id, _downloaded, total_dl)
-            if _result:
-                return _result
-            _result = _handle_task_pause(task_id, user_id, _downloaded, total_dl, {
-                'completed': [r.get(columns[0], '') for r in _table_rows if r is not None and not r.get('_failed')],
-                'pending': [d.document_code for d in docs_to_download[_i:]],
-                'completed_rows': [r for r in _table_rows if r is not None],
-                'failed': [r.get(columns[0], '') for r in _table_rows if r is not None and r.get('_failed')],
-                'columns': columns,
-                'downloaded': _downloaded,
-                'analyzed': _analyzed,
-            })
-            if _result:
-                return _result
-
-            _visible_progress = max(_downloaded, _analyzed)
-            # Update US jurisdiction detail during download phase
-            for _j in _jurisdictions:
-                if _j['code'] == 'US':
-                    _j['detail'] = _t('prosecution_downloading', lang, current=doc_index, total=total_dl)
-                    _j['progress'] = int((doc_index / max(total_dl, 1)) * 40) + 5  # 5-45% during download
-            update_task_status(
-                task_id, 'downloading',
-                _advance_progress(15 + int((_visible_progress / max(total_dl, 1)) * 40)),
-                _t('prosecution_downloading', lang, current=doc_index, total=total_dl),
-                jurisdictions=_jurisdictions,
-                table_columns=columns,
-            )
-            await download_single_document(_doc, _fetch_prosecution, us_app_number, headers)
-            _downloaded += 1
-
             _pipeline_logger.info(
-                f"[task={task_id}] FAMILY PHASE2 download_done — "
-                f"code={_doc.document_code}, idx={doc_index}/{total_dl}, "
-                f"text_len={len(_doc.text) if _doc.text else 0}"
+                f"[task={task_id}] FAMILY PHASE0.5 no_us_member — "
+                f"skipping US prosecution; analyzable={sorted(_analyzable)}")
+        else:
+            update_task_status(task_id, 'preparing', _advance_progress(15),
+                               _t('fetching_uspto', lang))
+            _us_headers = {'Accept': 'application/json'}
+            _uspto_key = _os.getenv('USPTO_API_KEY', '')
+            if _uspto_key:
+                _us_headers['X-API-Key'] = _uspto_key
+
+            _doc_list_url = (
+                f"https://api.uspto.gov/api/v1/patent/applications/"
+                f"{us_app_number}/documents"
             )
-
-            _pending_tasks.append(asyncio.create_task(_analyze_one(_doc, _i)))
-
-        # ── Wait for all in-flight analyses to finish ──
-        docs_with_text = [d for d in docs_to_download if d.text and len(d.text.strip()) >= 50]
-        _pipeline_logger.info(
-            f"[task={task_id}] FAMILY PHASE2 all_downloads_done — "
-            f"with_text={len(docs_with_text)}/{total_dl}, "
-            f"waiting_for_{len(_pending_tasks)}_analyses"
-        )
-        if _pending_tasks:
-            await asyncio.gather(*_pending_tasks)
-
-        # Reconstruct table_rows in original order
-        table_rows = [r for r in _table_rows if r is not None]
-
-        if not table_rows:
-            if lang == 'zh':
-                msg = "所有审查文件处理失败。文件可能是扫描件或加密PDF。"
+            _pipeline_logger.info(
+                f"[task={task_id}] FAMILY PHASE0 fetch_doc_list — "
+                f"app_number={us_app_number}, url={_doc_list_url}"
+            )
+            _resp = await _uspto_get_with_retry(
+                _doc_list_url, _us_headers, timeout=20)
+            if _resp.status_code != 200:
+                _us_error = f'USPTO API status {_resp.status_code}'
+                _pipeline_logger.error(
+                    f"[task={task_id}] FAMILY PHASE0 doc_list_failed — "
+                    f"status={_resp.status_code}")
             else:
-                msg = "All prosecution documents failed processing. Files may be scanned images or encrypted PDFs."
-            # Terminal failure — single-exit writes failed (spec §5.4).
-            return {'status': 'failed', 'task_id': task_id, 'error': msg}
+                _doc_list = _resp.json() if _resp.text else {}
+                _documents = (_doc_list.get('documentBag', [])
+                              if isinstance(_doc_list, dict) else [])
+                columns, table_rows, _us_error, _stop_result = (
+                    await fetch_us_prosecution(
+                        _documents,
+                        task_id=task_id, user_id=user_id,
+                        query=query, lang=lang,
+                        app_number=us_app_number, headers=_us_headers,
+                        flash_provider=flash_provider,
+                        pro_provider=pro_provider,
+                        vision_provider=vision_provider,
+                        include_priority_2=include_priority_2,
+                        uspto_get_with_retry=_uspto_get_with_retry,
+                        handle_stop=_handle_task_stop,
+                        handle_pause=_handle_task_pause,
+                        jurisdictions=_jurisdictions,
+                        vision_extract=_extract_text_via_vision,
+                    )
+                )
+                if _stop_result:
+                    # 停止/暂停：调用方必须原样 return 该结果
+                    return _stop_result
 
-        # ═════════════════════════════════════════════════════════════════
+        if _us_error and not (
+                (cn_exam_data and (cn_exam_data.get('events')
+                                   or cn_exam_data.get('timeline_md')))
+                or (jp_exam_data and jp_exam_data.get('progress'))
+                or (ep_exam_data and ep_exam_data.get('events'))):
+            # 美国段失败、且没有其它辖区数据可支撑报告 → 才是真正的失败
+            _pipeline_logger.error(
+                f"[task={task_id}] FAMILY US phase failed with no fallback — "
+                f"{_us_error}")
+            return {'status': 'failed', 'task_id': task_id, 'error': _us_error}
+        if _us_error:
+            _pipeline_logger.warning(
+                f"[task={task_id}] FAMILY US phase degraded — {_us_error}; "
+                f"continuing with CN/JP/EP data")
+
         # Phase 3: Generate report
         # ═════════════════════════════════════════════════════════════════
         _pipeline_logger.info(
