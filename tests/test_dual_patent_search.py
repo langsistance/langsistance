@@ -1549,5 +1549,142 @@ class TestUsCitingNote(unittest.TestCase):
             "")
 
 
+class TestAutoLadderBudgetCharging(unittest.TestCase):
+    """需求#37: 阶梯预算按**结果**计费, 不按发起计费。
+
+    2026-09-19 生产: 美方前 3 条阶梯全 404(含重发同一条已 404 的形态), 额度被
+    记满 used=3/3, 两条未试的**最松档合规阶梯**被直接跳过 —— 本轮美方 us_hits=0。
+    格式被拒(applications/search 的 404)不消耗额度, 因为它不含信息量; 真零与
+    传输失败仍计费(否则"零命中就重试"会变成无限重试)。
+    """
+
+    def _agent_at(self, used_us):
+        agent = _FakeAgent()
+        agent._patent_auto_used = {"us": used_us, "cn": 0}
+        return agent
+
+    def test_format_rejection_does_not_charge_budget(self):
+        calls = []
+
+        async def _search(q, page=1, page_size=20):
+            calls.append(q)
+            return [], "USPTO HTTP 404 (true zero, no retry)"
+
+        agent = self._agent_at(0)
+        asyncio.run(_auto_run_patent_ladder(
+            agent, ["u1", "u2", "u3"], _search, [], [], "zh", "us", 1, 20))
+        self.assertEqual(calls, ["u1", "u2", "u3"])
+        self.assertEqual(agent._patent_auto_used["us"], 0)
+
+    def test_transient_failure_is_charged_once_the_request_reaches_the_corpus(self):
+        """拿到 200 的查询(真零)计费 —— 否则"零命中就重试"会变成无限重试。"""
+        calls = []
+
+        async def _search(q, page=1, page_size=20):
+            calls.append(q)
+            return [], "USPTO 0 hits"
+
+        agent = self._agent_at(0)
+        asyncio.run(_auto_run_patent_ladder(
+            agent, ["u1", "u2"], _search, [], [], "zh", "us", 1, 20,
+            max_queries=1))
+        self.assertEqual(calls, ["u1"])
+        self.assertEqual(agent._patent_auto_used["us"], 1)
+
+    def test_exception_does_not_charge_and_stays_retryable(self):
+        """抛异常的查询没有到达语料 —— 不扣额度, 也不计入 tried(本请求内可重试)。
+
+        与 HEAD 行为一致: 原实现在异常分支 `continue`, 既不计 tried 也不追加
+        executed。改成"记入 tried + 计费"会让一次瞬时故障永久吃掉该查询。
+        """
+        calls = []
+
+        async def _search(q, page=1, page_size=20):
+            calls.append(q)
+            raise RuntimeError("connection reset")
+
+        agent = self._agent_at(0)
+        asyncio.run(_auto_run_patent_ladder(
+            agent, ["u1", "u2"], _search, [], [], "zh", "us", 1, 20))
+        self.assertEqual(agent._patent_auto_used["us"], 0)
+        self.assertEqual(agent._tried_queries, [])
+        # 本请求内再次补跑仍会重试同样的查询
+        asyncio.run(_auto_run_patent_ladder(
+            agent, ["u1", "u2"], _search, [], [], "zh", "us", 1, 20))
+        self.assertEqual(calls, ["u1", "u2", "u1", "u2"])
+
+    def test_real_zero_is_charged(self):
+        async def _search(q, page=1, page_size=20):
+            return [], "USPTO 0 hits"
+
+        agent = self._agent_at(0)
+        asyncio.run(_auto_run_patent_ladder(
+            agent, ["u1", "u2"], _search, [], [], "zh", "us", 1, 20,
+            max_queries=1))
+        self.assertEqual(agent._patent_auto_used["us"], 1)
+
+    def test_budget_still_caps_charted_queries(self):
+        """计费口径改了, 额度上限本身不能被绕过。"""
+        calls = []
+
+        async def _search(q, page=1, page_size=20):
+            calls.append(q)
+            return [], "USPTO 0 hits"
+
+        agent = self._agent_at(REACT_PATENT_AUTO_LADDER_MAX - 1)
+        asyncio.run(_auto_run_patent_ladder(
+            agent, ["u1", "u2"], _search, [], [], "zh", "us", 1, 20,
+            max_queries=REACT_PATENT_AUTO_LADDER_MAX))
+        self.assertEqual(calls, ["u1"])          # 只剩 1 条额度
+        self.assertEqual(agent._patent_auto_used["us"],
+                         REACT_PATENT_AUTO_LADDER_MAX)
+
+    def test_format_rejection_does_not_consume_the_remaining_slot(self):
+        """2026-09-19 场景复现: 被拒的那条不该占掉仅剩的额度。"""
+        calls = []
+
+        async def _search(q, page=1, page_size=20):
+            calls.append(q)
+            if q == "u1":
+                return [], "USPTO HTTP 404 (true zero, no retry)"
+            return [], "USPTO 0 hits"
+
+        agent = self._agent_at(REACT_PATENT_AUTO_LADDER_MAX - 1)
+        asyncio.run(_auto_run_patent_ladder(
+            agent, ["u1", "u2"], _search, [], [], "zh", "us", 1, 20,
+            max_queries=REACT_PATENT_AUTO_LADDER_MAX))
+        self.assertEqual(calls, ["u1", "u2"])    # u2 仍被执行
+        self.assertEqual(agent._patent_auto_used["us"],
+                         REACT_PATENT_AUTO_LADDER_MAX)
+
+    def test_unrun_ladder_queries_are_reported(self):
+        """额度耗尽导致阶梯没跑完时, 必须让模型知道 —— 否则"没查"会被读成"查了没有"。"""
+        notes = []
+
+        async def _search(q, page=1, page_size=20):
+            return [], "USPTO 0 hits"
+
+        agent = self._agent_at(REACT_PATENT_AUTO_LADDER_MAX)
+        asyncio.run(_auto_run_patent_ladder(
+            agent, ["u1", "u2"], _search, [], notes, "zh", "us", 1, 20,
+            max_queries=REACT_PATENT_AUTO_LADDER_MAX))
+        self.assertTrue(any("未执行" in n for n in notes),
+                        f"未执行阶梯未留痕: {notes}")
+
+    def test_format_rejected_queries_are_not_reported_as_unrun(self):
+        """被格式拒绝的条目已执行过(并被记录进 tried), 不算"未执行"。"""
+        notes = []
+
+        async def _search(q, page=1, page_size=20):
+            return [], "USPTO HTTP 404 (true zero, no retry)"
+
+        agent = self._agent_at(0)
+        asyncio.run(_auto_run_patent_ladder(
+            agent, ["u1", "u2"], _search, [], notes, "zh", "us", 1, 20))
+        self.assertFalse([n for n in notes if "未执行" in n])
+        self.assertTrue(any("格式被拒" in n for n in notes), notes)
+
 if __name__ == "__main__":
     unittest.main()
+
+

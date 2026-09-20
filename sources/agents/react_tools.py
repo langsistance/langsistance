@@ -3020,6 +3020,16 @@ async def _rank_builtin_patent_pool(agent, items: list, lang: str) -> list:
         return items
 
 
+def _is_format_rejection(note: str) -> bool:
+    """需求#37: 该结果为「格式被拒」而非「查过但没命中」。
+
+    USPTO applications/search 对超出方言上限的括号/AND 形态直接 404
+    （``_uspto_search_by_query`` 把它标成 ``USPTO HTTP 404``），重试链已在中途
+    穷尽，这条查询不含任何信息量。 CN 侧网关不产生此标记。
+    """
+    return "HTTP 404" in str(note or "")
+
+
 async def _auto_run_patent_ladder(agent, ladder: list, search_fn, merged: list,
                                   notes: list, lang: str, source: str,
                                   page: int, page_size: int,
@@ -3051,8 +3061,17 @@ async def _auto_run_patent_ladder(agent, ladder: list, search_fn, merged: list,
     cap = REACT_PATENT_AUTO_LADDER_MAX
     if max_queries is not None:
         cap = min(cap, max(0, int(max_queries)))
-    take = untried[:min(PATENT_AUTO_LADDER_BATCH, cap - used)]
-    if not take:
+    # 需求#37: 被拒的检索式不占额度, 所以按"剩余额度"切片会让批次欠额
+    # （额度只剩 1、补跑上限 4 时, 被拒的条目不计数 → 批次只发 1 条就停）。
+    # 本批要发多少由"补跑上限"决定, 额度由循环内的 used >= cap 收口。
+    take = untried[:PATENT_AUTO_LADDER_BATCH]
+    if max_queries is not None:
+        take = take[:max(0, int(max_queries))]
+
+    if not take or used >= cap:
+        # 无待发条目, 或源头额度已用尽。 未试阶梯必须留痕 —— 之前静默
+        # return 0, 线上 total=0 无从排查(2026-08-29 事故); 且"没查"不能被
+        # 模型读成"查过了没有"。
         _glog = getattr(agent, "logger", None)
         if _glog is not None:
             _glog.warning(
@@ -3060,18 +3079,38 @@ async def _auto_run_patent_ladder(agent, ladder: list, search_fn, merged: list,
                 f"budget exhausted (used={used}/{cap}), {len(untried)} untried "
                 f"ladder queries skipped"
             )
+        if untried:
+            label = "中国" if source == "cn" else "美国"
+            notes.append(
+                f"{label}专利阶梯式另有 {len(untried)} 条未执行"
+                f"（本轮补跑额度已满）" if lang == "zh"
+                else f"{len(untried)} more {source.upper()} ladder queries "
+                     f"were not run (per-request auto-ladder budget spent)")
         return 0
     gained = 0
     executed: list = []
+    format_rejected = 0
+    used_at_entry = used
     for q in take:
-        used_map[source] = used + 1
-        used += 1
-        agent._patent_auto_used = used_map
+        if used >= cap:
+            break  # 额度本就有上限 —— 被拒的查询不占额度, 但也不能因此无限跑
         try:
             items, note = await search_fn(q, page=page, page_size=page_size)
         except Exception as exc:
+            # 抛异常的查询**没有到达语料**: 不计费, 也不记 tried —— 与 HEAD 的
+            # `continue` 一致, 让一次瞬时故障能在本请求内重试。
             notes.append(f"{source}: {exc}")
             continue
+        # 需求#37: 计费按**结果**算, 不按发起算。 applications/search 对超限的
+        # 括号/AND 形态直接 404 —— 那是格式被拒, 不是"查过但没命中", 扣额度等于
+        # 让最松档的合规阶梯被"确定不会成功"的形态挤掉 (2026-09-19 生产:
+        # used=3/3 后 2 条未试阶梯被跳过, 该轮美方 us_hits=0)。
+        if _is_format_rejection(note):
+            format_rejected += 1
+        else:
+            used_map[source] = used + 1
+            used += 1
+            agent._patent_auto_used = used_map
         executed.append(q)
         if q not in tried:
             tried.append(q)
@@ -3088,14 +3127,21 @@ async def _auto_run_patent_ladder(agent, ladder: list, search_fn, merged: list,
         if _glog is not None:
             _glog.info(
                 f"patent_search_auto_ladder — source={source} "
-                f"queries={[q[:40] for q in executed]} gained={gained}"
+                f"queries={[q[:40] for q in executed]} gained={gained} "
+                f"charged={used - used_at_entry} "
+                f"format_rejected={format_rejected}"
             )
         label = "中国" if source == "cn" else "美国"
+        rejected_tail = (
+            f"，其中 {format_rejected} 条因检索式格式被拒(未计额度)"
+            if format_rejected and lang == "zh"
+            else (f" ({format_rejected} rejected by query syntax, "
+                  f"not charged)" if format_rejected else ""))
         notes.append(
             f"已自动补跑{label}专利阶梯式 {len(executed)} 条"
-            f"（并入 {gained} 条候选）" if lang == "zh"
+            f"（并入 {gained} 条候选）{rejected_tail}" if lang == "zh"
             else f"Auto-ran {len(executed)} {source.upper()} ladder "
-                 f"queries ({gained} candidates merged)"
+                 f"queries ({gained} candidates merged){rejected_tail}"
         )
     return gained
 
