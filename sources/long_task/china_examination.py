@@ -279,8 +279,9 @@ async def fetch_examination_data(
         f"review_decisions_count={len(review_data) if isinstance(review_data, list) else 1}"
     )
 
-    # Parse into ExaminationEvent objects
-    events = _parse_review_decisions(review_data)
+    # Parse into ExaminationEvent objects.  佰腾与 SIPOP 的字段名不同，适配层
+    # 做无损翻译（拿不到的留空，绝不猜决定类型或当事人）。
+    events = _parse_review_decisions(adapt_baiten_review_decisions(review_data))
     events.sort(key=lambda e: e.sort_date)
 
     # Fetch legal status
@@ -324,6 +325,122 @@ async def fetch_examination_data(
     )
 
     return events, law_state, basic_info, claims, legal_timeline
+
+
+# ── 佰腾数据源适配 ──────────────────────────────────────────────────────────────
+# CN 审查分析改用佰腾（``BaitenClient.query_patent_review`` 已是 SIPOP-compatible
+# 签名，取 FSWX 的 ``patentLawDeclare_list``），但**字段名不同**：本模块的解析器
+# 读的是 SIPOP 的 camelCase，佰腾给的是 declareNum/declareDate/reDeclarePerson…
+# 这一层做翻译，纯函数、无 I/O。
+
+# 决定类型：佰腾不提供该字段，只能从决定书全文的固定措辞推断。推不出时留空
+# —— ``decision_label_zh`` 对空值回落到"审查决定"，比猜错类型安全。
+_DECISION_MARKERS = (
+    ("无效宣告", "invalidation"),
+    ("复审", "reexamination"),
+    ("驳回", "overrule"),
+    ("异议", "opposition"),
+)
+
+# 佰腾字段 → SIPOP 字段。值为同一语义的不同叫法（网关版本间有漂移），
+# 按序取第一个有值的。
+_BAITEN_FIELD_ALIASES = {
+    "decisionNumber": ("declareNum", "decisionNumber"),
+    "decisionDate": ("declareDate", "decisionDate"),
+    "inventionTitle": ("inTitle", "inventionTitle"),
+    "assignee": ("patentee", "assignee"),
+    "appellant": ("reDeclarePerson", "appellant"),
+    "chiefExaminer": ("mainExamingPerson", "chiefExaminer"),
+    "leaderExaminer": ("chargeMan", "leaderExaminer"),
+    "memberExaminer": ("examingPerson", "memberExaminer"),
+    "lawReference": ("lawBase", "lawReference"),
+    "mainClassification": ("mainClassNum", "mainClassification"),
+}
+
+
+class BaitenExaminationSource:
+    """``fetch_examination_data`` 需要的数据源接口，由两条来源拼成。
+
+    单一客户端都凑不齐那 5 个方法：佰腾有审查决定与法律状态（FSWX/FLZT），
+    中国专利客户端有着录与权利要求全文。组合起来即可让 CN 审查分析**不依赖
+    SIPOP**。任一来源未配置时，它负责的方法返回空值——审查分析降级，不中断。
+    """
+
+    def __init__(self, baiten=None, cn_client=None):
+        self._baiten = baiten
+        self._cn = cn_client
+
+    async def query_patent_review(self, app_num: str,
+                                  country: str = "CN") -> list:
+        if self._baiten is None:
+            return []
+        return await self._baiten.query_patent_review(app_num, country)
+
+    async def query_law_state(self, app_num: str) -> dict:
+        if self._baiten is None:
+            return {}
+        return await self._baiten.query_law_state(app_num)
+
+    async def query_legal_state_timeline(self, app_num: str,
+                                         country: str = "CN") -> list:
+        if self._baiten is None:
+            return []
+        return await self._baiten.query_legal_state_timeline(app_num, country)
+
+    async def query_basic_info(self, app_num: str) -> dict:
+        if self._cn is None:
+            return {}
+        return await self._cn.query_basic_info(app_num)
+
+    async def query_full_text(self, app_num: str) -> dict:
+        if self._cn is None:
+            return {}
+        return await self._cn.query_full_text(app_num)
+
+
+def _infer_decision_type(text: str) -> str:
+    """从决定书全文措辞推断决定类型；推不出返回 ""。"""
+    for marker, kind in _DECISION_MARKERS:
+        if marker in text:
+            return kind
+    return ""
+
+
+def adapt_baiten_review_decisions(
+    raw_data: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """佰腾 FSWX 决定 → ``_parse_review_decisions`` 期望的 SIPOP 形态。
+
+    只做字段名翻译与类型推断，**不丢信息**：拿不到的一律留空，让下游的
+    「记录未载明」表述自然成立。绝不编造决定类型或当事人。
+    """
+    out: list[dict[str, Any]] = []
+    for item in (raw_data or []):
+        if not isinstance(item, dict):
+            continue
+        mapped: dict[str, Any] = {}
+        for target, aliases in _BAITEN_FIELD_ALIASES.items():
+            mapped[target] = next(
+                (str(item[a]) for a in aliases if item.get(a)), "")
+        full_text = str(item.get("fullText") or "")
+        mapped["fullText"] = full_text
+        # 决定要点（佰腾的 declareProintvarhcar 疑为 declare_point_varchar 的
+        # 拼写漂移）—— 单独取，不混进全文。
+        mapped["decisionMainPoint"] = str(
+            item.get("declareProintvarhcar")
+            or item.get("declarePoint") or "") or None
+        # 决定类型：先看佰腾是否直接给了，再退到全文措辞推断。
+        mapped["decision"] = (str(item.get("decision") or "")
+                              or _infer_decision_type(full_text))
+        # 当事人：无效宣告里"请求人"对"专利权人"；复审里请求人即专利权人。
+        # 两个槽分开给，由下游按类型理解，这里不做语义裁剪。
+        mapped["complainant"] = str(item.get("reDeclarePerson") or "") or None
+        mapped["defendant"] = str(item.get("ineffectivePerson") or "")
+        # 全文进 reasoning —— 后续可按需拆三段，先保证内容不丢。
+        if full_text:
+            mapped["reasoning"] = full_text
+        out.append(mapped)
+    return out
 
 
 def _parse_review_decisions(
