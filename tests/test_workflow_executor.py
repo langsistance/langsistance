@@ -36,12 +36,46 @@ if "sklearn.metrics.pairwise" not in sys.modules:
     sys.modules["sklearn.metrics"] = metrics_module
     sys.modules["sklearn.metrics.pairwise"] = pairwise_module
 
+# 这些第三方桩只为让本模块 import 得过。**用完必须还原** —— 留着的话，同一
+# 进程里后续任何 `import redis` 都会拿到这个空 module（`Redis` 被替换成
+# `object`），于是 patent_token._get_redis() 在 `redis.Redis(...)` 处抛
+# TypeError。此前 test_workflow_executor 与 test_dynamic_tool_params 同批运行时
+# 就是这样把 TestHttpErrorSemantics 打红的（与本次改动无关，2026-09-20 定位）。
+_stubbed_modules = {}
 for module_name in ("bs4", "pymysql", "pymysql.cursors", "redis", "requests"):
     if module_name not in sys.modules:
-        sys.modules[module_name] = types.ModuleType(module_name)
+        _stubbed_modules[module_name] = types.ModuleType(module_name)
+        sys.modules[module_name] = _stubbed_modules[module_name]
 
 sys.modules["bs4"].BeautifulSoup = lambda *args, **kwargs: types.SimpleNamespace(get_text=lambda *a, **k: "")
-sys.modules["redis"].Redis = object
+
+
+class _StubRedis:
+    """可调用的 redis 替身。
+
+    **不能是 `object`**：``patent_token._get_redis()`` 是在**调用时**查
+    ``redis.Redis``，被污染的模块会让它 `TypeError: object() takes no arguments`
+    —— 此前本文件与 test_dynamic_tool_params 同批运行时就是这样把它打红的。
+    ``get`` 一律返回 None = 没有 token，与"拿不到凭据"的既有行为一致。
+    """
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def get(self, *args, **kwargs):
+        return None
+
+    def set(self, *args, **kwargs):
+        return True
+
+    def delete(self, *args, **kwargs):
+        return 0
+
+    def close(self, *args, **kwargs):
+        return None
+
+
+sys.modules["redis"].Redis = _StubRedis
 
 logger_module = types.ModuleType("sources.logger")
 
@@ -67,6 +101,10 @@ utility_module.pretty_print = lambda *args, **kwargs: None
 sys.modules["sources.utility"] = utility_module
 
 from sources.knowledge.knowledge import KnowledgeItem, ToolItem
+
+# 桩用完还原（本模块已持有自己的模块引用，不受影响）。
+for _name in _stubbed_modules:
+    sys.modules.pop(_name, None)
 
 if _original_sources_logger is not None:
     sys.modules["sources.logger"] = _original_sources_logger
@@ -405,3 +443,43 @@ class TestWorkflowExecutor(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWorkflowToolFailureIsStepLevel(unittest.IsolatedAsyncioTestCase):
+    """2026-09-20: execute_backend_tool_request 对未替换的模板占位符改为抛
+    ValueError(需求#32/#33)。工作流若不接住, 一次占位符失配会掀翻整个工作流 ——
+    而这本应是**步骤级**结果: 让后续步骤和 LLM 看到原因再决定。
+    """
+
+    async def test_failing_tool_records_error_without_killing_the_workflow(self):
+        from sources.workflow.workflow_executor import WorkflowExecutor
+
+        knowledge = KnowledgeItem(
+            id=101, user_id="u1", question="取文档", description="",
+            answer="取文档", public=1, model_name="m", tool_id=201,
+            params="{}", type=1)
+        tool = ToolItem(
+            id=201, user_id="u1", title="docs", description="d", push=2,
+            url="https://example.test/{applicationNumberText}", status=True,
+            timeout=30, params='{"method": "GET"}')
+
+        def _raise(tool_info, params):
+            raise ValueError(
+                "Request failed: missing value for URL parameter(s): "
+                "applicationNumberText")
+
+        executor = WorkflowExecutor(
+            llm=FakeLlm(),
+            knowledge_resolver=lambda kid: knowledge,
+            tool_resolver=lambda tid: tool,
+            tool_executor=_raise,
+        )
+        result = await executor.execute(
+            workflow_spec=json.dumps({
+                "type": "workflow", "version": 1, "mode": "context_chain",
+                "steps": [{"id": "step_1", "knowledge_id": 101}],
+            }),
+            user_prompt="取该申请的文档",
+        )
+        self.assertEqual(len(result.steps), 1)
+        self.assertIn("applicationNumberText", str(result.steps[0].data))

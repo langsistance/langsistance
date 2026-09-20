@@ -520,19 +520,30 @@ class TestPathTemplateSubstitution(unittest.TestCase):
 
     def test_missing_value_refuses_to_send_literal_template(self):
         # 2026-09-14 生产：LLM 没给申请号，模板字面量被原样发出 → USPTO 403。
-        # 现在必须在出站前拦下并回一条点名缺参的可读错误。
-        result, mock_req = self._result(self._docs_tool(), {"query": {}})
+        # 出站前拦下并回一条点名缺参的可读错误。2026-09-20 起改为**抛异常**
+        # —— 返回值契约会让 ReAct 循环把它读成成功（见 TestPlaceholderGateRaises）。
+        from unittest.mock import patch
+        from sources.dynamic_tool_params import execute_backend_tool_request
+        with patch("sources.dynamic_tool_params.outbound_http.request",
+                   return_value=self._resp()) as mock_req:
+            with self.assertRaises(ValueError) as ctx:
+                execute_backend_tool_request(self._docs_tool(), {"query": {}})
         self.assertFalse(mock_req.called, "模板未替换时不得出站")
-        self.assertIn("applicationNumberText", result["data"])
-        self.assertIsNone(result["raw_items"])
+        self.assertIn("applicationNumberText", str(ctx.exception))
 
     def test_placeholder_echoed_as_value_is_not_sent_literally(self):
         # LLM 把模板字面量当参数值回传的形态。
-        result, mock_req = self._result(
-            self._docs_tool(),
-            {"query": {"applicationNumberText": "{applicationNumberText}"}})
+        from unittest.mock import patch
+        from sources.dynamic_tool_params import execute_backend_tool_request
+        with patch("sources.dynamic_tool_params.outbound_http.request",
+                   return_value=self._resp()) as mock_req:
+            with self.assertRaises(ValueError) as ctx:
+                execute_backend_tool_request(
+                    self._docs_tool(),
+                    {"query": {"applicationNumberText":
+                               "{applicationNumberText}"}})
         self.assertFalse(mock_req.called)
-        self.assertIn("applicationNumberText", result["data"])
+        self.assertIn("applicationNumberText", str(ctx.exception))
 
     def test_concrete_value_still_goes_out(self):
         result, mock_req = self._result(
@@ -588,10 +599,15 @@ class TestPathTemplateSubstitution(unittest.TestCase):
         self.assertEqual(
             _substitute_url_placeholders(url, [{"q": "anything"}]), url)
         # …and 2026-09-15 起出站闸门把它拦下：宁可当场报缺参，也不发字面量。
-        result, mock_req = self._result(self._docs_tool(),
-                                        {"query": {"q": "anything"}})
+        from unittest.mock import patch
+        from sources.dynamic_tool_params import execute_backend_tool_request
+        with patch("sources.dynamic_tool_params.outbound_http.request",
+                   return_value=self._resp()) as mock_req:
+            with self.assertRaises(ValueError) as ctx:
+                execute_backend_tool_request(self._docs_tool(),
+                                             {"query": {"q": "anything"}})
         self.assertFalse(mock_req.called)
-        self.assertIn("applicationNumberText", result["data"])
+        self.assertIn("applicationNumberText", str(ctx.exception))
 
 
 class TestQueryObjectEnvelopeCollision(unittest.TestCase):
@@ -1134,3 +1150,49 @@ class TestHttpErrorSemantics(unittest.TestCase):
                           payload={"detailedMessage": "boom"})["data"]
         self.assertIn("Request failed, status code: 500", data)
         self.assertIn("boom", data)
+
+
+class TestPlaceholderGateRaises(unittest.TestCase):
+    """需求#32/#33: 占位符闸门必须以**异常**失败, 不能返回一个"看起来成功"的字典。
+
+    2026-09-14 生产: 该闸门 return {"data": "Request failed: ..."} —— ReAct 循环
+    用 `obs.startswith("Error:")` 判失败, 于是这次失败:
+      * 不计入 consecutive_failures → 循环的"连续失败就收手并补齐本轮调用"保护
+        (react_loop.py) 根本不触发;
+      * 模型看到的是成功语义的空结果 → 盲目重试, 直到 4 次 403、整轮被 provider
+        以 400 拒绝(悬空 tool_call)。
+    同文件其它失败路径都是 raise ValueError —— 这一处是唯一的例外。
+    """
+
+    def _docs_tool(self):
+        from unittest.mock import MagicMock
+        tool = MagicMock()
+        tool.params = '{"method":"GET","query":{},"body":{}}'
+        tool.url = ("https://api.uspto.gov/api/v1/patent/applications/"
+                    "{applicationNumberText}/documents")
+        tool.timeout = 30
+        return tool
+
+    def _call(self, params):
+        from unittest.mock import MagicMock, patch
+        from sources.dynamic_tool_params import execute_backend_tool_request
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.headers = {"Content-Type": "application/json"}
+        resp.json.return_value = {}
+        with patch("sources.dynamic_tool_params.outbound_http.request",
+                   return_value=resp) as mock_req:
+            with self.assertRaises(ValueError) as ctx:
+                execute_backend_tool_request(self._docs_tool(), params)
+        return mock_req, str(ctx.exception)
+
+    def test_missing_placeholder_raises_readable_error(self):
+        mock_req, message = self._call({"query": {}})
+        self.assertFalse(mock_req.called, "模板未替换时不得出站")
+        self.assertIn("applicationNumberText", message)
+
+    def test_template_echoed_as_value_raises(self):
+        mock_req, message = self._call(
+            {"query": {"applicationNumberText": "{applicationNumberText}"}})
+        self.assertFalse(mock_req.called)
+        self.assertIn("applicationNumberText", message)

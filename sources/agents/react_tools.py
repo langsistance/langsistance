@@ -2207,6 +2207,37 @@ def _alive_counts(items: list) -> tuple:
     return (alive, len(candidates))
 
 
+def _log_uspto_alive(path_label: str, q: str, items: list, glog=None) -> tuple:
+    """需求#31: 记录一批 USPTO 结果的存活率（每次响应都记，不只是回退触发时）。
+
+    诊断目的：`sort=_score` 在标题级语料上会让短标题的申请件顶满结果页
+    （2026-09-15 探针实测前 20 槽存活 41/120 vs 默认序 103/120）。dual search
+    路径有"存活占比 < 0.25 就用默认序重取一次"的回退，但**只在触发时才留痕**
+    —— 阈值定得对不对、KB 工具路径（`_build_uspto_envelope`，同样带 _score）
+    是不是同样受害，都无从判断。这一行把两侧的比值都摆出来，让"要不要改阈值 /
+    要不要给 KB 路径也加回退"变成可测的问题，而不是猜。
+
+    两个 path 的口径**不可直接比较**：``dual_search`` 记的是原始响应页，
+    ``kb_tool`` 记的是截断/重排之后的候选列表。各自只能与自己比。
+
+    返回值与 ``_alive_counts`` 一致；*glog* 为 None 时只算不记。
+    ``items`` 非空却解析不出候选，本身就是值得留痕的异常（schema 漂移 /
+    错误信封），不能与"没查"在日志里长得一样。
+    """
+    alive, total = _alive_counts(items)
+    if glog is not None:
+        if total:
+            glog.info(
+                f"uspto_alive_ratio — path={path_label} alive={alive}/{total} "
+                f"ratio={alive / total:.2f} q={str(q or '')[:60]!r}")
+        elif items:
+            glog.warning(
+                f"uspto_alive_ratio — path={path_label} 0/{len(items)} "
+                f"parsed (schema drift or error envelope?) "
+                f"q={str(q or '')[:60]!r}")
+    return alive, total
+
+
 async def _uspto_search_by_query(
     q: str, page: int = 1, page_size: int = 20,
 ) -> tuple[list, str]:
@@ -3183,7 +3214,12 @@ async def _run_patent_search(agent, args, lang: str, dual: bool = True) -> dict:
         )
 
     async def _uspto(q, page=1, page_size=20):
-        return await _uspto_search_by_query(q, page=page, page_size=page_size)
+        items, note = await _uspto_search_by_query(
+            q, page=page, page_size=page_size)
+        # 需求#31: dual search 才是排序回退的归属地 —— 阈值该定在哪，要靠它的
+        # 亚阈值区间数据说话（此前只在回退触发时留痕，等于没有对照）。
+        _log_uspto_alive("dual_search", q, items, _glog)
+        return items, note
 
     async def _baiten(q, page=1, page_size=20):
         # enrich=False：富化移出每轮检索的关键路径，改由本函数收尾统一跑
@@ -4179,6 +4215,11 @@ async def make_action_executor(agent, registry, push_filter=None):
             _is_doc_list = is_documents_tool(entry.tool_info)
             applies = _relevance_pool_applies(agent, entry.tool_info, pending)
             _glog = getattr(agent, "logger", None)
+            # 需求#31: KB 工具路径同样走 `_build_uspto_envelope`（sort=_score），
+            # 却既没有排序回退、也没有存活率留痕 —— dual search 侧至少能在
+            # "近乎整页失效"时回退。这里把比值摆出来，判断要不要给它也加回退。
+            if _is_uspto_search_tool(entry.tool_info) and _glog is not None:
+                _log_uspto_alive("kb_tool", q_used, pending, _glog)
             if _glog is not None:
                 _glog.info(
                     "relevance_pool gate — "

@@ -140,7 +140,17 @@ class WorkflowExecutor:
                 step_results.append(step_result)
                 break
 
-            tool_result = self.tool_executor(tool, params)
+            # 工具执行失败是**步骤级**结果，不是工作流级故障：把错误记进这一步
+            # 的 data，让后续步骤（和 LLM）看到原因并决定继续或终止。
+            # 2026-09-20 起 ``execute_backend_tool_request`` 对"参数里带未替换
+            # 的模板占位符"抛 ValueError（此前返回一个成功语义的字典）——
+            # 不接住的话一次占位符失配会掀翻整个工作流。
+            try:
+                tool_result = self.tool_executor(tool, params)
+            except ValueError as exc:
+                logger.warning(
+                    f"workflow step {index} tool call failed: {exc}")
+                tool_result = {"data": f"Error: {exc}", "raw_items": None}
             logger.info(f"workflow step {index}")
             final_data = tool_result.get("data")
             raw_items = tool_result.get("raw_items")

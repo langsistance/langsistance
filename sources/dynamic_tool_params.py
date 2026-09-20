@@ -622,17 +622,24 @@ def execute_backend_tool_request(tool_info: Any, params: Dict[str, Any] | str | 
     # 宁可当场回一条可读错误，也不要把 ``{applicationNumberText}`` 这种
     # 模板字面量发出去换一个 403（2026-09-14 生产：5 次取件调用里 4 次
     # 如此，全部报废）。错误里点名缺哪个参数，模型可直接补齐重试。
+    #
+    # **必须以异常失败，不能返回结果字典**（2026-09-20, 需求#32）：ReAct 循环
+    # 用 ``obs.startswith("Error:")`` 判失败，而返回的字典经
+    # ``execute_backend_tool_request`` 会变成一条**成功语义**的观察结果 ——
+    # 于是这次失败不计入 consecutive_failures，"连续失败就收手并补齐本轮调用"
+    # 的保护根本不触发，模型还会盲目重试直到整轮被 provider 以 400 拒绝
+    # （悬空 tool_call，2026-09-14 生产同一次事故）。本文件其它失败路径都是
+    # raise ValueError，这一处是唯一的例外。
     _missing = _unresolved_placeholders(url)
     if _missing:
         logger.warning(
             f"backend_tool: unresolved URL placeholder(s) {_missing} — "
             f"refusing to send the template literal to {url[:120]}")
-        return {"data": (
+        raise ValueError(
             "Request failed: missing value for URL parameter(s): "
             + ", ".join(_missing)
             + " — pass the concrete value (for example the application "
-              "number), not the {template} literal."),
-            "raw_items": None}
+              "number), not the {template} literal.")
 
     method = params_data.get("method", "GET").upper()
     content_type = params_data.get("Content-Type", "application/json")

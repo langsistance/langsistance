@@ -406,3 +406,78 @@ class TestToolMessagePairing(unittest.TestCase):
             seen["messages"][-1].tool_call_id, "call_X",
             "provider 必须看到与 tool_call 配对的 ToolMessage")
         self.assertEqual(text, "ok")
+
+
+class TestUnpairedCallsOnEarlyReturn(unittest.TestCase):
+    """需求#32: 同轮多个 tool_call、中途 return 时其余调用必须补齐结果。
+
+    sanitize_tool_message_pairs 是出站前的最后防线，但循环自己提前 return
+    时（long_task / final）应当就地补齐 —— 只有一层防线意味着上游任何一次
+    改动都可能把残缺历史送到 provider（2026-09-14 生产：整轮 400，用户只
+    看到"连接中断"）。
+    """
+
+    def test_long_task_return_pairs_remaining_calls(self):
+        model = _FakeModel([("", [
+            {"id": "c1", "name": "a", "args": {}},
+            {"id": "c2", "name": "b", "args": {}},
+        ], "")])
+        executor = _FakeExecutor({"a": {"kind": "long_task",
+                                        "knowledge": "k", "tool_info": None}})
+        loop = ReActLoop(model, executor, _Events(), max_rounds=3)
+        _result, messages = _run(loop, model, executor)
+        tool_ids = [m.get("tool_call_id") for m in messages
+                    if m.get("role") == "tool"]
+        self.assertEqual(tool_ids, ["c1", "c2"])
+
+    def test_final_return_pairs_remaining_calls(self):
+        model = _FakeModel([
+            ("", [{"id": "c1", "name": "a", "args": {}},
+                  {"id": "c2", "name": "b", "args": {}}], ""),
+            ("答案", [], ""),
+        ])
+        executor = _FakeExecutor({"a": {"kind": "observation", "text": "ok",
+                                        "final": True}})
+        loop = ReActLoop(model, executor, _Events(), max_rounds=3)
+        _result, messages = _run(loop, model, executor)
+        tool_ids = [m.get("tool_call_id") for m in messages
+                    if m.get("role") == "tool"]
+        self.assertEqual(tool_ids, ["c1", "c2"])
+
+
+class TestPlaceholderFailureReachesTheGuard(unittest.TestCase):
+    """需求#32 × #33: 占位符失败必须以"错误"的身份进入循环。
+
+    这是 2026-09-14 事故的因果链：占位符闸门返回一个成功语义的字典 →
+    `obs.startswith("Error:")` 为假 → 不计入 consecutive_failures → "连续
+    失败就收手并补齐本轮调用"的保护不触发 → 模型盲目重试 → 整轮被 provider
+    以 400 拒绝（悬空 tool_call）。闸门改为 raise 后，下面这条链才成立。
+    """
+
+    def test_placeholder_error_triggers_the_runaway_guard(self):
+        # 执行器抛出占位符错误（真实路径里由 execute_action 的 try 转成
+        # "Error: ..." 观察结果）。
+        class _RaisingExecutor:
+            async def __call__(self, name, args, round_no):
+                raise ValueError(
+                    "Request failed: missing value for URL parameter(s): "
+                    "applicationNumberText")
+
+        model = _FakeModel([
+            ("", [{"id": "c1", "name": "docs", "args": {}}], ""),
+            ("", [{"id": "c2", "name": "docs", "args": {}}], ""),
+            ("无法取得该文件。", [], ""),
+        ])
+        executor = _RaisingExecutor()
+        result, messages = _run(
+            ReActLoop(model, executor, _Events()), model, executor)
+
+        self.assertEqual(result.kind, "fallback")   # 保护生效, 没有继续重试
+        self.assertEqual(result.steps, 2)
+        # 每个 tool_call 都有配对结果 —— 送给 provider 的历史不残缺
+        assistant = [m for m in messages if m.get("tool_calls")]
+        tool_ids = [m.get("tool_call_id") for m in messages
+                    if m.get("role") == "tool"]
+        for msg in assistant:
+            for call in msg["tool_calls"]:
+                self.assertIn(call["id"], tool_ids)

@@ -135,6 +135,27 @@ class ReActLoop:
         return f"第 {step_no} 步 · 正在调用「{action_name}」"
 
     @staticmethod
+    def _append_unpaired_tool_messages(messages: List[dict],
+                                       tool_calls: List[dict],
+                                       start_index: int) -> None:
+        """给本轮 ``tool_calls[start_index:]`` 补占位 tool 结果（需求#32）。
+
+        assistant 那条带 tool_calls 的消息在本轮开始时就已写进 *messages*
+        （执行之前），因此任何中途 return 都可能留下未配对的调用 —— provider
+        以 400 "No tool output found for function call …" 拒绝整轮，用户只
+        看到"连接中断"（2026-09-14 生产）。 ``sanitize_tool_message_pairs``
+        在出站前兜底，但循环自己提前结束时也不该交出残缺历史。
+        """
+        for _call in (tool_calls or [])[start_index:]:
+            messages.append({
+                "role": "tool",
+                "tool_call_id": _call.get("id") or "",
+                "name": _call.get("name", ""),
+                "content": ("Error: not executed — the round ended after an "
+                            "earlier call"),
+            })
+
+    @staticmethod
     def _params_brief(args: dict, limit: int = 120) -> str:
         try:
             text = json.dumps(args, ensure_ascii=False)
@@ -197,6 +218,11 @@ class ReActLoop:
                     result = {"kind": "observation", "text": f"Error: {exc}"}
 
                 if result.get("kind") == "long_task":
+                    # 需求#32: 本轮剩余(含当前这条)调用必须补齐结果。这里比
+                    # 下面 fallback 分支更早返回，而当前这条连自己的 tool 消息
+                    # 都还没写 —— 直接 return 就留下悬空调用。
+                    self._append_unpaired_tool_messages(
+                        messages, tool_calls, _ci)
                     return await self._finish(
                         "long_task", messages, steps, start,
                         long_task_knowledge=result.get("knowledge"),
@@ -249,6 +275,10 @@ class ReActLoop:
                     # then end the loop.  Observed without this: the loop
                     # kept calling search/spec tools and streamed pool
                     # patents instead of the documents.
+                    # 需求#32: 走出循环前同样不留下未配对的调用。当前这条的
+                    # 结果已在上方追加，从下一条补起。
+                    self._append_unpaired_tool_messages(
+                        messages, tool_calls, _ci + 1)
                     text, _calls, _reasoning = await self.llm_call(messages, [])
                     messages.append({"role": "assistant", "content": text or ""})
                     return await self._finish("answer", messages, steps, start,

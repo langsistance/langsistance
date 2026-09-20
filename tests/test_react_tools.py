@@ -15,6 +15,7 @@ from sources.agents.react_tools import (
     MAX_PATENT_LIST_ITEMS,
     SEARCH_KNOWLEDGE_TOOL_NAME,
     _cap_patent_list,
+    _log_uspto_alive,
     _summarize_observation,
     build_tool_set,
     make_action_executor,
@@ -3321,3 +3322,80 @@ class TestLongTaskRuleFallback(unittest.TestCase):
             4)
         self.assertEqual(_common_substring_len("abc", "xyz"), 0)
         self.assertEqual(_common_substring_len("", "abc"), 0)
+
+
+class TestUsptoAliveDiagnostic(unittest.TestCase):
+    """需求#31: 每次 USPTO 响应都要留下存活率 —— 阈值定得对不对要靠数据。
+
+    此前只有 dual search 在**回退触发时**才留痕，于是"阈值 0.25 是否合适"、
+    "KB 工具路径是否同样受害"这两件事都无从判断（2026-09-20：用户日志里
+    sort fallback 从未观察到触发，KB 路径的存活数据也没有）。
+    """
+
+    def _items(self, alive, dead):
+        items = []
+        for i in range(alive):
+            items.append({"applicationNumberText": str(10000000 + i),
+                          "applicationMetaData": {
+                              "inventionTitle": f"T{i}",
+                              "applicationStatusDescriptionText": "Patented Case"}})
+        for i in range(dead):
+            items.append({"applicationNumberText": str(20000000 + i),
+                          "applicationMetaData": {
+                              "inventionTitle": f"D{i}",
+                              "applicationStatusDescriptionText":
+                                  "Abandoned  --  Failure to Respond"}})
+        return items
+
+    def test_logs_ratio_even_when_fallback_does_not_fire(self):
+        """关键是**亚阈值区间**的数据 —— 只有它才能说明阈值该定在哪。"""
+        logged = []
+
+        class _L:
+            def info(self, msg, *a, **k):
+                logged.append(msg)
+
+        alive, total = _log_uspto_alive(
+            "kb_tool", "some query", self._items(7, 3), _L())
+        self.assertEqual((alive, total), (7, 10))
+        self.assertEqual(len(logged), 1)
+        self.assertIn("uspto_alive_ratio", logged[0])
+        self.assertIn("path=kb_tool", logged[0])
+        self.assertIn("alive=7/10", logged[0])
+        self.assertIn("ratio=0.70", logged[0])   # 高于阈值也要留痕
+
+    def test_no_logger_still_computes(self):
+        alive, total = _log_uspto_alive(
+            "dual_search", "q", self._items(2, 8), None)
+        self.assertEqual((alive, total), (2, 10))
+
+    def test_unparseable_items_are_silent(self):
+        logged = []
+
+        class _L:
+            def info(self, msg, *a, **k):
+                logged.append(msg)
+
+        _log_uspto_alive("kb_tool", "q", [], _L())
+        self.assertEqual(logged, [])             # 无候选 → 不留噪音
+
+    def test_unparseable_items_are_logged_as_warning(self):
+        """items 非空却解析不出候选 = schema 漂移/错误信封 —— 必须留痕。
+
+        与"没查过"在日志里长得一样是危险的：整页解析失败会静默成"零命中"。
+        """
+        warned = []
+
+        class _L:
+            def info(self, msg, *a, **k):
+                pass
+
+            def warning(self, msg, *a, **k):
+                warned.append(msg)
+
+        alive, total = _log_uspto_alive(
+            "dual_search", "q", [{"unexpected": "shape"}] * 3, _L())
+        self.assertEqual((alive, total), (0, 0))
+        self.assertEqual(len(warned), 1)
+        self.assertIn("uspto_alive_ratio", warned[0])
+        self.assertIn("0/3 parsed", warned[0])
