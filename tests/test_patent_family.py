@@ -7,7 +7,11 @@ from __future__ import annotations
 
 import pytest
 from sources.long_task.family_member import FamilyMember, PatentFamily
-from sources.long_task.patent_family import _parse_family_xml, EPOError
+from sources.long_task.patent_family import (
+    _parse_family_xml,
+    analyzable_jurisdictions,
+    EPOError,
+)
 
 
 # ── Real EPO OPS XML response for US12506212 (trimmed to essential elements) ───
@@ -436,3 +440,69 @@ class TestXMLParserEdgeCases:
         </ops:world-patent-data>"""
         family = _parse_family_xml(xml, "US12345")
         assert family.family_id == "99999999"
+
+
+class TestAnalyzableJurisdictions:
+    """族分析的范围决策：哪些成员国能支撑一次审查分析。
+
+    背景：`execute_family_analysis` 原先硬取 `get_representative('US')`，
+    拿不到就整任务失败——哪怕族里明明有 CN/JP/EP 成员、而这三个国别的审查
+    分析器都已存在。用户问「查某中国专利的全球审查历史」时，若该族没有美国
+    成员，得到的是「未找到美国同族成员」，与诉求无关。
+
+    这里把「能分析谁」做成**纯函数**，供任务决定继续还是如实报告范围。
+    无状态、不碰 I/O，因为它要守的正是"没有美国成员时还能不能干活"。
+    """
+
+    @staticmethod
+    def _fam(members):
+        return PatentFamily(query_pub_number="X", family_id="f", total_count=len(members),
+                            members=[FamilyMember(**m) for m in members])
+
+    @staticmethod
+    def _member(country, pub="1234567", kind="A1", app="2020123456"):
+        return {"country": country, "pub_number": pub, "pub_kind": kind,
+                "pub_date": "20200101", "app_number": app, "app_date": "20190101"}
+
+    def test_us_and_cn_members_both_analyzable(self):
+        fam = self._fam([self._member("US", kind="B2"),
+                         self._member("CN", kind="B", app="201710216936")])
+        got = analyzable_jurisdictions(fam)
+        assert sorted(got) == ["CN", "US"]
+        assert got["US"].country == "US"
+        assert got["CN"].country == "CN"
+
+    def test_family_without_us_member_is_still_analyzable(self):
+        """纯国内 CN 申请（无美国同族）必须以 CN 为分析对象，而不是失败。"""
+        fam = self._fam([self._member("CN", kind="B", app="201710216936")])
+        assert sorted(analyzable_jurisdictions(fam)) == ["CN"]
+
+    def test_ep_member_states_fold_into_ep(self):
+        """EP 族的成员国（DE/GB/FR…）合并为 EP 一个分析对象。"""
+        fam = self._fam([self._member("EP", pub="3000000", kind="A1"),
+                         self._member("DE", pub="602012034", kind="T2"),
+                         self._member("GB", pub="2500000", kind="A")])
+        assert sorted(analyzable_jurisdictions(fam)) == ["EP"]
+
+    def test_unsupported_jurisdictions_are_excluded(self):
+        """只有 WO/KR 等无分析器的辖区时，结果为空——调用方据此如实报告。"""
+        fam = self._fam([self._member("WO"), self._member("KR")])
+        assert analyzable_jurisdictions(fam) == {}
+
+    def test_all_four_offices_supported(self):
+        fam = self._fam([self._member("US", kind="B2"),
+                         self._member("CN", kind="B"),
+                         self._member("EP", pub="3000000"),
+                         self._member("JP", kind="B2")])
+        assert sorted(analyzable_jurisdictions(fam)) == ["CN", "EP", "JP", "US"]
+
+    def test_granted_member_preferred_within_an_office(self):
+        """同一局既有申请公开又有授权件时，取授权件（审查过程更完整）。"""
+        fam = self._fam([self._member("US", pub="2020001", kind="A1"),
+                         self._member("US", pub="12506212", kind="B2")])
+        got = analyzable_jurisdictions(fam)
+        assert list(got) == ["US"]
+        assert got["US"].pub_kind == "B2"
+
+    def test_empty_family_yields_nothing(self):
+        assert analyzable_jurisdictions(self._fam([])) == {}

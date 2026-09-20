@@ -41,6 +41,55 @@ EPO_REQUEST_TIMEOUT = 30  # seconds
 _OPS_NS = "http://ops.epo.org"
 _EXCHANGE_NS = "http://www.epo.org/exchange"
 
+# ── Per-jurisdiction examination analysis scope ─────────────────────────────────
+# 审查分析有数据源支持的四局。
+ANALYZABLE_JURISDICTIONS: tuple = ("US", "CN", "EP", "JP")
+
+# EP 族的成员国（DE/GB/FR…）共用同一份 EPO 审查程序，合并成 EP 一个分析对象。
+EP_MEMBER_STATES = frozenset({
+    "AT", "BE", "BG", "CH", "CY", "CZ", "DE", "DK", "EE", "ES", "FI",
+    "FR", "GB", "GR", "HR", "HU", "IE", "IS", "IT", "LI", "LT", "LU",
+    "MC", "MT", "NL", "NO", "PL", "PT", "RO", "SE", "SI", "SK", "TR",
+})
+
+
+def _office_of(country: str) -> str:
+    """把成员国代码归一到分析局：EP 的成员国归 EP，其余按原样。
+
+    EP 族里的成员可能以 DE/GB/FR 等国家码出现（EPO 的 DOCDB 就这么给），
+    它们接受的是**同一套** EPO 审查程序，必须合并，否则同一份审查过程会被
+    当成多份、报告里出现重复章节。
+    """
+    code = str(country or "").strip().upper()
+    if code in EP_MEMBER_STATES:
+        return "EP"
+    return code
+
+
+def analyzable_jurisdictions(family) -> dict:
+    """该族的哪些成员国能支撑一次审查分析 → {office: representative_member}。
+
+    纯函数，无 I/O。存在的理由：``execute_family_analysis`` 原先硬取美国成员，
+    拿不到就整任务失败 —— 哪怕族里明明有 CN/JP/EP 成员，而这三个局的分析器
+    都已存在。用户问「查这件中国专利的全球审查历史」时，若该族恰好没有美国
+    同族，得到的是「未找到美国同族成员」这一句与诉求无关的话。
+
+    返回空 dict 表示**没有任何可分析的辖区**（如只有 WO/KR 成员），调用方据此
+    如实报告覆盖范围，而不是报一个具体的"缺某个国"。
+    """
+    if family is None:
+        return {}
+    out: dict = {}
+    for member in family.deduplicated_members:
+        office = _office_of(member.country)
+        if office not in ANALYZABLE_JURISDICTIONS:
+            continue
+        existing = out.get(office)
+        # 同一局多条时优先取已授权的那条（审查过程最完整）。
+        if existing is None or (member.is_granted and not existing.is_granted):
+            out[office] = member
+    return out
+
 
 # ── Error types ──────────────────────────────────────────────────────────────────
 
