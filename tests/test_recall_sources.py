@@ -347,10 +347,6 @@ class TestFetchByCpc(unittest.TestCase):
         mock_fetch.assert_not_called()
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestFetchByNumbersOrdering(unittest.TestCase):
     """需求#40: 按号取数不该走相关度排序。
 
@@ -381,3 +377,8 @@ class TestFetchByNumbersOrdering(unittest.TestCase):
         body = self._body()
         self.assertIn('"12253745"', body["q"])
         self.assertEqual(body["fields"], RECALL_SEARCH_FIELDS)
+
+if __name__ == "__main__":
+    unittest.main()
+
+

@@ -3538,8 +3538,10 @@ async def _lookup_number_candidates(
 def number_hit_kind(item: dict, targets: list) -> str:
     """需求#36: 该记录是否**就是**查询的那个号码。
 
-    ``fetch_by_numbers`` 走的是 USPTO 全文检索 + ``sort=_score`` —— 返回的是
-    相关度榜, 不是号码榜, 因此"按号查"完全可能返回一堆不含该号的记录
+    ``fetch_by_numbers`` 发的是**全文检索式**（`"N" OR "M"`），不是按键的精确
+    查找 —— 匹配落在任意著录字段上，因此"按号查"完全可能返回一堆不含该号的
+    记录。 需求#40 已去掉该路径的相关度排序（那让 BM25 把短标题的申请件顶到
+    前面），但自由文本匹配这条性质不变，中靶判定仍然必需。
     (2026-09-19 生产: 问 US12253745B2 拿到题名 LEAK DETECTOR 的记录, 模型
     据此断言"不符合", 用户连问三遍)。 判据取记录自带的两个号: US 侧
     ``patent_id`` = applicationNumberText、``patent_number`` = patentNumber;
