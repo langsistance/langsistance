@@ -1250,6 +1250,24 @@ ONLY from the records actually returned in this conversation:
    line per source, with a one-line note on the field prefixes used (title /
    abstract / claims).
 
+The same skeleton applies when the user states their solution as a list of
+**enumerated requirements** (numbered or lettered items, optionally with an
+express exclusion) and then asks whether a particular record satisfies them
+("does this one comply / fit / qualify?"). Deliver:
+
+1. **Requirement-by-requirement comparison** — one line per stated requirement:
+   covered / partially covered / not seen in the records. Quote the record's own
+   wording for what covers it; when the record does not carry the requirement,
+   say the record does not show it rather than that the field lacks it.
+2. **What the record is** — state plainly whether the record under discussion is
+   the number itself or a related record returned alongside it; never let a
+   related record's title stand in for the number the user asked about.
+3. **Near misses** — a record that satisfies some requirements but is excluded by
+   one express limitation is the most useful finding of the round: name both what
+   it covers and the limitation that excludes it.
+4. **Where the records leave room** — grounded in the comparison above.
+5. **Reproducible queries** — as above, when the round's queries are listed.
+
 When the question instead asks which approaches or methods exist, group the
 returned records into the approach families they represent — naming each family
 from the records' own wording, never from a fixed list — and give one

@@ -368,6 +368,11 @@ class TestLoopGuidanceTopN(unittest.TestCase):
         self.assertIn("Closest prior art", text)
         self.assertIn("not seen in the returned records", text)
         self.assertIn("Reproducible queries", text)
+        # 需求#39: 用户以①②③列举要素再问「符合吗」时, 同样要走评估骨架 ——
+        # 逐要素标注命中状态, 而不是只复述题名(2026-09-19 生产: 四条要素的
+        # 判定被压缩成"这个号叫 LEAK DETECTOR", 用户连问三遍)。
+        self.assertIn("enumerated requirements", text)
+        self.assertIn("Requirement-by-requirement comparison", text)
         # 保持语言中性 / 不固化任何领域词
         self.assertNotIn("patents", text)
         self.assertNotIn("相关度", text)
