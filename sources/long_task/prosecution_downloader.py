@@ -639,3 +639,92 @@ async def download_prosecution_documents(
         )
 
     return docs
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# US prosecution pipeline (extracted from celery_worker's family task)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+async def fetch_us_prosecution(
+    documents: list,
+    *,
+    query: str,
+    lang: str,
+    flash_provider: Any,
+    pro_provider: Any,
+    vision_provider: Any = None,
+    include_priority_2: bool = True,
+    analyze_single_document: Callable = None,
+    generate_table_columns: Callable = None,
+) -> tuple[list, list, str]:
+    """美国审查文件：分类 → 表头 → 逐份分析，返回 (columns, table_rows, error)。
+
+    从 ``celery_worker.execute_family_analysis`` 的 Phase 0.5~2 抽出（任务#7）。
+    抽出的动机：族分析原先**硬性要求美国成员**，没有就整任务失败 —— 而族里
+    CN/JP/EP 的数据在更早的阶段已经取到。把美国这一段变成可独立调用、可独立
+    失败的一段，调用方就能按 ``family_report_strategy`` 决定走哪条报告路径。
+
+    返回契约刻意与 ``family_report_strategy(rows, columns, ...)`` 对齐：
+
+    - 成功 → ``(columns, rows, "")``
+    - 失败 → ``([], [], 原因)`` —— 调用方据此判断是否需要美国数据才能继续
+      （族里若还有其它辖区数据，仍可出跨国报告）。
+
+    纯编排：所有 I/O 走注入的 provider 与 ``download_single_document``，因此可
+    在本地用假 provider 完整验证 —— 这正是把它抽出来的收益。
+    """
+    from sources.long_task.prosecution_analyzer import (
+        analyze_single_document as _default_analyze,
+        generate_table_columns as _default_columns,
+        generate_document_summary,
+    )
+    _analyze = analyze_single_document or _default_analyze
+    _columns_fn = generate_table_columns or _default_columns
+
+    if not documents:
+        return [], [], ("USPTO returned no documents for this application."
+                        if lang == "en" else
+                        "USPTO 未返回该申请的任何审查文件。")
+
+    manifest = classify_prosecution_documents(documents)
+    docs_to_download = list(manifest.must_download)
+    if include_priority_2:
+        docs_to_download.extend(manifest.recommended)
+    if not docs_to_download:
+        return [], [], ("No analyzable prosecution documents found (no Office "
+                        "Actions, Responses, or Amendments)." if lang == "en" else
+                        "未找到可分析的审查文件（无 Office Action、Response 或 "
+                        "Amendment）。")
+
+    columns = await _columns_fn(
+        query=query, doc_count=len(docs_to_download),
+        provider=flash_provider, lang=lang,
+    )
+
+    table_rows: list = []
+    for doc in docs_to_download:
+        try:
+            row = await _analyze(
+                doc_text=doc.text or "",
+                doc_code=doc.document_code,
+                doc_desc=doc.description,
+                doc_category=doc.category,
+                columns=columns,
+                query=query,
+                provider=pro_provider,
+                lang=lang,
+            )
+        except Exception as exc:
+            _logger.warning(
+                f"[prosecution] us_phase analyze_failed code={doc.document_code}: {exc}")
+            row = None
+        if row:
+            table_rows.append(row)
+
+    if not table_rows:
+        return [], [], ("All prosecution documents failed processing. Files may "
+                        "be scanned images or encrypted PDFs." if lang == "en" else
+                        "所有审查文件处理失败。文件可能是扫描件或加密PDF。")
+
+    return columns, table_rows, ""

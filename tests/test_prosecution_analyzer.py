@@ -1,5 +1,6 @@
 """Tests for prosecution_analyzer module — question-driven report generation."""
 
+import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock
 
@@ -338,3 +339,76 @@ class TestFamilyReportStrategy(unittest.TestCase):
             [], [], {}, {}, {}) == "nothing"
         assert family_report_strategy(
             [], [], {"timeline_md": ""}, {}, {}) == "nothing"
+
+
+class TestFetchUsProsecution(unittest.IsolatedAsyncioTestCase):
+    """任务#7 的抽取本体：美国审查阶段独立成函数，可独立失败。
+
+    抽出的意义：族分析原先硬性要求美国成员，没有就整任务失败 —— 而族里
+    CN/JP/EP 的数据在更早阶段已取到。美国这一段可独立调用/独立失败后，调用方
+    就能用 family_report_strategy 决定走哪条报告路径。
+
+    返回契约与 family_report_strategy 对齐：失败即 ([], [], 原因)，让调用方
+    能区分"美国这段没成"与"整个任务没法做"。
+    """
+
+    @staticmethod
+    def _raw_doc(code="CTNF", desc="Non-Final Office Action"):
+        """USPTO documentBag 的原始形态 —— 分类器就是从这个形状工作的。"""
+        return {
+            "documentCode": code,
+            "documentCodeDescriptionText": desc,
+            "pageTotalQuantity": 10,
+            "downloadOptionBag": [{"downloadUrl": "https://example.test/d"}],
+        }
+
+    def _run(self, documents, analyze=None, columns=None, lang="zh"):
+        from sources.long_task.prosecution_downloader import fetch_us_prosecution
+
+        async def _cols(query, doc_count, provider, lang):
+            return ["文件类型", "文件描述", "核心内容"]
+
+        async def _an(doc_text, doc_code, doc_desc, doc_category, columns,
+                      query, provider, lang):
+            return {"文件类型": doc_category, "文件描述": doc_desc,
+                    "核心内容": "分析结果"}
+
+        async def _main():
+            return await fetch_us_prosecution(
+                documents, query="q", lang=lang,
+                flash_provider=object(), pro_provider=object(),
+                analyze_single_document=analyze or _an,
+                generate_table_columns=columns or _cols,
+            )
+        return asyncio.run(_main())
+
+    def test_success_returns_columns_rows_and_no_error(self):
+        cols, rows, err = self._run([self._raw_doc()])
+        self.assertEqual(err, "")
+        self.assertEqual(cols[0], "文件类型")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["核心内容"], "分析结果")
+
+    def test_empty_document_list_is_an_error_not_an_empty_report(self):
+        cols, rows, err = self._run([])
+        self.assertEqual((cols, rows), ([], []))
+        self.assertIn("USPTO", err)
+
+    def test_no_analyzable_documents_is_an_error(self):
+        """一条不可分析的文件（既非 OA 也非 Response）→ 报错而非空报告。"""
+        cols, rows, err = self._run(
+            [self._raw_doc(code="BIB", desc="Bibliographic data sheet")])
+        self.assertEqual((cols, rows), ([], []))
+        self.assertIn("可分析", err)
+
+    def test_all_analyses_failing_is_an_error(self):
+        async def _boom(**kwargs):
+            raise RuntimeError("scanned pdf")
+        cols, rows, err = self._run([self._raw_doc()], analyze=_boom)
+        self.assertEqual((cols, rows), ([], []))
+        self.assertIn("失败", err)
+
+    def test_english_error_wording(self):
+        cols, rows, err = self._run([], lang="en")
+        self.assertIn("USPTO", err)
+        self.assertTrue(err.isascii(), err)
