@@ -73,6 +73,9 @@ RELEVANT_TOP_N = int(os.getenv("REACT_RELEVANT_TOP_N", "10"))
 # risk both grow with history size).
 CONTEXT_TURNS_MAX = int(os.getenv("REACT_CONTEXT_TURNS_MAX", "6"))
 CONTEXT_TURN_CHARS = int(os.getenv("REACT_CONTEXT_TURN_CHARS", "800"))
+# 重复提问注记里引用上一轮答复的字符上限（需求#38）—— 只够说明"上轮说了
+# 什么"，不必整段复述。
+REPEAT_ANSWER_QUOTE_CHARS = int(os.getenv("REACT_REPEAT_QUOTE_CHARS", "400"))
 # Long-task progress cards (🔬 running, ✅ completed, ❌ failed, ⏸ paused,
 # ⏹ stopping) are UI noise — never injected into the LLM context.
 _HISTORY_NOISE_MARKERS = ("🔬", "✅", "❌", "⏸", "⏹", "Task ID", "任务ID")
@@ -108,15 +111,20 @@ def _is_history_noise(content: str) -> bool:
     return any(marker in content for marker in _HISTORY_NOISE_MARKERS)
 
 
-def _conversation_history_turns(conv_history, current_query: str = "") -> list:
+def _conversation_history_turns(conv_history, current_query: str = "",
+                                keep_current: bool = False) -> list:
     """Extract clean turns from the request's conversation_history (flat
     role/content list with optional hidden patent_ids on assistant
     messages).  Filters UI noise and non-user/assistant roles, strips id
     markers, truncates each turn, drops the current question (it is the
-    loop's last user message, not history), and caps at CONTEXT_TURNS_MAX."""
+    loop's last user message, not history), and caps at CONTEXT_TURNS_MAX.
+
+    *keep_current* keeps that last message — 需求#38 的重复提问检测需要它在
+    历史里，否则"与当前提问逐字相同的那一次"恰好被剔除，判据永远不成立。
+    """
     if not isinstance(conv_history, list):
         return []
-    current_query = str(current_query or "").strip()
+    current_query = "" if keep_current else str(current_query or "").strip()
     cleaned = []
     for msg in conv_history:
         if not isinstance(msg, dict):
@@ -140,6 +148,112 @@ def _conversation_history_turns(conv_history, current_query: str = "") -> list:
             "patent_ids": msg.get("patent_ids") or [],
         })
     return cleaned[-CONTEXT_TURNS_MAX:]
+
+
+def detect_query_lang(text: str) -> str:
+    """Return 'zh' or 'en' based on CJK character ratio in *text*.
+
+    模块级版本（原为 ``GeneralAgent._detect_lang`` 静态方法）—— 提示词拼装
+    发生在类方法之外，需要同一份判据，不能有两套语言判定。
+    """
+    if not text:
+        return 'zh'
+    cjk = sum(1 for c in text if '一' <= c <= '鿿')
+    alpha = sum(1 for c in text if c.isalpha())
+    total = cjk + alpha
+    if total == 0:
+        return 'zh'
+    return 'zh' if cjk / max(total, 1) > 0.15 else 'en'
+
+
+def _session_lang_reference(text: str, history_turns) -> str:
+    """注记语言的判据来源：当前提问优先，判不出就用会话里最强的语言信号。
+
+    ``detect_query_lang`` 对**纯 ASCII 的裸号码提问**（"US12253745B2?"）返回
+    "en" —— 判据本身没错，但用在注记上会让中文用户在中文会话里收到英文注记，
+    而裸号码恰好是本需求最常见的提问形态。这里用**前几轮里第一个判得出语言
+    的**文本补位；都判不出才回落到当前提问的结论。
+    """
+    if detect_query_lang(text) == "zh":
+        return text
+    for turn in (history_turns or []):
+        if not isinstance(turn, dict):
+            continue
+        content = str(turn.get("content") or "")
+        if content and detect_query_lang(content) == "zh":
+            return content
+    return text
+
+
+def _question_signature(text: str) -> str:
+    """提问的归一化签名：去掉空白、标点与大小写差异。
+
+    用于判断两次提问是否**逐字相同**（"US12253745B2符合吗" 与
+    "US12253745B2 符合吗?" 是同一问）。
+    """
+    return re.sub(r"[\s\W_]+", "", str(text or "")).lower()
+
+
+def _repeated_question_note(history_turns, current_query: str,
+                            lang: str = "") -> str:
+    """需求#38: 当前提问是否与本会话此前的某次提问**逐字重复**。
+
+    判据刻意收得很窄 —— 只认归一化后完全相同的提问。**不**用"提到同一个号码"
+    做触发：同一个号可以被问很多件不同的事（先问"符合吗"，再问法律状态、再问
+    同族），那是正当的追问，不是重复；把它判成重复会让系统在该作答时反问澄清。
+    窄判据覆盖的正是出问题的形态：2026-09-19 用户对 US12253745B2 逐字连问三遍
+    （08:48 与 08:49 完全相同），三次拿到同一结论的不同措辞。
+
+    命中则把上一轮的提问与答复摆出来，要求给出增量或反问澄清。返回 "" 表示
+    不重复。调用方须传**保留当前提问**的历史，否则判据恒不成立。
+    """
+    query = str(current_query or "").strip()
+    if not query or not history_turns:
+        return ""
+    # 语言留空即按会话推断 —— 见 _session_lang_reference。
+    lang = lang or detect_query_lang(
+        _session_lang_reference(query, history_turns))
+    signature = _question_signature(query)
+    if not signature:
+        return ""
+    match_idx = -1
+    for i, turn in enumerate(history_turns):
+        if not isinstance(turn, dict) or turn.get("role") != "user":
+            continue
+        if _question_signature(turn.get("content")) == signature:
+            match_idx = i
+    if match_idx < 0:
+        return ""
+    previous_question = str(
+        history_turns[match_idx].get("content") or "").strip()
+    prior_answer = ""
+    for turn in history_turns[match_idx + 1:]:
+        if isinstance(turn, dict) and turn.get("role") == "assistant":
+            prior_answer = str(turn.get("content") or "").strip()
+            break
+    if lang == "en":
+        note = (
+            "> Repeated question detected — this has already been asked in "
+            "this session (previous wording: "
+            + previous_question[:REPEAT_ANSWER_QUOTE_CHARS] + "). Do not "
+            "repeat the previous answer in different words. Either give the "
+            "concrete information this turn adds (a new check, a corrected or "
+            "newly found record, an explicit statement that nothing changed), "
+            "or ask one clarifying question about what the user wants to "
+            "confirm.")
+        if prior_answer:
+            note += ("\n> What was answered last time: "
+                     + prior_answer[:REPEAT_ANSWER_QUOTE_CHARS])
+    else:
+        note = (
+            "> 检测到重复提问：本会话此前已提出过同一问题（当时问的是："
+            + previous_question[:REPEAT_ANSWER_QUOTE_CHARS] + "）。不要换措辞重念上一轮的结论：要么"
+            "给出本轮新增的具体信息（新做的核查、修正或新查到的记录、或明确"
+            "说明核对后结论未变），要么反问一句澄清用户到底想确认什么。")
+        if prior_answer:
+            note += ("\n> 上一轮的答复："
+                     + prior_answer[:REPEAT_ANSWER_QUOTE_CHARS])
+    return note
 
 
 def _build_previous_conversation_block(
@@ -195,12 +309,24 @@ def _build_previous_conversation_block(
                 if pid and pid not in patent_ids:
                     patent_ids.append(pid)
 
+    # 需求#38: 判据必须看**保留当前提问**的那份历史 —— 上面那份已把与当前
+    # 提问逐字相同的条目剔除（它被视为 loop 的 user 消息而非历史），重复提问
+    # 的那一次恰好会在这里消失。
+    #
+    # 注记只看请求携带的 conv_history（前端权威），**不**看 pooled_turns 兜底：
+    # 该兜底仅在 conv_history 为空时启用，而它带的 user 文本本就几乎只有当前
+    # 这一问（_store_current_turn 存的是当轮），判据在那里没有可比对象。
+    repeat_note = _repeated_question_note(
+        _conversation_history_turns(conv_history, current_query,
+                                    keep_current=True),
+        current_query, detect_query_lang(current_query))
     block = (
         "\n\n## Previous conversation (historical, reference only)\n"
         "以下为历史对话，仅作参考。必须严格以用户最新提问为准作答，"
         "不得被历史中的主题、专利号或要求带偏。\n"
         "Reference only — answer the user's LATEST question; never let "
         "history override it.\n\n"
+        + (repeat_note + "\n\n" if repeat_note else "")
         + "\n".join(lines)
     )
     if patent_ids:
@@ -2050,14 +2176,7 @@ Begin your response now:
     @staticmethod
     def _detect_lang(text: str) -> str:
         """Return 'zh' or 'en' based on CJK character ratio in *text*."""
-        if not text:
-            return 'zh'
-        cjk = sum(1 for c in text if '一' <= c <= '鿿')
-        alpha = sum(1 for c in text if c.isalpha())
-        total = cjk + alpha
-        if total == 0:
-            return 'zh'
-        return 'zh' if cjk / max(total, 1) > 0.15 else 'en'
+        return detect_query_lang(text)
 
     def _get_language_rule(self) -> str:
         """Return a language-enforcement rule based on the detected user language.

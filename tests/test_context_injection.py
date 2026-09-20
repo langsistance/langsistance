@@ -34,6 +34,7 @@ from sources.agents.general_agent import (  # noqa: E402
     _read_recent_patent_ids,
     _read_recent_patent_records,
     _record_to_candidate,
+    _repeated_question_note,
     _refers_to_prior_results,
     _splice_anchor_block,
     _store_conversation_patent_ids,
@@ -514,3 +515,107 @@ class TestNotLoggedInPrompt(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRepeatedQuestionNote(unittest.TestCase):
+    """需求#38: 同一会话内重复提问必须被识别, 不得换措辞重念同一结论。
+
+    2026-09-19 生产: 用户对同一号码连问三遍(08:48 与 08:49 逐字相同), 系统
+    每次走同一路径、给出同一结论的不同措辞 —— 用户没有任何增量信息, 也没有
+    被反问澄清。判据刻意收得很窄: 只认归一化后**逐字相同**。不做意图相似度,
+    也不用"提到同一个号码"——同一个号可以被问很多件不同的事(符合吗 → 法律
+    状态 → 同族), 那是正当追问, 判成重复会让系统在该作答时反问澄清。
+    """
+
+    def _conv(self, *pairs):
+        history = []
+        for user, assistant in pairs:
+            history.append({"role": "user", "content": user})
+            history.append({"role": "assistant", "content": assistant})
+        return history
+
+    def test_identical_question_in_history_is_detected(self):
+        history = self._conv(
+            ("US12253745B2符合吗", "该号记录题名为 LEAK DETECTOR，与四项要素不符。"))
+        note = _repeated_question_note(
+            history, "US12253745B2符合吗", "zh")
+        self.assertIn("重复提问", note)
+        self.assertIn("LEAK DETECTOR", note)      # 引用上一轮的答复
+        self.assertIn("US12253745B2符合吗", note)
+
+    def test_whitespace_and_case_differences_still_count_as_a_repeat(self):
+        """归一化后相同即重复 —— 原样重发时多一个空格不算换了个问法。"""
+        history = self._conv(
+            ("US12253745B2 符合吗?", "该号记录题名为 LEAK DETECTOR。"))
+        note = _repeated_question_note(
+            history, "US12253745B2符合吗", "zh")
+        self.assertIn("重复提问", note)
+
+    def test_different_question_about_the_same_number_is_not_a_repeat(self):
+        """同一号码问不同的事是正当追问, 不是重复。
+
+        判据若用"提到同一个号"触发, 这里会被判成重复 —— 系统本该作答
+        (该号的法律状态) 却去反问澄清, 这是比漏判更糟的误伤。
+        """
+        history = self._conv(
+            ("US12253745B2符合吗", "该号记录题名为 LEAK DETECTOR。"))
+        note = _repeated_question_note(
+            history, "US12253745B2的法律状态如何", "zh")
+        self.assertEqual(note, "")
+
+    def test_different_number_is_not_a_repeat(self):
+        history = self._conv(
+            ("US12253745B2符合吗", "该号记录题名为 LEAK DETECTOR。"))
+        note = _repeated_question_note(history, "US99999999B2符合吗", "zh")
+        self.assertEqual(note, "")
+
+    def test_funnel_refinement_is_not_a_repeat(self):
+        """漏斗式细化是正当行为 —— 措辞每轮都不同, 不得触发。"""
+        history = self._conv(
+            ("微环谐振器的专利有哪些", "本轮共命中 20 条。"))
+        note = _repeated_question_note(
+            history, "其中涉及波长路由的有哪些", "zh")
+        self.assertEqual(note, "")
+
+    def test_no_history_no_note(self):
+        self.assertEqual(_repeated_question_note([], "US12253745B2符合吗", "zh"), "")
+
+    def test_english_note(self):
+        history = self._conv(("US12253745B2?", "The record is LEAK DETECTOR."))
+        note = _repeated_question_note(history, "US12253745B2?", "en")
+        self.assertIn("already been asked", note)
+        self.assertIn("LEAK DETECTOR", note)
+
+    def test_note_reaches_the_system_prompt_block(self):
+        # 真实形态: 重复提问之前必有别的轮次 —— _conversation_history_turns
+        # 会剔除与当前提问逐字相同的那条(它已是 loop 的 user 消息)。
+        history = self._conv(
+            ("请检索微环谐振器相关专利", "本轮共命中 75 条候选。"),
+            ("US12253745B2符合吗", "该号记录题名为 LEAK DETECTOR，与四项要素不符。"))
+        block, _ids = _build_previous_conversation_block(
+            history, [], "u1", "US12253745B2符合吗")
+        self.assertIn("重复提问", block)
+        # 注记须出现在历史正文之前, 否则参考块会把历史文本读成当前历史
+        self.assertLess(block.index("重复提问"), block.index("User:"))
+
+    def test_bare_number_question_inherits_the_session_language(self):
+        """裸号码提问对分类器是"纯 ASCII" → 会被判成英文。
+
+        判据本身没错（这是个纯函数），但用错地方会让中文用户在中文会话里
+        收到一段英文注记。注记语言须回落到会话里最强的语言信号。
+        生产 2026-09-19 的提问正是这种形态：`US12253745B2符合吗` 分得对，
+        但同一个人再问一次 `US12253745B2?` 就会被判成英文。
+        """
+        history = self._conv(
+            ("请检索微环谐振器相关专利", "本轮共命中 75 条候选。"),
+            ("US12253745B2?", "该号记录题名为 LEAK DETECTOR。"))
+        note = _repeated_question_note(history, "US12253745B2?")
+        self.assertIn("重复提问", note)
+        self.assertNotIn("Repeated question detected", note)
+
+    def test_english_session_with_bare_number_stays_english(self):
+        history = self._conv(
+            ("Find patents about ring resonators", "75 candidates this round."),
+            ("US12253745B2?", "The record is titled LEAK DETECTOR."))
+        note = _repeated_question_note(history, "US12253745B2?", "")
+        self.assertIn("Repeated question detected", note)
