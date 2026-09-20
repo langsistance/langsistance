@@ -152,11 +152,18 @@ def fetch_by_numbers(numbers: list, timeout: int = 30) -> list:
     for start in range(0, len(numbers), RECALL_NUMBER_BATCH):
         chunk = numbers[start:start + RECALL_NUMBER_BATCH]
         q = " OR ".join(f'"{n}"' for n in chunk)
+        # 需求#40: 不排序 —— 用 API 默认序。
+        #
+        # 这里是"取回给定的这几个号"，相关度排序在语义上就不成立；而 `_score`
+        # 是 BM25，标题级语料上短标题的申请件会被顶到前面（scripts/
+        # uspto_sort_probe.py 的 H1/H2 之争；2026-09-15 排序回退探针实测：
+        # _score 前 20 槽存活 41/120，API 默认序 103/120，最坏类 0/20）。
+        # 生产 2026-09-19：按号问 US12253745B2 返回的头条是另一件 LEAK
+        # DETECTOR，模型据此断言"不符合"，用户连问三遍。
         body: dict[str, Any] = {
             "q": q,
             "pagination": {"offset": 0, "limit": len(chunk) + 2},
             "fields": RECALL_SEARCH_FIELDS,
-            "sort": [{"field": "_score", "order": "desc"}],
         }
         try:
             response = outbound_http.request(

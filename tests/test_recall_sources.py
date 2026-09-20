@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from sources.long_task.recall_sources import (
+    RECALL_SEARCH_FIELDS,
     collect_family_refs,
     fetch_by_cpc,
     fetch_by_numbers,
@@ -348,3 +349,35 @@ class TestFetchByCpc(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFetchByNumbersOrdering(unittest.TestCase):
+    """需求#40: 按号取数不该走相关度排序。
+
+    `_score` 是 BM25 —— 标题级语料上短标题的申请件会被顶到前面
+    （scripts/uspto_sort_probe.py 记录 H1/H2 之争，2026-09-15 排序回退探针
+    实测：_score 前 20 槽存活 41/120，API 默认序 103/120）。 按号取数的目标是
+    "取回这几个号"，相关度榜既不给号码又不给存活件 —— 生产 2026-09-19 按号问
+    US12253745B2 时返回的头条是另一件 LEAK DETECTOR。
+    """
+
+    _PAYLOAD = {"count": 1, "patentFileWrapperDataBag": [
+        {"applicationNumberText": "18363489",
+         "applicationMetaData": {"inventionTitle": "T"}}]}
+
+    def _body(self):
+        with patch("sources.long_task.recall_sources.outbound_http") as mock, \
+             patch.dict(os.environ, {"USPTO_API_KEY": "k"}):
+            mock.request.return_value = _FakeResponse(200, self._PAYLOAD)
+            fetch_by_numbers(["12253745"])
+        return mock.request.call_args.kwargs["json"]
+
+    def test_no_relevance_sort_on_number_lookup(self):
+        body = self._body()
+        sorts = [s.get("field") for s in (body.get("sort") or [])]
+        self.assertNotIn("_score", sorts)
+
+    def test_fetch_still_targets_the_numbers(self):
+        body = self._body()
+        self.assertIn('"12253745"', body["q"])
+        self.assertEqual(body["fields"], RECALL_SEARCH_FIELDS)
