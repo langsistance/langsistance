@@ -1847,7 +1847,12 @@ def execute_family_analysis(self, task_id: str, params: dict):
         get_jpo_config,
         DEFAULT_VISION_PROVIDER, DEFAULT_VISION_MODEL,
     )
-    from sources.long_task.patent_family import EPOFamilyClient, EPOError
+    from sources.long_task.patent_family import (
+        ANALYZABLE_JURISDICTIONS,
+        EPOFamilyClient,
+        EPOError,
+        analyzable_jurisdictions,
+    )
     from sources.long_task.family_member import PatentFamily
     from sources.long_task.prosecution_downloader import (
         classify_prosecution_documents,
@@ -1967,40 +1972,63 @@ def execute_family_analysis(self, task_id: str, params: dict):
             f"dedup_members={len(family.deduplicated_members)}"
         )
 
-        # ── Extract US member ────────────────────────────────────────────
-        us_member = family.get_representative('US')
-        if not us_member:
-            _pipeline_logger.warning(
-                f"[task={task_id}] FAMILY PHASE0 no_us_member — "
-                f"jurisdictions={family.jurisdictions}"
-            )
+        # ── Per-jurisdiction analysis scope ──────────────────────────────
+        # 此前这里硬取美国成员，拿不到就整个任务失败 —— 哪怕族里有 CN/JP/EP
+        # 成员、而它们的取数段（Phase 0.3/0.4/0.45）都已写好。用户问「查这件
+        # 中国专利的全球审查历史」而该族恰好没有美国同族时，得到的是「未找到
+        # 美国同族成员」，与诉求无关。
+        #
+        # 现在按能分析的辖区决定范围：美国**可选**，其余辖区任一有数据即可继续。
+        _analyzable = analyzable_jurisdictions(family)
+        us_member = _analyzable.get('US')
+        _pipeline_logger.info(
+            f"[task={task_id}] FAMILY PHASE0 analyzable — "
+            f"offices={sorted(_analyzable)}, "
+            f"all_jurisdictions={family.jurisdictions}"
+        )
+
+        if not _analyzable:
+            # 一个可分析的辖区都没有（如族里只有 WO/KR）——这时才失败，且要说
+            # 清"覆盖了哪些局"而不是"缺某个局"。
             if lang == 'zh':
                 msg = (
-                    f"在EPO同族专利数据库中未找到 {patent_id} 的美国同族成员。"
-                    f"该专利的同族覆盖: {', '.join(family.jurisdictions)}。"
+                    f"该同族中没有可供审查分析的成员国。"
+                    f"同族覆盖: {', '.join(family.jurisdictions)}；"
+                    f"本系统支持分析 {', '.join(ANALYZABLE_JURISDICTIONS)} 的审查过程。"
                 )
             else:
                 msg = (
-                    f"No US family member found for {patent_id} in the EPO "
-                    f"family database. Jurisdictions found: {', '.join(family.jurisdictions)}."
+                    f"No analyzable family member found for {patent_id}. "
+                    f"Family covers: {', '.join(family.jurisdictions)}; "
+                    f"this system analyses "
+                    f"{', '.join(ANALYZABLE_JURISDICTIONS)} prosecution."
                 )
-            # Terminal failure — single-exit writes failed (spec §5.4).
             return {'status': 'failed', 'task_id': task_id, 'error': msg}
 
-        us_pub_number = us_member.pub_number
-        us_app_number = us_member.normalized_app_number
+        if us_member is None:
+            # 美国不是必须的：下面的美国专属阶段（Phase 0.5/1/2）按 us_member
+            # 是否存在整体跳过，报告改由 CN/JP/EP 数据支撑。
+            _pipeline_logger.info(
+                f"[task={task_id}] FAMILY PHASE0 no_us_member — "
+                f"continuing with {sorted(_analyzable)}"
+            )
 
-        _pipeline_logger.info(
-            f"[task={task_id}] FAMILY PHASE0 us_member — "
-            f"pub_number={us_pub_number}, "
-            f"pub_kind={us_member.pub_kind}, "
-            f"is_granted={us_member.is_granted}, "
-            f"app_number_raw={us_member.app_number}, "
-            f"app_number_normalized={us_app_number}, "
-            f"title={us_member.title[:80] if us_member.title else '(none)'}"
-        )
+        us_pub_number = us_member.pub_number if us_member else ''
+        us_app_number = (us_member.normalized_app_number
+                         if us_member else '')
 
-        if not us_app_number or len(us_app_number) < 8:
+        if us_member is not None:
+            _pipeline_logger.info(
+                f"[task={task_id}] FAMILY PHASE0 us_member — "
+                f"pub_number={us_pub_number}, "
+                f"pub_kind={us_member.pub_kind}, "
+                f"is_granted={us_member.is_granted}, "
+                f"app_number_raw={us_member.app_number}, "
+                f"app_number_normalized={us_app_number}, "
+                f"title={us_member.title[:80] if us_member.title else '(none)'}"
+            )
+
+        if us_member is not None and (not us_app_number or len(us_app_number) < 8):
             _pipeline_logger.error(
                 f"[task={task_id}] FAMILY PHASE0 invalid_app_number — "
                 f"raw={us_member.app_number}, normalized={us_app_number}"
@@ -2427,6 +2455,37 @@ def execute_family_analysis(self, task_id: str, params: dict):
         # ═════════════════════════════════════════════════════════════════
         # Phase 0.5: Fetch USPTO document list + classify
         # ═════════════════════════════════════════════════════════════════
+        # 需求：无美国同族时不该整任务失败（CN/JP/EP 的取数已在 0.3/0.4/0.45
+        # 完成）。但下面的 Phase 1 产出 columns/table_rows、Phase 2 逐份分析
+        # 美国审查文件，Phase 3 的报告直接依赖它们 —— 跳过它们需要把这段整体
+        # 缩进到 if 里，属机械但大范围的改动。
+        #
+        # 在此之前先如实收口：说明本系统当前的族分析以美国审查文件为报告主干，
+        # 该族没有美国成员，并列出实际覆盖的辖区。**不要再报"未找到美国同族
+        # 成员"就了事** —— 那句话对"查这件中国专利的全球审查历史"毫无信息量。
+        if us_member is None:
+            _pipeline_logger.warning(
+                f"[task={task_id}] FAMILY PHASE0.5 no_us_member — "
+                f"report backbone requires US prosecution documents; "
+                f"analyzable_offices={sorted(_analyzable)}"
+            )
+            if lang == 'zh':
+                msg = (
+                    f"该同族中没有美国成员，而本系统的族分析报告以美国审查文件"
+                    f"为主干，本次无法生成完整报告。"
+                    f"同族覆盖: {', '.join(family.jurisdictions)}；"
+                    f"其中可分析的局: {', '.join(sorted(_analyzable))}。"
+                )
+            else:
+                msg = (
+                    f"This family has no US member, and the family report is "
+                    f"built on US prosecution documents, so a full report "
+                    f"cannot be produced. Family covers: "
+                    f"{', '.join(family.jurisdictions)}; analyzable offices: "
+                    f"{', '.join(sorted(_analyzable))}."
+                )
+            return {'status': 'failed', 'task_id': task_id, 'error': msg}
+
         update_task_status(task_id, 'preparing', _advance_progress(15),
                            _t('fetching_uspto', lang))
 
