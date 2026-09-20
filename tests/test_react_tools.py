@@ -15,7 +15,9 @@ from sources.agents.react_tools import (
     MAX_PATENT_LIST_ITEMS,
     SEARCH_KNOWLEDGE_TOOL_NAME,
     _cap_patent_list,
+    _is_long_task_eligible,
     _log_uspto_alive,
+    _query_has_patent_id,
     _summarize_observation,
     build_tool_set,
     make_action_executor,
@@ -3399,3 +3401,45 @@ class TestUsptoAliveDiagnostic(unittest.TestCase):
         self.assertEqual(len(warned), 1)
         self.assertIn("uspto_alive_ratio", warned[0])
         self.assertIn("0/3 parsed", warned[0])
+
+
+class TestQueryHasPatentIdCjkBoundary(unittest.TestCase):
+    """专利号紧邻中文时的识别 —— 中文用户最典型的写法。
+
+    2026-09-20 生产：`CN114601976A全球专利族审查历史分析` 判为"未包含专利号"，
+    深度分析任务被拒三次，用户拿到的是"任务未能启动"。
+
+    真因是正则末尾的 `\b`：Python 3 里 CJK 字符也算 word character，所以
+    `A全` 之间没有词边界 —— `\bCN\d{7,12}[A-Z]?\d?\b` 对"号+中文"直接失配。
+    而中文提问里专利号**天然紧挨着中文**，这正是最该命中的形态。
+    """
+
+    def test_cn_publication_immediately_followed_by_chinese(self):
+        self.assertTrue(_query_has_patent_id("CN114601976A全球专利族审查历史分析"))
+
+    def test_cn_publication_followed_by_chinese_no_kind_letter(self):
+        self.assertTrue(_query_has_patent_id("CN114601976的审查历史"))
+
+    def test_long_task_eligibility_accepts_cn_number_with_chinese(self):
+        self.assertTrue(
+            _is_long_task_eligible("CN114601976A全球专利族审查历史分析"))
+
+    def test_us_number_followed_by_chinese(self):
+        self.assertTrue(_query_has_patent_id("US12253745B2符合吗"))
+
+    def test_standalone_ids_still_detected(self):
+        """回归：不改变既有形态的判定。
+
+        用真正合法的形态 —— 8 位（US 申请/授权号）、9 位带 CN 前缀（中国公开
+        号）、CN 申请号带校验位。裸 9 位数字（如 114601976）本来就不匹配任何
+        模式，那是既有行为，不在本次改动范围。
+        """
+        for text in ("CN114601976A", "CN114601976",
+                     "12253745", "US12253745B2", "202310123456.7"):
+            self.assertTrue(_query_has_patent_id(text), text)
+
+    def test_text_without_id_still_rejected(self):
+        """不得因为放宽边界而把普通文本误判成含专利号。"""
+        for text in ("帮我检索散热装置相关专利", "椭偏仪校准",
+                     "分析这批专利的授权情况", "the quick brown fox"):
+            self.assertFalse(_query_has_patent_id(text), text)
