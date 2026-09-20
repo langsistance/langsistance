@@ -167,10 +167,11 @@ def normalize_result_rows(items: list[Any]) -> tuple[list[str], list[dict[str, s
     for item in items:
         row: dict[str, str] = {}
         if isinstance(item, dict):
-            # ``_raw`` is an internal field (the full source row carried for
-            # family/dedupe logic); it must never leak into user-facing
-            # exports or the frontend artifact.
-            export_item = {k: v for k, v in item.items() if k != "_raw"}
+            # 下划线前缀的键是内部字段（``_raw`` 承载 family/dedupe 用的完整
+            # 来源行，``_number_hit`` 标记按号查询的中靶记录）—— 一律不得
+            # 泄漏进用户可见的导出或前端产物。
+            export_item = {k: v for k, v in item.items()
+                           if not str(k).startswith("_")}
             _flatten_value("", _lift_download_url(export_item), row)
         else:
             row["value"] = _stringify_cell(item)

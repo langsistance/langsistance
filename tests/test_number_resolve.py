@@ -40,6 +40,7 @@ def _agent(candidates=None):
     )
 
 
+# 中靶形态: 记录自带被查的申请号 (需求#36 后 "主源命中即收手" 要求中靶)
 _USPTO_ITEM = {
     "applicationNumberText": "117941643",
     "applicationMetaData": {
@@ -54,6 +55,7 @@ _BAITEN_ITEM = {
     "title": "某方法",
     "applicant": "某公司",
     "pub_date": "2024-02-23",
+    "patent_number": "CN117941643A",   # 中靶槽: 公开号含被查号码
     "pn": "CN117941643A",
     "an": "CN202311794164.0",
 }
@@ -599,3 +601,266 @@ class TestNativeKeyReadback(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── 需求#36: 按号解析的中靶校验 ──────────────────────────────────────────────
+# 2026-09-19 生产: 用户三问「US12253745B2符合吗」, number_resolve 的命中集是
+# 两条**非中靶**记录(题名 LEAK DETECTOR 排在首位), 模型据此断言"不符合" —
+# 事实基础错位, 用户连问三遍未获澄清。 以下测试钉住修法:
+# (a) 号码自身命中(applicationNumberText 或 patentNumber 对得上)在命中集中
+#     必须排首位, 且带 _number_hit 标记;
+# (b) 全非中靶时仍返回记录, 但观察文本必须显式声明"未取得该号码本身的记录";
+# (c) 非中靶不得像命中那样提前终止其他数据源的复核。
+
+_LEAK_DETECTOR_ITEM = {
+    "applicationNumberText": "17000001",
+    "applicationMetaData": {
+        "inventionTitle": "LEAK DETECTOR",
+        "applicationStatusDescriptionText": "Patented Case",
+    },
+}
+
+_TARGET_ITEM = {
+    "applicationNumberText": "18363489",
+    "applicationMetaData": {
+        "inventionTitle": "Silicon Photonic Device With Backup Light Paths",
+        "applicationStatusDescriptionText": "Patented Case",
+        "patentNumber": "12253745",
+    },
+}
+
+_US12253745_CAND = {
+    "country": "US", "display": "US12253745B2",
+    "id_type": "ambiguous",
+    "lookups": ["12253745", "122537452"],
+}
+
+
+class TestNumberHitVerification(unittest.TestCase):
+    """需求#36 — 中靶记录与"相关但非该号"必须可区分。"""
+
+    def test_target_record_is_flagged_and_ordered_first(self):
+        """号码自身命中: 标注 _number_hit, 并与非中靶记录一起按中靶优先排序。"""
+        agent = _agent([_US12253745_CAND])
+        with patch.object(react_tools, "_uspto_search_by_number",
+                          new=AsyncMock(return_value=(
+                              [_LEAK_DETECTOR_ITEM, _TARGET_ITEM],
+                              "USPTO 2 hits"))):
+            merged, _notes = _run(react_tools._lookup_number_candidates(
+                agent, [_US12253745_CAND]))
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(merged[0]["applicationNumberText"], "18363489")
+        self.assertEqual(merged[0]["_number_hit"], "12253745")
+        self.assertNotIn("_number_hit", merged[1])
+
+    def test_target_matched_by_application_number(self):
+        """中靶判据覆盖申请号一侧: 号码是申请号时同样命中。"""
+        cand = {"country": "US", "display": "US18363489",
+                "lookups": ["18363489"]}
+        agent = _agent([cand])
+        with patch.object(react_tools, "_uspto_search_by_number",
+                          new=AsyncMock(return_value=(
+                              [_LEAK_DETECTOR_ITEM, _TARGET_ITEM],
+                              "USPTO 2 hits"))):
+            merged, _notes = _run(react_tools._lookup_number_candidates(
+                agent, [cand]))
+        self.assertEqual(merged[0]["applicationNumberText"], "18363489")
+        self.assertEqual(merged[0]["_number_hit"], "18363489")
+
+    def test_target_is_matched_by_either_id(self):
+        """判据对两个号槽都成立: 申请号在 patent_id、授权号在 patentNumber。"""
+        self.assertEqual(
+            react_tools.number_hit_kind(_TARGET_ITEM, ["12253745"]), "12253745")
+        self.assertEqual(
+            react_tools.number_hit_kind(_TARGET_ITEM, ["US18363489"]),
+            "18363489")
+        self.assertEqual(
+            react_tools.number_hit_kind(_LEAK_DETECTOR_ITEM, ["12253745"]), "")
+
+    def test_non_hit_does_not_stop_cross_check(self):
+        """非中靶命中不得当作"主源已命中"提前收手 —— 对侧仍须复核。"""
+        agent = _agent([_US12253745_CAND])
+        with patch.object(react_tools, "_uspto_search_by_number",
+                          new=AsyncMock(return_value=(
+                              [_LEAK_DETECTOR_ITEM], "USPTO 1 hits"))), \
+             patch.object(react_tools, "_baiten_search_by_query",
+                          new=AsyncMock(return_value=(
+                              [], "CN 0 hits"))) as bm:
+            merged, _notes = _run(react_tools._lookup_number_candidates(
+                agent, [_US12253745_CAND]))
+        self.assertEqual(len(merged), 1)
+        bm.assert_awaited()          # 非中靶 → 继续打对侧
+
+    def test_hit_stops_cross_check(self):
+        """中靶命中仍保持原有的"主源命中即收手"行为, 不额外耗预算。"""
+        agent = _agent([_US12253745_CAND])
+        with patch.object(react_tools, "_uspto_search_by_number",
+                          new=AsyncMock(return_value=(
+                              [_TARGET_ITEM], "USPTO 1 hits"))), \
+             patch.object(react_tools, "_baiten_search_by_query",
+                          new=AsyncMock()) as bm:
+            merged, _notes = _run(react_tools._lookup_number_candidates(
+                agent, [_US12253745_CAND]))
+        self.assertEqual(len(merged), 1)
+        bm.assert_not_awaited()
+        self.assertEqual(agent._number_cross_used, 1)
+
+
+class TestNumberHitDigestWording(unittest.TestCase):
+    """需求#36 — 全非中靶时, 回答必须说清"这些不是你要的那个号"。
+
+    2026-09-19 生产: 模型拿到两条非中靶记录(题名 LEAK DETECTOR)后直接断言
+    "US12253745B2 不符合...记录为 LEAK DETECTOR" —— 记录本身没错, 错在把
+    相关件当成了号码自身。观察文本必须把这条边界说出来。
+    """
+
+    def _run_resolve(self, items, notes_tail=""):
+        agent = _agent([_US12253745_CAND])
+        agent._number_cross_done = False
+        with patch.object(react_tools, "_lookup_number_candidates",
+                          new=AsyncMock(return_value=(
+                              items, ["USPTO(nums=12253745) — USPTO 2 hits"
+                                      + notes_tail]))), \
+             patch.object(react_tools, "_rank_builtin_patent_pool",
+                          new=AsyncMock(side_effect=lambda a, p, l: p)):
+            return _run(react_tools._run_patent_number_resolve(
+                agent, {"number": "US12253745B2"}, "zh"))
+
+    def test_non_hit_records_declare_the_number_itself_was_not_found(self):
+        obs = self._run_resolve([dict(_LEAK_DETECTOR_ITEM)])
+        self.assertIn("未取得该号码本身的记录", obs["text"])
+
+    def test_non_hit_declaration_keeps_the_records_retrieved(self):
+        """声明边界不等于藏起记录 —— 用户仍须看到这次查到了什么。"""
+        obs = self._run_resolve([dict(_LEAK_DETECTOR_ITEM)])
+        self.assertIn("LEAK DETECTOR", obs["text"])
+
+    def test_hit_record_carries_no_missing_declaration(self):
+        item = dict(_TARGET_ITEM)
+        item["_number_hit"] = "12253745"
+        obs = self._run_resolve([item])
+        self.assertNotIn("未取得该号码本身的记录", obs["text"])
+
+    def test_hit_line_is_marked_for_the_model(self):
+        """中靶行在观察文本里必须带显式标记 —— 模型要能一眼看出哪条是号码本身。"""
+        item = dict(_TARGET_ITEM)
+        item["_number_hit"] = "12253745"
+        digest = react_tools._items_digest([item], lang="zh")
+        self.assertIn("★该号码本身", digest)
+        self.assertIn("Silicon Photonic Device With Backup Light Paths", digest)
+
+    def test_non_hit_line_carries_no_hit_marker(self):
+        digest = react_tools._items_digest(
+            [dict(_LEAK_DETECTOR_ITEM)], lang="zh")
+        self.assertNotIn("★该号码本身", digest)
+
+    def test_cn_publication_number_is_matched(self):
+        """CN 侧判据: 公开号 in patent_id 亦须中靶, 否则 CN 查询永不中靶。"""
+        cand = {"country": "CN", "display": "CN117941643",
+                "lookups": ["CN117941643A", "117941643"]}
+        agent = _agent([cand])
+        with patch.object(react_tools, "_baiten_search_by_query",
+                          new=AsyncMock(return_value=(
+                              [_BAITEN_ITEM], "CN 1 hits"))):
+            merged, _notes = _run(react_tools._lookup_number_candidates(
+                agent, [cand]))
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["_number_hit"], "117941643")
+
+
+class TestNativeKeyHitTagging(unittest.TestCase):
+    """需求#36 × 需求#29: 原生键直查取回的就是该号本身, 必须打中靶标记。
+
+    否则 `_baiten_native_leg` 走完后 merged 无一条带 `_number_hit`,
+    `_run_patent_number_resolve` 会**误报**"未取得该号码本身的记录" ——
+    把修复变成反向错误。
+    """
+
+    _CAND = {"country": "CN", "display": "CN116570413A",
+             "lookups": ["CN116570413A", "116570413"],
+             "native_key": "CN202310123456.7",
+             "native_key_kind": "app_num"}
+
+    def test_native_key_record_is_tagged_as_hit(self):
+        agent = _agent([self._CAND])
+        with patch.object(react_tools, "_baiten_law_lookup",
+                          new=AsyncMock(return_value={
+                              "status": "专利权终止", "timeline": []})):
+            merged, _notes = _run(react_tools._lookup_number_candidates(
+                agent, [self._CAND]))
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["_number_hit"], "CN202310123456.7")
+
+
+class TestInternalKeysNeverLeak(unittest.TestCase):
+    """内部标记键(下划线前缀)不得进入用户可见的导出列。"""
+
+    def test_number_hit_not_exported(self):
+        from sources.result_export import normalize_result_rows
+        item = dict(_TARGET_ITEM)
+        item["_number_hit"] = "12253745"
+        columns, rows = normalize_result_rows([item])
+        self.assertFalse([c for c in columns if c.startswith("_")],
+                         f"内部键泄漏进导出列: {columns}")
+        self.assertFalse(any(k.startswith("_") for r in rows for k in r))
+
+    def test_cn_hit_line_is_marked_for_the_model(self):
+        """CN 侧中靶行同样要带标记 —— 否则中文检索的中靶信号是空的。"""
+        item = dict(_BAITEN_ITEM)
+        item["_number_hit"] = "117941643"
+        digest = react_tools._items_digest([item], lang="zh")
+        self.assertIn("★该号码本身", digest)
+        self.assertIn("某方法", digest)
+
+    def test_marker_is_language_aware(self):
+        item = dict(_TARGET_ITEM)
+        item["_number_hit"] = "12253745"
+        self.assertIn("★该号码本身",
+                      react_tools._items_digest([item], lang="zh"))
+        self.assertNotIn("★该号码本身",
+                         react_tools._items_digest([item], lang="en"))
+
+
+class TestAutoNumberCrossRoundHitWording(unittest.TestCase):
+    """需求#36 第 2 条入口: KB 号码工具零命中时走的跨源复核。
+
+    这条路径同样会把"相关但非该号"的记录当成"复核命中"交给模型 ——
+    与 patch tool 路径同源, 声明必须一并给到。
+    """
+
+    def test_non_hit_records_declare_the_number_itself_was_not_found(self):
+        agent = _agent([_US12253745_CAND])
+        with patch.object(react_tools, "_lookup_number_candidates",
+                          new=AsyncMock(return_value=(
+                              [dict(_LEAK_DETECTOR_ITEM)],
+                              ["USPTO(nums=12253745) — USPTO 1 hits"]))), \
+             patch.object(react_tools, "_rank_pending_pool",
+                          new=AsyncMock(return_value=(
+                              [{"patent_id": "17000001"}], ""))):
+            _ranked, _rn, note = _run(
+                react_tools._auto_number_cross_round(agent, "zh"))
+        self.assertIn("未取得该号码本身的记录", note)
+
+    def test_hit_records_carry_no_missing_declaration(self):
+        item = dict(_TARGET_ITEM)
+        item["_number_hit"] = "12253745"
+        agent = _agent([_US12253745_CAND])
+        with patch.object(react_tools, "_lookup_number_candidates",
+                          new=AsyncMock(return_value=(
+                              [item], ["USPTO 1 hits"]))), \
+             patch.object(react_tools, "_rank_pending_pool",
+                          new=AsyncMock(return_value=(
+                              [{"patent_id": "18363489"}], ""))):
+            _ranked, _rn, note = _run(
+                react_tools._auto_number_cross_round(agent, "zh"))
+        self.assertNotIn("未取得该号码本身的记录", note)
+
+    def test_both_id_slots_are_consulted(self):
+        """顶层 patent_number 不匹配时, 嵌套槽仍须被查到(勿用 or 短路)。"""
+        item = {
+            "applicationNumberText": "18363489",
+            "patent_number": "99999999",       # 顶层槽不匹配
+            "applicationMetaData": {"patentNumber": "12253745"},  # 嵌套槽匹配
+        }
+        self.assertEqual(
+            react_tools.number_hit_kind(item, ["12253745"]), "12253745")

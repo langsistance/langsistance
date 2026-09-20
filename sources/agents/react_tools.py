@@ -704,6 +704,8 @@ def _items_digest(raw_items, limit: int = SEARCH_DIGEST_LIMIT,
     if not items:
         return ""
     us_lines: list = []
+    # 需求#36: 按号查询时中靶行的前缀标记（与"相关件"区分）。
+    hit_marker = "★该号码本身" if lang == "zh" else "★ THE NUMBER ITSELF"
     candidates = build_candidates(items)
     _us_limit = limit if us_limit is None else max(0, int(us_limit))
     _cn_limit = limit if cn_limit is None else max(0, int(cn_limit))
@@ -715,6 +717,9 @@ def _items_digest(raw_items, limit: int = SEARCH_DIGEST_LIMIT,
             c.get("filing_date") or "?",
             c.get("status") or "?",
         ]
+        # 需求#36: 按号查询时把"这一条就是该号码本身"标给模型, 与相关件区分。
+        if isinstance(c.get("_raw"), dict) and c["_raw"].get("_number_hit"):
+            parts.insert(0, hit_marker)
         us_lines.append(" | ".join(str(p) for p in parts))
     # Baiten CN candidates (flat mapped shape with source="baiten") ride
     # alongside USPTO rows in a mixed dual-source pool.
@@ -729,6 +734,9 @@ def _items_digest(raw_items, limit: int = SEARCH_DIGEST_LIMIT,
             c.get("applicant") or "?",
             c.get("pub_date") or c.get("apply_date") or "?",
         ]
+        # 需求#36: CN 侧中靶行同样要标 —— 中文检索的中靶信号不能是空的。
+        if c.get("_number_hit"):
+            parts.insert(0, hit_marker)
         tail_bits = []
         current_status = str(c.get("status") or "").strip()
         if current_status:
@@ -3378,6 +3386,16 @@ async def _lookup_number_candidates(
     merged: list = []
     notes: list = []
     us_tried: set = set()
+    # 需求#36: 中靶记录(号码自身)与非中靶记录必须可区分 —— 前者证明"这个号
+    # 是什么", 后者只是"顺带检索到的相关件"。 打标后由调用方决定措辞。
+    targets = [l for c in (candidates or []) for l in (c.get("lookups") or [])]
+
+    def _tag_hits(items: list) -> None:
+        for item in items:
+            if isinstance(item, dict):
+                hit = number_hit_kind(item, targets)
+                if hit:
+                    item["_number_hit"] = hit
 
     async def _baiten_leg(lookups: list) -> None:
         nonlocal used
@@ -3393,6 +3411,7 @@ async def _lookup_number_candidates(
                     f"CN source failed: {exc}")
             notes.append(f"CN(q={q[:40]!r}) — {note}")
             if items:
+                _tag_hits(items)
                 merged.extend(items)
                 return
 
@@ -3410,6 +3429,7 @@ async def _lookup_number_candidates(
         items, note = await _uspto_search_by_number(nums)
         notes.append(f"USPTO(nums={','.join(nums[:2])}) — {note}")
         if items:
+            _tag_hits(items)
             merged.extend(items)
 
     async def _baiten_native_leg(c: dict) -> bool:
@@ -3431,6 +3451,9 @@ async def _lookup_number_candidates(
         merged.append({
             "patent_id": str(c.get("display") or native),
             "patent_number": str(c.get("display") or native),
+            # 需求#36: 本条是**按原生申请号按键直查**取回的 —— 它就是该号
+            # 本身, 无需再比对(号码可能只出现在 native_key 里, 比不到)。
+            "_number_hit": native,
             "source": "cn",
             "app_num": native,
             "title": "",
@@ -3455,10 +3478,69 @@ async def _lookup_number_candidates(
                 await _baiten_leg(lookups)
             else:
                 await _uspto_leg(lookups)
-            if len(merged) > before:
-                break  # 主源已命中 — 无需再打对侧
+            # 需求#36: 只有**中靶**才收手。 非中靶条目(全文检索的相关件)不能
+            # 当作"主源已命中" —— 否则对侧复核被跳过, 而这个号本身可能就在
+            # 对侧可查(2026-09-19: US 腿返回非中靶记录后即收手)。
+            if any(m.get("_number_hit") for m in merged[before:]):
+                break
+        if len(merged) > 1:
+            merged = _order_hits_first(merged)
     agent._number_cross_used = used
     return merged, notes
+
+
+def number_hit_kind(item: dict, targets: list) -> str:
+    """需求#36: 该记录是否**就是**查询的那个号码。
+
+    ``fetch_by_numbers`` 走的是 USPTO 全文检索 + ``sort=_score`` —— 返回的是
+    相关度榜, 不是号码榜, 因此"按号查"完全可能返回一堆不含该号的记录
+    (2026-09-19 生产: 问 US12253745B2 拿到题名 LEAK DETECTOR 的记录, 模型
+    据此断言"不符合", 用户连问三遍)。 判据取记录自带的两个号: US 侧
+    ``patent_id`` = applicationNumberText、``patent_number`` = patentNumber;
+    CN 侧 ``patent_id`` 是公开号。 数字归一化后等值比较, 非中靶返回 ""。
+    """
+    target_digits = {re.sub(r"\D", "", str(t or "")) for t in (targets or [])}
+    target_digits.discard("")
+    if not target_digits:
+        return ""
+    meta = item.get("applicationMetaData")
+    if not isinstance(meta, dict):
+        meta = {}
+    # 三个号槽, 覆盖原始 USPTO 形态与扁平候选形态: 申请号在
+    # applicationNumberText(原始)/patent_id(扁平), 授权号在
+    # applicationMetaData.patentNumber(原始)/patent_number(扁平)。
+    values = (
+        item.get("applicationNumberText"), item.get("patent_id"),
+        item.get("patent_number"), meta.get("patentNumber"),
+    )
+    for value in values:
+        digits = re.sub(r"\D", "", str(value or ""))
+        if digits and digits in target_digits:
+            return digits
+    return ""
+
+
+def _order_hits_first(items: list) -> list:
+    """中靶记录排首位, 其余保持原序(稳定排序保证)。"""
+    return sorted(items, key=lambda i: 0 if i.get("_number_hit") else 1)
+
+
+def number_non_hit_declaration(items: list, lang: str) -> str:
+    """需求#36: 有记录、但**没有一条是该号码本身**时的边界声明。
+
+    逐条复述这些相关件的题名容易被读成"这个号叫什么名字"（2026-09-19 生产：
+    模型据此断言 US12253745B2 = LEAK DETECTOR）。两条入口——patch tool 的
+    ``_run_patent_number_resolve`` 与 KB 零命中钩子 ``_auto_number_cross_round``
+    ——都必须先把边界说清楚。无记录或已有中靶时返回 ""。
+    """
+    if not items or any(i.get("_number_hit") for i in items):
+        return ""
+    if lang == "en":
+        return (f"⚠️ No record for the number itself was retrieved — the "
+                f"{len(items)} item(s) below are RELATED records and must not "
+                f"be reported as this number's bibliographic data.")
+    return (f"⚠️ 未取得该号码本身的记录——以下 {len(items)} 条是与该号码"
+            f"相关的其他记录，不能视为该号码的著录信息。")
 
 
 def _pool_candidates_for_items(items: list) -> list:
@@ -3554,6 +3636,10 @@ async def _run_patent_number_resolve(agent, args, lang: str) -> dict:
             digest = f"未按该号码查到专利记录。已核验的数据源：\n{checked}"
             if hints:
                 digest += f"\n\n{hints}"
+    else:
+        declaration = number_non_hit_declaration(merged, lang)
+        if declaration:
+            digest = f"{declaration}\n\n{digest}"
     return {"kind": "observation", "text": digest}
 
 
@@ -3914,6 +4000,10 @@ async def _auto_number_cross_round(agent, lang) -> Optional[Tuple[list, str, str
             f"Cross-source number verification found "
             f"{len(ranked)} record(s):\n{executed}" if lang == "en"
             else f"号码跨源复核命中 {len(ranked)} 条：\n{executed}")
+        # 需求#36: 与 patch tool 入口同一条边界, 不得只报"复核命中 N 条"。
+        declaration = number_non_hit_declaration(merged, lang)
+        if declaration:
+            cross_note = f"{declaration}\n\n{cross_note}"
         return ranked, "", cross_note
     cross_note = (
         f"Cross-source number verification found nothing:\n{executed}"
