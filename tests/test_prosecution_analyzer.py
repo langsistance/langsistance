@@ -2,7 +2,7 @@
 
 import asyncio
 import unittest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from sources.long_task.prosecution_analyzer import (
     generate_executive_summary,
@@ -362,7 +362,14 @@ class TestFetchUsProsecution(unittest.IsolatedAsyncioTestCase):
             "downloadOptionBag": [{"downloadUrl": "https://example.test/d"}],
         }
 
-    def _run(self, documents, analyze=None, columns=None, lang="zh"):
+    def _run(self, documents, analyze=None, lang="zh"):
+        """注入假的 LLM 层（patch prosecution_analyzer 里的实现）。
+
+        函数按原实现的方式从 prosecution_analyzer 内部导入 —— 与 celery
+        一致（它也用那里的 generate_table_columns/analyze_single_document）。
+        因此测试在导入侧打桩，而不是改函数签名。
+        """
+        import sources.long_task.prosecution_analyzer as pa
         from sources.long_task.prosecution_downloader import fetch_us_prosecution
 
         async def _cols(query, doc_count, provider, lang):
@@ -373,30 +380,47 @@ class TestFetchUsProsecution(unittest.IsolatedAsyncioTestCase):
             return {"文件类型": doc_category, "文件描述": doc_desc,
                     "核心内容": "分析结果"}
 
+        async def _summary(doc_text, row, query, provider, lang):
+            return "摘要"
+
+        async def _fake_download(doc, fetch, app_number, headers):
+            # 替代真实下载：直接给文档填上正文（真实路径由
+            # download_single_document + 文本提取链负责）。
+            if doc.binary is None:
+                doc.text = "审查意见正文" * 20
+
+        import sources.long_task.prosecution_downloader as pd
+
         async def _main():
-            return await fetch_us_prosecution(
-                documents, query="q", lang=lang,
-                flash_provider=object(), pro_provider=object(),
-                analyze_single_document=analyze or _an,
-                generate_table_columns=columns or _cols,
-            )
+            with patch.object(pa, "generate_table_columns", _cols), \
+                 patch.object(pa, "analyze_single_document", analyze or _an), \
+                 patch.object(pa, "generate_document_summary", _summary), \
+                 patch.object(pd, "download_single_document", _fake_download):
+                return await fetch_us_prosecution(
+                    documents, task_id="t1", user_id="u1",
+                    query="q", lang=lang,
+                    flash_provider=object(), pro_provider=object(),
+                    uspto_get_with_retry=lambda *a, **k: None,
+                )
         return asyncio.run(_main())
 
     def test_success_returns_columns_rows_and_no_error(self):
-        cols, rows, err = self._run([self._raw_doc()])
+        cols, rows, err, stop = self._run([self._raw_doc()])
         self.assertEqual(err, "")
+        self.assertIsNone(stop)
         self.assertEqual(cols[0], "文件类型")
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["核心内容"], "分析结果")
+        self.assertEqual(rows[0]["_summary"], "摘要")
 
     def test_empty_document_list_is_an_error_not_an_empty_report(self):
-        cols, rows, err = self._run([])
+        cols, rows, err, _stop = self._run([])
         self.assertEqual((cols, rows), ([], []))
         self.assertIn("USPTO", err)
 
     def test_no_analyzable_documents_is_an_error(self):
         """一条不可分析的文件（既非 OA 也非 Response）→ 报错而非空报告。"""
-        cols, rows, err = self._run(
+        cols, rows, err, _stop = self._run(
             [self._raw_doc(code="BIB", desc="Bibliographic data sheet")])
         self.assertEqual((cols, rows), ([], []))
         self.assertIn("可分析", err)
@@ -404,11 +428,11 @@ class TestFetchUsProsecution(unittest.IsolatedAsyncioTestCase):
     def test_all_analyses_failing_is_an_error(self):
         async def _boom(**kwargs):
             raise RuntimeError("scanned pdf")
-        cols, rows, err = self._run([self._raw_doc()], analyze=_boom)
+        cols, rows, err, _stop = self._run([self._raw_doc()], analyze=_boom)
         self.assertEqual((cols, rows), ([], []))
         self.assertIn("失败", err)
 
     def test_english_error_wording(self):
-        cols, rows, err = self._run([], lang="en")
+        cols, rows, err, _stop = self._run([], lang="en")
         self.assertIn("USPTO", err)
         self.assertTrue(err.isascii(), err)

@@ -642,50 +642,75 @@ async def download_prosecution_documents(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# US prosecution pipeline (extracted from celery_worker's family task)
+# US prosecution pipeline (extracted from celery_worker's family task, 任务#7)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 async def fetch_us_prosecution(
     documents: list,
     *,
+    task_id: str,
+    user_id: str,
     query: str,
     lang: str,
     flash_provider: Any,
     pro_provider: Any,
     vision_provider: Any = None,
     include_priority_2: bool = True,
-    analyze_single_document: Callable = None,
-    generate_table_columns: Callable = None,
-) -> tuple[list, list, str]:
-    """美国审查文件：分类 → 表头 → 逐份分析，返回 (columns, table_rows, error)。
+    app_number: str = "",
+    headers: dict | None = None,
+    uspto_get_with_retry: Callable | None = None,
+    handle_stop: Callable | None = None,
+    handle_pause: Callable | None = None,
+    jurisdictions: list | None = None,
+    vision_extract: Callable | None = None,
+) -> tuple:
+    """美国审查文件：分类 -> 表头 -> 流水线下载 + 分析。
 
-    从 ``celery_worker.execute_family_analysis`` 的 Phase 0.5~2 抽出（任务#7）。
-    抽出的动机：族分析原先**硬性要求美国成员**，没有就整任务失败 —— 而族里
-    CN/JP/EP 的数据在更早的阶段已经取到。把美国这一段变成可独立调用、可独立
-    失败的一段，调用方就能按 ``family_report_strategy`` 决定走哪条报告路径。
+    返回 ``(columns, table_rows, error, stop_result)``：
 
-    返回契约刻意与 ``family_report_strategy(rows, columns, ...)`` 对齐：
+    - 正常 -> ``(columns, rows, "", None)``
+    - 失败 -> ``([], [], 原因, None)``，调用方据 family_report_strategy 决定
+      是否还有其它辖区的数据可出报告；
+    - 被停止/暂停 -> ``(columns, rows, "", stop_result)``，调用方必须原样
+      return stop_result。
 
-    - 成功 → ``(columns, rows, "")``
-    - 失败 → ``([], [], 原因)`` —— 调用方据此判断是否需要美国数据才能继续
-      （族里若还有其它辖区数据，仍可出跨国报告）。
+    行为与 celery_worker 原内联实现一致：
 
-    纯编排：所有 I/O 走注入的 provider 与 ``download_single_document``，因此可
-    在本地用假 provider 完整验证 —— 这正是把它抽出来的收益。
+    - 流水线：下载顺序执行（守 USPTO 限流），每份下载完立即 create_task 启动
+      分析，下载与分析互相重叠；分析侧由 Semaphore 限并发。
+    - 文本提取链：已有 text -> 本地 extract_text_from_binary -> vision。
+    - 失败行仍进 table_rows（用户要看到哪份没成，而不是少一行）。
+
+    所有 I/O 走注入的 provider / 回调，可在本地完整验证。
     """
+    import asyncio as _asyncio
+
     from sources.long_task.prosecution_analyzer import (
-        analyze_single_document as _default_analyze,
-        generate_table_columns as _default_columns,
+        analyze_single_document,
+        build_failed_row,
         generate_document_summary,
+        generate_table_columns,
     )
-    _analyze = analyze_single_document or _default_analyze
-    _columns_fn = generate_table_columns or _default_columns
+
+    _jur = jurisdictions if jurisdictions is not None else []
+
+    def _bump_us_done() -> None:
+        for j in _jur:
+            if j.get('code') != 'US':
+                continue
+            j['files_done'] = j.get('files_done', 0) + 1
+            fd = j['files_done']
+            fc = max(j.get('file_count', 1), 1)
+            j['progress'] = int((fd / fc) * 55) + 45
+            if fd >= j.get('file_count', 1):
+                j['status'] = 'done'
+                j['progress'] = 100
 
     if not documents:
         return [], [], ("USPTO returned no documents for this application."
                         if lang == "en" else
-                        "USPTO 未返回该申请的任何审查文件。")
+                        "USPTO 未返回该申请的任何审查文件。"), None
 
     manifest = classify_prosecution_documents(documents)
     docs_to_download = list(manifest.must_download)
@@ -695,36 +720,137 @@ async def fetch_us_prosecution(
         return [], [], ("No analyzable prosecution documents found (no Office "
                         "Actions, Responses, or Amendments)." if lang == "en" else
                         "未找到可分析的审查文件（无 Office Action、Response 或 "
-                        "Amendment）。")
+                        "Amendment）。"), None
 
-    columns = await _columns_fn(
-        query=query, doc_count=len(docs_to_download),
-        provider=flash_provider, lang=lang,
+    total_dl = len(docs_to_download)
+    columns = await generate_table_columns(
+        query=query, doc_count=total_dl, provider=flash_provider, lang=lang,
     )
 
-    table_rows: list = []
-    for doc in docs_to_download:
-        try:
-            row = await _analyze(
-                doc_text=doc.text or "",
-                doc_code=doc.document_code,
-                doc_desc=doc.description,
-                doc_category=doc.category,
-                columns=columns,
-                query=query,
-                provider=pro_provider,
-                lang=lang,
-            )
-        except Exception as exc:
-            _logger.warning(
-                f"[prosecution] us_phase analyze_failed code={doc.document_code}: {exc}")
-            row = None
-        if row:
-            table_rows.append(row)
+    async def _default_fetch(url, hdrs, timeout):
+        return await uspto_get_with_retry(url, hdrs, timeout)
 
-    if not table_rows:
+    _fetch = _default_fetch if uspto_get_with_retry is not None else None
+
+    _table_rows: list = [None] * total_dl
+    _sem = _asyncio.Semaphore(100)
+    _pending: list = []
+    _downloaded = 0
+    _analyzed = 0
+
+    async def _analyze_one(_doc, _idx: int) -> None:
+        nonlocal _analyzed
+        async with _sem:
+            if not _doc.text and _doc.binary:
+                try:
+                    _local = extract_text_from_binary(
+                        _doc.binary, skip_pdf_extraction=False)
+                except Exception:
+                    _local = ""
+                if _local and len(_local.strip()) > 50:
+                    _doc.text = _local.strip()
+                elif vision_extract is not None and vision_provider is not None:
+                    try:
+                        _vtext = await vision_extract(
+                            _doc.binary, _doc.description, vision_provider)
+                        if _vtext and len(_vtext.strip()) > 50:
+                            _doc.text = _vtext.strip()
+                    except Exception as _e:
+                        _logger.warning(
+                            f"[prosecution] us_phase vision_error code="
+                            f"{_doc.document_code}: {type(_e).__name__}: {_e}")
+
+            if not _doc.text or len(_doc.text.strip()) < 50:
+                row = build_failed_row(_doc.document_code,
+                                       "text extraction failed", columns, lang)
+                row["_failed"] = True
+                row["_summary"] = ""
+                _table_rows[_idx] = row
+                _analyzed += 1
+                _bump_us_done()
+                return
+
+            try:
+                row = await analyze_single_document(
+                    doc_text=_doc.text, doc_code=_doc.document_code,
+                    doc_desc=_doc.description, doc_category=_doc.category,
+                    columns=columns, query=query, provider=pro_provider,
+                    lang=lang,
+                )
+            except Exception as e:
+                _logger.warning(
+                    f"[prosecution] us_phase analyze_error code="
+                    f"{_doc.document_code}: {type(e).__name__}: {e}")
+                row = build_failed_row(_doc.document_code, str(e), columns, lang)
+                row["_failed"] = True
+
+            try:
+                summary = await generate_document_summary(
+                    doc_text=_doc.text, row=row, query=query,
+                    provider=pro_provider, lang=lang,
+                )
+            except Exception as e:
+                _logger.warning(
+                    f"[prosecution] us_phase summary_error code="
+                    f"{_doc.document_code}: {type(e).__name__}: {e}")
+                summary = ""
+            row["_summary"] = summary
+            _table_rows[_idx] = row
+            _analyzed += 1
+            _bump_us_done()
+
+    def _partial() -> list:
+        return [r for r in _table_rows if r is not None]
+
+    def _successful() -> list:
+        """有内容分析的行（排除文本提取失败的失败行）。
+
+        与原实现一致：它用 ``docs_with_text``（有文本且够长的文档）判断
+        "是不是全都拿不到内容" —— 失败行仍进 table_rows 供用户看到哪份没成，
+        但**不**算成功。
+        """
+        return [r for r in _table_rows
+                if r is not None and not r.get('_failed')]
+
+    # 主流水线：顺序下载，下载完立即启动分析。
+    # stop/pause 每轮只探一次（它们有副作用：改任务状态）。
+    for _i, _doc in enumerate(docs_to_download):
+        if handle_stop is not None:
+            _stopped = handle_stop(task_id, user_id, _downloaded, total_dl)
+            if _stopped:
+                if _pending:
+                    await _asyncio.gather(*_pending, return_exceptions=True)
+                return columns, _partial(), "", _stopped
+
+        if handle_pause is not None:
+            _paused = handle_pause(task_id, user_id, _downloaded, total_dl, {
+                'completed': [r.get(columns[0], '') for r in _table_rows
+                              if r is not None and not r.get('_failed')],
+                'pending': [d.document_code for d in docs_to_download[_i:]],
+                'completed_rows': _partial(),
+                'failed': [r.get(columns[0], '') for r in _table_rows
+                           if r is not None and r.get('_failed')],
+                'columns': columns,
+                'downloaded': _downloaded,
+                'analyzed': _analyzed,
+            })
+            if _paused:
+                if _pending:
+                    await _asyncio.gather(*_pending, return_exceptions=True)
+                return columns, _partial(), "", _paused
+
+        if _fetch is not None:
+            await download_single_document(_doc, _fetch, app_number, headers)
+        _downloaded += 1
+        _pending.append(_asyncio.create_task(_analyze_one(_doc, _i)))
+
+    if _pending:
+        await _asyncio.gather(*_pending, return_exceptions=True)
+
+    _rows = _partial()
+    if not _successful():
+        # 没有一份拿到可分析的内容 —— 与原实现一致，这算失败，不是"空报告"。
         return [], [], ("All prosecution documents failed processing. Files may "
                         "be scanned images or encrypted PDFs." if lang == "en" else
-                        "所有审查文件处理失败。文件可能是扫描件或加密PDF。")
-
-    return columns, table_rows, ""
+                        "所有审查文件处理失败。文件可能是扫描件或加密PDF。"), None
+    return columns, _rows, "", None
