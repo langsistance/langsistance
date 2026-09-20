@@ -546,7 +546,9 @@ class TestBaitenDecisionAdapter:
         assert got["mainClassification"] == "H05K7/20"
         assert got["complainant"] == "请求人甲"
         assert got["defendant"] == "专利权人乙"
-        assert got["reasoning"] == "决定要点：……"
+        # 全文走 paragraphs 槽 —— 解析器用它重建 reasoning，直接给
+        # reasoning 键会被覆盖成空。
+        assert got["reasoningParagraphs"] == "决定要点：……"
 
     def test_decision_type_inferred_from_full_text(self):
         """佰腾不给决定类型字段——从全文措辞推断，推不出时留空。"""
@@ -657,3 +659,54 @@ class TestBaitenExaminationSource:
         assert run(src.query_legal_state_timeline("X")) == []
         assert run(src.query_basic_info("X")) == {}
         assert run(src.query_full_text("X")) == {}
+
+
+class TestFetchExaminationDataWithBaiten:
+    """端到端：CN 审查分析在新数据源（佰腾）下能产出审查事件。
+
+    这是 09-20 那次「CN114601976A 全球专利族审查历史分析」拿不到审查历史的
+    根因所在——此前数据源给不出 review decisions，events 恒为空。
+    """
+
+    _BAITEN_WIRE = [{
+        "declareNum": "7971", "declareDate": "20240315",
+        "inTitle": "一种散热装置", "patentee": "某公司",
+        "reDeclarePerson": "请求人甲", "ineffectivePerson": "专利权人乙",
+        "mainExamingPerson": "审查员丙", "lawBase": "专利法第22条",
+        "fullText": "无效宣告请求审查决定书……决定要点：本专利维持有效。",
+    }]
+
+    class _Baiten:
+        async def query_patent_review(self, app_num, country="CN"):
+            return list(TestFetchExaminationDataWithBaiten._BAITEN_WIRE)
+
+        async def query_law_state(self, app_num):
+            return {"status": "专利权有效"}
+
+        async def query_legal_state_timeline(self, app_num, country="CN"):
+            return [{"date": "20240101", "lawStatus": "授权"}]
+
+    class _Cn:
+        async def query_basic_info(self, app_num):
+            return {"title": "一种散热装置", "applicant": "某公司"}
+
+        async def query_full_text(self, app_num):
+            return {"claim": ["1. 一种散热装置，其特征在于……"]}
+
+    def test_baiten_source_yields_parsed_examination_events(self):
+        from sources.long_task.china_examination import (
+            BaitenExaminationSource, fetch_examination_data,
+        )
+        src = BaitenExaminationSource(self._Baiten(), self._Cn())
+        events, law_state, basic_info, claims, legal_timeline = asyncio.run(
+            fetch_examination_data("201710216936", src))
+
+        assert len(events) == 1, "佰腾的决定必须被解析成审查事件"
+        assert events[0].decision_number == "7971"
+        assert events[0].decision == "invalidation"      # 由全文措辞推断
+        assert events[0].complainant == "请求人甲"
+        assert "维持有效" in events[0].reasoning          # 决定书全文不丢
+        assert law_state == {"status": "专利权有效"}
+        assert basic_info["title"] == "一种散热装置"
+        assert claims == ["1. 一种散热装置，其特征在于……"]
+        assert legal_timeline[0]["lawStatus"] == "授权"

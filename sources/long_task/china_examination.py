@@ -436,9 +436,12 @@ def adapt_baiten_review_decisions(
         # 两个槽分开给，由下游按类型理解，这里不做语义裁剪。
         mapped["complainant"] = str(item.get("reDeclarePerson") or "") or None
         mapped["defendant"] = str(item.get("ineffectivePerson") or "")
-        # 全文进 reasoning —— 后续可按需拆三段，先保证内容不丢。
+        # 全文进 reasoning。**必须用 paragraphs 槽**：解析器是用
+        # ``_join_section("reasoningHeading", "reasoningParagraphs")`` 重建
+        # reasoning 的，直接给 reasoning 键会被它覆盖成空 —— 决定书全文是整个
+        # 分析里最有价值的字段，丢了等于白取。
         if full_text:
-            mapped["reasoning"] = full_text
+            mapped["reasoningParagraphs"] = full_text
         out.append(mapped)
     return out
 

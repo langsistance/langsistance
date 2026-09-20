@@ -3190,6 +3190,7 @@ def execute_china_examination_analysis(self, task_id: str, params: dict):
     )
     from sources.long_task.patent_family import EPOFamilyClient, EPOError
     from sources.long_task.china_examination import (
+        BaitenExaminationSource,
         resolve_cn_application_number,
         fetch_examination_data,
         generate_table_columns,
@@ -3227,9 +3228,32 @@ def execute_china_examination_analysis(self, task_id: str, params: dict):
             server_address='', is_local=False,
         )
 
-    # ── China patent data client (Google Patents) ──────────────────────────
+    # ── China examination data source ───────────────────────────────────────
+    # 审查决定与法律状态走**佰腾**（FSWX/FLZT），著录与权利要求走中国专利
+    # 客户端；两来源由 BaitenExaminationSource 组合成 fetch_examination_data
+    # 要的那一个接口。此前是单一客户端，取不到审查决定（events 恒为空）。
+    #
+    # 佰腾未配置时组合源自动降级（那些方法返回空），但审查分析的核心数据
+    # 就没了 —— 所以这里显式告警，别让"跑完流程但报告是空的"无从归因。
     google_client = GooglePatentsClient(delay=2.0)
     china_client = ChinaPatentClient(google_client=google_client)
+    _baiten_source = None
+    try:
+        from sources.baiten_client import BaitenClient
+        from sources.long_task.config import get_baiten_config
+        _bc = get_baiten_config()
+        if _bc.get('app_key') and _bc.get('app_secret'):
+            _baiten_source = BaitenClient(
+                _bc['app_key'], _bc['app_secret'], _bc['gateway_url'])
+        else:
+            _pipeline_logger.warning(
+                f"[task={task_id}] CHINA_EXAM baiten not configured — "
+                f"review decisions (FSWX) will be empty")
+    except Exception as _bexc:
+        _pipeline_logger.warning(
+            f"[task={task_id}] CHINA_EXAM baiten client unavailable — "
+            f"{_bexc}; review decisions will be empty")
+    exam_source = BaitenExaminationSource(_baiten_source, china_client)
 
     # ── Family config (for EPO family lookup) ────────────────────────────────
     fc = get_family_config()
@@ -3306,7 +3330,7 @@ def execute_china_examination_analysis(self, task_id: str, params: dict):
 
         try:
             events, law_state, basic_info, claims, legal_timeline = await fetch_examination_data(
-                cn_app_number, china_client,
+                cn_app_number, exam_source,
             )
         except (GooglePatentsError, ChinaPatentError) as e:
             _pipeline_logger.error(
