@@ -57,8 +57,12 @@
   footer{border-top:1px solid var(--line);background:var(--bg-2);
          padding:40px 0;font-size:14px;color:var(--ink-3)}
   .foot{display:flex;flex-wrap:wrap;gap:12px 28px;align-items:center}
-  .foot a{color:var(--ink-2);text-decoration:none}
-  .foot a:hover{color:var(--accent);text-decoration:underline}
+  /* 页脚链接默认态就必须看得出来是链接：备案审查会看"隐私政策是否显著可达"，
+     若默认态与相邻的纯文本（公司名）视觉权重完全相同，监管人员看不出它可以点。
+     用下划线（而非仅靠颜色）表达，是因为颜色对色觉障碍用户不可靠，
+     且 .foot 的基色偏灰，仅靠颜色区分度不足。 */
+  .foot a{color:var(--accent);text-decoration:underline;text-underline-offset:3px}
+  .foot a:hover{color:#1746b0;text-decoration:underline;text-decoration-thickness:2px}
   .foot .sep{margin-left:auto}
   .licenses{margin-top:18px;display:flex;flex-wrap:wrap;gap:8px 20px}
   .licenses a{color:var(--ink-3)}

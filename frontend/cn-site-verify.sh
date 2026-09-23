@@ -50,12 +50,17 @@ if [ ! -d "$SITE_DIR" ]; then
 fi
 
 # A1 无表单与输入（大小写不敏感：<FORM> 同样是表单）
-hits=$(GI '<form|<input|<textarea|<select' || true)
+# contenteditable 必须一并拦截：它是真实的可编辑输入面，与被拦截的 <input>/<textarea>
+# 在"页面是否具备收集个人信息的能力"这一点上等价，漏掉它等于给红线留了后门
+# （<div contenteditable="true"> 与空字符串写法 contenteditable="" 都算）。
+# 刻意不匹配 type=：本页有合法的 <link rel="icon" type="image/svg+xml"> 与 <style>，
+# 一加 type= 就会立刻误报，属于假阳性陷阱。
+hits=$(GI '<form|<input|<textarea|<select|contenteditable' || true)
 if [ -n "$hits" ]; then
-  fail "A1 发现表单或输入元素（构成收集个人信息）"
+  fail "A1 发现表单、输入元素或可编辑区域（构成收集个人信息）"
   printf '%s\n' "$hits"
 else
-  pass "A1 无表单与输入"
+  pass "A1 无表单、输入与可编辑区域"
 fi
 
 # A2a 资源零外链：src 属性一定是加载资源，不得出现绝对 URL
